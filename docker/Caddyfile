@@ -16,6 +16,34 @@
 # basic_auth validates → `header_up` replaces with Bearer → registry
 # receives the right token.  WebSocket upgrades same path.
 #
+# TWO MODES PER REQUEST (X3-B3, 2026-10-08 — local users + sign-in):
+#   A. NO `legba_session` cookie → the PERIMETER OPERATOR, exactly as before:
+#      basic_auth validates, the operator bearer is injected upstream, the
+#      registry sees the operator.
+#   B. a `legba_session` cookie → a SIGNED-IN USER: basic_auth still
+#      validates (the perimeter stays the OUTER wall until the operator drops
+#      it), but the Authorization header is STRIPPED and NO bearer is
+#      injected; the cookie rides upstream and the registry's session
+#      middleware resolves it to that user's identity and role. An expired or
+#      revoked cookie is a 401 from the registry (the UI shows its sign-in
+#      screen) — never a silent fall-back to the operator.
+#   The matcher is `@legba_session` (one per handle). CONSEQUENCE while the
+#   perimeter injects the bearer: anyone who holds the perimeter password and
+#   sends NO cookie is the operator. Hand invited users the perimeter password
+#   only when that is acceptable; dropping the perimeter (removing the
+#   `import basic_auth_perimeter` lines AND the mode-A bearer injection) makes
+#   the cookie the only way in for a browser — the operator's call.
+#
+# SIGN-IN SWITCH (A-1, 2026-11-14): `LEGBA_AUTH_SIGNIN` picks mode A's
+#   upstream through the `mode_a_*_{$LEGBA_AUTH_SIGNIN:0}` snippets below.
+#   Unset, empty or 0 (the default): mode A injects the admin bearer, exactly
+#   as above. 1: mode A injects NOTHING and strips the perimeter header, so a
+#   browser without a session cookie reaches the registry with no credential,
+#   gets a 401, and the console shows its sign-in screen — the browser is
+#   never handed the admin token. Mode B is the same in both. Any other value
+#   names a snippet that does not exist and caddy refuses to start (loud,
+#   never a silent fall-back to the admin token).
+#
 # Retired vhosts from the pre-reshape config (ui-v2 / legba2/dcmaster
 # basic_auth shells) deliberately not carried forward.
 
@@ -36,19 +64,159 @@
 	}
 }
 
+# CONSOLE PERIMETER SWITCH (2026-11-15). `LEGBA_EDGE_PERIMETER` (default 1)
+# decides whether the console's routes sit behind the basic_auth perimeter.
+#   1: the perimeter is the outer wall, as it always was (sign-in on or off).
+#   0: no perimeter password; the registry's own sign-in is the only gate.
+#      This is allowed ONLY with `LEGBA_AUTH_SIGNIN=1`: with sign-in off the
+#      edge injects the admin bearer for every browser, so dropping the
+#      perimeter would hand the admin token to anyone. There is deliberately
+#      no `console_perimeter_0_0` snippet: caddy refuses to start on that
+#      pair (and on any other value) instead of serving an open console.
+# The ntfy vhost below keeps `basic_auth_perimeter` whatever this says: ntfy
+# has no sign-in of its own.
+(console_perimeter_1_0) {
+	import basic_auth_perimeter
+}
+(console_perimeter_1_1) {
+	import basic_auth_perimeter
+}
+(console_perimeter_1_) {
+	import basic_auth_perimeter
+}
+(console_perimeter_0_1) {
+}
+
+# Mode A upstreams (SIGN-IN SWITCH above). `_0` = the switch off: the admin
+# bearer injected, as it always was. `_1` = the switch on: no bearer, the
+# perimeter's Basic header stripped. `api` carries the active health probe.
+(mode_a_api_0) {
+	reverse_proxy legba-registry:8090 {
+		header_up Authorization "Bearer {$LEGBA_REGISTRY_API_TOKEN}"
+		health_uri /api/v1/registry/healthz
+		health_interval 15s
+		health_timeout 5s
+		health_status 200
+	}
+}
+(mode_a_api_1) {
+	reverse_proxy legba-registry:8090 {
+		header_up -Authorization
+		health_uri /api/v1/registry/healthz
+		health_interval 15s
+		health_timeout 5s
+		health_status 200
+	}
+}
+(mode_a_plain_0) {
+	reverse_proxy legba-registry:8090 {
+		header_up Authorization "Bearer {$LEGBA_REGISTRY_API_TOKEN}"
+	}
+}
+(mode_a_plain_1) {
+	reverse_proxy legba-registry:8090 {
+		header_up -Authorization
+	}
+}
+# Set but EMPTY (`LEGBA_AUTH_SIGNIN=` in .env) is off, like unset: caddy's
+# `:0` default applies only to an unset variable.
+(mode_a_api_) {
+	import mode_a_api_0
+}
+(mode_a_plain_) {
+	import mode_a_plain_0
+}
+
+# THE INSTALLABLE PHONE APP (P-1, 2026-11-14) — `/m/` as a web app installed
+#   from the browser (Android first, iPhone second), with NO third-party push.
+#   Behind the SIGN-IN SWITCH: with it off (unset, empty or 0) the `_0` / `_`
+#   snippets below are EMPTY and the adapted config is identical to the
+#   config before this lane (`caddy adapt` proof in the lane report). With it
+#   on (1):
+#   - BOOTSTRAP OUTSIDE THE PERIMETER. The manifest, the service worker
+#     script and the icons answer without the perimeter password: browsers
+#     fetch the manifest without credentials unless told, a worker
+#     registration has been reported to drop the Authorization header, and an
+#     installed app must reach its icons before anyone signs in. These are
+#     three kinds of STATIC, data-free file (the repository is public); every
+#     page, every script of the app and every API route keep the perimeter,
+#     and every API route still needs a session and passes its minimum role.
+#   - CACHE HEADERS. The worker script, the manifest and the page are
+#     `no-cache` (revalidated every time, so an update is seen); the hashed
+#     scripts and styles under `/m/assets/` are `immutable` and 404 when
+#     missing (never the page standing in for a script under an immutable
+#     header); the icons revalidate daily.
+#   - `Service-Worker-Allowed: /m/` names the scope the worker already has
+#     (its directory): it never controls the desktop at `/`.
+#   Dropping the perimeter for the phone path entirely (documents and API on
+#   the session cookie alone — the phone plan's option 1, the arrangement the
+#   research supports for iOS standalone) is lane P-2, on the owner's word.
+(phone_app_0) {
+}
+(phone_app_) {
+	import phone_app_0
+}
+(phone_app_1) {
+	handle /m/sw.js {
+		root * /srv/legba-ui
+		header Content-Type "text/javascript; charset=utf-8"
+		header Cache-Control "no-cache"
+		header Service-Worker-Allowed "/m/"
+		file_server
+	}
+	handle /m/manifest.webmanifest {
+		root * /srv/legba-ui
+		header Content-Type "application/manifest+json"
+		header Cache-Control "no-cache"
+		file_server
+	}
+	handle /m/icons/* {
+		root * /srv/legba-ui
+		header Cache-Control "public, max-age=86400"
+		file_server
+	}
+	handle /m/assets/* {
+		import console_perimeter_{$LEGBA_EDGE_PERIMETER:1}_{$LEGBA_AUTH_SIGNIN:0}
+		root * /srv/legba-ui
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+}
+# Inside `handle /m/*` (the page and anything not matched above): no-cache.
+(phone_page_0) {
+}
+(phone_page_) {
+	import phone_page_0
+}
+(phone_page_1) {
+	header Cache-Control "no-cache"
+}
+
 {$LEGBA_PUBLIC_DOMAIN:localhost} {
 	encode gzip
 
-	# WebSocket event stream — bypasses basic_auth because browsers
-	# CAN'T carry `Authorization: Basic ...` on the WS upgrade request
-	# (the `new WebSocket()` JS API doesn't expose request headers).
-	# basic_auth on this path causes a 401 → browser-prompt loop on
-	# every reconnect attempt.  Security is preserved via the Bearer
-	# injection: only requests through this caddy get the bearer, so
-	# the registry rejects any external direct hit.
+	# WebSocket event stream. (The earlier note here claimed the bypass was
+	# safe because "only requests through this caddy get the bearer" — which
+	# is exactly the problem: every external request comes through this caddy.)
+	# 2026-10-08 (adversarial review P1, W11-F22): the perimeter applies here
+	# too. Without it any external upgrade through this caddy received the
+	# injected admin bearer and a 101 — the whole event bus, unauthenticated.
+	# Browsers attach the realm's cached Basic credentials to the WS upgrade
+	# through the normal HTTP stack; if a prompt loop ever appears, the fix is
+	# a short-lived WS ticket minted behind /api/*, never dropping the gate.
 	handle /api/v1/registry/events* {
-		reverse_proxy legba-registry:8090 {
-			header_up Authorization "Bearer {$LEGBA_REGISTRY_API_TOKEN}"
+		import console_perimeter_{$LEGBA_EDGE_PERIMETER:1}_{$LEGBA_AUTH_SIGNIN:0}
+		# Mode B (X3-B3): a signed-in browser — strip the perimeter header,
+		# inject nothing; the cookie rides the upgrade.
+		@legba_session header_regexp Cookie `(^|;\s*)legba_session=[^;\s]+`
+		handle @legba_session {
+			reverse_proxy legba-registry:8090 {
+				header_up -Authorization
+			}
+		}
+		# Mode A: no cookie — the admin bearer (switch off) or nothing (on).
+		handle {
+			import mode_a_plain_{$LEGBA_AUTH_SIGNIN:0}
 		}
 	}
 
@@ -65,19 +233,36 @@
 	# half-dead process. The probe carries no auth dependency, so no Bearer
 	# is needed for the health request itself.
 	handle /api/* {
-		import basic_auth_perimeter
-		reverse_proxy legba-registry:8090 {
-			header_up Authorization "Bearer {$LEGBA_REGISTRY_API_TOKEN}"
-			health_uri /api/v1/registry/healthz
-			health_interval 15s
-			health_timeout 5s
-			health_status 200
+		import console_perimeter_{$LEGBA_EDGE_PERIMETER:1}_{$LEGBA_AUTH_SIGNIN:0}
+		# Mode B (X3-B3): a signed-in browser — strip the perimeter header,
+		# inject nothing; the registry resolves the `legba_session` cookie.
+		@legba_session header_regexp Cookie `(^|;\s*)legba_session=[^;\s]+`
+		handle @legba_session {
+			reverse_proxy legba-registry:8090 {
+				header_up -Authorization
+				health_uri /api/v1/registry/healthz
+				health_interval 15s
+				health_timeout 5s
+				health_status 200
+			}
+		}
+		# Mode A: no cookie — the admin bearer (switch off) or nothing (on).
+		handle {
+			import mode_a_api_{$LEGBA_AUTH_SIGNIN:0}
 		}
 	}
 
 	handle /ws/* {
-		reverse_proxy legba-registry:8090 {
-			header_up Authorization "Bearer {$LEGBA_REGISTRY_API_TOKEN}"
+		import console_perimeter_{$LEGBA_EDGE_PERIMETER:1}_{$LEGBA_AUTH_SIGNIN:0}
+		# Mode B (X3-B3) / mode A, as for /api/* above.
+		@legba_session header_regexp Cookie `(^|;\s*)legba_session=[^;\s]+`
+		handle @legba_session {
+			reverse_proxy legba-registry:8090 {
+				header_up -Authorization
+			}
+		}
+		handle {
+			import mode_a_plain_{$LEGBA_AUTH_SIGNIN:0}
 		}
 	}
 
@@ -88,7 +273,7 @@
 	# Self-hosted PMTiles basemap (UI v4). Range-request file server over a
 	# read-only mount; if the file is absent the SPA falls back to demotiles.
 	handle /tiles/* {
-		import basic_auth_perimeter
+		import console_perimeter_{$LEGBA_EDGE_PERIMETER:1}_{$LEGBA_AUTH_SIGNIN:0}
 		root * /srv
 		file_server
 	}
@@ -99,6 +284,10 @@
 	handle /m {
 		redir * /m/ 308
 	}
+
+	# P-1 — the installable phone app's bootstrap files and cache headers
+	# (THE INSTALLABLE PHONE APP above; nothing at all with the switch off).
+	import phone_app_{$LEGBA_AUTH_SIGNIN:0}
 
 	# Mobile surface (`/m/`) — the phone-first, report-centric page. A SECOND
 	# SPA from the SAME `legba_ui_dist` volume: `legba-ui-build` emits it to
@@ -117,14 +306,15 @@
 	# entry adds NO new auth path — it reads the same `localStorage.legba_token`
 	# and rides the same two-layer gate.
 	handle /m/* {
-		import basic_auth_perimeter
+		import console_perimeter_{$LEGBA_EDGE_PERIMETER:1}_{$LEGBA_AUTH_SIGNIN:0}
+		import phone_page_{$LEGBA_AUTH_SIGNIN:0}
 		root * /srv/legba-ui
 		try_files {path} /m/index.html
 		file_server
 	}
 
 	handle {
-		import basic_auth_perimeter
+		import console_perimeter_{$LEGBA_EDGE_PERIMETER:1}_{$LEGBA_AUTH_SIGNIN:0}
 		root * /srv/legba-ui
 		try_files {path} /index.html
 		file_server

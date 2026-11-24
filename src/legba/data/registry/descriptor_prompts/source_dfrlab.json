@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.dfrlab.reports": {
+      "source": "source_dfrlab.yaml",
+      "state": "draft"
+    }
+  }
+}

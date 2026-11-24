@@ -1,6 +1,14 @@
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'node:path'
+import fs from 'node:fs'
+import {
+  precacheList,
+  renderServiceWorker,
+  shellFiles,
+  swVersion,
+  type BundleLike,
+} from './src/mobile/pwa/swBuild'
 
 /**
  * Vite config for the MOBILE surface (`/m/`), built into `dist/m/`.
@@ -56,8 +64,45 @@ function htmlAsIndex(): Plugin {
   }
 }
 
+/**
+ * P-1 — emit the phone app's service worker as `dist/m/sw.js` (served at
+ * `/m/sw.js`, so its scope is `/m/` and never the desktop at `/`).
+ *
+ * The worker's source is `src/mobile/pwa/sw.template.js`; this fills in the
+ * shell list (the page, the entry's static import graph, the public files —
+ * `src/mobile/pwa/swBuild.ts` says why lazy chunks are left out) and a version
+ * hashed over all of it, so any change to the shell is a new worker. Runs
+ * after `htmlAsIndex`, so the page is already `index.html`.
+ */
+function phoneServiceWorker(publicDir: string): Plugin {
+  const listPublic = (dir: string, rel = ''): string[] =>
+    fs.readdirSync(path.join(dir, rel), { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory() ? listPublic(dir, path.join(rel, e.name)) : [path.join(rel, e.name).split(path.sep).join('/')],
+    )
+  return {
+    name: 'legba-mobile-service-worker',
+    enforce: 'post',
+    apply: 'build',
+    generateBundle(_options, bundle) {
+      const template = fs.readFileSync(path.resolve(__dirname, 'src/mobile/pwa/sw.template.js'), 'utf8')
+      const publicFiles = listPublic(publicDir)
+      const precache = precacheList('/m/', shellFiles(bundle as unknown as BundleLike), publicFiles)
+      const contents = precache.map((p) => {
+        const rel = p.slice('/m/'.length)
+        const item = (bundle as unknown as BundleLike)[rel]
+        if (item) return item.type === 'chunk' ? String((item as unknown as { code: string }).code) : (item.source ?? '')
+        return fs.readFileSync(path.join(publicDir, rel))
+      })
+      const source = renderServiceWorker(template, swVersion(template, precache, contents), precache)
+      this.emitFile({ type: 'asset', fileName: 'sw.js', source })
+    },
+  }
+}
+
+const PUBLIC_M = path.resolve(__dirname, 'public-m')
+
 export default defineConfig({
-  plugins: [react(), htmlAsIndex()],
+  plugins: [react(), htmlAsIndex(), phoneServiceWorker(PUBLIC_M)],
   // Assets are requested from `/m/assets/...` — the surface is served under a
   // sub-path, not the origin root.
   base: '/m/',
@@ -65,7 +110,15 @@ export default defineConfig({
   // panels use and this surface does not (there is no map here; see the
   // build note). Copying it would have made the phone bundle mostly a file
   // the phone never opens. The workstation still ships it from its own build.
-  publicDir: false,
+  // M-0a — so the phone has its OWN public dir, `public-m/`, holding only what
+  // the phone serves at `/m/…`: today the icon (`/m/favicon.svg`; m.html's
+  // `/favicon.svg` is rewritten under the base). Until 2026-11-14 this was
+  // `false`, nothing was emitted, and the icon request fell through to the
+  // SPA's index.html. The icon is the same file as `public/favicon.svg`
+  // (`src/mobile/publicAssets.test.ts` holds them byte-identical).
+  // P-1: it also holds the app manifest and the icons (`public-m/icons/`,
+  // drawn by `tools/make-phone-icons.mjs` from `favicon.svg`).
+  publicDir: path.resolve(__dirname, 'public-m'),
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

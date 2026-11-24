@@ -1,0 +1,51 @@
+{
+ "_doc": "W10 TAX-2: sha256 of each target registrar body (canonical JSON, sort_keys, compact) built by the PINNED fcbafb2e registrars with LEGBA_FRAME_FAMILY unset and fixed inputs (name=\"Name <ISO2>\", languages=[\"xx\"]). tests/data_pkg/test_source_classification_stamping.py rebuilds every body and requires the same hashes: flag off, byte-identical.",
+ "bodies": {
+  "g20": {
+   "AR": "b747f2fffab273fa7ade7b9d500105d4e306cbffa2b605152efd7df3dca1b8fb",
+   "AU": "01e2cb730a50069ed3ce22ba0da0e632d57ed975978c33197385e10f73fa37ee",
+   "BR": "89b7c35b7c193c2fe07e96d7ef1c7964375f853cfd4a1f58ef32f385daeb7439",
+   "CA": "d6ccee2a49183110c090f35faa94876824eb988e50168481381d3cd1865a5246",
+   "CN": "6c32551b61f36a5d773c0d33ea6e1e5afa92650aff5d872a5b911a6bfa8fd330",
+   "DE": "40e8805b0128df9e059c415a59c631db00319a537dc24789a96828c7cc4bcd0d",
+   "FR": "b758133940cb2e0277677cb08dd99ec4ee4e71f35f7b422b17f02251fb659014",
+   "GB": "98ca352f82a267e3b157f5d8b3ec918e8492992110f88103d89c430656237e9a",
+   "ID": "36f6deedb79e3865a019f6a5fc1c3ee7f6e9ee0709d4642212e6bb25cd79bcac",
+   "IN": "92c58e0259dde28785587c82f809f9fa212757f5f99e087160094cf50453af49",
+   "IT": "d0701ff9f4d666596a1dd8c135c92394116570bea431ce3b47445aa558786310",
+   "JP": "cfcb53d239adbd2f09f2233c250a501f981a65696c2d9f38bddec026a3d9fd2e",
+   "KR": "abc811d9817549841fee2ec47f44f62eca9948510c55ea4b4b0626a4d8263273",
+   "MX": "2c66157bf9099cb0f8b0862c19a4cb529276bcea7e1d108495a6dc0b644a913b",
+   "RU": "90feba230606d8fc395e43989c9587c76f530822921b1da9538d265dfd2af654",
+   "SA": "ec0592f6cb2e80e66d6577829cf2898c587747243282f0551038a65ce00245cf",
+   "TR": "d7100f84119e5431600872fe95341065fd87eea7d088ee6ba1b79b3a9b7aab3e",
+   "US": "9f14948f753d2d1e4ff19724ebc14f0dab9bdb97a687fb6dacd3c7779d273cba",
+   "ZA": "1b1ece58e5e5c99554f8f1ee2d47f9ba356b85040d8665314ec30f1204112ce9"
+  },
+  "region": {
+   "region_africa": "e3f37af1c153b9943a5f2e452c161a49e2927ad203292857a1dc1003a2b92a88",
+   "region_americas": "8232aa207809e9002528d9b8a5272959fd63df82ce64c61caa348d9ae8473381",
+   "region_europe": "bc4c377442c0a927f6fb1a595abe2be0c2bf65e55e41be8bd0ee54aa65cd30ad",
+   "region_indo_pacific": "30cb25ae11e3f0b043aeeedcf73251abd472a44770199b092f00f63428bb2260",
+   "region_mena": "0f3df19ff464055b3cecb8553dc334fd94da01e95d5eeae5538e57912ce9e5bf"
+  },
+  "situation": {
+   "target_situation_iran_war.yaml": "4d792f89a5a6646a6fbe111b0302daf8ce213a27e47c48a707f2211b21137fb6"
+  },
+  "watch": {
+   "BF": "d5633d7f01016f933978b37e28a46759450d6d4ea36aa56e18feb99152389bbf",
+   "CD": "540ab57465c693da8578edece84e9755625209e0dfd0391c3ed3c6b5a7eedac5",
+   "HT": "483a7e62666f490b55ddbf5a0f03d3ed53eb095e87d0c0c98457fe6320f8ab1d",
+   "IL": "62803e7430b71e9c1a7382764022e0f20c0bfe03ca3a43a72fefc526dc258bf2",
+   "IR": "6611e2a54df2c1727a03d560fb736e44edc97e8948353db89ff0c8560d60db28",
+   "KP": "00f4063ca51d0d5a5856fb439300a157993c926bd899c2dec7091aeba10f21c6",
+   "ML": "2031a4de477ea561cc4dc189f6ebf70342709278d33bb642c201c388a58a3374",
+   "MM": "b6ca38315cc87d6a27c56f73e21976c6e30b4826e9efd0d457a637c37922e030",
+   "NE": "d2b87f7eb2d8d93c6c9118bb1151d2d415c6a21fcac6a432fb53717c4964e3b6",
+   "PK": "63b74f175a007d5d7503b02d991d5934f0c515cbeba2084e8e69ea6fe57f7539",
+   "SD": "ce1b07537ec438e602075e510dad0186d1b2700a4415fad9b7a4f605691cbb94",
+   "TW": "a5ab42b18962fea83e31b0153870ad716d1386f539e2e2ad7f6c0f8269287e2e",
+   "UA": "128490e6b903d95c2a08dd65a3f50f079b48a3f28bbd52bab923ddc0e964211c"
+  }
+ }
+}

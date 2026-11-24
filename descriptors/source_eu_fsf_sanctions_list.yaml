@@ -1,0 +1,110 @@
+# X-1 source expansion (2026-11-14) — the EU consolidated list of persons,
+# groups and entities subject to financial sanctions (the Commission's
+# Financial Sanctions Files, FSF), as the INSTRUMENT itself (kind
+# instrument_snapshot: fetch, hash, archive, diff). Ships DRAFT; the reference
+# host walks it to CONFIGURED (descriptors/LIFECYCLE.md), never active —
+# activation is the owner's call, and the kind refuses activation without a
+# writable evidence archive.
+#
+# WHY: the first sanctions register held as data on this instance (the
+# Federal Register OFAC/BIS feeds are notices about lists, not the lists).
+#
+# THE ENDPOINT. The FSF "full sanctions list" XML 1.1 download. The `token`
+# query value is the PUBLIC constant in the Commission's own published link —
+# not a credential, not registered by anyone. Checked 2026-11-14 by the
+# source-expansion review (one GET, generic client identity): HTTP 200,
+# application/xml, 25.9 MB (under this kind's 64 MB cap); root
+# <export xmlns="http://eu.europa.ec/fpi/fsd/export" generationDate=...>,
+# 6,269 <sanctionEntity> entries in that file. robots.txt returned 404.
+#
+# DIFFER: xml_records keyed on the list's OWN identifier, the attribute
+# sanctionEntity/@logicalId (I-5 taught the record differ attribute keys;
+# X-1 had to fall back to a text diff). A change names the entries added,
+# removed and changed by logicalId, each changed entry naming the fields that
+# moved (`@` = the entry's own attributes, e.g. its EU reference number).
+# Label: the first nameAlias/@wholeName; summary: the EU reference number,
+# the regulation programme(s) and the subject type. Checked against the
+# review's own 2026-11-14 download (kept in its scratchpad, not fetched
+# again): 6,269 entries, 6,269 distinct logicalIds, none without one, parse
+# ~5 s. The root's generationDate changes with every regeneration; with this
+# differ a regenerated-but-identical list is a change of zero entries, said
+# as such. Re-checked every six hours (an act lands without notice);
+# conditional GET when the server sends a validator.
+#
+# Language: en. Region: EU (no
+# country code). Class: official (a register published by an EU institution).
+
+identity:
+  id: source.eu.fsf_sanctions_list
+  name: "EU — consolidated financial sanctions list (FSF, the published instrument, diffed)"
+  kind: instrument_snapshot
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: x1_source_expansion
+  created: "2026-11-14T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [sanctions, designation, gov, instrument, eu]
+  source_class: official
+  access_class: public
+  license_class: cc_by               # Commission legal notice: CC BY 4.0
+  attribution: "© European Union, CC BY 4.0 (EU Financial Sanctions Files, consolidated list)"
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "51 */6 * * *"
+  cooldown_seconds: 600
+  jitter_seconds: 120
+
+config:
+  instrument_name:
+    factory_kind: text
+    raw: "EU consolidated financial sanctions list (FSF XML 1.1)"
+  url:
+    factory_kind: text
+    raw: "https://webgate.ec.europa.eu/fsd/fsf/public/files/xmlFullSanctionsList_1_1/content?token=dG9rZW4tMjAxNw"
+  license_class:                     # the same class as scope.license_class (a test pins the pair)
+    factory_kind: text
+    raw: "cc_by"
+  differ:
+    factory_kind: text
+    raw: "xml_records"
+  record_tag:
+    factory_kind: text
+    raw: "sanctionEntity"
+  key_path:
+    factory_kind: text
+    raw: "@logicalId"
+  label_paths:
+    factory_kind: list
+    raw: ["nameAlias/@wholeName"]
+  summary_paths:
+    factory_kind: list
+    raw: ["@euReferenceNumber", "regulation/@programme", "subjectType/@code"]
+  timeout_seconds:
+    factory_kind: number
+    raw: 180
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_2            # the (previous, current) sha pair; no URL tier (one URL, many changes)
+      config: {}
+  enrichment: []                     # a structured change record — no text chain
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

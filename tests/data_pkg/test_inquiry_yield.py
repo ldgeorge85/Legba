@@ -341,6 +341,117 @@ async def test_handle_reports_capped_warnings():
 
 
 # ---------------------------------------------------------------------------
+# The findings read pages over the whole week (SW-10)
+# ---------------------------------------------------------------------------
+#
+# 2026-09-28's yield warned `inquiry_yield.findings_capped`: one `LIMIT 5000`
+# read against a week carrying ~12.6k in-window findings. The read now pages on
+# (produced_at, id); these prove the whole set comes back, once each.
+
+
+class _KeysetConn:
+    """A fake connection that honours the keyset page SQL's five arguments
+    ``(week_start, week_end, cursor_ts, cursor_id, limit)`` over an in-memory
+    table, ordered ``(produced_at, id)`` exactly as Postgres would."""
+
+    def __init__(self, rows):
+        self._rows = sorted(rows, key=lambda r: (r["produced_at"], r["id"]))
+        self.page_calls = 0
+
+    async def fetch(self, sql, *args):
+        if "FROM inquiry_ledger" in sql:
+            return []
+        if "DISTINCT analyst_id, target_id" in sql:
+            return []
+        assert "FROM analyst_outputs" in sql and "derived_from" in sql
+        start, end, cursor_ts, cursor_id, limit = args
+        self.page_calls += 1
+        out = []
+        for r in self._rows:
+            if not (start <= r["produced_at"] < end):
+                continue
+            if cursor_ts is not None and (r["produced_at"], r["id"]) <= (cursor_ts, cursor_id):
+                continue
+            out.append(r)
+            if len(out) >= limit:
+                break
+        return out
+
+
+def _finding_rows(n, *, end, ties_every=7):
+    """``n`` in-window finding rows; every ``ties_every`` rows share ONE
+    produced_at, so page boundaries land inside runs of equal timestamps."""
+    from uuid import UUID
+
+    return [
+        {
+            "id": UUID(int=i + 1),
+            "produced_at": end - timedelta(seconds=1 + (i // ties_every)),
+            "derived_from": [uuid4()],
+        }
+        for i in range(n)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_finding_read_over_3x_the_old_cap_returns_the_whole_set_once():
+    old_cap = 5_000
+    n = 3 * old_cap + 1
+    start, end = _WEEK_START, _WEEK_END
+    rows = _finding_rows(n, end=end)
+    conn = _KeysetConn(rows)
+    got, capped = await iy.fetch_finding_refs(conn, start, end)
+    assert capped is False
+    assert len(got) == n
+    assert len({r["id"] for r in got}) == n, "a page boundary repeated a row"
+    assert conn.page_calls == 4  # three full pages of 5,000 + the short tail
+
+
+@pytest.mark.asyncio
+async def test_handle_over_3x_the_old_cap_does_not_warn_findings_capped(monkeypatch):
+    now = datetime.now(timezone.utc)
+    rows = _finding_rows(3 * 5_000 + 1, end=now - timedelta(minutes=5))
+    conn = _KeysetConn(rows)
+    result = await iy.handle([], {}, _Deps(_Pool(conn)))
+    assert "inquiry_yield.findings_capped" not in result.finding.data["warnings"]
+    assert conn.page_calls == 4
+
+
+@pytest.mark.asyncio
+async def test_finding_read_ceiling_warns_only_when_rows_remain():
+    start, end = _WEEK_START, _WEEK_END
+    rows = _finding_rows(30, end=end, ties_every=4)
+    # exactly at the ceiling, nothing beyond it: not capped
+    got, capped = await iy.fetch_finding_refs(
+        _KeysetConn(rows), start, end, page_rows=7, max_rows=30,
+    )
+    assert (len(got), capped) == (30, False)
+    # one row beyond the ceiling: capped, and the read stopped at the ceiling
+    got, capped = await iy.fetch_finding_refs(
+        _KeysetConn(rows), start, end, page_rows=7, max_rows=29,
+    )
+    assert (len(got), capped) == (29, True)
+
+
+@pytest.mark.asyncio
+async def test_handle_reports_findings_capped_at_the_ceiling(monkeypatch):
+    monkeypatch.setattr(iy, "_MAX_FINDING_ROWS", 10)
+    monkeypatch.setattr(iy, "_FINDING_PAGE_ROWS", 4)
+    # fetch_finding_refs binds its defaults at definition time, so the shell
+    # must pass the module's CURRENT values — patched here to prove it does.
+    now = datetime.now(timezone.utc)
+    conn = _KeysetConn(_finding_rows(11, end=now - timedelta(minutes=5)))
+    result = await iy.handle([], {}, _Deps(_Pool(conn)))
+    assert "inquiry_yield.findings_capped" in result.finding.data["warnings"]
+
+
+def test_the_page_and_the_ceiling_are_the_documented_values():
+    assert iy._FINDING_PAGE_ROWS == 5_000
+    assert iy._MAX_FINDING_ROWS == 250_000
+    assert iy._MAX_LEDGER_ROWS == 20_000  # the ledger cap is kept as it was
+
+
+# ---------------------------------------------------------------------------
 # Dispatch wiring + descriptor
 # ---------------------------------------------------------------------------
 

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:corpus_indexer": {
+      "source": "analyst_corpus_indexer.yaml",
+      "state": "active"
+    }
+  }
+}

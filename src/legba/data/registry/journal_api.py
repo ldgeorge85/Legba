@@ -18,8 +18,8 @@ Exposes the Journal panel's read surface:
 
 FIELDS MODE (§3.3). ``fields=summary`` (list-view weight — id/entry_kind/title/
 honesty_flags/period_*/produced_at/analyst_* + the verify score, §3.4) vs.
-``fields=full`` (today's behavior — adds body/claims/cited_substrate_refs/
-verify_body). Summary requests skip ``_resolve_refs`` entirely (it only hydrates
+``fields=full`` (the pre-P-8 default — adds body/claims/cited_substrate_refs/
+verify_body; since P-8 the default is ``summary``). Summary requests skip ``_resolve_refs`` entirely (it only hydrates
 fields summary rows don't carry) and skip the critique body join (verify_body is
 full-only) so the grouped list (§2b of the spec) stays a cheap read regardless of
 how many chronicle-weight rows are in the window.
@@ -74,6 +74,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from .api import RegistryAPIDeps, require_bearer
+from ..calibration_honesty import reduce_calibration
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +95,8 @@ _VALID_KINDS = frozenset({
     "entry", "consolidation", "chronicle", "lens", "lens_diff",
     # Program 5 — the stateful tier written by the `inquiry` KIND.
     "inquiry", "crossroads",
+    # N-G — an append-only correction citing the rows it withdrew.
+    "correction",
 })
 
 # Default stream selection when `kind` is omitted: every append tier —
@@ -102,6 +105,7 @@ _VALID_KINDS = frozenset({
 # stays slot-only, never a stream row.
 _DEFAULT_STREAM_KINDS = (
     "entry", "chronicle", "lens", "lens_diff", "inquiry", "crossroads",
+    "correction",
 )
 
 _VALID_FIELDS = frozenset({"summary", "full"})
@@ -156,6 +160,11 @@ def _validate_kinds(kind: list[str] | None) -> list[str] | None:
             detail=f"invalid kind(s) {bad}; must be one of {sorted(_VALID_KINDS)}",
         )
     return kind
+
+
+#: What an omitted `fields` means on `GET /journal` (P-8: the light weight;
+#: "full" restores the pre-P-8 default).
+JOURNAL_DEFAULT_FIELDS = "summary"
 
 
 def _validate_fields(fields: str) -> str:
@@ -382,6 +391,14 @@ class JournalEntryOut(BaseModel):
     # ``  - [judge_unsupported] ...`` / ``  - [no_citation] ...`` line; the
     # reader pane's per-claim verdict block parses these.
     verify_body: str | None = None
+    # W2 S-batch — a lens row's declared-prior header as the row itself
+    # stamped it (``data.lens_prior``). ``None`` for every other tier and for a
+    # lens row written before the stamp existed — never back-filled from a
+    # persona module the row may have outlived.
+    lens_prior: str | None = None
+    # N-G — the id of the ``correction`` row that withdrew this one (the row
+    # stays readable by id; the stream no longer serves it). ``None`` otherwise.
+    corrected_by: str | None = None
 
 
 class JournalEntrySummaryOut(BaseModel):
@@ -402,6 +419,8 @@ class JournalEntrySummaryOut(BaseModel):
     analyst_id: str | None
     analyst_version: str | None
     verify_score: float | None = None
+    lens_prior: str | None = None
+    corrected_by: str | None = None
 
 
 class CalibrationVerdict(BaseModel):
@@ -420,13 +439,18 @@ class CalibrationVerdict(BaseModel):
     calibration_thin: bool = True
     brier_skill_score: float | None = None
     exogenous_sample_size: int | None = None
+    # Lane E — the legacy/untrusted label and the headline population's staleness
+    # (never the sealed forecast ledger).
+    label: str = ""
+    stale: bool | None = None
+    newest_member_at: str | None = None
     forecast_acute_sample_size: int | None = None
     forecast_acute_status: str | None = None
     produced_at: datetime | None = None
 
 
 class JournalOut(BaseModel):
-    """``GET /journal?fields=full`` body (default): the open consolidation (or
+    """``GET /journal?fields=full`` body: the open consolidation (or
     null) + the entry stream + the calibration verdict, each row at full
     (body+claims) weight."""
 
@@ -512,6 +536,8 @@ def _hydrate_entry(
         analyst_version=row["analyst_version"],
         verify_score=vr.score if vr is not None else None,
         verify_body=vr.body if vr is not None else None,
+        lens_prior=_lens_prior_of(row),
+        corrected_by=_corrected_by_of(row),
     )
 
 
@@ -533,7 +559,28 @@ def _hydrate_summary(
         analyst_id=row["analyst_id"],
         analyst_version=row["analyst_version"],
         verify_score=vr.score if vr is not None else None,
+        lens_prior=_lens_prior_of(row),
+        corrected_by=_corrected_by_of(row),
     )
+
+
+def _corrected_by_of(row: Any) -> str | None:
+    """The row's ``data.corrected_by`` (selected as ``corrected_by``), or ``None``."""
+    try:
+        value = row["corrected_by"]
+    except (KeyError, IndexError):
+        return None
+    return (value.strip() or None) if isinstance(value, str) else None
+
+
+def _lens_prior_of(row: Any) -> str | None:
+    """The row's stamped ``data.lens_prior`` (selected as ``lens_prior``), or
+    ``None`` — a blank stamp is absence, not a prior."""
+    try:
+        value = row["lens_prior"]
+    except (KeyError, IndexError):
+        return None
+    return (value.strip() or None) if isinstance(value, str) else None
 
 
 def _all_ref_ids(rows: list[Any]) -> list[str]:
@@ -577,12 +624,15 @@ async def _read_calibration(conn: Any) -> CalibrationVerdict:
     forecast_proven = (
         ready and not degenerate and isinstance(bss, (int, float)) and bss > 0.0
     )
-    exo_n = data.get("exogenous_sample_size")
-    calibration_thin = not isinstance(exo_n, int) or exo_n < 5
+    red = reduce_calibration(data)
+    exo_n = red["exogenous_sample_size"]
     return CalibrationVerdict(
         available=True,
         forecast_unproven=not forecast_proven,
-        calibration_thin=calibration_thin,
+        calibration_thin=red["calibration_thin"],
+        label=red["label"],
+        stale=red["stale"],
+        newest_member_at=red["newest_member_at"],
         brier_skill_score=bss if isinstance(bss, (int, float)) else None,
         exogenous_sample_size=exo_n if isinstance(exo_n, int) else None,
         forecast_acute_sample_size=(
@@ -611,7 +661,8 @@ async def _read_calibration(conn: Any) -> CalibrationVerdict:
 # rows, §3.5).
 _ENTRY_COLS = (
     "id, entry_kind, title, body, claims, cited_substrate_refs, honesty_flags, "
-    "period_start, period_end, produced_at, analyst_id, analyst_version"
+    "period_start, period_end, produced_at, analyst_id, analyst_version, "
+    "data->>'lens_prior' AS lens_prior, data->>'corrected_by' AS corrected_by"
 )
 
 # The list-cheap column set at `fields=summary` (§3.3) — drops body/claims/
@@ -619,7 +670,8 @@ _ENTRY_COLS = (
 # than a diary row and that a future lens_diff.data matrix would only add to.
 _SUMMARY_COLS = (
     "id, entry_kind, title, honesty_flags, "
-    "period_start, period_end, produced_at, analyst_id, analyst_version"
+    "period_start, period_end, produced_at, analyst_id, analyst_version, "
+    "data->>'lens_prior' AS lens_prior, data->>'corrected_by' AS corrected_by"
 )
 
 
@@ -660,7 +712,11 @@ def build_journal_router(deps: RegistryAPIDeps) -> APIRouter:
         limit: int = Query(default=DEFAULT_LIMIT),
         cursor: str | None = Query(default=None),
         kind: list[str] | None = Query(default=None),
-        fields: str = Query(default="full"),
+        # P-8 — light by default: an omitted `fields` is `summary` (measured
+        # live 2026-11-14, 25 rows: 483 KB full vs 17 KB summary). The full row
+        # is `fields=full` by name, or one entry at `GET /journal/{id}`. The
+        # switch back is `JOURNAL_DEFAULT_FIELDS`.
+        fields: str = Query(default=JOURNAL_DEFAULT_FIELDS),
         principal: str = Depends(require_bearer),
     ) -> JournalOut | JournalSummaryOut:
         limit = _validate_limit(limit)

@@ -66,7 +66,7 @@ function ValueRow({ v }: { v: ContentionValueView }) {
   return (
     <li
       className={cn(
-        'flex items-center justify-between gap-2 rounded px-2 py-1 text-[11px]',
+        'flex items-center justify-between gap-2 rounded px-2 py-1 text-label',
         v.surfacedWinner ? 'bg-amber-500/10 ring-1 ring-amber-500/30' : 'bg-surface-100',
         v.isJunk && 'opacity-50',
       )}
@@ -77,13 +77,13 @@ function ValueRow({ v }: { v: ContentionValueView }) {
           {v.valueKey}
         </span>
         {v.surfacedWinner && (
-          <span className="shrink-0 rounded-full bg-amber-500/20 px-1.5 text-[9px] font-semibold uppercase tracking-wide text-amber-300">
+          <span className="shrink-0 rounded-full bg-amber-500/20 px-1.5 text-label font-semibold uppercase tracking-wide text-amber-300">
             surfaced
           </span>
         )}
         {v.isJunk && (
           <span
-            className="shrink-0 rounded-full bg-slate-700 px-1.5 text-[9px] uppercase text-slate-400"
+            className="shrink-0 rounded-full bg-slate-700 px-1.5 text-label uppercase text-slate-400"
             title={v.junkReason ?? 'junk-gated'}
           >
             junk
@@ -115,7 +115,7 @@ function ContestedView({
     <div className={cn('flex flex-col gap-1', className)} data-testid="contested-badge">
       <span
         className={cn(
-          'inline-flex w-fit items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold',
+          'inline-flex w-fit items-center gap-1 rounded-full px-2 py-0.5 text-label font-semibold',
           view.abstained
             ? 'bg-rose-500/15 text-rose-300 ring-1 ring-rose-500/30'
             : 'bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/30',
@@ -175,7 +175,7 @@ export default function ContestedBadge({
     return (
       <span
         className={cn(
-          'inline-flex w-fit items-center gap-1 text-[10px] text-slate-500',
+          'inline-flex w-fit items-center gap-1 text-label text-slate-500',
           className,
         )}
         title={`Contested-claim lookup failed${

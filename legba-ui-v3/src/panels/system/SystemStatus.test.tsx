@@ -106,3 +106,51 @@ describe('SystemStatusPanel — Acquisition freshness column', () => {
     expect(screen.getByTestId('status-source-pill-firing')).toBeInTheDocument()
   })
 })
+
+describe('SystemStatusPanel — Infra backup line (X1-A2)', () => {
+  function stub(backup: unknown) {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/v3/system/backup-status')) {
+        return Promise.resolve({ ok: true, json: async () => backup })
+      }
+      return Promise.resolve({ ok: true, json: async () => [] })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  it('shows the last backup as an age with its UTC stamp, and an absent drill as "never recorded"', async () => {
+    const at = new Date(Date.now() - 2 * 3600_000).toISOString()
+    const fetchMock = stub({ last_backup_at: at, last_drill_at: null })
+    render(wrap(<SystemStatusPanel registration={reg()} scope={{}} mode="personal" />))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('status-backup-last')).toHaveTextContent('2.0h ago'),
+    )
+    expect(screen.getByTestId('status-backup-last').getAttribute('title')).toBe(`${at} (UTC)`)
+    expect(screen.getByTestId('status-backup-last').className).toMatch(/text-ink-1/)
+    expect(screen.getByTestId('status-backup-drill')).toHaveTextContent('never recorded')
+    expect(
+      fetchMock.mock.calls.some(([u]) => String(u).includes('/v3/system/backup-status')),
+    ).toBe(true)
+  })
+
+  it('never renders a time when nothing is recorded, and goes amber past the nightly cadence', async () => {
+    stub({ last_backup_at: null, last_drill_at: null })
+    const { unmount } = render(
+      wrap(<SystemStatusPanel registration={reg()} scope={{}} mode="personal" />),
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('status-backup-last')).toHaveTextContent('never recorded'),
+    )
+    expect(screen.getByTestId('status-backup')).not.toHaveTextContent(/ago/)
+    unmount()
+
+    stub({ last_backup_at: new Date(Date.now() - 3 * 86400_000).toISOString(), last_drill_at: null })
+    render(wrap(<SystemStatusPanel registration={reg()} scope={{}} mode="personal" />))
+    await waitFor(() =>
+      expect(screen.getByTestId('status-backup-last')).toHaveTextContent('3.0d ago'),
+    )
+    expect(screen.getByTestId('status-backup-last').className).toMatch(/amber/)
+  })
+})

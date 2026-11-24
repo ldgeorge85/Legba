@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:lane_panama": {
+      "source": "target_lane_panama.yaml",
+      "state": "draft"
+    }
+  }
+}

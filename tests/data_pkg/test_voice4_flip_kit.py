@@ -35,11 +35,13 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "voice4_flip"))
 
+from _level_peel import LATER_LEVEL_SWAPS, pre_level_indicators  # noqa: E402
 from _flip_common import (  # noqa: E402
     HELD_SHA256,
     HELD_UNIT,
     INTENDED_SHA256,
     LATER_CONTRACT_PARAGRAPHS,
+    LATER_DESK_PARAGRAPHS,
     LATER_TITLE_HINTS,
     MA2_DATE_FORMAT_SENTENCE,
     TITLE_AMENDMENT_SENTENCE,
@@ -169,20 +171,48 @@ def test_the_peel_removes_the_later_paragraphs_and_nothing_else(unit: str) -> No
     swap gets its own byte accounting in the test below, so neither peel is
     unpoliced.
     """
-    full, base = pre_title_frame_fix(_prompt(unit)), d6_base(_prompt(unit))
-    later = {norm(p) for p in LATER_CONTRACT_PARAGRAPHS}
-    for para in LATER_CONTRACT_PARAGRAPHS:
+    # X4 LEVEL's whole-line swaps are rolled back first, like the title hint,
+    # and policed by their own accounting test below.
+    full = pre_title_frame_fix(pre_level_indicators(_prompt(unit)))
+    base = d6_base(_prompt(unit))
+    # X4 / ESC: the house-contract paragraphs ride every desk; a per-desk
+    # paragraph rides only the desks LATER_DESK_PARAGRAPHS names - and a desk it
+    # does NOT name must not carry it (the peel would then be hiding an edit).
+    expected = LATER_CONTRACT_PARAGRAPHS + LATER_DESK_PARAGRAPHS.get(unit, ())
+    later = {norm(p) for p in expected}
+    for para in expected:
         assert norm(para) in norm(full), f"{unit}: later paragraph missing from tree"
         assert norm(para) not in norm(base), f"{unit}: peel left it behind"
+    for other, paras in LATER_DESK_PARAGRAPHS.items():
+        if other != unit:
+            for para in paras:
+                if para not in LATER_DESK_PARAGRAPHS.get(unit, ()):
+                    assert norm(para) not in norm(full), f"{unit}: carries {other}'s paragraph"
 
     paragraphs = full.split("\n\n")
     dropped = [p for p in paragraphs if norm(p) in later]
-    assert len(dropped) == len(LATER_CONTRACT_PARAGRAPHS), f"{unit}: {len(dropped)}"
+    assert len(dropped) == len(expected), f"{unit}: {len(dropped)}"
     # Byte accounting: the peel removed exactly those paragraphs and exactly one
     # blank-line separator each. Anything else — a stripped space, a joined
     # paragraph — shows up as an inequality here rather than as a digest that
     # someone re-pins.
     assert len(full) == len(base) + sum(len(p) + 2 for p in dropped), unit
+
+
+@pytest.mark.parametrize("unit", ALL_DESKS)
+def test_the_level_peel_is_exactly_its_declared_swaps(unit: str) -> None:
+    """X4 LEVEL (W11-F36) — the third later train's peel accounts for every
+    byte it moves: on a converted desk each X4 text is present once and the
+    rollback changes the length by exactly the swaps' difference; every other
+    desk is untouched by it."""
+    prompt = _prompt(unit)
+    swaps = LATER_LEVEL_SWAPS.get(unit, ())
+    for new, old in swaps:
+        assert prompt.count(new) == 1, f"{unit}: X4 text not present exactly once"
+    peeled = pre_level_indicators(prompt)
+    assert len(prompt) - len(peeled) == sum(len(n) - len(o) for n, o in swaps)
+    if not swaps:
+        assert peeled == prompt
 
 
 @pytest.mark.parametrize("unit", ALL_DESKS)
@@ -429,6 +459,11 @@ def test_structural_diff_reports_a_list_the_registry_and_tree_size_differently()
     ]
 
 
+#: Desks whose synthesis call went back to thinking "off" on the first live
+#: measurement (3af2e339; test_thinking_seats.MEASURED_OFF).
+_THINKING_MEASURED_OFF = frozenset({"proliferation_watch"})
+
+
 @pytest.mark.parametrize("unit", UNITS)
 def test_only_the_prompt_changed_against_the_pre_flip_descriptor(unit: str) -> None:
     """The tree half of "no other descriptor field changed".
@@ -498,6 +533,23 @@ def test_only_the_prompt_changed_against_the_pre_flip_descriptor(unit: str) -> N
     _pre_flip_opts = before.get("method", {}).get("options")
     if isinstance(_pre_flip_opts, dict) and _pre_flip_opts.get("judge_sample_rate") == 0.10:
         _pre_flip_opts["judge_sample_rate"] = 1.0
+    # 2026-09-17 (post-flip, house rule): budget_tokens_per_day is 0 on EVERY
+    # descriptor (no token budgets). The pre-flip base carried 30,000,000; the
+    # tree is right and this pin never learned the change (it fails only on
+    # the host — the container gate has no git and skips). Normalized on the
+    # BEFORE side like the carve-outs above.
+    if "budget_tokens_per_day" in before.get("method", {}):
+        before["method"]["budget_tokens_per_day"] = 0
+    # T-2 (2026-11-14, post-flip): the desks think on their synthesis call and
+    # not on their gather rounds. Normalized on the BEFORE side like the
+    # carve-outs above, so this pin keeps asserting "nothing ELSE moved".
+    # 3af2e339 (2026-11-15): proliferation_watch's synthesis call measured
+    # three to four times slower with the verifier score flat, so it went back
+    # to "off" (asserted by test_thinking_seats.MEASURED_OFF).
+    before["method"].setdefault("llm", {})["thinking"] = (
+        "off" if unit in _THINKING_MEASURED_OFF else "on"
+    )
+    before["method"]["gather"] = {"thinking": "off"}
     # F-3 (2026-09-03, post-flip): method.bounded_question is a wholly NEW field
     # — the desk's bounded question, previously implicit only in system_prompt's
     # own "BOUNDED QUESTION —" section, made explicit so the assembly's block
@@ -511,4 +563,14 @@ def test_only_the_prompt_changed_against_the_pre_flip_descriptor(unit: str) -> N
     _after_bq = after.get("method", {}).get("bounded_question")
     if "bounded_question" not in before.get("method", {}) and _after_bq is not None:
         before["method"]["bounded_question"] = _after_bq
+    # Lane N-B (2026-11-11, post-flip): slice_since_watermark is a wholly new
+    # slice-reader knob on seven units, asserted in test_slice_coverage.py.
+    after.get("method", {}).get("options", {}).pop("slice_since_watermark", None)
+    # Three more wholly new, post-flip option knobs this pin never learned
+    # (roll 84 found them when the host run was made green; each has its own
+    # test): level_indicators (X4 LEVEL, e26f140c — energy_security,
+    # military_posture), offer_events (V3/P2, 80fdb309 — escalation) and
+    # offer_history (007e5cde — energy_security).
+    for _knob in ("level_indicators", "offer_events", "offer_history"):
+        after.get("method", {}).get("options", {}).pop(_knob, None)
     assert before == after

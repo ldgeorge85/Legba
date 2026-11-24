@@ -522,5 +522,7 @@ def test_known_kinds_set_matches_brief() -> None:
         "classify",
         "fact_extractor",
         "slm_entity_resolve",
+        # W3 SRC-3 — the droppable keyword gate (ingestion_filters).
+        "keyword_gate",
     })
     assert _KNOWN_KINDS == expected

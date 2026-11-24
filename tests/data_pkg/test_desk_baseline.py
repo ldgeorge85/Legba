@@ -482,11 +482,21 @@ async def pg_pool(migrated_pg: PostgresConfig):
 @pytest_asyncio.fixture
 async def clean_slate(pg_pool):
     """A clean desk universe + empty sidecar so each test's compute sees ONLY
-    its own desks (the session DB is per-session + disposable)."""
+    its own desks (the session DB is per-session + disposable).
+
+    ALL signals go, not just this file's ``test_p3_7_src`` rows (W11-F94): a
+    desk's bucket vector counts every live signal whose ``geo`` overlaps its
+    scope, whoever inserted it, so a stray row from another module is read as
+    this test's evidence. Nightly 2026-10-15 (shuffled): US spillover read 6.0,
+    not 5.0 — one extra live ``geo=['CA']`` row in the current window, the
+    shape ``agency/test_research_slice_and_gather.py::
+    test_research_geo_must_match_the_target`` leaves when it is its module's
+    last test. The same unscoped wipe that module, test_narrative_mapper_db and
+    test_source_track_record_db already run."""
     async with pg_pool.acquire() as conn:
         await conn.execute("DELETE FROM desk_baselines")
         await conn.execute("DELETE FROM target_descriptors")
-        await conn.execute("DELETE FROM signals WHERE source_id = 'test_p3_7_src'")
+        await conn.execute("DELETE FROM signals")
         await conn.execute(
             "DELETE FROM analyst_outputs WHERE analyst_id IN "
             "('desk_baseline', 'test_p3_7_escalation')"

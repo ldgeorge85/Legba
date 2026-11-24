@@ -29,6 +29,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from legba.data._url_canon import stored_canonical_url_hash
 from legba.data.filters.ingest_dedupe import (
     IngestDedupe,
     IngestDedupeResult,
@@ -88,17 +89,24 @@ class FakeConn:
         self.alias_rows: list[dict[str, Any]] = []
 
     async def fetch(self, sql: str, *params: Any):
-        # Tier-1 canonical-URL scan (the canonicalise-BOTH-sides lookup): returns
-        # every tenant row carrying a non-empty canonical_url (excluding self),
-        # ordered fetched_at ASC, id ASC — IngestDedupe canonicalises each
-        # stored value in Python and picks the first match.
+        # Tier-1 un-hashed fallback (N-S): rows carrying a canonical_url but no
+        # canonical_url_hash yet (a row is "un-hashed" here when it says so
+        # with ``"unhashed": True``), excluding self, optionally only rows
+        # ordered before the indexed hit, ordered fetched_at ASC, id ASC.
         exclude_id = params[0]
-        tenant = params[1] if len(params) > 1 else None
+        rest = list(params[1:])
+        before = None
+        if "(fetched_at, id) <" in sql:
+            before = (rest[0], str(rest[1]))
+            rest = rest[2:]
+        tenant = rest[0] if rest else None
         cands = [
             r for r in self.signals
             if str(r["id"]) != str(exclude_id)
             and r.get("canonical_url")
+            and r.get("unhashed")
             and (tenant is None or r.get("owner_tenant") == tenant)
+            and (before is None or (r["fetched_at"], str(r["id"])) < before)
         ]
         cands.sort(key=lambda r: (r["fetched_at"], str(r["id"])))
         return [
@@ -106,19 +114,21 @@ class FakeConn:
                 "id": r["id"],
                 "canonical_signal_id": r.get("canonical_signal_id"),
                 "canonical_url": r.get("canonical_url"),
+                "fetched_at": r["fetched_at"],
             }
             for r in cands
         ]
 
     async def fetchrow(self, sql: str, *params: Any):
         exclude_id = params[0]
-        if "canonical_url = $2" in sql:
-            canon = params[1]
+        if "canonical_url_hash = $2" in sql:
+            key = params[1]
             tenant = params[2] if len(params) > 2 else None
             cands = [
                 r for r in self.signals
                 if str(r["id"]) != str(exclude_id)
-                and r.get("canonical_url") == canon
+                and not r.get("unhashed")
+                and stored_canonical_url_hash(r.get("canonical_url")) == key
                 and (tenant is None or r.get("owner_tenant") == tenant)
             ]
         elif "content_hash = $2" in sql:
@@ -137,7 +147,8 @@ class FakeConn:
             return None
         cands.sort(key=lambda r: (r["fetched_at"], str(r["id"])))
         top = cands[0]
-        return {"id": top["id"], "canonical_signal_id": top.get("canonical_signal_id")}
+        return {"id": top["id"], "canonical_signal_id": top.get("canonical_signal_id"),
+                "fetched_at": top["fetched_at"]}
 
     async def fetchval(self, sql: str, *params: Any):
         if "INSERT INTO signal_aliases" in sql:

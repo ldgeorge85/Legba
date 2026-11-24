@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:crossroads": {
+      "source": "analyst_crossroads.yaml",
+      "state": "draft"
+    }
+  }
+}

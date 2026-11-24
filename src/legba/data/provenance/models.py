@@ -384,7 +384,11 @@ class CritiquePayload(_AnalystOutputBase):
     # signal; ``judge_llm_ref`` alone cannot distinguish the two when both
     # name the same component. ``""`` = floor-only / pre-W-3d rows. Additive +
     # defaulted: every existing row/writer validates unchanged.
-    judge_route: str = Field(default="", max_length=32)
+    # JUDGE-2 (W11b, additive value): ``chain:<component_id>`` — a LATER rung of
+    # the judge failure chain (``runtime/judge_fallback_chain.py``) wrote the
+    # verdict after rung 1's route was gone (401/402/403/404). The three ladder
+    # values above are unchanged; the width grows to the ref's (256) to carry it.
+    judge_route: str = Field(default="", max_length=256)
     scores: dict[str, float] = Field(default_factory=dict)
     overall_score: float | None = Field(default=None, ge=0.0, le=1.0)
     revision_delta: str | None = Field(default=None, max_length=8192)
@@ -655,6 +659,9 @@ class JournalPayload(BaseModel):
     entry_kind: Literal[
         "entry", "consolidation", "chronicle", "lens", "lens_diff",
         "inquiry", "crossroads",
+        # N-G — an append-only correction: cites the rows it withdraws (each
+        # closed with superseded_by = this row); see provenance/journal_correction.
+        "correction",
     ] = "entry"
     title: str = Field(min_length=1, max_length=2048)
     # The narrative (markdown, with inline [[ref:<uuid>]] citation markers).
@@ -741,7 +748,7 @@ class EventSignalLinkPayload(BaseModel):
     linked_at: datetime
     relevance: float = Field(default=1.0, ge=0.0, le=1.0)
     source_class: Literal[
-        "reporting", "analysis", "official", "state_media"
+        "reporting", "analysis", "official", "state_media", "claim"
     ] = "reporting"
     source_kind: str = Field(default="", max_length=128)
     source_id: str = Field(default="", max_length=256)

@@ -77,6 +77,7 @@ import os
 from datetime import date, datetime, timezone
 from typing import Any, Mapping, Sequence
 
+from ... import profile_constants as _profile_constants
 from ._external_audit_claims import WidthClaim
 
 logger = logging.getLogger(__name__)
@@ -195,16 +196,13 @@ def governor_max_claims_per_tick(binding: Any | None = None) -> int:
     )
 
 
-#: How the drain ranks the day. Higher wins. World first because it is the read
-#: with the widest audience and the fewest claims; thematic next; the voice
-#: above the desks because it is the only tier still authoring; region last (it
-#: is a deterministic rollup and carries no claims of its own).
-_TIER_RANK: dict[str, int] = {
-    "world_assessor": 4,
-    "escalation_composition": 3,
-    "world_assessment": 2,
-    "country_composition": 1,
-}
+#: How the drain ranks the day. Higher wins. The order is the instance
+#: profile's ``constants.audit_tier_order`` (SPLIT-3, ``profile_constants``);
+#: the exemplar's: world first because it is the read with the widest audience
+#: and the fewest claims; thematic next; the voice above the desks because it
+#: is the only tier still authoring; region last (it is a deterministic rollup
+#: and carries no claims of its own). A producer not listed ranks 0.
+_TIER_RANK: dict[str, int] = _profile_constants.audit_tier_rank()
 
 _SEVERITY_RANK: dict[str, int] = {
     "low": 0, "moderate": 1, "elevated": 2, "high": 3, "critical": 4,

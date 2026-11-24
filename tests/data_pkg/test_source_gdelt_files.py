@@ -1041,3 +1041,149 @@ def test_migration_0121_retires_by_state_not_delete():
     assert "state <> 'retired'" in sql
     # It must never touch the successor.
     assert "source.gdelt.files" not in sql.split("UPDATE")[-1]
+
+
+# ---------------------------------------------------------------------------
+# Slot walk (2026-11-06): lastupdate.txt names a slot before its zip is up
+# ---------------------------------------------------------------------------
+
+_SLOT_BASE = "http://data.gdeltproject.org/gdeltv2/"
+
+
+def _slot_export_url(stamp: str) -> str:
+    return f"{_SLOT_BASE}{stamp}.export.CSV.zip"
+
+
+def _index_for(stamp: str) -> str:
+    return (
+        f"12345 aaaa {_slot_export_url(stamp)}\n"
+        f"67890 bbbb {_SLOT_BASE}{stamp}.mentions.CSV.zip\n"
+        f"11111 cccc {_SLOT_BASE}{stamp}.gkg.csv.zip\n"
+    )
+
+
+def test_slots_to_probe_newest_first_and_bounded() -> None:
+    from legba.data.sources.gdelt_files import slots_to_probe
+
+    pointer = datetime(2026, 11, 6, 21, 0, tzinfo=timezone.utc)
+    floor = datetime(2026, 11, 6, 20, 15, tzinfo=timezone.utc)
+    assert slots_to_probe(pointer, floor) == [
+        pointer,
+        datetime(2026, 11, 6, 20, 45, tzinfo=timezone.utc),
+        datetime(2026, 11, 6, 20, 30, tzinfo=timezone.utc),
+    ]
+    assert slots_to_probe(pointer, pointer) == []
+    far = datetime(2026, 10, 31, 7, 15, tzinfo=timezone.utc)
+    probed = slots_to_probe(pointer, far, max_probes=4)
+    assert probed[-1] == datetime(2026, 11, 6, 20, 15, tzinfo=timezone.utc)
+    assert len(probed) == 4
+
+
+async def test_pull_pointer_slot_404_is_an_empty_poll_and_retried() -> None:
+    """The live shape: the pointer names 21:00 but its zip 404s and nothing
+    newer than the cursor is up. The poll ends healthy with nothing emitted
+    and the cursor unmoved; once the zip is up, the next poll fetches it."""
+    handler = GDELTFilesSourceHandler()
+    published: dict[str, bool] = {"20261106210000": False}
+
+    def _file(request: httpx.Request) -> httpx.Response:
+        if not published["20261106210000"]:
+            return httpx.Response(404, text="not yet")
+        return httpx.Response(200, content=_load_fixture_bytes())
+
+    mock = _MockResponses(
+        {
+            handler.config.lastupdate_url: _text_response(_index_for("20261106210000")),
+            _slot_export_url("20261106210000"): _file,
+        }
+    )
+    _patch_client(handler, mock)
+    store = InMemoryStateStore()
+    await store.set("gdelt_files_last_export_ts", "2026-11-06T20:45:00+00:00")
+    ctx = _make_ctx(store=store, now=datetime(2026, 11, 6, 21, 0, 1, tzinfo=timezone.utc))
+
+    assert await _collect(handler, ctx) == []
+    health = await store.get("gdelt_files_health")
+    assert health["state"] == "healthy"
+    assert health["detail"]["pending_slots"] == ["2026-11-06T21:00:00+00:00"]
+    assert await store.get("gdelt_files_last_export_ts") == "2026-11-06T20:45:00+00:00"
+
+    published["20261106210000"] = True
+    signals = await _collect(handler, ctx)
+    assert {s.payload["external_id"] for s in signals} == {"1000001", "1000005"}
+    assert await store.get("gdelt_files_last_export_ts") == "2026-11-06T21:00:00+00:00"
+
+
+async def test_pull_falls_back_to_the_newest_slot_that_is_up() -> None:
+    """Pointer 21:00 and 20:45 still 404, 20:30 up: the poll takes 20:30 (the
+    previous-slot fallback) and commits the cursor there, so 20:45 and 21:00
+    are retried next poll."""
+    cfg = GDELTFilesConfig(max_files_per_pull=1)
+    handler = GDELTFilesSourceHandler(config=cfg)
+    mock = _MockResponses(
+        {
+            handler.config.lastupdate_url: _text_response(_index_for("20261106210000")),
+            _slot_export_url("20261106203000"): _bytes_response(_load_fixture_bytes()),
+            _slot_export_url("20261106201500"): _bytes_response(_load_fixture_bytes()),
+        }
+    )
+    _patch_client(handler, mock)
+    store = InMemoryStateStore()
+    await store.set("gdelt_files_last_export_ts", "2026-10-31T07:15:00+00:00")
+    ctx = _make_ctx(
+        config=cfg, store=store, now=datetime(2026, 11, 6, 21, 0, 1, tzinfo=timezone.utc),
+    )
+
+    signals = await _collect(handler, ctx)
+    assert len(signals) == 2
+    fetched = [str(r.url) for r in mock.calls[1:]]
+    assert fetched == [
+        _slot_export_url("20261106210000"), _slot_export_url("20261106204500"),
+        _slot_export_url("20261106203000"),
+    ]
+    assert await store.get("gdelt_files_last_export_ts") == "2026-11-06T20:30:00+00:00"
+    health = await store.get("gdelt_files_health")
+    assert health["detail"]["pending_slots"] == [
+        "2026-11-06T21:00:00+00:00", "2026-11-06T20:45:00+00:00",
+    ]
+
+
+async def test_cursor_is_committed_before_the_first_row_is_yielded() -> None:
+    """The source actor closes the generator when its per-poll budget runs
+    out (every live poll since 10-31 stopped after 2 rows). The cursor must
+    already be committed by then, or the next poll re-walks the same slot."""
+    handler = GDELTFilesSourceHandler()
+    mock = _MockResponses(
+        {
+            handler.config.lastupdate_url: _text_response(_index_for("20261106210000")),
+            _slot_export_url("20261106210000"): _bytes_response(_load_fixture_bytes()),
+        }
+    )
+    _patch_client(handler, mock)
+    store = InMemoryStateStore()
+    await store.set("gdelt_files_last_export_ts", "2026-11-06T20:45:00+00:00")
+    ctx = _make_ctx(store=store, now=datetime(2026, 11, 6, 21, 0, 1, tzinfo=timezone.utc))
+
+    gen = handler.pull(ctx)
+    first = await gen.__anext__()
+    assert first.payload["external_id"]
+    await gen.aclose()  # the actor's cap
+    assert await store.get("gdelt_files_last_export_ts") == "2026-11-06T21:00:00+00:00"
+
+
+async def test_pull_non_404_file_error_still_reports_unhealthy() -> None:
+    handler = GDELTFilesSourceHandler()
+    mock = _MockResponses(
+        {
+            handler.config.lastupdate_url: _text_response(_index_for("20261106210000")),
+            _slot_export_url("20261106210000"): lambda r: httpx.Response(503, text="down"),
+        }
+    )
+    _patch_client(handler, mock)
+    store = InMemoryStateStore()
+    await store.set("gdelt_files_last_export_ts", "2026-11-06T20:45:00+00:00")
+    ctx = _make_ctx(store=store, now=datetime(2026, 11, 6, 21, 0, 1, tzinfo=timezone.utc))
+
+    assert await _collect(handler, ctx) == []
+    health = await store.get("gdelt_files_health")
+    assert health["state"] == "unhealthy"

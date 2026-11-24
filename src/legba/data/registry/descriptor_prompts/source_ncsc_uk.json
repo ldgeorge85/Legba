@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.ncsc.uk_all": {
+      "source": "source_ncsc_uk.yaml",
+      "state": "draft"
+    }
+  }
+}

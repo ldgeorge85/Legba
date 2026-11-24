@@ -71,3 +71,5 @@ scripts/seed_data.py
 
 # External-agent worktrees (docs/V3_IMPLEMENTATION_PLAN.md §0) — never tracked
 .worktrees/
+# C-1: the cold-tier object store credentials (deploy/patches/seaweedfs-coldstore.patch)
+deploy/seaweedfs/

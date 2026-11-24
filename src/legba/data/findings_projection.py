@@ -60,6 +60,9 @@ JUDGMENT_FIELDS: frozenset[str] = frozenset(
         "single_source",
         "wire_folded",
         "marker_class",
+        # C-1: the claimant when the cited row is a CLAIM (source class
+        # 'claim'), else None — what the console labels "claim" on.
+        "claimant",
     }
 )
 
@@ -96,6 +99,14 @@ def _text_or_none(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _claimant(claim: Any) -> str | None:
+    """The claimant of a claim citation's stamp (``citation['claim']``),
+    or ``None`` for every other citation."""
+    if isinstance(claim, dict) and claim.get("source_class") == "claim":
+        return _text_or_none(claim.get("claimant")) or "unnamed claimant"
+    return None
+
+
 def _reduce_one(entry: Any) -> dict[str, Any] | None:
     """One stored citation entry -> the judgment key set, or ``None`` when
     the entry is not itself a mapping (never fabricated from a bare id)."""
@@ -113,6 +124,7 @@ def _reduce_one(entry: Any) -> dict[str, Any] | None:
         "single_source": bool(entry.get("single_source", False)),
         "wire_folded": bool(entry.get("wire_folded", False)),
         "marker_class": _text_or_none(entry.get("marker_class")),
+        "claimant": _claimant(entry.get("claim")),
     }
 
 

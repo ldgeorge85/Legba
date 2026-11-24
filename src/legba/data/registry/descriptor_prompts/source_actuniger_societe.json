@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.actuniger.societe": {
+      "source": "source_actuniger_societe.yaml",
+      "state": "draft"
+    }
+  }
+}

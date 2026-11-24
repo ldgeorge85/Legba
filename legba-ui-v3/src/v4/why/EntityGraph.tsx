@@ -32,7 +32,7 @@
  * (attachFitOnResize) once sized, gated on `useVisibleSize`.
  */
 import { useQuery } from '@tanstack/react-query'
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type cytoscape from 'cytoscape'
 import type { Core, ElementDefinition, StylesheetStyle } from 'cytoscape'
 import CytoscapeComponent from 'react-cytoscapejs'
@@ -50,7 +50,7 @@ import { GraphControls } from '@/components/GraphControls'
 import { attachFitOnResize, useVisibleSize } from '@/lib/cytoscapeFit'
 import { selectRow, useSelection, type Selection } from '@/state/selection'
 import { cn } from '@/lib/cn'
-import { ArrowRight, Clock, Route, Share2 } from 'lucide-react'
+import { Clock, Share2 } from 'lucide-react'
 import { citationDrill, extractCitations, type Citation } from '@/lib/citationsModel'
 import {
   signalGeoPoints,
@@ -67,7 +67,7 @@ import {
   type TLSituation,
 } from '@/lib/timelinePoints'
 import { useWorldState } from '@/v4/world/worldState'
-import { ReadGeoLens } from '@/v4/world/LeafletWorldMap'
+import { ReadGeoLens } from '@/v4/globe/ReadGeoLens'
 import { ReadTimelineLens } from '@/v4/world/TimeScrubber'
 
 /** Edge as served — mirrors `GraphEdge` (entities_api.py). */
@@ -400,207 +400,6 @@ interface LensRead {
   targetId: string | null
 }
 
-// ---------------------------------------------------------------------------
-// P1-T9 — the ONE graph verb: "is there a path A→B / who's the broker?".
-//
-// GET /api/v1/graph/path?source=&target= returns the shortest relationship path
-// between two actors + the highest-betweenness broker ON that path. The AGE path
-// engine is lazily imported on the backend and SOFT-FAILS to `found:false` + a
-// `detail` string ('graph-path engine unavailable in this build (...)') until
-// the backend decouple deploys — rendered HONESTLY, never a fabricated path or
-// an invented score. The server clamps len/budget; nothing is capped here.
-// ---------------------------------------------------------------------------
-
-/** One hop on the path — a REAL AGE relationship edge. Mirrors `PathEdge`
- *  (graph_structure_api.py); endpoints are entity ids (canonical names). */
-interface GraphPathEdge {
-  source: string
-  target: string
-  label: string
-}
-
-/** The highest-betweenness node ON the path. Mirrors `PathBroker`. */
-interface GraphPathBroker {
-  node: string
-  betweenness: number
-}
-
-/** GET /graph/path body. Mirrors `GraphPath` (graph_structure_api.py). */
-interface GraphPathResp {
-  found: boolean
-  source: string
-  target: string
-  path: string[]
-  edges: GraphPathEdge[]
-  length: number | null
-  broker: GraphPathBroker | null
-  max_len: number
-  detail: string
-}
-
-/**
- * The compact find-path / broker verb that lives atop the node-graph lens. Two
- * actor inputs + a Find-path button → GET /graph/path; renders the ordered node
- * + REAL-AGE-edge chain (every node + edge clickable → `selectRow` to its entity
- * row) and names the broker + its betweenness. 'no path' and 'engine
- * unavailable' degrade to the response's honest `detail` string — there is no
- * client-side fabrication of a path or a score, and len/budget is the server's.
- */
-function FindPathControl() {
-  const [source, setSource] = useState('')
-  const [target, setTarget] = useState('')
-  const [submitted, setSubmitted] = useState<{ source: string; target: string } | null>(null)
-
-  const pathQ = useQuery<GraphPathResp>({
-    enabled: !!submitted,
-    queryKey: ['graph-path', submitted?.source ?? '', submitted?.target ?? ''],
-    queryFn: async () => {
-      const sub = submitted
-      // Unreachable: the query is gated by `enabled: !!submitted`.
-      if (!sub) throw new Error('no actors submitted')
-      return apiGet<GraphPathResp>(
-        `/graph/path?source=${encodeURIComponent(sub.source)}&target=${encodeURIComponent(sub.target)}`,
-      )
-    },
-    retry: false,
-  })
-
-  const submit = () => {
-    const s = source.trim()
-    const t = target.trim()
-    if (!s || !t) return
-    setSubmitted({ source: s, target: t })
-  }
-
-  const data = pathQ.data ?? null
-  const broker = data?.broker ?? null
-  const brokerNode = broker?.node ?? null
-
-  return (
-    <div
-      className="shrink-0 border-b border-slate-800 bg-surface-300 px-3 py-2"
-      data-testid="find-path-control"
-    >
-      <div className="flex items-center gap-1.5">
-        <Route className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden />
-        <input
-          value={source}
-          onChange={(e) => setSource(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') submit()
-          }}
-          placeholder="source actor"
-          aria-label="path source actor"
-          className="min-w-0 flex-1 rounded border border-slate-700 bg-surface-200 px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-slate-500 focus:outline-none"
-        />
-        <ArrowRight className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden />
-        <input
-          value={target}
-          onChange={(e) => setTarget(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') submit()
-          }}
-          placeholder="target actor"
-          aria-label="path target actor"
-          className="min-w-0 flex-1 rounded border border-slate-700 bg-surface-200 px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-slate-500 focus:outline-none"
-        />
-        <button
-          type="button"
-          onClick={submit}
-          disabled={!source.trim() || !target.trim() || pathQ.isFetching}
-          className="shrink-0 rounded border border-slate-600 bg-surface-100 px-2.5 py-1 text-xs font-medium text-slate-100 hover:bg-surface-200 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {pathQ.isFetching ? 'Finding…' : 'Find path'}
-        </button>
-      </div>
-
-      {submitted && (
-        <div className="mt-2 text-xs" data-testid="find-path-result">
-          {pathQ.isFetching ? (
-            <span className="text-slate-500">Searching the relationship graph…</span>
-          ) : pathQ.isError ? (
-            <span className="text-amber-300">
-              Path lookup failed
-              {pathQ.error instanceof ApiError ? ` (${pathQ.error.status})` : ''}.
-            </span>
-          ) : data && data.found ? (
-            <div>
-              <div className="flex flex-wrap items-center gap-1">
-                {data.path.map((node, i) => {
-                  const edge = i < data.path.length - 1 ? data.edges[i] : undefined
-                  const isBroker = brokerNode != null && node === brokerNode
-                  return (
-                    <Fragment key={`${node}-${i}`}>
-                      <button
-                        type="button"
-                        onClick={() => selectRow('entity', node, node, { origin: 'find-path' })}
-                        title={isBroker ? 'broker on this path — select entity' : 'select entity'}
-                        className={cn(
-                          'rounded border px-1.5 py-0.5 font-mono hover:bg-surface-100',
-                          isBroker
-                            ? 'border-amber-500 text-amber-200'
-                            : 'border-slate-700 text-slate-200',
-                        )}
-                      >
-                        {node}
-                      </button>
-                      {edge && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            selectRow('entity', edge.target, edge.target, {
-                              origin: 'find-path-edge',
-                            })
-                          }
-                          title={`${edge.label || 'related'} → ${edge.target} (select entity)`}
-                          className="inline-flex items-center gap-0.5 text-slate-400 hover:text-slate-200"
-                        >
-                          <ArrowRight className="h-3 w-3" aria-hidden />
-                          <span className="font-mono">{edge.label || 'rel'}</span>
-                        </button>
-                      )}
-                    </Fragment>
-                  )
-                })}
-              </div>
-              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-slate-400">
-                <span>
-                  {data.length != null
-                    ? `${data.length} hop${data.length === 1 ? '' : 's'}`
-                    : `${data.path.length} nodes`}
-                </span>
-                {broker ? (
-                  <span>
-                    broker{' '}
-                    <button
-                      type="button"
-                      onClick={() =>
-                        selectRow('entity', broker.node, broker.node, {
-                          origin: 'find-path-broker',
-                        })
-                      }
-                      className="font-mono text-amber-200 hover:underline"
-                    >
-                      {broker.node}
-                    </button>{' '}
-                    · betweenness {broker.betweenness.toFixed(3)}
-                  </span>
-                ) : (
-                  <span className="text-slate-500">no broker on this path</span>
-                )}
-              </div>
-            </div>
-          ) : (
-            <span className="text-slate-400">
-              {data?.detail?.trim() || 'no path between these actors'}
-            </span>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
 /**
  * The node-graph lens — a small claim graph of one read: the read at the
  * centre, the country it assesses (a distinct node only for a finding read —
@@ -715,9 +514,7 @@ export function ReadGraphLens({ read, citations }: { read: LensRead; citations: 
 
   useEffect(() => () => fitCleanup.current?.(), [])
 
-  // Centre-only (no target, no citations) ⇒ nothing to graph — but the find-path
-  // verb works over the WHOLE relationship graph, so keep it mounted above an
-  // honest empty state rather than blanking the lens.
+  // Centre-only (no target, no citations) ⇒ nothing to graph: an honest empty state.
   const graphRegion =
     elements.length <= 1 ? (
       <Centered>
@@ -751,7 +548,6 @@ export function ReadGraphLens({ read, citations }: { read: LensRead; citations: 
       className="flex h-full w-full min-h-0 flex-col"
       data-testid="read-graph-lens-wrap"
     >
-      <FindPathControl />
       <div className="min-h-0 flex-1">{graphRegion}</div>
     </div>
   )
@@ -805,7 +601,7 @@ async function resolveRead(read: LensRead): Promise<ReadResolved> {
   if (read.kind === 'target') {
     try {
       const page = await apiGet<{ data: FindingEnvelopeRow[] }>(
-        `/findings?analyst_id=country_composition&target_id=${encodeURIComponent(read.id)}&limit=5`,
+        `/findings?analyst_id=country_composition&target_id=${encodeURIComponent(read.id)}&limit=5&fields=full`,
       )
       let newest: FindingEnvelopeRow | null = null
       for (const r of page.data ?? []) {
@@ -839,10 +635,10 @@ async function resolveRead(read: LensRead): Promise<ReadResolved> {
 async function fetchEvidencePool(targetId: string): Promise<EvidencePool> {
   const enc = encodeURIComponent(targetId)
   const [sig, fin, sit] = await Promise.all([
-    apiGet<{ data: PoolSignal[] }>(`/signals?target_id=${enc}&limit=200`).catch(() => ({
+    apiGet<{ data: PoolSignal[] }>(`/signals?target_id=${enc}&limit=200&fields=full`).catch(() => ({
       data: [] as PoolSignal[],
     })),
-    apiGet<{ data: TLFinding[] }>(`/findings?target_id=${enc}&limit=100`).catch(() => ({
+    apiGet<{ data: TLFinding[] }>(`/findings?target_id=${enc}&limit=100&fields=summary`).catch(() => ({
       data: [] as TLFinding[],
     })),
     apiGet<{ data: TLSituation[] }>(`/situations?target_id=${enc}&limit=100`).catch(() => ({

@@ -18,16 +18,55 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ..source_classification import (
+    MAX_DECLARED_CLASSIFICATIONS,
+    TAG_MAX_LENGTH,
+    TAG_PATTERN,
+    classification_shape_error,
+    tag_shape_error,
+)
 from .lifecycle import AbstractionLevel, LifecycleState, WireEnumCoercion
 from .properties import Cron
+from .source_claim import ClaimDeclaration
+from .source_follow import SourceFollow
+from .source_series_api import SERIES_API_KIND, validate_series_api_descriptor
+from .source_sink import SourceSink
+from .source_subscribe import SourceSubscribe, validate_subscribe_descriptor
 
 # Source ids follow the stack-component naming convention `source.<provider>.<purpose>`
 # (dots allowed, unlike target/analyst ids).
 SourceId = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$", max_length=128)]
 GeoCode = Annotated[str, Field(pattern=r"^[A-Z]{2,3}$")]
-Tag = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=64)]
+
+
+def _checked(rule):
+    def _check(v: str) -> str:
+        err = rule(v)
+        if err is not None:
+            raise ValueError(err)
+        return v
+    return _check
+
+
+# W10 TAX-2 (W8-F1): a tag is a bare ``[a-z][a-z0-9_]*`` value OR a namespaced
+# ``<family>:<value>`` whose prefix is family-shaped (``src``, a platform family,
+# ``<profile>.<axis>``) — one regex (``source_classification.TAG_PATTERN``), the
+# family-shape check beside it. Every bare tag that validated before still does.
+Tag = Annotated[
+    str,
+    Field(pattern=TAG_PATTERN, max_length=TAG_MAX_LENGTH),
+    AfterValidator(_checked(tag_shape_error)),
+]
+# A DECLARED classification: always ``<family>:<value>``, never bare, never the
+# reserved ``src``. Its family and value are validated against the registered
+# vocabulary at registration (the registry refuses an unloaded family by name).
+ClassificationTag = Annotated[
+    str,
+    Field(pattern=TAG_PATTERN, max_length=TAG_MAX_LENGTH),
+    AfterValidator(_checked(classification_shape_error)),
+]
 
 # S1-T8 — editorial CLASS of a source, for analysis-side source tiering. A fixed,
 # auditable taxonomy (kept in lock-step with the collection-doctrine map in
@@ -37,8 +76,15 @@ Tag = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=64)]
 #   * ``official``     — government / IGO / primary-source publishers;
 #   * ``state_media``  — state-controlled outlets (read as FRAMING evidence and
 #                        an official-position signal, LOW-tier for establishing
-#                        facts — see the narrative_coordination unit prompt).
-SourceClass = Literal["reporting", "analysis", "official", "state_media"]
+#                        facts — see the narrative_coordination unit prompt);
+#   * ``claim``        — C-1: a party's OWN claim (a group saying it did
+#                        something; a tracker listing what groups posted).
+#                        Supports only "<claimant> claimed/posted/listed Y",
+#                        attributed and dated — never Y as fact, never a
+#                        corroboration, never a credibility input. Requires a
+#                        ``scope.claim`` declaration (source_claim.py); the
+#                        support rules are code (legba.data.claim_support).
+SourceClass = Literal["reporting", "analysis", "official", "state_media", "claim"]
 
 # LIC-2 (planning/SOURCE_LICENSING_LEDGER_2026-07-10.md §E.4) — the license
 # class a source's content carries, stamped SourceScope → every signal's
@@ -111,6 +157,17 @@ class SourceScope(BaseModel):
     geo: list[GeoCode] = Field(default_factory=list)  # OPTIONAL now (pivot scope relax)
     languages: list[str] = Field(default_factory=list)
     tags: list[Tag] = Field(default_factory=list)
+    # W10 TAX-2: what this source's stream IS — ``<family>:<value>`` tags of
+    # registered vocabulary families, stamped on every signal it writes
+    # (``signals.tags`` gets the keys, ``signals.data.classifications`` the
+    # bound entries; ``legba.data.source_classification``). OPTIONAL and
+    # HASH-NEUTRAL: an empty list is left out of the dump, so every existing
+    # descriptor's body and content hash are byte-identical.
+    classifications: list[ClassificationTag] = Field(
+        default_factory=list,
+        max_length=MAX_DECLARED_CLASSIFICATIONS,
+        exclude_if=lambda v: not v,
+    )
     # S1-T8: editorial class of the source (see :data:`SourceClass`). OPTIONAL /
     # defaulted to ``reporting`` (the conservative "when unsure" bucket) so every
     # pre-S1-T8 descriptor still validates unchanged; the analysis side reads it
@@ -129,6 +186,33 @@ class SourceScope(BaseModel):
     # ``access_class`` column (migration 0216); the read routes' opt-in
     # ``access_class_in`` filter reads that column. Enforcement is SEAMS #59.
     access_class: AccessClass = "restricted"
+    # N-R: the provider's required attribution line, verbatim (e.g. "Source:
+    # IMF PortWatch (portwatch.imf.org)"). OPTIONAL and HASH-NEUTRAL: unset is
+    # left out of the dump, so every existing body and content hash is
+    # byte-identical. The observation sink copies it (with license_class) onto
+    # each row's provenance; data/observation_attribution.py reads it back.
+    attribution: str | None = Field(
+        default=None, min_length=1, max_length=256, exclude_if=lambda v: v is None,
+    )
+    # C-1: the claimant + sign-off record of a ``source_class: claim`` source
+    # (data/schemas/source_claim.py). Required for that class, refused for any
+    # other. HASH-NEUTRAL: absent is left out of the dump.
+    claim: ClaimDeclaration | None = Field(default=None, exclude_if=lambda v: v is None)
+
+    @model_validator(mode="after")
+    def _claim_declared_iff_claim_class(self) -> "SourceScope":
+        if self.source_class == "claim" and self.claim is None:
+            raise ValueError(
+                "scope.source_class 'claim' needs a scope.claim block naming the "
+                "declared claimant (claim.claimant): a claim row is always "
+                "attributed to a named claimant"
+            )
+        if self.source_class != "claim" and self.claim is not None:
+            raise ValueError(
+                f"scope.claim is only for source_class 'claim' (this source is "
+                f"{self.source_class!r})"
+            )
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +226,19 @@ class CadenceBlock(BaseModel):
     schedule: Cron | None = None          # poll sources only; None for push
     cooldown_seconds: int = Field(default=0, ge=0)
     jitter_seconds: int = Field(default=0, ge=0)
+    # Lane N-U: a feed that is QUIET BY NATURE (USGS significant quakes: days
+    # with nothing new are the norm). The liveness watchdog's empty-poll streak
+    # page skips it; the cadence-stall and error paths still watch it. Left out
+    # of the dump when False, so every existing body and hash is unchanged.
+    expect_quiet: bool = Field(default=False, exclude_if=lambda v: v is False)
+    # Roll 86: how long (hours, since the last ingested signal) an honestly
+    # quiet empty-poll streak must last before it pages. Unset = the platform
+    # floor (``runtime.source_quiet_evidence.QUIET_PAGE_MIN_ELAPSED_S``, 72 h:
+    # longer than a weekend); 0 = the poll count alone decides. Left out of the
+    # dump when unset, so every existing body and hash is unchanged.
+    quiet_page_after_hours: int | None = Field(
+        default=None, ge=0, exclude_if=lambda v: v is None,
+    )
 
 
 class ProvisionBlock(BaseModel):
@@ -188,6 +285,20 @@ class SourcePipeline(BaseModel):
     enrichment: list[FilterStage] = Field(default_factory=list)
     # media: reference (default — hold a media_ref pointer) | eager (fetch+process at ingest)
     media: Literal["reference", "eager"] = "reference"
+
+    @model_validator(mode="after")
+    def _keyword_gate_is_an_ingestion_filter(self) -> "SourcePipeline":
+        # W3 SRC-3: ``keyword_gate`` DROPS. SourceCore runs it from
+        # ``ingestion_filters`` before enrichment; the ``enrichment`` chain is
+        # annotate-only (a None falls back to the unenriched signal), so a gate
+        # declared there would silently drop nothing. Refuse it at validation.
+        if any(st.kind == "keyword_gate" for st in self.enrichment):
+            raise ValueError(
+                "pipeline.enrichment may not contain 'keyword_gate' — it is a "
+                "dropping filter; declare it under pipeline.ingestion_filters "
+                "(it runs there before enrichment)"
+            )
+        return self
 
 
 class SourceDeps(BaseModel):
@@ -244,6 +355,21 @@ class SourceDiscoveryBlock(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+class SourceFetch(BaseModel):
+    """How a poll source's fetches are made (N-L) — protocol only, never the
+    client identity. ``http_version``: ``auto`` (the normal client — HTTP/2
+    offered — with ONE HTTP/1.1 retry on a CDN/WAF protocol block, remembered
+    per host for a week), ``h2`` (never fall back), ``http1.1`` (never offer
+    HTTP/2). See ``legba.data.sources._http_version``."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    http_version: Literal["auto", "h2", "http1.1"] = "auto"
+
+    def is_default(self) -> bool:
+        return self.http_version == "auto"
+
+
 # ---------------------------------------------------------------------------
 # SourceDescriptor
 # ---------------------------------------------------------------------------
@@ -254,7 +380,10 @@ class SourceDescriptor(BaseModel):
 
     identity: SourceIdentity
     scope: SourceScope = Field(default_factory=SourceScope)
-    acquisition: Literal["poll", "push"] = "poll"   # "stream" is a documented future seam
+    # "subscribe" (I-4): Legba holds a connection open to the upstream and
+    # receives records as it emits them; the `subscribe` block names the
+    # transport (built: sse; websocket / nats are refused at save, SEAMS #78).
+    acquisition: Literal["poll", "push", "subscribe"] = "poll"
     config: dict[str, Any] = Field(default_factory=dict)   # per-kind; values are FactoryValue
     cadence: CadenceBlock | None = None
     provision: ProvisionBlock | None = None
@@ -266,9 +395,30 @@ class SourceDescriptor(BaseModel):
     allowed_targets: list[str] = Field(default_factory=list)
     allowed_tenants: list[str] = Field(default_factory=list)
     discovery: SourceDiscoveryBlock | None = None
+    # N-L: the pipeline FAMILY its records land in (data/schemas/source_sink.py).
+    # Default `document` = today's signals path; the default block is left out
+    # of the dump so every existing body and content hash is byte-identical.
+    sink: SourceSink = Field(default_factory=SourceSink, exclude_if=lambda v: v.is_default())
+    # N-L: fetch protocol posture (hash-neutral at its default, like `sink`).
+    fetch: SourceFetch = Field(default_factory=SourceFetch, exclude_if=lambda v: v.is_default())
+    # I-1: which outbound references the ingestion intake may follow from this
+    # source's documents (data/schemas/source_follow.py). Absent = none; left
+    # out of the dump when absent, so every existing hash is unchanged.
+    follow: SourceFollow | None = Field(default=None, exclude_if=lambda v: v is None)
+    # I-4: how a SUBSCRIBED source's connection is held (transport, url,
+    # bounds). Required with acquisition='subscribe', refused otherwise; left
+    # out of the dump when absent, so every existing hash is unchanged.
+    subscribe: SourceSubscribe | None = Field(default=None, exclude_if=lambda v: v is None)
 
     @model_validator(mode="after")
     def _constraints(self) -> "SourceDescriptor":
+        # I-4: the subscribe mode's save-time rules (the block, a built
+        # transport — the block's own validator refuses an unbuilt one naming
+        # SEAMS #78 — and a declared, non-refusing licence class).
+        validate_subscribe_descriptor(
+            acquisition=self.acquisition, subscribe=self.subscribe,
+            license_class=self.scope.license_class,
+        )
         # An active, non-discovery POLL source needs a schedule; PUSH sources
         # don't (they're inbound-driven); discovery templates don't (their
         # materialised children pull).
@@ -281,7 +431,78 @@ class SourceDescriptor(BaseModel):
             raise ValueError("active poll source must declare a cadence.schedule")
         if self.discovery is not None and self.identity.abstraction_level == AbstractionLevel.L1:
             raise ValueError("a source with a discovery block must be L2/L3 (a template)")
+        if self.scope.source_class == "claim":
+            _claim_source_constraints(self)
+        elif "claims" in self.config:
+            _claim_channel_constraints(self)
+        if self.identity.kind == SERIES_API_KIND:
+            # S-1: the generic series kind's config is checked AT SAVE, against
+            # the series registry the observation sink enforces.
+            validate_series_api_descriptor(self.config, self.sink)
         return self
+
+
+#: C-1 — pipeline stages a CLAIM source may not run: each turns the claim's
+#: text into something the platform reads as established (a fact row, a
+#: fact-bearing graph edge). Refused at save, with the reason.
+CLAIM_FORBIDDEN_STAGES: dict[str, str] = {
+    "fact_extractor": "it mines the claimed event into facts; a claim supports "
+                      "only '<claimant> claimed Y', never Y",
+}
+
+
+def _claim_source_constraints(d: "SourceDescriptor") -> None:
+    """A claim source is TEXT ONLY and never a fact source (C-1)."""
+    for stage in list(d.pipeline.ingestion_filters) + list(d.pipeline.enrichment):
+        why = CLAIM_FORBIDDEN_STAGES.get(stage.kind)
+        if why is not None:
+            raise ValueError(f"a claim source may not run pipeline stage {stage.kind!r}: {why}")
+    if d.pipeline.media != "reference":
+        raise ValueError(
+            "a claim source is text only: pipeline.media must be 'reference' "
+            "(no media is fetched or processed at ingest)"
+        )
+    if d.deps.object_store:
+        raise ValueError("a claim source is text only: deps.object_store (media retain) is refused")
+    if d.follow is not None:
+        raise ValueError(
+            "a claim source may not declare a follow policy: links in a claim are "
+            "never followed (no archive fetch, no linked files)"
+        )
+    if d.sink.family != "document":
+        raise ValueError("a claim source lands documents only (sink.family 'document')")
+    if d.identity.state == LifecycleState.ACTIVE and (d.scope.claim is None or d.scope.claim.sign_off is None):
+        raise ValueError(
+            "claim_sign_off_required: a claim source cannot be active without a "
+            "recorded scope.claim.sign_off {by, at, note}"
+        )
+
+
+def _claim_channel_constraints(d: "SourceDescriptor") -> None:
+    """C-2 — a descriptor that marks a CHANNEL ``claim`` (Telegram's
+    ``config.classes`` + ``config.claims``) holds that channel to a claim
+    source's rules: no follow policy, no media retain, documents only, and
+    no ``active`` state while any claim channel lacks its own sign-off. The
+    descriptor's other channels are unchanged; the per-row rules (stamp,
+    text hygiene, the fact extractor's pass-through) key on the channel."""
+    from ..claim_support import channel_claims, unsigned_claim_channels  # noqa: PLC0415
+
+    if not channel_claims(d.config):
+        return
+    if d.follow is not None:
+        raise ValueError("a descriptor with a claim channel may not declare a follow policy: "
+                         "links in a claim are never followed")
+    if d.deps.object_store or d.pipeline.media != "reference":
+        raise ValueError("a descriptor with a claim channel is text only "
+                         "(pipeline.media 'reference', no deps.object_store)")
+    if d.sink.family != "document":
+        raise ValueError("a descriptor with a claim channel lands documents only")
+    unsigned = unsigned_claim_channels(d.config)
+    if d.identity.state == LifecycleState.ACTIVE and unsigned:
+        raise ValueError(
+            f"claim_sign_off_required: claim channel(s) {unsigned} have no recorded "
+            "config.claims.<channel>.sign_off {by, at, note}; the descriptor cannot be active"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -388,6 +609,7 @@ class SourceRef(BaseModel):
 
 __all__ = [
     "AccessClass",
+    "ClassificationTag",
     "LicenseClass",
     "SourceClass",
     "SourceIdentity",
@@ -399,8 +621,10 @@ __all__ = [
     "SourceOutput",
     "SourceDiscoveryBlock",
     "SourceDescriptor",
+    "SourceFetch",
     "FilterStage",
     "Subscription",
     "SourceSelector",
     "SourceRef",
+    "Tag",
 ]

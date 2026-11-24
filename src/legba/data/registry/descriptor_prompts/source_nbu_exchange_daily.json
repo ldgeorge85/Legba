@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.nbu.exchange_daily": {
+      "source": "source_nbu_exchange_daily.yaml",
+      "state": "draft"
+    }
+  }
+}

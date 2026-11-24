@@ -1,0 +1,88 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# target region_americas — the live head, folded into the tree 2026-10-04 (W6 SPLIT-1, DEC-13).
+# It was registered by scripts/bringup_register_region_targets.py;
+# scripts/bringup_register_descriptors.py now registers this file and nothing else does.
+# identity.version is the 16-zero placeholder: the registry stamps the content hash.
+identity:
+  abstraction_level: L1
+  created: '2026-07-02T00:00:00Z'
+  id: region_americas
+  inherits: []
+  name: Region — Americas
+  owner: region_tier
+  retire_after: null
+  schema_uri: legba/target/2.0.0
+  state: active
+  version: '0000000000000000'
+scope:
+  domain: thematic
+  entity_classes:
+  - country
+  - organization
+  - corporation
+  - person
+  - location
+  - political_party
+  - international_org
+  - infrastructure
+  - media_outlet
+  - military_unit
+  - armed_group
+  - event_series
+  - commodity
+  - concept
+  geo: []
+  predicate: null
+  relationship_types:
+  - AlliedWith
+  - HostileTo
+  - MemberOf
+  - LeaderOf
+  - TradesWith
+  - BordersWith
+  - SanctionsAgainst
+  - DiplomaticRelationsWith
+  - MilitaryPresenceIn
+  - SuppliesWeaponsTo
+  tags:
+  - region
+  - region_americas
+  - geopolitical
+  themes:
+  - americas
+  - north_america
+  - latin_america
+  time_horizon_days: 90
+discovery: null
+sources:
+- source_id: null
+  source_selector:
+    geo: []
+    kinds:
+    - rss
+    languages: []
+    owner_tenant: shared
+    predicate: null
+    tags:
+    - news
+  subscription:
+    canonical_only: true
+    entity_classes: []
+    geo: []
+    languages: []
+    modalities: []
+    predicate: null
+    tags: []
+allowed_action_packs: []
+pipeline:
+  enrichment: []
+  ingestion_filters: []
+  routing: []
+analyst: null
+outputs: []
+coordination:
+  allow_cycles: false
+  cycle_hop_limit: 0
+  publishes: []
+  subscribes_to: []

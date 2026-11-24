@@ -2,14 +2,19 @@
      SPDX-License-Identifier: AGPL-3.0-or-later -->
 # Runbook — procedures for a running instance
 
-Six things an operator does: start and stop the stack, ship a change, tell
-whether it is healthy, the weekly tasks, the failures this platform has actually
-shown, and cut a release. Standing an instance up from empty volumes is
-`SETUP.md`; every knob and its live value is `TUNABLES.md`; what is live, off or
-untested is `STATUS.md`; the incidents and retired eras behind the rules below
-are `history/RUNBOOK_extracts.md`.
+Six things the person running an instance does: start and stop the stack, ship
+a change, tell whether it is healthy, the routine tasks, the failures this
+platform has actually shown, and cut a release. Standing an instance up from
+empty volumes is [SETUP.md](SETUP.md); accounts and roles are
+[Operating your instance §9](OPERATING_YOUR_INSTANCE.md#9-turning-on-sign-in);
+every knob and its value is [TUNABLES.md](TUNABLES.md); what is live, off by
+default or not built is [STATUS.md](STATUS.md).
 
-Commands run from the repository root, `/usr/local/deployments/active/legba`:
+Commands run from the repository root. The shipped systemd units, cron files
+and host scripts assume the default install path,
+`/usr/local/deployments/active/legba`. The registry's admin token works on the
+host whether sign-in is on or off (with sign-in on, every use is logged as
+break-glass):
 
 ```bash
 REG=http://127.0.0.1:8090
@@ -22,7 +27,7 @@ TOKEN=$(grep '^LEGBA_REGISTRY_API_TOKEN=' .env | cut -d= -f2-)
 
 | Layer | Services | Profile |
 |---|---|---|
-| Substrate | `postgres` (Postgres + AGE), `redis`, `qdrant`, `nats`, `opensearch` | none — always on |
+| Substrate | `postgres` (the Apache AGE image; the extension is installed, the graph is dropped and nothing uses it), `redis`, `qdrant`, `nats`, `opensearch` | none — always on |
 | Dapr control plane | `dapr-placement`, `dapr-scheduler-init`, `dapr-scheduler`, `dapr-init-db`, `dapr-sidecar` | `dapr`, pulled in by `runtime` |
 | Application | `legba-registry`, `legba-runtime-dapr`, `legba-ui-build`, `legba-caddy` | `runtime` |
 | Workflow worker | `legba-dapr-workflow-worker` | `dapr-workflow` |
@@ -68,6 +73,36 @@ docker compose --profile runtime up -d --force-recreate \
 why compose gives it a 45-second `stop_grace_period`: docker's default
 ten-second SIGTERM-to-SIGKILL can corrupt that etcd mid-write. Never put a
 recreate of that container on a timer.
+
+### Halt and resume the fleet
+
+Two scripts stop and restart only the processes that call a model —
+`legba-runtime-dapr` and `legba-dapr-workflow-worker` — and leave the
+substrate, the Dapr control plane, the registry, the UI and caddy up, so the
+read surfaces keep answering through a halt.
+
+```bash
+scripts/fleet_stop.sh                    # watchdogs off, runtime + worker stopped
+scripts/fleet_start.sh                   # runtime, wait healthy, then the worker
+scripts/fleet_start.sh --resume-watchdog # ... and turn the watchdogs back on
+scripts/fleet_start.sh --recreate --resume-watchdog   # after an .env change
+scripts/fleet_stop.sh --dry-run          # either script: print the commands only
+```
+
+`fleet_stop.sh` first creates `/etc/legba-watchdog.disabled`, the maintenance
+flag both host cron jobs honour (`host_stall_watchdog.sh` skips its recovery,
+`host_llm_heartbeat.sh` exits quietly); without it the stall watchdog reads
+the quiet actor plane as a stall and restarts the runtime it just stopped.
+`fleet_start.sh` leaves the flag in place unless given `--resume-watchdog`,
+and says so. Both run compose as `-p legba --env-file .env -f
+docker-compose.yml` under `COMPOSE_PROFILES=runtime,dapr-workflow`, the set
+the worker needs (without it compose answers `no such service:
+dapr-placement`), and with `--no-deps`, so nothing else is touched. A plain
+start reuses the stopped containers and their old environment; an `.env`
+change needs `--recreate` (`up -d --force-recreate --no-deps`). If the
+runtime is not healthy within 300 seconds the start stops there (exit 3) and
+the worker is not started. If ingestion or analyst cadence stays silent after
+a resume, restart the control plane together as above.
 
 ### Boot signposts
 
@@ -123,10 +158,39 @@ scripts/rolling_deploy.sh \
 | `--max-image-age-min N` | image-age guard threshold, default 30 |
 | `--skip-build` | deploy the images that already exist; the guard still runs, so a stale image still aborts |
 | `--ui` | also build `legba-ui-build` and restart `legba-caddy` for the new bundle |
-| `--dry-run` | print the plan and the guard readout, touch nothing |
+| `--dry-run` | print the plan and the guard readout, touch nothing; the nightly gate is still enforced |
+| `--ignore-nightly "REASON"` | roll despite a red nightly record; the reason is required and is appended to the nightly ledger as a `NIGHTLY_GATE_OVERRIDE` line |
+| `--drain-seconds N` | at the runtime recreate, docker waits N s (1–60) after SIGTERM before SIGKILL instead of the compose default 10 s, so in-flight analyst runs can finish; needs `LEGBA_RUNTIME_DRAIN_SECONDS` on the running container (below) |
+| `--tier auto\|t0\|t1\|t2\|t3\|full` | the deploy tier (below); default `full`, today's path |
+| `--force-tier` | roll an explicit tier below the computed one; recorded in the deploy log with who forced it |
+| `--range FROM..TO` / `--deploy-log PATH` | the range the tier is computed over (default: the last successful roll..HEAD) / the deploy log (default `/var/log/legba_deploy.log`) |
 
 Exit codes: `2` image-age guard, `3` a recreated container never reported
-healthy, `4` migration failed, `5` marker verification failed.
+healthy, `4` migration failed, `5` marker verification failed, `6` the nightly
+gate refused, `9` a tier refused, `10` a tier's gate failed, `11` a descriptor
+parse failure after a `t1` walk.
+
+**Deploy tiers.** A change does not always need the full gate and three
+recreates. `scripts/deploy_tier.py classify` names the tier a range needs:
+`t0` (docs, tests, host scripts: merge only), `t1` (walked descriptors: the
+walker only), `t2` (UI only: the UI build), `t3` (Python one service alone
+imports, off the protected paths: rebuild that service only, no migration) or
+`full` (migrations, shared schemas, the runtime core, write paths, images,
+dependencies, and anything it cannot place). Below full the roll runs
+`scripts/run_targeted_gate.sh` (the changed tests, their importers and the
+guard set) instead of the full suite. A red nightly, five lower-tier rolls in a
+row, a full gate older than 24 h or a repeat `t3` after a gate failure force
+full. The default stays `--tier full`; `--tier auto` opts in. When in doubt it
+is full. Full reference: [operations/rolling-deploy.md](operations/rolling-deploy.md#deploy-tiers).
+
+**The nightly gate runs first.** The nightly suite appends one
+`NIGHTLY_VERDICT` line per run to `/var/log/legba_nightly_suite.log` (full SHA,
+PASS or FAIL, phases, pass and fail counts) and posts the verdict to its own
+ntfy topic, `nightly`. Before building anything, the roll finds the newest
+record from a full run on a clean tree whose SHA is the rolled commit or one of
+its ancestors. If that record is FAIL, the roll stops. With no record at all it
+warns and proceeds. To clear a red record without an override, fix the cause
+and run `PHASES="lint ordered" scripts/host_nightly_suite.sh` on the new HEAD.
 
 Three properties are load-bearing, each answering a way a deploy has silently
 not happened. **The guard is on images, never logs** — a container logs a fresh
@@ -139,6 +203,30 @@ inside the worker container catches. **The worker build carries its profiles** �
 with no profile set it fails on a sibling service behind the same profile, and
 some compose versions print nothing that reads as an error, so the script runs
 it under `COMPOSE_PROFILES=runtime,dapr-workflow`.
+
+**Draining the runtime.** An analyst run in flight when the runtime
+is recreated has already written its finding. Its verify leg, which writes the
+critique, never runs, so the finding stands unverified until the
+`verify_backfill` sweep (§5) repays it. To lose fewer runs, set
+`LEGBA_RUNTIME_DRAIN_SECONDS=45` in `.env` and roll with
+`--drain-seconds 55` (N ≥ D + 10). The old runtime then handles its first
+SIGTERM as uvicorn's graceful shutdown. It closes the listener, so daprd
+delivers no new actor call. It waits up to D seconds for in-flight requests,
+and every actor turn is one. Then it cancels the rest and runs the lifespan
+shutdown (NATS, the leader lease). A backstop stops the loop at D + 10 s, and a
+second signal stops it at once. Without the variable the first signal stops the
+loop at once. The process reads the variable
+when it starts. So the roll that first sets it cannot drain, because the
+container it replaces never read it, and the roll warns about this. Expect:
+
+* The roll takes up to N s longer.
+* A fan-out turn in flight cannot start its remaining per-target runs once the
+  listener closes. Those calls fail, and that turn's own critique is still
+  written if its run finishes.
+* A reminder that fires during the drain or the restart is a missed tick,
+  exactly as without a drain.
+
+The drain is bounded; the backfill is the backstop for what it does not save.
 
 ### After the roll
 
@@ -168,9 +256,37 @@ It separates "no trace" (cold-activation failure) from "failed trace"
 ### Stand up a fresh instance
 
 `deploy/deploy.sh` is the one-command bring-up: substrate and Dapr → baseline
-schema plus future migrations → registry, then vault, stack, packs, sources,
-catalog, targets, analysts, budget → optional seeds → runtime and UI →
-boot-verify. It neither calls nor is called by `rolling_deploy.sh`.
+schema plus future migrations → registry, then vault, stack, every descriptor
+(one walker), budget → optional seeds → runtime and UI → boot-verify. It
+neither calls nor is called by `rolling_deploy.sh`.
+
+Every registry descriptor (action packs, sources and the source catalog,
+targets, analysts) comes from ONE registrar,
+`scripts/bringup_register_descriptors.py`. It registers every
+`descriptors/*.yaml` of those families and every catalog entry, except the
+rows of `descriptors/RETIRED.md`, at the lifecycle state the profile's
+lifecycle overlay records (for the geopolitics example, one file per row under
+`descriptors/LIFECYCLE.d/`). A head whose
+content already matches is reported `unchanged` and never written, so a
+re-run is safe. A `failed` line aborts the deploy. The rule, the two
+manifests and the triage of the scripts it replaced are in
+[BRINGUP.md](BRINGUP.md).
+
+Which descriptors, overlay, source catalog and seed list those are comes from
+the **instance profile** ([PROFILES.md](PROFILES.md)): `--profile <dir>`, else
+`LEGBA_PROFILE`, else `profiles/geopolitics` — the reference instance, so a
+plain `deploy/deploy.sh` is unchanged. Step [0] of the registrar phase loads
+the manifest and aborts before any write if it does not validate; the walker
+then runs with the same `--profile`. The workstation's labels are a build-time
+export of the profile (`scripts/gen_profile_ui.py`); deploy.sh warns when the
+committed export is not the selected profile's.
+
+```bash
+# does the tree still describe this host? writes nothing; expect every head `unchanged`
+docker compose -p legba run --rm --no-deps -v "$PWD:$PWD" -w "$PWD" \
+  -e LEGBA_DATA_PG_DB=legba --entrypoint python legba-registry \
+  scripts/bringup_register_descriptors.py --dry-run
+```
 
 ```bash
 docker compose --profile runtime build
@@ -179,12 +295,16 @@ deploy/deploy.sh
 # a throwaway validation stack, fully isolated from the live volumes
 deploy/deploy.sh --project legba_val --no-caddy --seed
 deploy/deploy.sh --project legba_val --teardown   # down -v, only the legba_val_* volumes
+
+# another instance profile, on a throwaway stack
+deploy/deploy.sh --project legba_val --no-caddy --profile profiles/<id>
 ```
 
-It applies the round-trip-proven baseline `deploy/baseline/0001_baseline.sql` —
-schema, AGE graph, ledger pre-seeded — then `python -m legba.data.migrate` for
-everything after it; the runner discovers migrations by sorted glob, so gaps in
-the numbering are harmless. Seeds run before the runtime boots, for the reason
+It applies the round-trip-proven baseline `deploy/baseline/0001_baseline.sql`
+(schema and ledger pre-seeded), then `python -m legba.data.migrate` for
+everything after it: the numbered migrations in order, then the time-named
+ones (`YYYYMMDDTHHMM_slug.sql`), so gaps in the numbering are harmless. One of
+the later migrations drops the empty graph the baseline created. Seeds run before the runtime boots, for the reason
 under the boot signposts; curated seed data is operator-provided, and an absent
 file makes its adapter no-op, so `--seed` degrades cleanly.
 `deploy/compose.isolation.yml` re-declares every named volume and the scheduler
@@ -217,12 +337,12 @@ than the port, which is not published off that host's docker network.
 | Registry | `{"status":"ok","checks":{"postgres":"ok","nats":"ok"}}` |
 | Runtime | HTTP 200 |
 | Ingestion freshness | newest signal under 30 minutes old — the measured worst-case inter-signal gap over a week, and the threshold the host stall watchdog acts on |
-| Source fan-out | distinct producing sources over 24 h, about 105 on this deployment |
+| Source fan-out | distinct producing sources over 24 h, close to the active source count less the weekday-only feeds at a weekend |
 | Poll outcomes | `error` a small tail beside `success` and `empty`; `empty` is the normal outcome for a feed with nothing new |
 | Analyst production | findings, critiques, alerts and scorecards all present over 24 h, in the hundreds. A kind at zero is a dead plane |
-| Judge band | mean faithfulness around 0.83 today; movement toward the 0.50 composition verify floor is the signal, not the absolute value |
+| Judge band | mean faithfulness near the band your instance has held; movement toward the 0.50 composition verify floor is the signal, not the absolute value |
 | Grader receipts | non-zero rows in 24 h — the correctness instrument ran |
-| Fleet canaries | `world_assessor`, `journal_assessor` and `journal_consolidator` each produced recently |
+| Fleet canaries | the global-run analysts (in the example instance `world_assessor`, `journal_assessor` and `journal_consolidator`) each produced recently |
 | External audit | `present=true`, `stale=false`, `degraded=false` |
 | Production gauge | `deficit` counts are what to chase |
 | Dead letters | all three queues at zero |
@@ -237,7 +357,7 @@ cadence health alone cannot tell you the auditor stopped auditing. Every run
 writes a heartbeat including one that audits nothing, so "nothing to contradict"
 and "the auditor is dead" never look alike.
 
-**The world voice is the fleet canary** — a six-hour cadence on a single global
+**A global-run analyst is the fleet canary** (in the example instance, the world voice) — a six-hour cadence on a single global
 run, so it goes quiet first when the registry cannot serve `/typed`. The
 journal's two tiers need their own canaries for the same reason: a global-run
 analyst has no target to flag its death, and the daily consolidator hides it
@@ -245,8 +365,18 @@ longest.
 
 **Disk is the silent one.** OpenSearch's flood-stage watermark is 95%, past
 which it puts every shard into a read-only block silently — no crash, no error,
-corpus indexing simply stops while every other plane keeps running. The LLM
-heartbeat pages at 85% and again at 92%, which is the warning before that.
+corpus indexing simply stops while every other plane keeps running. Every disk
+check reads the figure `df` prints as Use% (used / (used + available), rounded
+up); OpenSearch's own figure runs about a point above it near full. The disk
+floor (`scripts/disk_floor_check.sh`, cron every 30 min) pages `engine` once on
+ENTERING a band — warning ≥ 85% (priority 3), urgent ≥ 90% (4), critical ≥ 93%
+(5, two points ahead of flood stage) — never again while it stays there, except
+critical, which re-notifies every 6 h. Leaving a band sends one recovery notice,
+only once usage falls 2 points below the band's threshold, so a reading that
+wobbles across a threshold does not flap. Its state is one line in
+`/var/log/legba-disk.state` (`<band 0-3> <since epoch> <last notify epoch>`);
+delete it to start over (a missing or corrupt file is a first run). The LLM
+heartbeat's own disk check still logs at 85% and pages hourly at ≥ 92%.
 
 ```bash
 docker compose ps --format '{{.Service}}\t{{.State}}\t{{.Health}}'
@@ -277,7 +407,22 @@ tail /var/log/legba-watchdog.log               # silent when healthy, so an empt
 ls /etc/legba-watchdog.disabled                # absent means the family is armed
 scripts/host_log_collector.sh status           # a service reading NOT-FOLLOWING is the failure to chase
 grep -E 'VERDICT|seed=' /var/log/legba/nightly/latest/summary.txt
+grep '^NIGHTLY_VERDICT' /var/log/legba_nightly_suite.log | tail -3   # what the roll gate reads
 ```
+
+**Replaying a shuffled nightly failure.** The summary's `seed=` line is the
+replay key: `LEGBA_REPO_ROOT=<checkout> LEGBA_TEST_SHUFFLE_SEED=<seed> bash
+scripts/run_tests_in_container.sh tests/` reruns the nightly's order (the runner
+waits on the nightly's `/tmp/legba-container-tests.lock`). Database-backed tests never
+run on the host: there `127.0.0.1:5432` is the live server and the suite refuses it
+(CONTRIBUTING.md, "Host-side database tests are not supported"). A host
+replay of pure tests (`pytest -p randomly --randomly-seed=<seed>`) matches it only when the
+host runs the SAME pytest-randomly release as the test image, because the
+module order a seed produces is the plugin's own (5.x sorts modules by a hash
+of seed + module name). Both are pinned to 5.0.0 — `PYTEST_RANDOMLY_VERSION`
+in `scripts/run_tests_in_container.sh` and the `dev` extra in `pyproject.toml`;
+check the host with `python3 -c "import importlib.metadata as m;
+print(m.version('pytest-randomly'))"` and bump the two together.
 
 ---
 
@@ -312,13 +457,36 @@ docker exec legba-legba-caddy-1 caddy hash-password --plaintext '<new>'
 docker compose --profile runtime up -d --force-recreate --no-deps legba-caddy
 ```
 
+### Accounts and service credentials
+
+Only with `LEGBA_AUTH_SIGNIN=1`. Turning sign-in on, creating the owner, and
+what each role can do are in
+[Operating your instance §9](OPERATING_YOUR_INSTANCE.md#9-turning-on-sign-in).
+The console has no user-management screen; an admin uses the API:
+
+```bash
+# invite someone (role: reader, contributor or admin); the answer's invite_path is shown once
+curl -sX POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  $REG/api/v1/auth/invite -d '{"email":"someone@example.org","role":"reader"}'
+curl -s -H "Authorization: Bearer $TOKEN" $REG/api/v1/auth/users          # every account
+curl -sX PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  $REG/api/v1/auth/users/<user_id> -d '{"status":"disabled"}'            # ends every session it holds
+```
+
+To rotate a service's credential, set a new random value for
+`LEGBA_SERVICE_TOKEN_<NAME>` in `.env` and recreate the registry first, then
+that service; there is no overlap window (SEAMS #87), so the service is
+refused between the two recreates. The registry log line
+`registry.auth.break_glass` marks every use of the shared admin token, and
+`principal=shared` at a service's start means it has no credential of its own.
+
 ### Register, activate, pause or retire a descriptor
 
 The registry API takes JSON, so convert the descriptor YAML first. A PUT stamps
 a fresh content hash, preserves history, emits `descriptor.updated.<family>.<id>`
 on NATS, and atomically retires the prior version's UI panel rows. The reconcile
 loop picks the change up within a resync interval, and a descriptor that ships
-`state: draft` stays inert until an operator flips it deliberately. Deterministic
+`state: draft` stays inert until an admin flips it deliberately. Deterministic
 handlers read their thresholds from a `method.options` block on the descriptor,
 so a threshold change needs no rebuild and no recreate; precedence runs
 runtime-stamped provenance, then a forced run's `payload.options`, then
@@ -327,7 +495,7 @@ key is dropped loudly and the handler default stands, so a mistyped knob never
 takes a class offline; the rejection lands in the trace as a `handler_options`
 step, `applied` or `degraded`, listing every dropped key with its cause.
 
-Every shipped analyst has an idempotent registrar under `scripts/` named for it, `bringup_register_<analyst>.py` (for example `bringup_register_correctness_grader.py`, `bringup_register_reference_builder.py`, `bringup_register_standing_auditor.py`); each reads the descriptor from `descriptors/`, registers it, and leaves activation to the lifecycle route. `deploy/deploy.sh` runs the set a fresh instance needs.
+A descriptor file under `descriptors/` IS its registration: `scripts/bringup_register_descriptors.py` (run by `deploy/deploy.sh`, or by hand with `--dry-run` first) registers every file of the four registry families, at the state the file ships unless the lifecycle overlay (one file per row under `descriptors/LIFECYCLE.d/`, `<family>__<id>.md`) records another for this host. Activate through the lifecycle route below, then add the descriptor's overlay row so a fresh instance comes up the same way; retire through the route, then add its RETIRED.md row ([BRINGUP.md](BRINGUP.md)). The older `bringup_register_<analyst>.py` scripts are absorbed by the walker and no deploy runs them.
 
 ```bash
 python3 -c 'import json,sys,yaml; json.dump(yaml.safe_load(open(sys.argv[1])), sys.stdout)' \
@@ -345,6 +513,19 @@ curl -sX POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/js
   $REG/api/v1/registry/descriptors/target/country_g20_br/retire \
   -d '{"reason":"decommissioning"}'
 ```
+
+`--id <descriptor_id>` (repeatable) limits the walker to those heads, for a
+staged switch-on such as turning thinking on seat by seat; an id the walk does
+not plan is refused. The vocabulary seeds still run; the source credibility
+seeds do not.
+
+**After switching a seat to thinking** ([AI_MODELS.md](AI_MODELS.md), "Which
+seats think"), check its receipts the same day, once its first scheduled burst
+has run: the calls carry `"thinking": true` and the thinking alias as `model`;
+compare their `duration_ms` with the seat's previous week; look for
+`thinking_fallback` on any receipt (and the `thinking_fallback` alert on the
+Watch data); and read `gate_wait_ms` on the core component's receipts and
+`llm_gates` on the runtime's `/healthz`.
 
 ### Force an analyst run
 
@@ -369,13 +550,14 @@ eight minutes per build; `--dry-run` builds without writing a row).
 
 ### Add or drop a source
 
-New source descriptors live under `descriptors/` and register through the
-registrar owning their batch (`bringup_register_sources.py`,
-`bringup_register_source_catalog.py`, `bringup_register_supply_chain_sources.py`,
-`bringup_register_wave_a_sources.py`, `bringup_register_rsshub_sources.py`). All
-are idempotent; the direct-to-database ones default to the `legba_pivot_test`
-database, so pin `LEGBA_DATA_PG_DB=legba`. Batches layered on the base catalog
-ship `draft` and are activated one at a time. Dropping a source is the pause or
+New source descriptors live under `descriptors/` (or as an entry in the
+profile's source catalog, `profiles/geopolitics/rosters/source_catalog.yaml`)
+and register through the one walker,
+`bringup_register_descriptors.py`, which also seeds every batch's
+`source_credibility` rows. It is idempotent and defaults to the
+`legba_pivot_test` database, so pin `LEGBA_DATA_PG_DB=legba`. New source
+files ship `draft` and are activated one at a time, each activation recorded
+as a row under `descriptors/LIFECYCLE.d/`. Dropping a source is the pause or
 retire transition above: pausing keeps its signals and its cursor, retiring
 releases its reminders through the orphan GC sweep.
 
@@ -384,7 +566,9 @@ releases its reminders through the orphan GC sweep.
 docker exec -e LEGBA_DATA_PG_DB=legba legba-legba-registry-1 \
   python scripts/bringup_register_source_catalog.py --verify
 docker exec -e LEGBA_DATA_PG_DB=legba legba-legba-registry-1 \
-  python scripts/bringup_register_source_catalog.py
+  python scripts/bringup_register_descriptors.py --dry-run --family source
+docker exec -e LEGBA_DATA_PG_DB=legba legba-legba-registry-1 \
+  python scripts/bringup_register_descriptors.py --family source
 ```
 
 ### Read a trace
@@ -406,6 +590,67 @@ SELECT s.id, s.title, s.published_at
  WHERE t.run_id = '<run-id>' AND s.title ILIKE '%<term>%';
 ```
 
+### Registry workers
+
+The registry runs one uvicorn worker unless `LEGBA_REGISTRY_WORKERS` says
+otherwise ([TUNABLES.md](TUNABLES.md) §6 has the full row; the code is
+`src/legba/data/registry/workers.py`). Every analyst run's descriptor GET,
+every stack GET, the UI's panels and consult share that one queue, so a fan-out
+is where it shows.
+
+**Before raising it**, know what stays per worker. The consult RUN plane
+(SEAMS #74): a run lives on the worker its `POST /consult` landed on, so a
+reconnect (`GET /consult/runs/{id}`), a **stop**
+(`POST /consult/runs/{id}/stop`) or the actor's armed `POST /consult/writes`
+that reaches another worker answers 404 / 403 with the worker split named in
+the detail. A stop that misses leaves the run going to its own wall clock and
+cost ceiling. If consult stop and consult writes matter more than read
+throughput this week, stay at 1.
+
+To raise it, from the repository root:
+
+```bash
+grep -q '^LEGBA_REGISTRY_SIGNING_KEY' .env || echo "set the signing key first: N>1 refuses without it"
+echo 'LEGBA_REGISTRY_WORKERS=2' >> .env      # or edit the existing line
+docker compose --profile runtime up -d legba-registry
+docker logs legba-legba-registry-1 --since 2m 2>&1 \
+  | grep -E 'registry.workers|once_only|Started server process|Application startup complete'
+```
+
+Fine looks like: one `registry.workers n=2` line naming what is shared and
+what is per worker, two `Started server process` lines, two `Application
+startup complete`, and **exactly one** `registry.once_only.acquired`. Two
+`acquired` lines is the lock failing — set it back to 1. Each worker's pool is
+`LEGBA_DATA_PG_POOL_MAX // N`, so the registry holds no more Postgres
+connections than before; the advisory lock takes one of them on the holder.
+Each worker is a whole process: check `docker stats legba-legba-registry-1`
+against the service's `mem_limit` (1 g) and raise that in the same change if
+the RSS does not fit N times over.
+
+What to watch for the first fan-out after the change (and compare with the
+same hour at 1 worker):
+
+```bash
+# p50 / p95 / max of a descriptor GET, 50 sequential reads — run it while the fleet fans out
+for i in $(seq 50); do
+  curl -s -o /dev/null -w '%{time_total}\n' -H "Authorization: Bearer $TOKEN" \
+    $REG/api/v1/registry/descriptors/analyst/world_assessor
+done | sort -n | awk '{a[NR]=$1} END {print "p50", a[int(NR*.5)], "p95", a[int(NR*.95)], "max", a[NR]}'
+
+# 5xx and 429 answered in the last hour (uvicorn's access log)
+docker logs legba-legba-registry-1 --since 1h 2>&1 | grep -cE '" 5[0-9]{2}'
+docker logs legba-legba-registry-1 --since 1h 2>&1 | grep -cE '" 429'
+
+# consult run misses — at N > 1 most of these are the worker split (SEAMS #74)
+docker logs legba-legba-registry-1 --since 1h 2>&1 | grep -cE '/consult/runs/[^ ]* HTTP/1.1" 404|/consult/writes HTTP/1.1" 403'
+```
+
+A p95 that does not move means the queue was not the registry's worker — look
+at Postgres (`pg_stat_activity` waits) before adding more. A rise in 5xx after
+the change is the cue to go back to 1 and read the tracebacks. Going back is
+the same edit with `LEGBA_REGISTRY_WORKERS=1` (or the line removed) and the
+same `up -d`.
+
 ### Reclaim disk
 
 Three levers, in the order that frees the most, none destructive to product
@@ -420,64 +665,313 @@ docker images && docker image prune -a -f     # superseded builds nothing refere
 
 ### Back up and restore
 
-`scripts/backup.sh` covers the four stateful stores — Postgres including the AGE
-graph, Redis, Qdrant, NATS JetStream — and is safe to run while the stack
-cycles. Output lands under `/var/backups/legba/<timestamp>/`. The OpenSearch
-corpus index is deliberately not backed up: it is a projection of `signals`,
-rebuilt by `corpus_indexer` through its dirty-marker path. Offsite stays off
-until `LEGBA_BACKUP_OFFSITE_DEST` and `LEGBA_BACKUP_OFFSITE_TOOL` are set in
-`.env`; until then the wrapper warns and drops an `OFFSITE_NOT_CONFIGURED.txt`
-marker into the generation directory, and a configured-but-failing push exits
-non-zero, so a failure is never silent. Restore into a scratch compose project,
-never the live one, and run the drill periodically — an untested backup is not a
-backup. It passes when the registry comes up healthy, `signals` and
-`analyst_outputs` row counts match the source rig within tolerance, and a
-fan-out produces a fresh finding.
+`scripts/backup.sh` takes one **encrypted backup set** of the whole deployment;
+`scripts/restore_drill.sh` restores a set into a throwaway project and proves it.
+A deployment that is lost without a set is lost: the vault master key and the
+signing key exist only in the untracked `.env`, and the evidence archive lives
+outside Postgres.
+
+**What a set holds.** Postgres `legba` (a custom-format dump taken inside an
+exported snapshot, with the named tables' row counts read in that same snapshot),
+the `dapr` database and the cluster globals; the evidence archive (the
+`legba_archive` volume — incremental, see below); one Qdrant snapshot per
+collection; a logical export of every OpenSearch user index (the live node has no
+`path.repo`, and adding one costs an OpenSearch restart); Redis; the JetStream
+store; `seeds/` and `planning/`; and the **key escrow** — `.env` (which carries
+`LEGBA_DATA_MASTER_KEY` and `LEGBA_REGISTRY_SIGNING_KEY`) plus any signing keyfile
+it points at, sealed as its own artifact. The run refuses when a required secret
+is missing from the escrow.
+
+**Encryption.** Every artifact is encrypted to an OpenPGP public key as it is
+written; no plaintext copy lands on disk here or at the destination. The script
+refuses to run without `LEGBA_BACKUP_PUBKEY`. The escrow can go to a second key
+(`LEGBA_BACKUP_ESCROW_PUBKEY`). Make the key pair **off this host** and keep the
+secret key there: a backup whose key dies with the host cannot be restored.
 
 ```bash
-bash scripts/backup.sh              # all four
-bash scripts/backup.sh pg nats      # a subset
+# on the machine that will hold the secret key
+gpg --quick-gen-key 'legba-backup' future-default default never
+gpg --export -a legba-backup > backup-pubkey.asc       # copy THIS to the host
+# on the host
+sudo install -m 644 backup-pubkey.asc /etc/legba/backup-pubkey.asc
+echo 'LEGBA_BACKUP_PUBKEY=/etc/legba/backup-pubkey.asc' >> .env
+```
 
-# scheduled, with retention and an offsite push
+**Destination.** `LEGBA_BACKUP_DEST` is a local path (the default,
+`/var/backups/legba` — not disaster-proof on its own), an rsync-over-ssh target
+(`ssh://user@host[:port]/path` or `user@host:/path`), or an S3-compatible bucket
+through rclone (`rclone:<remote>:<path>`, or `s3://bucket/path` on the remote
+named by `LEGBA_BACKUP_RCLONE_REMOTE`). A remote set is staged locally
+(`LEGBA_BACKUP_STAGING`), shipped (`set.json` last), then removed from staging.
+
+```text
+<dest>/sets/<SETID>/set.json            cleartext completeness marker, no content
+<dest>/sets/<SETID>/SHA256SUMS          sums of the encrypted files
+<dest>/sets/<SETID>/manifest.json.gpg   counts, sizes, the pack chain, fingerprints
+<dest>/sets/<SETID>/*.gpg               the artifacts; escrow.tar.gpg is the escrow
+<dest>/archive/pack-<SETID>.tar.zst.gpg the archive chain (+ .list.gpg per pack)
+```
+
+**The archive is incremental.** Archive files are named by their sha256 and never
+change, so each run packs only the names never shipped to that destination (the
+index lives in `LEGBA_BACKUP_STATE_DIR/archive_index/`). The first run is a full
+pack; the next ones carry a day's evidence. Every manifest lists the whole pack
+chain; retention never prunes `archive/`. Losing the state directory only costs a
+second full pack.
+
+**Disk guard.** The set's filesystem is the live one. The script projects the
+fill before it starts and checks again before each component; above
+`LEGBA_BACKUP_MAX_DISK_PCT` (90) it stops and removes the partial set, because
+OpenSearch goes read-only at 95% on the same disk.
+
+```bash
+bash scripts/backup.sh                     # one full set
+bash scripts/backup.sh postgres escrow     # a subset, still one set
+bash scripts/backup_scheduled.sh           # a set, then 7-daily / 4-weekly retention
+
+# nightly (no host_bootstrap.sh exists — install by hand; 03:30 HOST time, PDT)
 sudo cp deploy/systemd/legba-backup.{service,timer} /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now legba-backup.timer   # nightly 03:30 plus jitter
+sudo systemctl enable --now legba-backup.timer
+systemctl list-timers legba-backup.timer
 ```
+
+Exit codes: `0` a complete set is at the destination; `1` failed (the partial set
+is removed); `2` refused (no key, incomplete escrow, disk guard, bad destination);
+`backup_scheduled.sh` adds `3` (set taken, retention failed). Interrupting a run
+stops the in-container `pg_dump` it started (by its snapshot id).
+
+**The restore drill.** Run it where the secret key is — weekly, and after any
+change to the backup. It restores into `deploy/compose.drill.yml` (standalone,
+project-scoped volumes, loopback ports 55432 / 56333 / 59200, so it runs beside
+the live stack) and refuses if the rendered project would touch any volume that
+is not its own. It asserts: the set's sums; every named table's row count equals
+the manifest exactly; 100 random `evidence_archive` receipts from the restored
+database re-hash to their sha256 out of the pack chain; the escrow opens, is
+complete, and its master key decrypts one `stack_credentials` row of the restored
+database (only the secret id and its length are printed); Qdrant's point counts
+fall inside the manifest's before/after bracket and OpenSearch holds exactly the
+exported documents; the rest decrypts. It prints the restore time and, on PASS,
+writes `last_drill.json`. It tears the project down unless `--keep`.
+
+Run beside the live stack, the drill needs about the live Postgres size free on
+the same disk: it records each Qdrant and OpenSearch count and then drops that
+restored copy, and restores Postgres into empty `template0` databases in one
+transaction per database under `wal_level=minimal` (no WAL for the bulk load), but
+the restored database itself is the size of the live one. A disk watch aborts and
+tears down above `LEGBA_DRILL_MAX_DISK_PCT` (93). The first drill on the
+production host (2026-10-08) peaked at exactly 93% of a 148 GB disk — run it on
+another machine whenever one exists.
 
 ```bash
-GEN=/var/backups/legba/<timestamp>; P="docker compose -p legba_restore"
-
-gunzip -c "$GEN/postgres_legba.sql.gz" | $P exec -T postgres psql -U legba -d legba
-docker cp "$GEN/redis_dump.rdb" "$($P ps -q redis)":/data/dump.rdb && $P restart redis
-
-for f in "$GEN"/qdrant/*; do                       # one snapshot per collection
-  coll="$(basename "$f" | sed 's/_[^_]*$//')"
-  curl -sf -X PUT "http://127.0.0.1:6333/collections/${coll}/snapshots/recover" \
-    -H 'content-type: application/json' -d "{\"location\":\"file://$(realpath "$f")\"}"
-done
-
-tar -xzf "$GEN/nats.tar.gz" -C "$GEN"              # one restore per JetStream stream
-for s in "$GEN"/nats/*/; do
-  nats --server nats://127.0.0.1:4222 stream restore "$(basename "$s")" "$s"
-done
+bash scripts/restore_drill.sh --secret-key ~/backup-secret.asc \
+     [--escrow-secret-key FILE] [--set <dest>/sets/<SETID>] [--sample 100] [--keep]
+# a remote destination: copy sets/<SETID>/ and archive/ down first, then --set
 ```
+
+Do not use `deploy/compose.isolation.yml` for a restore: it re-declares only some
+of the base file's volumes, so `opensearch_data`, `archive_data` and `ntfy_cache`
+keep their live `legba_*` names under any project.
+
+**Status.** Both scripts write a status file on success only
+(`LEGBA_BACKUP_STATE_DIR`, default `/var/lib/legba/backup-state`:
+`last_backup.json`, `last_drill.json`). The registry mounts that directory
+read-only and serves `GET /api/v1/v3/system/backup-status`
+(`last_backup_at`, `last_drill_at`); System Status shows both at the head of its
+Infra section, "never recorded" when absent and amber past 36 hours (backup) or
+8 days (drill).
+
+**A real restore** is the drill against the target stack instead of the throwaway
+one: restore the dumps with `pg_restore`, upload each Qdrant snapshot
+(`POST /collections/<c>/snapshots/upload`), re-import each OpenSearch index with
+`python3 scripts/backup_lib.py os-import <url> <meta.json> < <ndjson>`, untar the
+pack chain oldest-first into the `legba_archive` volume, and put the escrowed
+`.env` back before the registry starts.
+
+### Compress and tier the evidence archive
+
+Archive objects rest zstd-compressed from N-K on; every reader detects the
+codec by frame magic and returns the ORIGINAL bytes re-verified against the
+address, so old (raw) and new (compressed) objects coexist with no migration.
+`evidence_archive.sha256` and `size_bytes` always describe the original.
+
+**Compact in place** (`scripts/archive_compact.py`, dry-run by default; run in
+the runtime image, which ships `zstandard`):
+
+```bash
+docker exec -i legba-postgres-1 psql -U legba -d legba -At -c \
+  "select sha256 from evidence_archive where sha256 is not null
+   union select media_sha256 from evidence_archive where media_sha256 is not null" > /tmp/archive_shas.txt
+docker run --rm -v legba_archive:/archive -v "$PWD/scripts:/s:ro" -v /tmp:/h \
+  --entrypoint python legba/legba-runtime-dapr:latest /s/archive_compact.py \
+  --root /archive --shas-file /h/archive_shas.txt --prefix 00 [--apply] --report /h/compact_00.json
+```
+
+Stage with `--prefix 00`, then `--prefix 01-0f`, then `10-ff`; `--max-mb-per-min`
+paces reads (default 300). The job is idempotent: kill it and run it again.
+A file whose bytes do not hash to its name is reported and never touched;
+an orphan (no row names it) is reported and skipped unless `--include-orphans`.
+Rollback: none is needed for correctness (every reader decodes); to restore a
+raw object, `zstd -dc <file> > tmp && mv tmp <file>`. Backup chains already
+hold the raw originals, and the restore drill's re-hash decodes.
+
+**Tier to cold** (`scripts/archive_tier.py`, dry-run by default) needs
+migration 0243 and `LEGBA_ARCHIVE_COLD_BACKEND`; it refuses otherwise. See
+`docs/TUNABLES.md` for the knobs.
 
 ### Regenerate the generated docs
 
-The panel table in `RELEASE_STATE_MATRIX.md` and the whole of
-`RELEASE_STATE.md` are generated and must not be hand-edited; a drift test fails
-the suite over the first. Run the second after registering or retiring a source,
-desk, unit or migration.
+Five generators own docs or parts of docs; never hand-edit what they write.
+Each has a `--check` mode that exits non-zero when the committed copy is stale,
+and the suite runs the checks.
+
+| Generator | Writes | Reads |
+|---|---|---|
+| `scripts/gen_api_roles_doc.py` | `docs/API_ROLES.md` | the registry's route-role tables (builds the app; no database) |
+| `scripts/gen_type_tables.py` | `docs/TYPES.md`, the kind table in `docs/ALERTING.md`, and the console's structural-verify set in `legba-ui-v3/src/lib/verdictModel.ts` | the type registry |
+| `scripts/gen_release_state_matrix.py` | the panel table in `docs/RELEASE_STATE_MATRIX.md` | the UI's panel registry |
+| `scripts/gen_not_published.py` | `legba-ui-v3/src/lib/not_published.json` | the measurement seams of `docs/SEAMS.md` and the eval routes' declarations |
+| `scripts/generate_release_manifest.py` | `docs/RELEASE_STATE.md` | the registry database (read-only); run it after registering or retiring a source, desk, unit or migration |
 
 ```bash
-python3 scripts/gen_release_state_matrix.py            # regenerate in place
-python3 scripts/gen_release_state_matrix.py --check    # exit 1 if stale
-PYTHONPATH=src python3 scripts/generate_release_manifest.py
+python3 scripts/gen_api_roles_doc.py --check
+python3 scripts/gen_type_tables.py --check
+python3 scripts/gen_release_state_matrix.py --check
+python3 scripts/gen_not_published.py --check
+PYTHONPATH=src python3 scripts/generate_release_manifest.py   # needs the database
 ```
 
 ---
 
 ## 5. When something is wrong
+
+**A judge route is gone: 401, 402, 403 or 404.** The watchdog pages at once on
+`llm_route_auth_failed` (severity high, budget-exempt, through the same ntfy
+fan-out as every watchdog channel) the first time a HOSTED component's receipt
+carries one of those statuses; it re-pages every 6 h while the route stays gone,
+and closes the episode on the first successful call. Meanwhile the critic falls
+down its judge fallback chain (`method.llm.judge_chain`, default: the $0 self-hosted
+8B alone; a paid second rung is opt-in) — read which rung is answering, and since when the
+checking layer has written only floors:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "$REG/api/v1/v3/system/judge-stats/health?days=7" | jq '{unverified_since, unverified_n,
+   components: [.components[] | {component_id, failure_class, consecutive_failures,
+   last_success_at, unverified_since}]}'
+```
+
+The fix is the provider's: top up (402), rotate the key (401/403), repoint
+`config.model_name` (404). Floor critiques written while every rung was down are
+NOT re-judged when the route recovers; inventory them, by UTC day, read-only:
+
+```bash
+PYTHONPATH=/app/src python3 /app/scripts/rejudge_floor_critiques.py \
+  --since 2026-10-02T23:00Z --until 2026-10-05T03:00Z
+```
+
+The dry run also previews the next 50 (`--limit N`) that an apply would re-judge.
+Once a rung answers again, re-judge them — it spends on the judge and supersedes
+published verdicts, so the count is always explicit (at most 500 per run):
+
+```bash
+PYTHONPATH=/app/src LEGBA_VERIFY_LLM_JUDGE=1 python3 /app/scripts/rejudge_floor_critiques.py \
+  --since 2026-10-02T23:00Z --until 2026-10-05T03:00Z --apply --limit 50
+```
+
+Oldest first, it re-runs the critic's verify pass over each finding's stored
+citations against the analyst's current judge chain and prints old score → new
+score, `judge_status` and `judge_llm_ref` per row. An answered row becomes a new
+critique (`verification.rejudge_of`, `judge_trigger = 'rejudge_floor'`) and the
+old floor is closed (`superseded_by`). A row the judge still cannot answer is
+left as it was and counted (`judge_failed`). Five such rows in a row stop the
+run. `--skip-weak` refuses verdicts from the 8B rung. Run it again until
+`still floor-only` reads 0 (SEAMS #69, resolved).
+
+**Findings with no critique at all.** A rolling deploy recreates the runtime; an
+analyst run in flight then has already written its finding, but the verify leg
+that writes the `Faithfulness verify` critique never runs, so the finding stands
+published unverified. `--missing` selects those instead of floors:
+cited `kind='finding'` rows of an analyst the critic covers (one with
+faithfulness critiques in the window), not a deterministic rollup, not
+superseded, older than `--min-age-minutes` (default 30, so a verify leg still
+running is never raced), with no faithfulness critique. The dry run counts them
+per UTC day and previews the next `--limit`:
+
+```bash
+PYTHONPATH=/app/src python3 /app/scripts/rejudge_floor_critiques.py --missing
+PYTHONPATH=/app/src LEGBA_VERIFY_LLM_JUDGE=1 python3 /app/scripts/rejudge_floor_critiques.py \
+  --missing --since 2026-10-17T00:00Z --apply --limit 50
+```
+
+The apply runs the same verify pass and writes the critique the critic would
+have written (`derived_from` = the finding; the finding's analyst, version and
+run), stamped `verification.judge_trigger = 'verify_backfill'` (outside the
+sampled arm, like a re-judge) and `verification.backfill_of_run = <the finding's
+run_id>`. Nothing is superseded. A judge that does not answer writes nothing. A
+critique that lands between the selection and the write wins: the write
+re-checks under a per-finding advisory lock and the row is counted `raced`.
+
+You rarely need the script: the `verify_backfill` deterministic analyst runs the
+same selection and write every 30 minutes (:12 / :42), `backfill_batch` (default
+50) per tick over the last 7 days, `min_age_minutes` default 30. Each tick's
+trace carries `examined` / `verified` / `failed` / `still_missing`, plus
+`skipped`, `parked` and `skipped_no_judge` (judge flag off, or no registry or
+secrets wiring). A finding that fails on a tick where another verified is
+retried, and after 3 such failures it is parked until the runtime restarts. Five
+judge failures in a row end the tick. Older debt is the script's (`--since`).
+Steady state is `examined=0`. A `still_missing` that grows across ticks means the
+judge chain is down (see the floors above) or rows are parked; read the tick's
+trace.
+
+**The search plane answers degraded.** The watchdog pages on `search_degraded`
+when more than 20 % of a search provider's audit NOT_FOUND grades in 24 h ran
+on a search that lost engines (the rule and its threshold: docs/TUNABLES.md §1).
+Those grades read as `search_failed` on `/v3/absence`, never as "searched, found
+nothing". Read which engines are failing, and how often, over 7 days:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "$REG/api/v1/v3/system/search-health?days=7" | jq '{threshold, as_of,
+   providers: [.providers[] | {provider, not_found, not_found_degraded_share}],
+   engines: [.engines[] | {engine, error_share, errors}]}'
+```
+
+The fix is the engine set (SW-3): disable or re-weight the failing engine in
+`docker/searxng/settings.yml` and restart searxng. Grades written before
+migration 0235 carry no engine record (`rows_without_engine_record`) and are
+read by the provider's own degraded flag.
+
+**The phone is too loud (or too quiet).** Outward alerts go to two ntfy topics
+(X4): `world` (escalation transitions, verified high findings, one batched push
+per trigger tick for band moves) and `engine` (source, search, cadence, judge
+and alert-plane health; the host LLM heartbeat, search canary and disk floor
+scripts post here too). `nightly` is the nightly suite's own. Subscribe the ntfy
+web UI to `world` and `engine`; the pre-split topic (`legba-alerts`) receives
+nothing new. The topic table is docs/TUNABLES.md §5. The watchdog pages
+`alert_volume_high` on `engine` when a topic sends more than its declared cap
+in 24 h (`LEGBA_ALERT_VOLUME_DAILY_CAP_WORLD` / `_ENGINE`, 50). Read the count
+per topic and kind — pushed, coalesced by the cooldown, level-only (an
+escalation whose severity held — recorded, never pushed), below the sink's
+severity floor, duplicate, failed. Every dispatch decision writes an
+`alert_sink_deliveries` row with its reason (`error_message`); nothing is
+"delivered" internally without one. The units' severities map onto the
+dispatcher's ladder explicitly — `moderate` → `medium` (priority 3), `elevated`
+→ `high` (priority 4); an unknown word becomes `medium` and logs
+`alert_sinks.severity_unknown` (the table is `SEVERITY_ALIASES` in
+`data/alerts/sinks.py`):
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "$REG/api/v1/v3/system/alerts/volume?days=7" | jq '{as_of, caps,
+   topics: [.topics[] | {topic, pushed, per_day, level_only, coalesced}],
+   loudest: [.kinds[] | select(.pushed > 0) | {topic, kind, pushed, alerts_carried}]}'
+```
+
+The levers, in order: the trigger scan's daily page budget and per-kind cap,
+the band batch's line cap, the level-only switch (`LEGBA_ALERT_SUPPRESS_LEVEL_ONLY=0`
+pushes levels again), the per-sink cooldown. `LEGBA_ALERT_NTFY_TOPIC_SPLIT=0`
+puts everything back on the single pre-split topic.
 
 **A wedged actor; the plane looks slow.** A hung `activate()` eats the reconcile
 loop's 90-second `run_once` bound and holds its actor's turn, and because Dapr
@@ -488,15 +982,29 @@ stops the queue paying for a wedged actor, and a bound on the hang-prone I/O
 inside the turn is what makes the turn complete so the queue behind it drains —
 a deadline on the caller alone does not release the callee's turn. The heal
 deadline must stay well below the loop's 90-second bound, and a test pins the
-ratio. Steady state emits none of the markers below.
+ratio. Steady state is NOT silent: the heal's `activate` queues behind any
+cadence run that holds the head actor's turn, so every meta-analyst or source
+turn longer than 20 s that spans a resync logs one `reconcile.activate`
+`budget_exceeded` + `action_executor.deadline` pair with
+`heal_phase=queued_behind_turn` — about 160–190 a day at the current roster
+(the 2026-10-03 SW-8 diagnosis; the per-actor counts follow the run lengths).
+Read `heal_phase` before reading the count.
 
 ```bash
 docker logs --since 30m legba-legba-runtime-dapr-1 2>&1 | grep -E \
   'action_executor.deadline|action_executor.heal_suppressed|actor_turn.budget_exceeded|activate.deps_timeout|reminder.timeout'
 ```
 
-`action_executor.deadline` carries the consecutive count;
-`heal_suppressed` means the breaker is open for that actor, and fleet-wide means
+`action_executor.deadline` carries the consecutive count and what held the turn
+when it blew: `heal_phase=queued_behind_turn` (another call held it — `held_by`
+names it, e.g. `remind/run_cadence`, `held_for_s` for how long; benign, the actor
+is alive), `own_call_overran` (the activate itself was executing — `in_turn_op`
+names the bounded phase, `analyst.activate.resolve_deps` or
+`analyst.activate.register_reminder`, with `in_turn_op_ms`; `None` there means an
+unbounded step such as state load, and `last_turn_op` says which phase it was
+past — this is the 08-01 class, act on it), or `not_delivered` (no call for that
+actor reached this process: placement, sidecar, scheduler). The same fields are
+top-level keys on the JSON line. `heal_suppressed` means the breaker is open for that actor, and fleet-wide means
 the actors are not answering while the loop survives it rather than freezing;
 `actor_turn.budget_exceeded` means an op inside a turn was released and the turn
 completed; `activate.deps_timeout` points at registry load, not the actor; and
@@ -561,6 +1069,18 @@ route-liveness check pages on it: under a 5% success rate over 24 hours across a
 least 20 calls writes a severity-high `alert_sink_deliveries` row, exempt from
 the daily page budget. Probe the ids before blaming cadence, then repoint the
 stack component — a config-only PUT, no rebuild.
+
+**Putting a stack component back.** A stack component's version is a hash of
+its content, so a PUT whose body equals an earlier version re-heads that row
+rather than writing a new one (audited `re_head`; a body equal to the current
+head is a 409). To step back without restating the body,
+`POST /api/v1/registry/stack/{component_id}/rollback` re-heads the version the
+current head replaced — repeated calls walk further back — or the version named
+in `{"version": "<hash>"}`, with an optional `reason`. It answers 404 for an
+unknown component and 409 when the target is already the head, does not exist,
+there is no earlier version, or the head or target is retired. Both paths
+publish a stack event, so the handler cache evicts; a warm actor still needs
+the rebind described above.
 
 **JetStream on a streamless subject.** A publish to a subject no stream captures
 blocks for about five seconds and is then swallowed, which reads downstream as
@@ -666,7 +1186,7 @@ engine's behaviour is measured before it reaches the data.
 
 The remote is public. `scripts/prepush_scan.sh` scans tracked content plus the
 about-to-push commit range, and exits non-zero on any of: a prior-host codename
-or private infra-host fragment in tracked content; the operator domain; a tracked
+or private infra-host fragment in tracked content; the deployment's own domain; a tracked
 `.env` or secrets file; private-key material; a `PASS`, `SECRET`, `TOKEN` or
 `API_KEY` assigned a long literal; a high-entropy literal; a non-neutral commit
 author or committer identity; a tracked `planning/` file; a tracked `corpora/`
@@ -715,8 +1235,8 @@ BASE=origin/main bash scripts/prepush_scan.sh
 - A persistent signing key and a production bearer token in `.env`; the boot log shows no ephemeral-key warning.
 - The models host's inference port confirmed loopback- or network-internal-only: `docker compose port legba-models 8700` shows no public bind.
 
-The push is the operator's, always, and is never automated.
+The push is the owner's, always, and is never automated.
 
 ```bash
-git push origin release   # operator only
+git push origin release   # the owner only
 ```

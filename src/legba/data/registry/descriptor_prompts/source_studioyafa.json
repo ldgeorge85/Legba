@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.studioyafa.news": {
+      "source": "source_studioyafa.yaml",
+      "state": "draft"
+    }
+  }
+}

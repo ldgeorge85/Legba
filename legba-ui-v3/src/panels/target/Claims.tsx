@@ -1,10 +1,12 @@
 /**
- * T10. Target Claims (`target.claims`, ex-Facts) — UI-3 (Tier B) rebuilt.
+ * T10. The subject's findings (`target.claims`; the subject page's
+ * "Findings" tab, id `claims`) — UI-3 (Tier B) rebuilt.
  *
- * Post-L-090 the facts table collapsed into the analyst-output substrate.
- * There is no `/claims` / `/facts` endpoint (frozen surface); the honest
- * source for claim-like rows carrying confidence AND corroboration is the
- * findings read (`GET /api/v1/findings?target_id=…` → `FindingRow`). The
+ * What it lists: FINDINGS — `analyst_outputs` rows of kind `finding`, read
+ * from `GET /api/v1/findings?target_id=…` (`FindingRow`). It does not show
+ * the `facts` table (which is live and separate; no console route reads it
+ * here). The internal names (`Claim`, `toClaims`, `claimsModel`) are kept
+ * so saved layouts and recorded cases still resolve. The
  * deterministic `corroboration_scoring` handler writes
  * `corroboration_score` + `corroboration_sources` into the row `data`.
  *
@@ -28,7 +30,9 @@ import { cn } from '@/lib/cn'
 import { selectRow } from '@/state/selection'
 import { humanizeAnalystId } from '@/lib/analystNames'
 import { requestCrossFraming } from '@/lib/crossFramingLink'
+import { humanizeId } from '@/lib/deskNames'
 import {
+  CLAIM_SEVERITY_SCALE,
   claimSeverities,
   toClaims,
   type Claim,
@@ -49,12 +53,66 @@ function openLineage(kind: string, id: string) {
   selectRow(kind, id)
 }
 
-/** Drop the `target:` / `analyst:` bookkeeping tags the analyst stamps. */
+/**
+ * Bare tags the engine stamps for its own bookkeeping (a run's kind, the
+ * component that wrote the row, a pipeline step). They are not topics a reader
+ * filters by. U-1, target brief §5.
+ */
+const MACHINE_BARE_TAGS = new Set([
+  'meta',
+  'deterministic',
+  'assembly',
+  'assessment',
+  'lead',
+  'spine',
+  'unstructured',
+  'rollup',
+  'proposal',
+  'thematic_proposal',
+  'escalation',
+  'regime',
+  'country',
+  'region',
+  'horizon',
+  'driver',
+  'mechanism',
+  'decay',
+  'correctness_measurement',
+  'correctness_grader',
+  'reference_builder',
+  'indicator_tracker',
+  'indicator_triggered',
+  'graph_mining',
+  'mining_abandoned',
+  'narrative_mapper',
+  'fact_decay_scan',
+  'desk_baseline',
+  'analyst_traces_retention',
+  'traces_purged',
+])
+
+/**
+ * The reader-facing topic tags on a claim (U-1). A `prefix:value` tag is kept
+ * only when its prefix is `topic:` — `severity:` / `severity_delta:` /
+ * `spine:` / `target:` / `analyst:` and the like are engine facets (severity
+ * has its own filter). A bare tag is kept unless it is engine bookkeeping.
+ */
 function topicTags(data: Record<string, unknown> | null | undefined): string[] {
   const raw = data && Array.isArray(data.tags) ? (data.tags as unknown[]) : []
   return raw
-    .filter((t): t is string => typeof t === 'string')
-    .filter((t) => !t.startsWith('target:') && !t.startsWith('analyst:'))
+    .filter((t): t is string => typeof t === 'string' && t.trim() !== '')
+    .filter((t) => {
+      const i = t.indexOf(':')
+      if (i >= 0) return t.slice(0, i) === 'topic' && t.length > i + 1
+      return !MACHINE_BARE_TAGS.has(t)
+    })
+}
+
+/** A topic tag in reader words: `topic:economic_coercion` → "Economic coercion". */
+function topicLabel(tag: string): string {
+  const v = tag.startsWith('topic:') ? tag.slice('topic:'.length) : tag
+  const words = v.replace(/[_-]+/g, ' ').trim()
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : tag
 }
 
 function severityDot(sev: string): string {
@@ -62,8 +120,9 @@ function severityDot(sev: string): string {
     case 'critical':
       return 'bg-accent-critical'
     case 'high':
+    case 'elevated':
       return 'bg-accent-warning'
-    case 'medium':
+    case 'moderate':
       return 'bg-accent-info'
     case 'low':
       return 'bg-accent-ok'
@@ -110,6 +169,7 @@ export default function TargetClaimsPanel({ registration, scope }: PanelProps) {
     queryFn: async () => {
       const qs = new URLSearchParams({ target_id, limit: '200' })
       if (severity) qs.set('severity', severity)
+      qs.set('fields', 'full') // reads data (tags, corroboration) and derived_from
       try {
         return await apiGet<Page<FindingRow>>(`/findings?${qs.toString()}`)
       } catch (e) {
@@ -142,8 +202,12 @@ export default function TargetClaimsPanel({ registration, scope }: PanelProps) {
 
   const filtered = useMemo(
     () =>
-      tagFilter ? claims.filter((c) => tagsById.get(c.id)?.includes(tagFilter)) : claims,
-    [claims, tagFilter, tagsById],
+      claims.filter(
+        (c) =>
+          (!severity || c.severity === severity) &&
+          (!tagFilter || tagsById.get(c.id)?.includes(tagFilter)),
+      ),
+    [claims, severity, tagFilter, tagsById],
   )
   const sorted = useMemo(() => sortClaims(filtered, sort), [filtered, sort])
 
@@ -156,8 +220,11 @@ export default function TargetClaimsPanel({ registration, scope }: PanelProps) {
         data-testid="target-claims-severity"
       >
         <option value="">all severities</option>
-        {/* Offer the union of what's loaded plus the static taxonomy. */}
-        {Array.from(new Set([...severities, 'critical', 'high', 'medium', 'low'])).map((s) => (
+        {/* U-1 — the platform's one scale (medium reads as moderate), plus any
+            off-scale value actually loaded. Never two names for one rung. */}
+        {Array.from(new Set([...CLAIM_SEVERITY_SCALE, ...severities]))
+          .filter((s) => s !== 'unknown')
+          .map((s) => (
           <option key={s} value={s}>
             {s}
           </option>
@@ -181,17 +248,22 @@ export default function TargetClaimsPanel({ registration, scope }: PanelProps) {
       registration={registration}
       subtitle={`${sorted.length}${
         sorted.length !== claims.length ? `/${claims.length}` : ''
-      } claim${claims.length === 1 ? '' : 's'} · target ${target_id}`}
+      } claim${claims.length === 1 ? '' : 's'} · ${humanizeId(target_id)}`}
       actions={actions}
       onRefresh={() => refetch()}
     >
-      {/* Topic-tag facet chips. */}
+      {/* Topic-tag facet chips — reader topics only, folded behind a
+          disclosure so the tab opens on the claims, not a facet dump (U-1). */}
       {allTags.length > 0 && (
-        <div className="flex flex-wrap gap-1 mb-2" data-testid="target-claims-tag-chips">
+        <details className="mb-2" data-testid="target-claims-topics" open={tagFilter !== null}>
+        <summary className="cursor-pointer text-label text-ink-3 select-none">
+          Filter by topic{tagFilter ? ` · ${topicLabel(tagFilter)}` : ''}
+        </summary>
+        <div className="flex flex-wrap gap-1 mt-1" data-testid="target-claims-tag-chips">
           {tagFilter && (
             <button
               onClick={() => setTagFilter(null)}
-              className="px-1.5 py-0.5 rounded text-[10px] border border-slate-600 text-slate-400 hover:text-slate-200"
+              className="px-1.5 py-0.5 rounded text-label border border-slate-600 text-slate-400 hover:text-slate-200"
             >
               clear ✕
             </button>
@@ -201,17 +273,18 @@ export default function TargetClaimsPanel({ registration, scope }: PanelProps) {
               key={tag}
               onClick={() => setTagFilter(tagFilter === tag ? null : tag)}
               className={cn(
-                'px-1.5 py-0.5 rounded text-[10px] border',
+                'px-1.5 py-0.5 rounded text-label border',
                 tagFilter === tag
                   ? 'bg-accent-info/30 text-accent-info border-accent-info/50'
                   : 'bg-surface-200 text-slate-300 border-slate-700 hover:border-slate-500',
               )}
               data-testid={`target-claims-tag-${tag}`}
             >
-              {tag} <span className="text-slate-500">{count}</span>
+              {topicLabel(tag)} <span className="text-slate-500">{count}</span>
             </button>
           ))}
         </div>
+        </details>
       )}
 
       {isLoading && <div className="text-xs text-slate-400">Loading claims…</div>}
@@ -288,7 +361,7 @@ function ClaimItem({
         {c.decay.label !== 'fresh' && (
           <span
             className={cn(
-              'px-1 py-0.5 rounded text-[9px] uppercase tracking-wide shrink-0',
+              'px-1 py-0.5 rounded text-label uppercase tracking-wide shrink-0',
               decayChipClass(c.decay.label),
             )}
             title={freshnessTitle(c.decay)}
@@ -299,18 +372,18 @@ function ClaimItem({
         )}
         {uncorroborated && (
           <span
-            className="px-1 py-0.5 rounded bg-accent-warning/20 text-accent-warning text-[9px] uppercase tracking-wide shrink-0"
+            className="px-1 py-0.5 rounded bg-accent-warning/20 text-accent-warning text-label uppercase tracking-wide shrink-0"
             title="fewer than 2 independent sources"
             data-testid={`target-claim-uncorrob-${c.id}`}
           >
             uncorrob
           </span>
         )}
-        <span className="font-mono text-[11px] text-slate-300 shrink-0" title="confidence">
+        <span className="font-mono text-label text-slate-300 shrink-0" title="confidence">
           {(c.confidence * 100).toFixed(0)}%
         </span>
         <span
-          className="font-mono text-[10px] text-slate-500 shrink-0"
+          className="font-mono text-label text-slate-500 shrink-0"
           title="corroborating sources"
           data-testid={`target-claim-corrob-${c.id}`}
         >
@@ -344,7 +417,7 @@ function ClaimItem({
                   origin: 'target.claims',
                 })
               }
-              className="text-[10px] underline text-accent-info"
+              className="text-label underline text-accent-info"
               data-testid={`target-claim-cross-framing-${c.id}`}
               title="put this claim against the desk's other bounded units, and see which of them are silent"
             >
@@ -361,7 +434,7 @@ function ClaimItem({
               className="rounded border border-accent-warning/40 bg-accent-warning/10 p-2 space-y-1"
               data-testid={`target-claim-whynot-${c.id}`}
             >
-              <div className="flex flex-wrap items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent-warning">
+              <div className="flex flex-wrap items-center gap-1 text-label font-semibold uppercase tracking-wide text-accent-warning">
                 why not — unsupported by verify
                 {c.whyNot.faithfulnessScore !== null && (
                   <span className="font-mono normal-case text-slate-400">
@@ -376,7 +449,7 @@ function ClaimItem({
               </div>
               <ul className="space-y-1">
                 {c.whyNot.unsupportedSpans.map((s, i) => (
-                  <li key={`${i}-${s.reason}`} className="text-[11px] text-slate-300">
+                  <li key={`${i}-${s.reason}`} className="text-label text-slate-300">
                     <span className="text-slate-200">“{s.text}”</span>{' '}
                     <span className="text-accent-warning">— {s.reasonLabel}</span>
                     {s.markers.length > 0 && (
@@ -395,9 +468,9 @@ function ClaimItem({
               {tags.map((t) => (
                 <span
                   key={t}
-                  className="px-1.5 py-0.5 rounded bg-surface-200 text-[10px] text-slate-300"
+                  className="px-1.5 py-0.5 rounded bg-surface-200 text-label text-slate-300"
                 >
-                  {t}
+                  {topicLabel(t)}
                 </span>
               ))}
             </div>
@@ -412,10 +485,10 @@ function ClaimItem({
               testid={`target-claim-corrob-bar-${c.id}`}
             />
           ) : (
-            <div className="text-[11px] text-slate-500">corroboration not yet scored</div>
+            <div className="text-label text-slate-500">corroboration not yet scored</div>
           )}
 
-          <div className="text-[10px] text-slate-500" title={c.analyst_id ?? undefined}>
+          <div className="text-label text-slate-500" title={c.analyst_id ?? undefined}>
             {humanizeAnalystId(c.analyst_id)} · {new Date(c.produced_at).toLocaleString()}
             {c.corroborationSources !== null && ` · ${c.corroborationSources} independent source(s)`}
           </div>
@@ -424,7 +497,7 @@ function ClaimItem({
               carries a decay/temporal signal (degrade to nothing otherwise). */}
           {(c.decay.decay !== null || c.decay.validUntil || c.decay.expired) && (
             <div
-              className="text-[10px] text-slate-500"
+              className="text-label text-slate-500"
               data-testid={`target-claim-freshness-${c.id}`}
             >
               freshness: <span className="text-slate-400">{c.decay.label}</span>
@@ -439,7 +512,7 @@ function ClaimItem({
           )}
 
           <div>
-            <span className="text-[10px] uppercase tracking-wide text-slate-400">
+            <span className="text-label uppercase tracking-wide text-slate-400">
               evidence chain ({c.derived_from.length})
             </span>
             {c.derived_from.length > 0 && (
@@ -449,7 +522,7 @@ function ClaimItem({
                     key={id}
                     title={`open lineage for ${id}`}
                     onClick={() => openLineage('signal', id)}
-                    className="font-mono text-[10px] underline text-accent-info"
+                    className="font-mono text-label underline text-accent-info"
                   >
                     {id.slice(0, 8)}…
                   </button>
@@ -460,7 +533,7 @@ function ClaimItem({
 
           <button
             onClick={() => openLineage('finding', c.id)}
-            className="text-[10px] underline text-accent-info"
+            className="text-label underline text-accent-info"
           >
             trace this claim →
           </button>
@@ -484,11 +557,11 @@ function ConfidenceBar({
   const pct = Math.max(0, Math.min(1, value)) * 100
   return (
     <div className="flex items-center gap-2" data-testid={testid}>
-      <span className="text-[10px] text-slate-400 w-24 shrink-0">{label}</span>
+      <span className="text-label text-slate-400 w-24 shrink-0">{label}</span>
       <div className="flex-1 h-1.5 bg-surface-200 rounded overflow-hidden">
         <div className="h-full rounded" style={{ width: `${pct}%`, backgroundColor: color }} />
       </div>
-      <span className="font-mono text-[10px] text-slate-300 w-9 text-right">{pct.toFixed(0)}%</span>
+      <span className="font-mono text-label text-slate-300 w-9 text-right">{pct.toFixed(0)}%</span>
     </div>
   )
 }

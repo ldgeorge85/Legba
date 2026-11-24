@@ -123,6 +123,26 @@ the 0116 column default, i.e. byte-identical to what 3.2.0 wrote. Turning the
 pipeline on is a descriptor PUT at deploy time (``method.options.bearing_gate:
 "on"``), not a code change and not a rebuild. That is the X-1 contract, held.
 
+TWO SHAPES OF GATE (W11-F148)
+-----------------------------
+The ``bearing_gate_ref`` component may be a CHAT model or a DECISION model
+(``POST /decide``, the ``.decide.`` components). The gate asks whichever it
+is given, resolved through the same builder either way:
+
+  * a client exposing ``decide`` is asked :func:`bearing_questions` — the ONE
+    choice question the W11-F108 shadow asked it, over the same
+    :func:`gate_row_text` state — and its ``choice`` IS the verdict
+    (``yes``/``no``; anything else reads unavailable). Its confidence (or, if
+    absent, the larger of its two probabilities) and its ``p_yes`` ride the
+    edge as ``bearing_gate_confidence`` / ``bearing_gate_p_yes``, and the
+    edge's ``bearing_gate_prompt`` is :data:`GATE_DECIDE_QUESTION_VERSION`,
+    because the system prompt and exemplars below were never sent;
+  * any other client takes the chat path below, byte for byte as before.
+
+``bearing_gate_shape`` (``decide`` | ``llm``) is stamped on the run receipt,
+and on every edge a decision model judged. The cap, the cache, the
+stamp-and-write posture and every counter are the same for both shapes.
+
 PROMPTS
 -------
 :data:`GATE_PROMPT` and :data:`CONFIRM_PROMPT` are module-level constants
@@ -133,6 +153,7 @@ every stamped edge so a precision shift is always attributable to the prompt
 that produced it. Bump the version with the prompt, in the same commit.
 """
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import asyncio
 import json
@@ -167,10 +188,23 @@ __all__ = [
     "SLM_DEPS_EXTRA_KEY",
     "EdgeCandidate",
     "MAX_DESK_CHARS",
+    "BEARING_CRITERIA",
+    "BEARING_INSTRUCTIONS",
+    "BEARING_QUESTION_ID",
+    "GATE_DECIDE_LEG",
+    "GATE_DECIDE_QUESTION_VERSION",
+    "GATE_SHAPES",
     "bearing_counter_defaults",
+    "bearing_questions",
     "confirm_blocking",
+    "build_component_handler",
     "desk_line",
     "gate_enabled",
+    "gate_llm_call",
+    "gate_llm_messages",
+    "gate_row_text",
+    "is_decide_client",
+    "read_decide_answer",
     "parse_confirm_batch",
     "parse_gate_verdict",
     "run_bearing_pipeline",
@@ -476,6 +510,62 @@ PAIRS:
 
 
 # ---------------------------------------------------------------------------
+# THE DECISION QUESTION — the same bearing question in the /decide shape
+# ---------------------------------------------------------------------------
+
+#: The ONE choice question a decision model is asked about a pair, by the gate
+#: (W11-F148, when ``bearing_gate_ref`` names a decision component) AND by the
+#: shadow (W11-F108; ``bearing_shadow.shadow_questions`` IS this function).
+#: One definition, so the gate and its shadow can trade components without the
+#: question drifting between the two roles. The wording is the one the
+#: W11-F108 shadow was measured with (197 adjudicated disagreements, 10-25);
+#: an edit is a new :data:`GATE_DECIDE_QUESTION_VERSION`.
+BEARING_QUESTION_ID = "bears"
+BEARING_INSTRUCTIONS = (
+    "Does the new evidence bear on the question — would a careful analyst "
+    "update the answer because of it?"
+)
+BEARING_CRITERIA: Mapping[str, str] = {
+    "yes": (
+        "The news item is genuine evidence on what the question asks — it "
+        "supports, refutes or materially updates the answer. When a Desk is "
+        "shown, the item concerns that desk's country or theatre."
+    ),
+    "no": (
+        "The item only shares a country, actors or vocabulary with the "
+        "question, concerns a different country or theatre than the Desk, or "
+        "never speaks to the consequence the question names."
+    ),
+}
+
+#: Stamped as ``bearing_gate_prompt`` on an edge a DECISION model judged — the
+#: chat prompt's version would name a system prompt and exemplars that were
+#: never sent. Bump WITH the question.
+GATE_DECIDE_QUESTION_VERSION = "decide:bears/1"
+
+#: The ``leg`` tag on the gate's decide receipts (``analyst_traces.llm_calls``).
+GATE_DECIDE_LEG = "bearing_gate"
+
+#: Further attempts on a transient decide failure, inside
+#: :data:`GATE_TIMEOUT_SECONDS` — the shadow's count.
+GATE_DECIDE_MAX_RETRIES = 1
+
+#: The two shapes a gate component can answer in (``bearing_gate_shape``).
+GATE_SHAPES: tuple[str, ...] = ("decide", "llm")
+
+
+def bearing_questions() -> dict[str, dict[str, Any]]:
+    """The one choice question, in the /decide shape."""
+    return {
+        BEARING_QUESTION_ID: {
+            "type": "choice",
+            "instructions": BEARING_INSTRUCTIONS,
+            "criteria": dict(BEARING_CRITERIA),
+        }
+    }
+
+
+# ---------------------------------------------------------------------------
 # The candidate the matcher hands over
 # ---------------------------------------------------------------------------
 
@@ -505,14 +595,31 @@ class EdgeCandidate:
     #: as a scope.
     desk_label: str = ""
 
+    #: W11-F108 — the desk id that owns the question (``hypotheses.target_id``,
+    #: empty for a desk-less question). Carried for the shadow ledger only; it
+    #: never reaches a prompt or ``data_payload``.
+    target_id: str = ""
+
     #: 'yes' | 'unavailable' | 'deferred', or None when the gate was OFF.
     #: A gate verdict of NO drops the candidate, so 'no' never lands here.
     gate: str | None = None
     #: The component that judged it — stamped onto the row for provenance.
     gate_ref: str = ""
+    #: W11-F148 — ``'decide'`` when a decision model judged this pair, else
+    #: ``''`` (the chat path, whose stamp stays byte-identical).
+    gate_shape: str = ""
+    #: W11-F148 — the decision model's confidence / p_yes; ``None`` on the
+    #: chat path (a chat model gives neither).
+    gate_confidence: float | None = None
+    gate_p_yes: float | None = None
     #: 'yes' | 'no' | 'unavailable', or None when the confirm did not run.
     confirm: str | None = None
     confirm_reason: str | None = None
+    #: C-2 — the signal's claim stamp (``payload.claim``) when the bearing
+    #: signal is a CLAIM row, else None. Written onto the edge as
+    #: ``evidence_class: claim`` + the claimant: the edge says a party's claim
+    #: bears on the question, never that the event is evidenced.
+    claim: dict[str, Any] | None = None
 
     @property
     def watch(self) -> str:
@@ -530,15 +637,25 @@ class EdgeCandidate:
         """The ``bearing_edges.data`` jsonb for this row.
 
         EMPTY when the gate was off — which is the 0116 column default, so a
-        gate-off run stores exactly the bytes 3.2.0 stored."""
+        gate-off run stores exactly the bytes 3.2.0 stored. C-2: a claim row's
+        edge also carries ``evidence_class`` + ``claimant`` (gate on or off)."""
         if self.gate is None:
-            return {}
+            return self._claim_keys({})
+        decided = self.gate_shape == "decide"
         out: dict[str, Any] = {
             "bearing_gate": self.gate,
             "bearing_gate_ref": self.gate_ref or "",
-            "bearing_gate_prompt": GATE_PROMPT_VERSION,
+            "bearing_gate_prompt": (
+                GATE_DECIDE_QUESTION_VERSION if decided else GATE_PROMPT_VERSION
+            ),
             "bearing_watch": self.watch,
         }
+        if decided:
+            out["bearing_gate_shape"] = "decide"
+            if self.gate_confidence is not None:
+                out["bearing_gate_confidence"] = self.gate_confidence
+            if self.gate_p_yes is not None:
+                out["bearing_gate_p_yes"] = self.gate_p_yes
         if self.desk_label:
             out["bearing_desk"] = _desk_text(self.desk_label)
         if self.confirm is not None:
@@ -546,6 +663,12 @@ class EdgeCandidate:
             out["bearing_confirm_prompt"] = CONFIRM_PROMPT_VERSION
             if self.confirm_reason:
                 out["bearing_confirm_reason"] = self.confirm_reason[:MAX_REASON_CHARS]
+        return self._claim_keys(out)
+
+    def _claim_keys(self, out: dict[str, Any]) -> dict[str, Any]:
+        if self.claim:
+            out["evidence_class"] = "claim"
+            out["claimant"] = str(self.claim.get("claimant") or "")
         return out
 
 
@@ -559,6 +682,9 @@ def bearing_counter_defaults() -> dict[str, Any]:
         "bearing_gate_mode": DEFAULT_BEARING_GATE,
         "bearing_gate_ref": "",
         "bearing_gate_prompt": GATE_PROMPT_VERSION,
+        # W11-F148 — which shape answered this run ('decide' | 'llm'); empty
+        # when no gate client answered (off, or the component did not build).
+        "bearing_gate_shape": "",
         "bearing_gate_calls": 0,
         "bearing_gate_yes": 0,
         "bearing_gated_out": 0,
@@ -638,6 +764,20 @@ def _thesis_text(raw: Any) -> str:
 
 def _desk_text(raw: Any) -> str:
     return re.sub(r"\s+", " ", str(raw or "").strip())[:MAX_DESK_CHARS]
+
+
+def gate_row_text(cand: "EdgeCandidate") -> str:
+    """The row under test, exactly as the gate's last user turn carries it:
+    the optional ``Desk:`` line, the question thesis and the news item.
+
+    One function so the W11-F108 shadow states the SAME question and the SAME
+    evidence the gate judged — a shadow over different text would measure the
+    text, not the model."""
+    return GATE_PROMPT.format(
+        desk=desk_line(cand.desk_label),
+        thesis=_thesis_text(cand.question_thesis),
+        signal=cand.signal_text or "(no text)",
+    )
 
 
 def desk_line(raw: Any, *, suffix: str = "\n") -> str:
@@ -786,28 +926,7 @@ async def _resolve_gate_client(deps: Any, ref: str) -> Any:
     if cached is not None:
         return cached
     try:
-        from ...config import PostgresConfig
-        from ...postgres import PostgresStore
-        from ...registry.credentials import CredentialVault
-        from ....runtime.analyst_deps_builder import (
-            build_llm_handler_from_stack_component,
-        )
-        from ....runtime.registry_client import RegistryHTTPClient
-
-        store = PostgresStore(PostgresConfig.from_env())
-        # The store must be CONNECTED before the vault can resolve — an
-        # unconnected store raises on first use and every candidate degrades
-        # to 'unavailable' (bit the first armed run, 2026-07-30 18:37Z).
-        await store.connect()
-        try:
-            vault = CredentialVault(store)
-            handler = await build_llm_handler_from_stack_component(
-                ref,
-                registry_client=RegistryHTTPClient(),
-                secrets_resolve=vault.resolve,
-            )
-        finally:
-            await store.close()
+        handler = await build_component_handler(ref)
     except Exception as exc:  # noqa: BLE001 — degrade the RUN, never kill it
         logger.warning(
             "claim_watch.bearing_gate.client_build_failed ref=%s err=%s — every "
@@ -823,32 +942,128 @@ async def _resolve_gate_client(deps: Any, ref: str) -> Any:
     return handler
 
 
+async def build_component_handler(ref: str) -> Any:
+    """Build one configured LLM handler for ``ref`` through the PRODUCTION
+    path (see :func:`_resolve_gate_client`). RAISES on any failure — the
+    callers own the degrade policy (the gate's stamp-and-write, the W11-F108
+    shadow's count-never-raise)."""
+    from ...config import PostgresConfig
+    from ...postgres import PostgresStore
+    from ...registry.credentials import CredentialVault
+    from ....runtime.analyst_deps_builder import (
+        build_llm_handler_from_stack_component,
+    )
+    from ....runtime.registry_client import RegistryHTTPClient
+
+    store = PostgresStore(PostgresConfig.from_env())
+    # The store must be CONNECTED before the vault can resolve — an
+    # unconnected store raises on first use and every candidate degrades
+    # to 'unavailable' (bit the first armed run, 2026-07-30 18:37Z).
+    await store.connect()
+    try:
+        vault = CredentialVault(store)
+        return await build_llm_handler_from_stack_component(
+            ref,
+            registry_client=RegistryHTTPClient(),
+            secrets_resolve=vault.resolve,
+        )
+    finally:
+        await store.close()
+
+
 # ---------------------------------------------------------------------------
 # The legs
 # ---------------------------------------------------------------------------
+
+
+def gate_llm_messages(cand: EdgeCandidate) -> list[dict[str, str]]:
+    """The chat gate's whole conversation for one pair: the system prompt,
+    the eight exemplar turns and the row under test. ONE definition — the
+    W11-F148 shadow asks a chat component exactly these messages."""
+    messages = [{"role": "system", "content": GATE_SYSTEM_PROMPT}]
+    for ex_user, ex_answer in GATE_FEWSHOT_TURNS:
+        messages.append({"role": "user", "content": ex_user})
+        messages.append({"role": "assistant", "content": ex_answer})
+    messages.append({"role": "user", "content": gate_row_text(cand)})
+    return messages
+
+
+def gate_llm_call(client: Any, cand: EdgeCandidate) -> Any:
+    """The chat gate's call for one pair (an awaitable) — the messages and the
+    call arguments, shared with the shadow so the two can never drift."""
+    return client.chat_complete(
+        gate_llm_messages(cand),
+        max_tokens=GATE_MAX_TOKENS,
+        temperature=HOUSE_TEMPERATURE,
+    )
+
+
+def is_decide_client(client: Any) -> bool:
+    """Does this component answer typed questions (``POST /decide``)?"""
+    return callable(getattr(client, "decide", None))
+
+
+def _unit(raw: Any) -> float | None:
+    """A probability clamped into [0, 1], or ``None`` when it is not a
+    number."""
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    return min(1.0, max(0.0, float(raw)))
+
+
+def read_decide_answer(answers: Any) -> tuple[str | None, float | None, float | None]:
+    """``(choice, confidence, p_yes)`` out of a /decide answer set for
+    :func:`bearing_questions`. ``choice`` is ``'yes'``/``'no'`` or ``None``
+    (unreadable); ``confidence`` falls back to the larger of the two
+    probabilities when the model gave none."""
+    answer = answers.get(BEARING_QUESTION_ID) if isinstance(answers, Mapping) else None
+    if not isinstance(answer, Mapping):
+        return None, None, None
+    choice = str(answer.get("choice") or "").strip().lower()
+    probs = answer.get("probabilities")
+    probs = probs if isinstance(probs, Mapping) else {}
+    p_yes = _unit(probs.get("yes"))
+    confidence = _unit(answer.get("confidence"))
+    if confidence is None:
+        known = [p for p in (p_yes, _unit(probs.get("no"))) if p is not None]
+        confidence = max(known) if known else None
+    return (choice if choice in ("yes", "no") else None), confidence, p_yes
+
+
+async def _gate_one_decide(client: Any, cand: EdgeCandidate) -> str | None:
+    """W11-F148 — one gate verdict from a DECISION model, stamping its
+    confidence/p_yes on the candidate. ``None`` on any failure (transport,
+    timeout, an unreadable choice): the chat path's collapse rule."""
+    cand.gate_shape = "decide"
+    try:
+        answers = await asyncio.wait_for(
+            client.decide(
+                gate_row_text(cand),
+                bearing_questions(),
+                leg=GATE_DECIDE_LEG,
+                max_retries=GATE_DECIDE_MAX_RETRIES,
+            ),
+            timeout=GATE_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:  # noqa: BLE001 — one edge degrades, the run does not
+        logger.warning(
+            "claim_watch.bearing_gate.decide_failed signal=%s question=%s err=%s",
+            cand.signal_id,
+            cand.question_id,
+            type(exc).__name__,
+        )
+        return None
+    choice, cand.gate_confidence, cand.gate_p_yes = read_decide_answer(answers)
+    return choice
 
 
 async def _gate_one(client: Any, cand: EdgeCandidate) -> str | None:
     """One gate verdict, or ``None`` on any failure (transport, timeout,
     unparseable reply) — the three collapse deliberately: from the edge's point
     of view they are one condition, "the gate could not answer"."""
-    prompt = GATE_PROMPT.format(
-        desk=desk_line(cand.desk_label),
-        thesis=_thesis_text(cand.question_thesis),
-        signal=cand.signal_text or "(no text)",
-    )
-    messages = [{"role": "system", "content": GATE_SYSTEM_PROMPT}]
-    for ex_user, ex_answer in GATE_FEWSHOT_TURNS:
-        messages.append({"role": "user", "content": ex_user})
-        messages.append({"role": "assistant", "content": ex_answer})
-    messages.append({"role": "user", "content": prompt})
     try:
         response = await asyncio.wait_for(
-            client.chat_complete(
-                messages,
-                max_tokens=GATE_MAX_TOKENS,
-                temperature=0.0,
-            ),
+            gate_llm_call(client, cand),
             timeout=GATE_TIMEOUT_SECONDS,
         )
     except Exception as exc:  # noqa: BLE001 — one edge degrades, the run does not
@@ -869,9 +1084,21 @@ async def _run_gate(
     gate_ref: str,
     gate_cap: int,
     counters: dict[str, Any],
+    asked: list[tuple[EdgeCandidate, str]] | None = None,
 ) -> list[EdgeCandidate]:
-    """W-B1. Returns the SURVIVING candidates (gate-NO dropped), stamped."""
+    """W-B1. Returns the SURVIVING candidates (gate-NO dropped), stamped.
+
+    ``asked`` (W11-F108) collects ``(candidate, 'yes'|'no'|'unavailable')``
+    for every pair the model was ACTUALLY asked — the shadow's population. An
+    observer only: appending to it changes no verdict and no flow."""
     client = await _resolve_gate_client(deps, gate_ref)
+    decide = client is not None and is_decide_client(client)
+    if client is not None:
+        # W11-F148 — which shape this run's gate answers in.
+        counters["bearing_gate_shape"] = "decide" if decide else "llm"
+        if decide:
+            counters["bearing_gate_prompt"] = GATE_DECIDE_QUESTION_VERSION
+    ask = _gate_one_decide if decide else _gate_one
     kept: list[EdgeCandidate] = []
     calls = 0
     for cand in candidates:
@@ -890,7 +1117,9 @@ async def _run_gate(
             kept.append(cand)
             continue
         calls += 1
-        verdict = await _gate_one(client, cand)
+        verdict = await ask(client, cand)
+        if asked is not None:
+            asked.append((cand, verdict if verdict in ("yes", "no") else "unavailable"))
         if verdict == "yes":
             cand.gate = "yes"
             counters["bearing_gate_yes"] += 1
@@ -959,7 +1188,7 @@ async def _run_confirm(
                 client.chat_complete(
                     [{"role": "user", "content": _confirm_prompt(batch)}],
                     max_tokens=CONFIRM_MAX_TOKENS,
-                    temperature=0.0,
+                    temperature=HOUSE_TEMPERATURE,
                 ),
                 timeout=CONFIRM_TIMEOUT_SECONDS,
             )
@@ -1018,6 +1247,7 @@ async def run_bearing_pipeline(
     confirm_cap: int,
     confirm_mode: Any = DEFAULT_BEARING_CONFIRM_MODE,
     counters: dict[str, Any],
+    asked: list[tuple[EdgeCandidate, str]] | None = None,
 ) -> list[EdgeCandidate]:
     """Both legs over one run's would-be edges. Returns what should be WRITTEN.
 
@@ -1028,6 +1258,10 @@ async def run_bearing_pipeline(
     ON, the survivors are the gate-YES set MINUS the confirm-NO set (CW-1),
     each survivor carrying ``data.bearing_watch`` = 'confirmed'/'unconfirmed'
     so an adjudicated edge and an un-adjudicated one are never one population.
+
+    ``asked`` (W11-F108): when a list is passed, the gate leg appends every
+    pair it asked, with its verdict — read AFTER this returns by the
+    clef-flash shadow (:mod:`.bearing_shadow`). Passing it moves nothing.
     """
     counters.update(bearing_counter_defaults())
     if not gate_enabled(mode):
@@ -1045,6 +1279,7 @@ async def run_bearing_pipeline(
         gate_ref=gate_ref,
         gate_cap=max(0, int(gate_cap)),
         counters=counters,
+        asked=asked,
     )
     await _run_confirm(
         kept, deps=deps, confirm_cap=max(0, int(confirm_cap)), counters=counters
@@ -1054,7 +1289,7 @@ async def run_bearing_pipeline(
         "claim_watch.bearing_gate.done candidates=%d kept=%d yes=%d gated_out=%d "
         "errors=%d deferred=%d confirm(mode=%s yes=%d no=%d unavailable=%d "
         "deferred=%d blocked=%d) watch(confirmed=%d unconfirmed=%d) "
-        "ref=%s prompt=%s",
+        "ref=%s shape=%s prompt=%s",
         len(candidates),
         len(kept),
         counters["bearing_gate_yes"],
@@ -1070,6 +1305,7 @@ async def run_bearing_pipeline(
         counters["bearing_watch_confirmed"],
         counters["bearing_watch_unconfirmed"],
         gate_ref,
-        GATE_PROMPT_VERSION,
+        counters["bearing_gate_shape"] or "-",
+        counters["bearing_gate_prompt"],
     )
     return kept

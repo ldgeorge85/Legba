@@ -32,7 +32,13 @@ from typing import Any, Callable
 
 import asyncpg
 
-from ..schemas.vocabulary import VocabularyEntry, VocabularyRegistry
+from ..schemas.vocabulary import (
+    FamilyError,
+    VocabularyEntry,
+    VocabularyRegistry,
+    validate_family,
+    walk_parents,
+)
 from .errors import UnknownVocabularyValue
 from .events import VOCABULARY_UPDATED_TOPIC
 
@@ -66,6 +72,14 @@ class VocabularyCache:
         self._values_by_family: dict[str, set[str]] = {}
         # Alias -> canonical value, scoped per family.
         self._aliases: dict[str, dict[str, str]] = {}
+        # (family, value) -> current entry, for the parent walk.
+        self._index: dict[tuple[str, str], VocabularyEntry] = {}
+        # Families the last refresh could not load (W6 VOCAB-1): one dict
+        # per family — {"family", "code", "detail", "rows"}. An unknown or
+        # malformed family degrades to THIS list; it never fails the refresh.
+        self._families_unloaded: list[dict[str, Any]] = []
+        # Rows of a loadable family that failed validation and were skipped.
+        self._rows_skipped: list[dict[str, Any]] = []
         self._lock = asyncio.Lock()
         self._sub = None  # NATS subscription handle
         self._nats = None  # legba.data.nats.NatsStore (or None)
@@ -98,6 +112,36 @@ class VocabularyCache:
     def resolve_alias(self, family: str, value: str) -> str:
         return self._aliases.get(family, {}).get(value, value)
 
+    @property
+    def families_unloaded(self) -> list[dict[str, Any]]:
+        """Families the last refresh left unloaded, with the reason code
+        (`family_unknown` / `family_malformed` / `family_protected`)."""
+        return list(self._families_unloaded)
+
+    @property
+    def rows_skipped(self) -> list[dict[str, Any]]:
+        return list(self._rows_skipped)
+
+    def entry(self, family: str, value: str) -> VocabularyEntry | None:
+        """The current entry for `value` (alias-resolved) in `family`."""
+        return self._index.get((family, self.resolve_alias(family, value)))
+
+    def ancestors(self, family: str, value: str) -> list[tuple[str, str]]:
+        """The `parent` chain of an entry, nearest first, as (family, value)
+        pairs — bounded (depth 8) and cycle-safe. Empty for an unknown
+        value or one with no parent."""
+        return walk_parents(self._index, family, self.resolve_alias(family, value))
+
+    def descends_from(
+        self, family: str, value: str, ancestor_family: str, ancestor_value: str,
+    ) -> bool:
+        """True when (ancestor_family, ancestor_value) is on the parent chain
+        of the entry — or is the entry itself."""
+        canon = self.resolve_alias(family, value)
+        if (family, canon) == (ancestor_family, ancestor_value):
+            return canon in self._values_by_family.get(family, set())
+        return (ancestor_family, ancestor_value) in self.ancestors(family, canon)
+
     # ------------------------------------------------------------------
     # Refresh
     # ------------------------------------------------------------------
@@ -117,8 +161,40 @@ class VocabularyCache:
             entries: list[VocabularyEntry] = []
             values_by_family: dict[str, set[str]] = {}
             aliases: dict[str, dict[str, str]] = {}
+            unloaded: dict[str, dict[str, Any]] = {}
+            skipped: list[dict[str, Any]] = []
+            # Pass 1 — the family gate. A family the registry refuses marks
+            # THAT family unloaded (every row of it is left out); the refresh
+            # goes on with the rest.
             for row in rows:
-                entry = _row_to_entry(row)
+                fam = row["family"]
+                if fam in unloaded:
+                    unloaded[fam]["rows"] += 1
+                    continue
+                try:
+                    validate_family(fam)
+                except FamilyError as exc:
+                    unloaded[fam] = {
+                        "family": fam, "code": exc.code, "detail": exc.hint,
+                        "rows": 1,
+                    }
+            for row in rows:
+                if row["family"] in unloaded:
+                    continue
+                try:
+                    entry = _row_to_entry(row)
+                except Exception as exc:
+                    # A bad row in a loadable family: skip the row, keep the
+                    # family. Logged; visible as `rows_skipped`.
+                    logger.warning(
+                        "vocabulary row skipped: family=%s value=%r: %s",
+                        row["family"], row["value"], exc,
+                    )
+                    skipped.append({
+                        "family": row["family"], "value": row["value"],
+                        "detail": str(exc).splitlines()[0][:200],
+                    })
+                    continue
                 entries.append(entry)
                 if entry.deprecated is None:
                     values_by_family.setdefault(entry.family, set()).add(entry.value)
@@ -126,9 +202,17 @@ class VocabularyCache:
                         per_family = aliases.setdefault(entry.family, {})
                         for alias in entry.aliases:
                             per_family[alias] = entry.value
+            for info in unloaded.values():
+                logger.warning(
+                    "vocabulary family unloaded: %s (%s; %d row(s)) — %s",
+                    info["family"], info["code"], info["rows"], info["detail"],
+                )
             self._registry = VocabularyRegistry(entries=entries)
             self._values_by_family = values_by_family
             self._aliases = aliases
+            self._index = self._registry.index()
+            self._families_unloaded = sorted(unloaded.values(), key=lambda d: d["family"])
+            self._rows_skipped = skipped
             logger.debug(
                 "vocabulary cache refreshed: %d entries across families %s",
                 len(entries),

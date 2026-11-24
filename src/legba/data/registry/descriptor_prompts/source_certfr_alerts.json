@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.certfr.alerts": {
+      "source": "source_certfr_alerts.yaml",
+      "state": "draft"
+    }
+  }
+}

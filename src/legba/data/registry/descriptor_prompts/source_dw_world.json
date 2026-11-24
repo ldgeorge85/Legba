@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.dw.world": {
+      "source": "source_dw_world.yaml",
+      "state": "active"
+    }
+  }
+}

@@ -400,4 +400,33 @@ describe('InspectorPanel', () => {
     expect(body).not.toHaveTextContent('0 of 2 independent pages')
     expect(body).not.toHaveTextContent("0 of the claim's subject words")
   })
+
+  it('prints no citation or verdict while the finding is still being read (fix 2)', async () => {
+    // The lineage walk never answers: only the optimistic preview is in hand.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) =>
+        url.includes('/lineage/')
+          ? new Promise(() => {})
+          : Promise.resolve({ ok: true, json: async () => ({ data: [] }) }),
+      ),
+    )
+    render(wrap(<InspectorPanel registration={reg()} scope={{}} mode="personal" />))
+    useSelection.getState().select({
+      kind: 'finding',
+      id: 'f-pending',
+      label: 'A pending read',
+      origin: 'feed',
+      preview: { body: 'Synthetic prose with a marker [1].', analystId: 'escalation' },
+    })
+    const report = await screen.findByTestId('inspector-report-optimistic')
+    expect(report).toHaveTextContent('Synthetic prose')
+    // Neutral, not a verdict: no "uncited (legacy finding)", no unverified /
+    // unstated badge before the record answered.
+    expect(screen.getByTestId('cited-pending')).toHaveTextContent('reading…')
+    expect(screen.queryByTestId('uncited-marker')).toBeNull()
+    expect(report).not.toHaveTextContent(/legacy finding/i)
+    expect(report).not.toHaveTextContent(/unverified/i)
+    expect(report).not.toHaveTextContent(/unstated/i)
+  })
 })

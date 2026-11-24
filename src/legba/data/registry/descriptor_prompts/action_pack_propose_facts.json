@@ -1,0 +1,8 @@
+{
+  "states": {
+    "action_pack:propose_facts": {
+      "source": "action_pack_propose_facts.yaml",
+      "state": "active"
+    }
+  }
+}

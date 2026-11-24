@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:alert_trigger_scan": {
+      "source": "analyst_alert_trigger_scan.yaml",
+      "state": "draft"
+    }
+  }
+}

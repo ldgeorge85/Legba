@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from ..claim_support import claim_judge_line, claim_of
 from .absence_slice import _is_machine_structured_row
 
 
@@ -194,6 +195,11 @@ def _marker_to_evidence(citations: Any) -> dict[int, str]:
         # V-I4: the machine-coding caveat, on the same terms as the OUTLET line.
         if _is_machine_coded_citation(entry):
             outlet_txt = _MACHINE_CODED_LINE + outlet_txt
+        # C-1: a CLAIM row says so to the judge, on the same terms (claim rows
+        # only; every other entry is byte-identical).
+        claim = claim_of(entry)
+        if claim is not None:
+            outlet_txt = claim_judge_line(claim) + outlet_txt
         snip_txt = snippet.strip() if isinstance(snippet, str) and snippet.strip() else ""
         src_full = (
             source_text.strip()

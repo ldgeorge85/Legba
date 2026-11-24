@@ -327,6 +327,73 @@ export function contentionPages(row: ContentionRow | null | undefined): Contenti
   })
 }
 
+// ---------------------------------------------------------------------------
+// The LISTING (W2) — `analysis.contentions`, every record the pass wrote
+// ---------------------------------------------------------------------------
+
+/** The four stances, in the route's own order, for the listing's filter. */
+export const CONTENTION_STANCES: readonly ContentionStance[] = [
+  'contradicts',
+  'qualifies',
+  'none_found',
+  'search_failed',
+]
+
+/** The listing's filters — each one a route parameter, nothing derived. */
+export interface ContentionListFilters {
+  /** A target id or a desk key; the route matches both and says which. */
+  scope?: string | null
+  /** One stance, or `null` for all four. */
+  stance?: ContentionStance | null
+  /** Only records whose shelf life has not run out. Off by default. */
+  liveOnly?: boolean
+  limit?: number
+}
+
+/** The listing's page size — the route's own default. */
+export const CONTENTIONS_LIST_LIMIT = 100
+
+/**
+ * `GET /v3/contentions` with the listing's filters, and nothing it did not ask
+ * for. An empty scope is fleet-wide; an unknown stance is not sent (the route
+ * would ignore it, and a URL should not claim a filter the read did not apply).
+ */
+export function contentionsListPath(f: ContentionListFilters = {}): string {
+  const qs = new URLSearchParams()
+  const scope = (f.scope ?? '').trim()
+  if (scope) qs.set('scope', scope)
+  if (f.stance && CONTENTION_STANCES.includes(f.stance)) qs.set('stance', f.stance)
+  if (f.liveOnly) qs.set('live_only', 'true')
+  qs.set('limit', String(f.limit ?? CONTENTIONS_LIST_LIMIT))
+  return `/v3/contentions?${qs.toString()}`
+}
+
+/** A stance in words. A retrieval outcome, never a verdict on the claim. */
+export function stanceLabel(stance: string): string {
+  switch (stance) {
+    case 'contradicts':
+      return 'counter-page states the opposite'
+    case 'qualifies':
+      return 'counter-page narrows it'
+    case 'none_found':
+      return 'looked, found nothing'
+    case 'search_failed':
+      return 'search failed'
+    default:
+      return stance || 'unknown'
+  }
+}
+
+/** How the listing names which handle its rows matched the scope on. */
+export function scopeFieldLine(resp: ContentionsResponse | null | undefined): string | null {
+  if (!resp?.scope) return null
+  const field = resp.scope_field
+  if (field === 'both') return `matched “${resp.scope}” as both its target and its desk key`
+  if (field === 'target_id') return `matched “${resp.scope}” as a target`
+  if (field === 'desk_key') return `matched “${resp.scope}” as a desk key`
+  return `nothing matched “${resp.scope}” as a target or a desk key`
+}
+
 /**
  * The records for one published read, or `null` while unknown.
  *

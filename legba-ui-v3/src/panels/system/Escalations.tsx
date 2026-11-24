@@ -97,7 +97,7 @@ type StatusFilter = (typeof STATUS_FILTERS)[number]
 function StatusPill({ status, testid }: { status: string; testid?: string }) {
   return (
     <span
-      className={`rounded px-1 text-[10px] whitespace-nowrap ${LIGHT_PILL[statusLight(status)]}`}
+      className={`rounded px-1 text-label whitespace-nowrap ${LIGHT_PILL[statusLight(status)]}`}
       data-testid={testid}
     >
       {statusLabel(status)}
@@ -135,7 +135,7 @@ function HealthBanner({ resp }: { resp: EscalationDeliveriesResponse }) {
             {s.non_delivery} escalation{s.non_delivery === 1 ? '' : 's'} FAILED or
             went NOWHERE
           </span>
-          <span className="text-[11px] text-rose-300/80">
+          <span className="text-label text-rose-300/80">
             in the last {s.window_hours}h · {s.delivered} delivered
           </span>
         </div>
@@ -143,7 +143,7 @@ function HealthBanner({ resp }: { resp: EscalationDeliveriesResponse }) {
           {s.by_sink_status.map((b) => (
             <span
               key={`${b.sink_kind}:${b.status}`}
-              className={`rounded px-1.5 py-0.5 text-[10px] ${LIGHT_PILL['red']}`}
+              className={`rounded px-1.5 py-0.5 text-label ${LIGHT_PILL['red']}`}
               title={b.sample_error ?? undefined}
               data-testid={`escalations-nd-${b.sink_kind}-${b.status}`}
             >
@@ -152,7 +152,7 @@ function HealthBanner({ resp }: { resp: EscalationDeliveriesResponse }) {
           ))}
         </div>
         {s.by_sink_status.some((b) => b.sample_error) && (
-          <div className="mt-1 text-[11px] font-mono text-rose-300/80 truncate">
+          <div className="mt-1 text-label font-mono text-rose-300/80 truncate">
             {s.by_sink_status.find((b) => b.sample_error)?.sample_error}
           </div>
         )}
@@ -168,7 +168,7 @@ function HealthBanner({ resp }: { resp: EscalationDeliveriesResponse }) {
       <span className="text-emerald-200 text-sm">
         No delivery failures in the last {s.window_hours}h
       </span>
-      <span className="text-[11px] text-slate-500">
+      <span className="text-label text-slate-500">
         {s.delivered} delivered{s.retrying > 0 ? ` · ${s.retrying} retrying` : ''}
       </span>
     </div>
@@ -210,11 +210,11 @@ function DeliveryRow({ row }: { row: EscalationDeliveryRow }) {
       </td>
       <td className="py-1 px-1 align-top">
         {row.severity ? (
-          <span className={`rounded px-1 text-[10px] ${LIGHT_PILL[severityPill(row.severity)]}`}>
+          <span className={`rounded px-1 text-label ${LIGHT_PILL[severityPill(row.severity)]}`}>
             {row.severity}
           </span>
         ) : (
-          <span className="text-slate-600 text-[10px]">—</span>
+          <span className="text-slate-600 text-label">—</span>
         )}
       </td>
       <td className="py-1 px-1 align-top font-mono text-slate-300 truncate max-w-[120px]">
@@ -227,7 +227,7 @@ function DeliveryRow({ row }: { row: EscalationDeliveryRow }) {
         )}
         {isFailure && row.error_message && (
           <div
-            className="text-rose-300 font-mono text-[10px] mt-0.5 break-all"
+            className="text-rose-300 font-mono text-label mt-0.5 break-all"
             data-testid={`escalations-row-error-${row.id}`}
           >
             {row.error_message}
@@ -293,7 +293,7 @@ export default function EscalationsPanel({ registration }: PanelProps) {
 
         {/* status filter */}
         <div className="flex items-center gap-2 mb-2">
-          <span className="text-[11px] text-slate-500">status</span>
+          <span className="text-label text-slate-500">status</span>
           <select
             className="bg-surface-200 border border-slate-700 rounded p-1 px-2 text-slate-200"
             value={status}
@@ -327,7 +327,7 @@ export default function EscalationsPanel({ registration }: PanelProps) {
           )}
           {rows.length > 0 && (
             <table className="w-full">
-              <thead className="text-slate-500 text-[10px] uppercase tracking-wide border-b border-slate-800">
+              <thead className="text-slate-500 text-label uppercase tracking-wide border-b border-slate-800">
                 <tr>
                   <th className="py-1 px-1 text-left">status</th>
                   <th className="py-1 px-1 text-left">sev</th>

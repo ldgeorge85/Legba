@@ -42,8 +42,19 @@ from _p17_registrar import (  # noqa: E402
     print_results,
     register_descriptor,
 )
+from _frame_kind import (  # noqa: E402
+    catalog_from_db,
+    frame_family_enabled,
+    frame_kind_tags,
+    roster_tag,
+)
 
 from legba.data.schemas.target import TargetDescriptor  # noqa: E402
+
+#: The desk's roster tag — READ against the profile's ``rosters.subject_tags``
+#: (W10 TAX-2): a registrar refuses, by name, to mint a desk the profile's
+#: composition would never count.
+ROSTER_TAG = "g20"
 
 # G20 membership minus the EU (no ISO-3166-1 alpha-2). 19 codes.
 G20_ISO2 = [
@@ -89,7 +100,9 @@ async def _country_meta(pg) -> dict[str, dict]:
     return out
 
 
-def _build_target(iso2: str, name: str, languages: list[str]) -> TargetDescriptor:
+def _build_target(
+    iso2: str, name: str, languages: list[str], catalog=None,
+) -> TargetDescriptor:
     iso_lower = iso2.lower()
     # English fallback on every country (mirrors the country_list relabel chain).
     langs = list(languages)
@@ -115,7 +128,12 @@ def _build_target(iso2: str, name: str, languages: list[str]) -> TargetDescripto
             "relationship_types": RELATIONSHIP_TYPES,
             "time_horizon_days": 90,
             "predicate": None,
-            "tags": ["geopolitical", "news", "g20"],
+            # W10 TAX-2: the roster tag is checked against the profile, and a
+            # desk that IS a registered frame gains `frame:<kind>` when live.
+            "tags": frame_kind_tags(
+                f"country_g20_{iso_lower}",
+                ["geopolitical", "news", roster_tag(ROSTER_TAG)], catalog,
+            ),
         },
         # NEW MODEL: no inline sources — a geo-predicate selector + per-country
         # subscription. Resolves to the shared sources (source.bbc.world /
@@ -181,10 +199,12 @@ async def main() -> int:
             print(f"WARNING: iso_countries missing G20 codes {missing} — "
                   f"falling back to bare codes for those.")
 
+        # W10 TAX-2: the frame family is read only when LEGBA_FRAME_FAMILY is on.
+        catalog = await catalog_from_db(pg) if frame_family_enabled() else None
         results: list[RegisterResult] = []
         for iso2 in G20_ISO2:
             m = meta.get(iso2, {"name": iso2, "languages": []})
-            desc = _build_target(iso2, m["name"], m["languages"])
+            desc = _build_target(iso2, m["name"], m["languages"], catalog)
             results.append(
                 await register_descriptor(pg, reg, family=Family.TARGET, descriptor=desc)
             )

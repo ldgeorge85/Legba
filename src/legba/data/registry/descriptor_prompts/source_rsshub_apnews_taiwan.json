@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.rsshub.apnews.taiwan": {
+      "source": "source_rsshub_apnews_taiwan.yaml",
+      "state": "draft"
+    }
+  }
+}

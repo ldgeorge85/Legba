@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:reenrich_ner": {
+      "source": "analyst_reenrich_ner.yaml",
+      "state": "active"
+    }
+  }
+}

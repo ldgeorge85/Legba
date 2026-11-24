@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:lane_black_sea": {
+      "source": "target_lane_black_sea.yaml",
+      "state": "draft"
+    }
+  }
+}

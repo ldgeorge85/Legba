@@ -48,7 +48,9 @@ publisher's origin. ``transform`` runs, in order:
 
 0. **geometry-first** (DQ-C1): an authoritative coordinate/geometry on the
    payload (NWS Polygon, USGS/GDACS/NASA point) is attributed offline by
-   point-in-country and short-circuits everything below.
+   point-in-country and short-circuits everything below. A point the record
+   declares authoritative that lies in no country stops the ladder too: the
+   signal is filed AT SEA, under no country (lane N-R, ``_geo_precedence``).
 1. **geo.location_name**: if ``signal.payload["geo"]["location_name"]`` is
    present, geocode that directly.
 2. **entities** (in-body NER): the ``country`` / ``location`` -class
@@ -77,6 +79,12 @@ publisher's origin. ``transform`` runs, in order:
    the *publisher* is British, and ``t.me`` (telegram) resolves to Montenegro
    (``.me``) — neither describes the story, so it only fires when nothing
    in the body resolved.
+
+Lane N-O: an OFFICIAL source with a declared ``scope.geo`` (an issuing
+authority) runs tiers 0-3-lead only; its declared country is always in the
+block and the subject-zone countries are added beside it
+(:mod:`._geo_precedence` — ``payload.geo.countries`` / ``derivation``).
+Non-place tokens are dropped before any sweep (:mod:`._geocode_rules`).
 
 The first candidate that the backend successfully resolves wins. If
 ``signal.payload["geo"]`` already has ``country`` + ``lat`` + ``lon``,
@@ -120,7 +128,20 @@ import pycountry
 from pydantic import BaseModel, ConfigDict, Field
 
 from ._country_geometry import country_iso2_for_point, representative_point
-from .._entity_canon import canonicalize_entity
+from . import _geo_precedence as _prec
+from . import _geocode_rules as _rules
+from ._geocode_rules import (
+    EXTRA_COUNTRY_NAMES,
+    QUERY_NAMES,
+    abbreviation_collisions,
+    blank_markup,
+    disambiguate,
+    is_common_word_name,
+    is_non_place_surface,
+    mask_person_names,
+    signal_context,
+)
+from .._entity_canon import _DEMONYM_MAP, canonicalize_entity
 from ..sources._contract import Signal
 from ._contract import FilterContext, FilterHealth
 
@@ -696,6 +717,9 @@ def _build_country_name_index() -> dict[str, str]:
         "czech republic": "CZ",
     }
     idx.update(aliases)
+    # Lane N-B: the DRC / Republic-of-Congo forms pycountry lacks
+    # (_geocode_rules.EXTRA_COUNTRY_NAMES), so "DR Congo" beats its "Congo".
+    idx.update(EXTRA_COUNTRY_NAMES)
     return idx
 
 
@@ -713,10 +737,13 @@ def _build_country_regex() -> re.Pattern[str]:
 
 
 _COUNTRY_REGEX = _build_country_regex()
+_DEMONYM_INDEX = _rules.build_demonym_index(_DEMONYM_MAP, _COUNTRY_NAME_INDEX)   # N-U
 
 # ISO2 / ISO3 standalone-token regex (e.g. "BR" or "BRA" appearing as a
 # whole word). We filter these by membership in pycountry's tables.
-_ISO_TOKEN_REGEX = re.compile(r"(?<![A-Za-z])([A-Z]{2,3})(?![A-Za-z])")
+# Lane N-O: a DIGIT also bounds a code ("...56BA9105E..." image-hash hex was
+# Bosnia, "MQ-9" / "GLP-1" model numbers were Martinique / Guadeloupe).
+_ISO_TOKEN_REGEX = re.compile(r"(?<![A-Za-z0-9])([A-Z]{2,3})(?![A-Za-z0-9]|-\d)")
 
 # DQ-C1: bare uppercase tokens that collide with ISO codes but are almost always
 # a US state postal code or a (US) timezone abbreviation in the geospatial feeds
@@ -766,7 +793,33 @@ _COMMON_WORD_ISO_TOKENS = frozenset({
 _GEO_TOKEN_STOPSET = _US_STATE_CODES | _TZ_ABBREVS | _COMMON_WORD_ISO_TOKENS
 
 
-def _first_country_hit(text: str) -> tuple[int, str] | None:
+def _iso_token_iso2(token: str, language: str | None) -> str | None:
+    """ISO2 for a bare uppercase token, or ``None`` when the token is in the
+    stopset or the source language's abbreviation table (lane N-O)."""
+    if token in _GEO_TOKEN_STOPSET or token in abbreviation_collisions(language):
+        return None
+    c = (pycountry.countries.get(alpha_2=token) if len(token) == 2
+         else pycountry.countries.get(alpha_3=token))
+    return c.alpha_2 if c is not None else None
+
+
+def _shouting(text: str) -> bool:
+    """ALL-CAPS copy (NWS watch bodies, wire slugs): every short word is an
+    uppercase token there, so a bare code is no signal (lane N-O)."""
+    letters = [ch for ch in text if ch.isalpha()]
+    return len(letters) >= 40 and sum(ch.isupper() for ch in letters) > 0.6 * len(letters)
+
+
+def _name_hits(text: str, language: str | None):
+    """Country-name matches, minus lower-case common words (lane N-O)."""
+    for m in _COUNTRY_REGEX.finditer(text):
+        if not is_common_word_name(m.group(1), language):
+            yield m
+
+
+def _first_country_hit(
+    text: str, *, context: str | None = None, language: str | None = None,
+) -> tuple[int, str] | None:
     """``(offset, iso2)`` of the EARLIEST country mention in ``text``.
 
     Both mention forms compete on POSITION: a full country name (case-
@@ -779,35 +832,39 @@ def _first_country_hit(text: str) -> tuple[int, str] | None:
     nothing, so "Netanyahu arrives in US, says Iran 'first and foremost' on the
     agenda" resolved to IRAN — the name "Iran" (offset 33) beat the code "US"
     (offset 21) purely because of pass order, not text order.
+
+    Lane N-B: an AMBIGUOUS bare name ("Congo") resolves by the places that
+    co-occur with it in ``context`` (default: ``text`` itself) —
+    :data:`_geocode_rules.AMBIGUOUS_NAMES`.
     """
     if not text:
         return None
+    text = blank_markup(text)
     best: tuple[int, str] | None = None
-    m = _COUNTRY_REGEX.search(text)
+    m = next(_name_hits(text, language), None)
     if m:
         iso = _COUNTRY_NAME_INDEX.get(m.group(1).lower())
         if iso:
+            iso = disambiguate(m.group(1), iso, text if context is None else context)
             best = (m.start(), iso)
     # Only ISO tokens STRICTLY LEFT of the name hit can beat it.
-    limit = best[0] if best is not None else len(text)
+    # ALL-CAPS copy: no bare token counts (lane N-O).
+    limit = 0 if _shouting(text) else (best[0] if best is not None else len(text))
     for m2 in _ISO_TOKEN_REGEX.finditer(text):
         if m2.start() >= limit:
             break
-        token = m2.group(1)
-        if token in _GEO_TOKEN_STOPSET:
-            # US state postal code / timezone abbrev / common word — not a
-            # country signal.
-            continue
-        if len(token) == 2:
-            c = pycountry.countries.get(alpha_2=token)
-        else:
-            c = pycountry.countries.get(alpha_3=token)
-        if c is not None:
-            return m2.start(), c.alpha_2
+        # US state code / timezone / common word / the language's
+        # abbreviations — not a country signal.
+        iso_tok = _iso_token_iso2(m2.group(1), language)
+        if iso_tok is not None:
+            return m2.start(), iso_tok
     return best
 
 
-def extract_country_iso2_from_text(text: str) -> str | None:
+def extract_country_iso2_from_text(
+    text: str, *, entities: Any = None, context: str | None = None,
+    language: str | None = None,
+) -> str | None:
     """Find the first country-name or ISO2/3 hit in ``text``.
 
     Used by inference: feed the title, then the body. Returns ``None``
@@ -815,9 +872,40 @@ def extract_country_iso2_from_text(text: str) -> str | None:
     avoid false positives ("at" the preposition vs "AT" Austria).
 
     "First" is by POSITION IN THE TEXT — see :func:`_first_country_hit`.
+
+    Lane N-B PERSON-NAME GUARD: with ``entities`` (the payload's NER list) every
+    ``person`` surface is blanked first, so "Jim Jordan" is not the country
+    (:func:`_geocode_rules.mask_person_names`).
     """
-    hit = _first_country_hit(text)
+    if entities:
+        text = mask_person_names(text, entities, country_names=_COUNTRY_NAME_INDEX)
+    hit = _first_country_hit(text, context=context, language=language)
     return hit[1] if hit is not None else None
+
+
+def geocoder_query_name(iso2: str) -> str | None:
+    """The backend query for a resolved ISO2: :data:`_geocode_rules.QUERY_NAMES`
+    where pycountry's name resolves wrongly, else the pycountry name."""
+    if iso2 in QUERY_NAMES:
+        return QUERY_NAMES[iso2]
+    c = pycountry.countries.get(alpha_2=iso2)
+    if c is None:
+        return None
+    return getattr(c, "common_name", None) or c.name     # N-O: "South Korea"
+
+
+def _place_query(text: str, context: str) -> str:
+    """An NER place surface as a backend query; an ambiguous / extra country
+    surface ("Congo", "DR Congo") goes as its disambiguated ISO's query."""
+    iso = _COUNTRY_NAME_INDEX.get(text.strip().lower())
+    if not iso:
+        return text
+    resolved = disambiguate(text, iso, context)
+    if resolved in QUERY_NAMES:
+        return QUERY_NAMES[resolved]
+    if resolved != iso:                  # N-U: "Georgia" the US state -> US
+        return geocoder_query_name(resolved) or text
+    return text
 
 
 # R4: how much of a text field counts as its LEAD — the dateline plus opening
@@ -827,6 +915,15 @@ def extract_country_iso2_from_text(text: str) -> str | None:
 # is ~1 newswire lead paragraph; a title is always shorter, so a title zone is
 # the whole title.
 _LEAD_CHARS = 400
+
+
+def _lead(value: str, max_chars: int = _LEAD_CHARS) -> str:
+    """``value``'s lead zone, never cut mid-word (lane N-O: a 400-char cut
+    turned NWS "SOUTHEAST INDIANA" into "INDIA")."""
+    end = max_chars
+    while end < len(value) and value[end].isalnum():
+        end += 1
+    return value[:end]
 
 
 def _country_entity_query(text: str) -> str:
@@ -856,7 +953,9 @@ def _country_entity_query(text: str) -> str:
 _PLACE_ENTITY_CLASSES: frozenset[str] = frozenset({"country", "location"})
 
 
-def _partition_place_entities(entities: Any) -> tuple[list[str], list[str]]:
+def _partition_place_entities(
+    entities: Any, language: str | None = None,
+) -> tuple[list[str], list[str]]:
     """Split NER place mentions into ``(country_texts, location_texts)``.
 
     Reads the ``payload.entities`` list the upstream ner_multilingual filter
@@ -881,7 +980,7 @@ def _partition_place_entities(entities: Any) -> tuple[list[str], list[str]]:
         if not isinstance(text, str):
             continue
         text = text.strip()
-        if not text:
+        if not text or is_non_place_surface(text, language):   # N-O: "Space"
             continue
         key = text.lower()
         if key in seen:
@@ -908,7 +1007,9 @@ def place_candidates_from_entities(entities: Any) -> list[str]:
     return countries + locations
 
 
-def country_iso2s_in_text(text: str) -> set[str]:
+def country_iso2s_in_text(
+    text: str, *, entities: Any = None, language: str | None = None,
+) -> set[str]:
     """Every country ISO2 explicitly named in ``text`` (offline sweep).
 
     A superset companion to :func:`extract_country_iso2_from_text` (which
@@ -922,20 +1023,17 @@ def country_iso2s_in_text(text: str) -> set[str]:
     out: set[str] = set()
     if not text:
         return out
-    for m in _COUNTRY_REGEX.finditer(text):
+    if entities:
+        text = mask_person_names(text, entities, country_names=_COUNTRY_NAME_INDEX)
+    text = blank_markup(text)
+    for m in _name_hits(text, language):
         iso = _COUNTRY_NAME_INDEX.get(m.group(1).lower())
         if iso:
-            out.add(iso)
-    for m2 in _ISO_TOKEN_REGEX.finditer(text):
-        token = m2.group(1)
-        if token in _GEO_TOKEN_STOPSET:
-            continue
-        if len(token) == 2:
-            c = pycountry.countries.get(alpha_2=token)
-        else:
-            c = pycountry.countries.get(alpha_3=token)
-        if c is not None:
-            out.add(c.alpha_2)
+            out.add(disambiguate(m.group(1), iso, text))
+    for m2 in () if _shouting(text) else _ISO_TOKEN_REGEX.finditer(text):
+        iso_tok = _iso_token_iso2(m2.group(1), language)
+        if iso_tok is not None:
+            out.add(iso_tok)
     return out
 
 
@@ -1159,13 +1257,25 @@ class GeocodeHandler:
             self._stats["signals_out"] += 1
             return signal
 
-        result = await self._infer_and_lookup(signal, ctx)
-        if result is None:
+        # Lane N-O: an official source's declared country is ALWAYS in its geo;
+        # its ladder runs the subject tiers only, and subject-zone countries
+        # are ADDED beside the declared one (``_geo_precedence``).
+        declared = _prec.issuer_declared_countries(ctx)
+        result, basis = await self._infer_and_lookup(
+            signal, ctx, subject_only=bool(declared))
+        # An authoritative geometry (NWS polygon) IS the subject; no text adds.
+        named = (self.subject_country_iso2s(signal.payload or {})
+                 if declared and basis not in (_prec.GEOMETRY, _prec.AT_SEA) else ())
+        geo_payload = _prec.build_geo_block(
+            result.to_payload(self._config.precision) if result else None,
+            basis, declared=declared, named=named,
+        )
+        if basis == _prec.AT_SEA:
+            geo_payload = _prec.at_sea_block(signal.payload, geo_payload)
+        if geo_payload is None:
             # No location resolved — emit signal unchanged.
             self._stats["signals_out"] += 1
             return signal
-
-        geo_payload = result.to_payload(self._config.precision)
         # Preserve any pre-existing geo hints (e.g. `location_name`) by
         # merging — handler-derived fields take precedence.
         if isinstance(existing_geo, dict):
@@ -1177,7 +1287,10 @@ class GeocodeHandler:
         new_payload["geo"] = merged
 
         self._stats["signals_out"] += 1
-        return signal.model_copy(update={"payload": new_payload})
+        update: dict[str, Any] = {"payload": new_payload}
+        if basis == _prec.AT_SEA:
+            update["tags"] = _prec.with_at_sea_tag(signal.tags)
+        return signal.model_copy(update=update)
 
     # ----------------------------------------------------------- health_check
 
@@ -1286,8 +1399,11 @@ class GeocodeHandler:
         self,
         signal: Signal,
         ctx: FilterContext,
-    ) -> GeocodeResult | None:
-        """Run the inference precedence ladder until something resolves."""
+        *,
+        subject_only: bool = False,
+    ) -> tuple[GeocodeResult | None, str | None]:
+        """Run the inference precedence ladder until something resolves;
+        ``(result, basis)`` — basis per :mod:`._geo_precedence`."""
         # DQ-C1: GEOMETRY-FIRST. If the payload carries an authoritative
         # coordinate/geometry (NWS active_alerts ship a Polygon; USGS/GDACS/NASA
         # ship points), attribute the country offline by point-in-country and
@@ -1299,9 +1415,12 @@ class GeocodeHandler:
             iso2 = country_iso2_for_point(pt[0], pt[1])
             if iso2:
                 self._last_success_at = datetime.now(tz=timezone.utc)
-                return _geometry_result(iso2, lat=pt[0], lon=pt[1])
+                return _geometry_result(iso2, lat=pt[0], lon=pt[1]), _prec.GEOMETRY
+            if _prec.point_is_authoritative(signal.payload):
+                return None, _prec.AT_SEA      # N-R: never a text guess over it
         backend = await self._ensure_backend()
-        candidates = self._derive_candidates(signal)
+        candidates = self._derive_candidates(signal, subject_only=subject_only)
+        tld_query = self._tld_candidate(signal) if self._config.tld_fallback else None
         for query in candidates:
             try:
                 result = await self._lookup_cached(backend, query)
@@ -1316,10 +1435,42 @@ class GeocodeHandler:
                 continue
             if result is not None:
                 self._last_success_at = datetime.now(tz=timezone.utc)
-                return result
-        return None
+                return result, (_prec.PUBLISHER_FALLBACK if query == tld_query
+                                and query == candidates[-1] else _prec.NAMED)
+        return None, None
 
-    def _derive_candidates(self, signal: Signal) -> list[str]:
+    def subject_country_iso2s(self, payload: Mapping[str, Any]) -> list[str]:
+        """Countries a signal is clearly ABOUT (lane N-O, issuer sources):
+        named in a configured text field's LEAD zone, or a country-class NER
+        entity whose surface sits in one. Offline; token rules applied."""
+        lang = _prec.payload_language(payload)
+        out: list[str] = []
+        leads = [_lead(v) for f in self._config.infer_from
+                 if f not in ("geo", "entities")
+                 and isinstance(v := payload.get(f), str) and v.strip()]
+        for lead in leads:
+            out.extend(i for i in sorted(country_iso2s_in_text(
+                lead, entities=payload.get("entities"), language=lang)) if i not in out)
+        if "entities" in self._config.infer_from:
+            lead_lc = [blank_markup(z).lower() for z in leads]
+            context = signal_context(payload)
+            for ent in _partition_place_entities(payload.get("entities"), lang)[0]:
+                if any(ent.lower() in z for z in lead_lc):
+                    q = _country_entity_query(ent).strip().lower()
+                    iso = _COUNTRY_NAME_INDEX.get(q)
+                    if iso:
+                        iso = disambiguate(q, iso, context)
+                    if iso and iso not in out:
+                        out.append(iso)
+        return out
+
+    def _tld_candidate(self, signal: Signal) -> str | None:
+        payload = signal.payload or {}
+        iso = country_iso2_from_tld(
+            signal.canonical_url or payload.get("link") or payload.get("source_url"))
+        return geocoder_query_name(iso) if iso else None
+
+    def _derive_candidates(self, signal: Signal, *, subject_only: bool = False) -> list[str]:
         """Return a priority-ordered, de-duplicated candidate list.
 
         D5 ordering: every in-body candidate (geo.location_name, NER place
@@ -1350,7 +1501,8 @@ class GeocodeHandler:
 
         Tiers 1-2 are the subject tiers. Everything a previous release emitted
         is still emitted, only re-ranked, so a signal that resolved before
-        still resolves.
+        still resolves. ``subject_only`` (lane N-O, issuer sources whose
+        declared country is the default) stops after tier 2.
         """
         out: list[str] = []
 
@@ -1359,9 +1511,12 @@ class GeocodeHandler:
                 out.append(candidate)
 
         payload = signal.payload or {}
+        context = signal_context(payload)
 
+        lang = _prec.payload_language(payload)
         entities_enabled = "entities" in self._config.infer_from
-        country_ents, location_ents = _partition_place_entities(payload.get("entities"))
+        country_ents, location_ents = _partition_place_entities(
+            payload.get("entities"), lang)
 
         # LEAD zones, strongest first (``infer_from`` order — ``title`` leads
         # by default). A title is shorter than the cap, so its zone is whole.
@@ -1373,7 +1528,7 @@ class GeocodeHandler:
             value = payload.get(field_name)
             if isinstance(value, str) and value.strip():
                 zone_fields.append(field_name)
-                lead_zones.append(value[:_LEAD_CHARS].lower())
+                lead_zones.append(blank_markup(_lead(value)).lower())
 
         def _subject_rank(text: str) -> tuple[int, int] | None:
             """(zone index, offset) of ``text``'s first lead-zone mention."""
@@ -1416,19 +1571,22 @@ class GeocodeHandler:
                     continue                      # field absent / empty
                 if entities_enabled:
                     for _o, _c, ent, is_country in subjects_by_zone.get(zone_index, ()):
-                        _add(_country_entity_query(ent) if is_country else ent)
+                        _add(_place_query(
+                            _country_entity_query(ent) if is_country else ent, context))
                 zone_index += 1
             for candidate in self._candidates_for_field(
                 field_name, signal, payload, max_chars=_LEAD_CHARS
             ):
                 _add(candidate)
+        if subject_only:
+            return out
 
         # Country entities named only deep in the body — an explicit country
         # mention still outranks a bare gazetteer hit in the same zone, but
         # neither outranks the lead.
         if entities_enabled:
             for ent in body_countries:
-                _add(_country_entity_query(ent))
+                _add(_place_query(_country_entity_query(ent), context))
 
         # DEEP sweep — the whole field (the pre-R4 behavior), so nothing that
         # used to resolve stops resolving; it simply no longer outranks a
@@ -1438,6 +1596,14 @@ class GeocodeHandler:
                 continue
             for candidate in self._candidates_for_field(field_name, signal, payload):
                 _add(candidate)
+
+        # N-U: a lead-zone DEMONYM, weaker than every named country above.
+        if _rules.DEMONYM_LEAD_EVIDENCE:
+            for field_name in zone_fields:
+                iso = _rules.first_demonym_iso2(mask_person_names(
+                    _lead(payload[field_name]), payload.get("entities"),
+                    country_names=_COUNTRY_NAME_INDEX), _DEMONYM_INDEX, language=lang)
+                _add(geocoder_query_name(iso) if iso else None)
 
         # Incidental (non-subject) location entities — after every in-body
         # country candidate, before the weak publisher-origin fallback. A
@@ -1449,16 +1615,7 @@ class GeocodeHandler:
 
         # WEAK publisher-origin fallback — last resort, opt-out-able.
         if self._config.tld_fallback:
-            tld_iso = country_iso2_from_tld(
-                signal.canonical_url or payload.get("link") or payload.get("source_url")
-            )
-            if tld_iso:
-                try:
-                    c = pycountry.countries.get(alpha_2=tld_iso)
-                    if c is not None:
-                        _add(c.name)
-                except (KeyError, AttributeError):                # pragma: no cover
-                    pass
+            _add(self._tld_candidate(signal))
         return out
 
     def _candidates_for_field(
@@ -1491,13 +1648,16 @@ class GeocodeHandler:
         if not isinstance(value, str) or not value.strip():
             return []
         if max_chars is not None:
-            value = value[:max_chars]
-        iso = extract_country_iso2_from_text(value)
+            value = _lead(value, max_chars)
+        iso = extract_country_iso2_from_text(
+            value, entities=payload.get("entities"), context=signal_context(payload),
+            language=_prec.payload_language(payload),
+        )
         if iso:
             try:
-                c = pycountry.countries.get(alpha_2=iso)
-                if c is not None:
-                    return [c.name]
+                name = geocoder_query_name(iso)
+                if name is not None:
+                    return [name]
             except (KeyError, AttributeError):                    # pragma: no cover
                 pass
         return []

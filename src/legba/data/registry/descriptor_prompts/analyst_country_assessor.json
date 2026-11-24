@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:country_assessor": {
+      "source": "analyst_country_assessor.yaml",
+      "state": "retired"
+    }
+  }
+}

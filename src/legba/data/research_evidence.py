@@ -75,12 +75,15 @@ from typing import Any, Mapping, Sequence
 from urllib.parse import urlsplit
 from uuid import UUID, uuid5
 
+from ._url_canon import stored_canonical_url_hash
 from .archive import cas_object_ref  # noqa: F401  (re-exported address format)
 from .filters.source_credibility import extract_lookup_hosts
 from .nats import SIGNALS_EXCLUDE_BACKFILL_SQL
 from .provenance.origin import origin_class_for
 from .research_flag import RESEARCH_SLICE_EXCLUSION_SQL, research_reaches_desks
 from .retrieval_origin import web_search_origin
+from .signal_slice_scope import CANONICAL_ONLY_SQL
+from ..shared.url_redaction import redact_presigned_in, redact_presigned_url
 
 logger = logging.getLogger(__name__)
 
@@ -427,7 +430,7 @@ def _slice_clauses(window_hours: int, geo_param: int | None) -> list[str]:
     clauses = [
         f"fetched_at > NOW() - INTERVAL '{int(window_hours)} hours'",
         SIGNALS_EXCLUDE_BACKFILL_SQL,
-        "(canonical_signal_id IS NULL OR canonical_signal_id = id)",
+        CANONICAL_ONLY_SQL,
     ]
     if geo_param is not None:
         clauses.append(f"geo && ${geo_param}::text[]")
@@ -596,6 +599,16 @@ class ResearchHit:
     url_chain: tuple[str, ...] = ()
     query: str = ""
     novelty: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # W11-F59: a redirect can land on a PRESIGNED object-store URL. Every
+        # path that builds a hit — and so the row's canonical_url, its payload
+        # url and ``raw_provenance.fetched_url_chain`` — gets the query-free
+        # form of a signed URL, and the unchanged form of any other.
+        object.__setattr__(self, "url", redact_presigned_url(self.url))
+        object.__setattr__(self, "url_chain", tuple(dict.fromkeys(
+            redact_presigned_url(u) for u in self.url_chain
+        )))
 
 
 def content_hash_for(text: str) -> str:
@@ -797,7 +810,8 @@ INSERT INTO signals (
     payload, canonical_url, raw_provenance,
     language, geo, tags, entity_classes, source_credibility,
     content_hash, derived_from, schema_uri,
-    retrieval_origin, salience, last_seen_at, origin_class
+    retrieval_origin, salience, last_seen_at, origin_class,
+    canonical_url_hash
 )
 VALUES (
     $1, $2, $3, $4, $5,
@@ -805,7 +819,8 @@ VALUES (
     $11::jsonb, $12, $13::jsonb,
     $14, $15::text[], $16::text[], $17::text[], $18,
     $19, $20::uuid[], $21,
-    $22, $23::jsonb, $6, $24
+    $22, $23::jsonb, $6, $24,
+    $25
 )
 ON CONFLICT (id) DO NOTHING
 RETURNING id
@@ -832,7 +847,7 @@ async def land_research_row(conn: Any, row: Mapping[str, Any]) -> Any | None:
         row["object_ref"],
         json.dumps(row["payload"], default=str),
         row["canonical_url"],
-        json.dumps(row["raw_provenance"], default=str),
+        json.dumps(redact_presigned_in(row["raw_provenance"]), default=str),  # W11-F59
         row["language"],
         list(row["geo"]),
         list(row["tags"]),
@@ -846,6 +861,8 @@ async def land_research_row(conn: Any, row: Mapping[str, Any]) -> Any | None:
         # V3/P7 — the origin class derives from the retrieval origin this
         # write path exists to stamp (web_search:* → 'web_retrieval').
         origin_class_for(row["retrieval_origin"]),
+        # N-S (migration 0247): the stored tier-1 dedupe key for this URL.
+        stored_canonical_url_hash(row["canonical_url"]),
     )
 
 

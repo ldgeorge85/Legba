@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.sahelintelligence.news": {
+      "source": "source_sahel_intelligence.yaml",
+      "state": "draft"
+    }
+  }
+}

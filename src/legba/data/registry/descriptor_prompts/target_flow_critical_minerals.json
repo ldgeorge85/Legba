@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:flow_critical_minerals": {
+      "source": "target_flow_critical_minerals.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -103,6 +103,15 @@ describe('AuditChainPanel', () => {
     await waitFor(() => expect(screen.getByText(/chain intact/)).toBeInTheDocument())
   })
 
+  it('renders a hashed principal label as the actor (never a credential)', async () => {
+    // W4 TOKEN-FIX: the registry stamps `bearer:<12 hex>`, not the bearer token.
+    stubFetch([{ ...PAGE[0], actor_id: 'bearer:0123456789ab' }])
+    render(wrap(<AuditChainPanel registration={reg()} scope={{}} mode="personal" />))
+    await waitFor(() => expect(screen.getByTestId('audit-summary')).toBeInTheDocument())
+    expect(screen.getByTitle('bearer:0123456789ab')).toHaveTextContent('bearer:0123456789ab: 1')
+    expect(screen.getByText(/by bearer:0123456789ab \(operator\)/)).toBeInTheDocument()
+  })
+
   it('family filter re-queries the endpoint', async () => {
     const fetchMock = stubFetch()
     render(wrap(<AuditChainPanel registration={reg()} scope={{}} mode="personal" />))

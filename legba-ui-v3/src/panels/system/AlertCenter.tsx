@@ -64,7 +64,7 @@ interface FindingRow {
 
 async function pollFindings(): Promise<FindingRow[]> {
   try {
-    const r = await apiGet<{ data?: FindingRow[] } | FindingRow[]>('/findings?limit=100')
+    const r = await apiGet<{ data?: FindingRow[] } | FindingRow[]>('/findings?limit=100&fields=summary')
     if (Array.isArray(r)) return r
     return Array.isArray(r?.data) ? r.data : []
   } catch {
@@ -193,7 +193,7 @@ export default function AlertCenterPanel({ registration }: PanelProps) {
       actions={
         <button
           onClick={() => setPollOn((v) => !v)}
-          className={`text-[10px] px-2 py-0.5 rounded border ${
+          className={`text-label px-2 py-0.5 rounded border ${
             pollOn ? 'border-accent-ok text-accent-ok' : 'border-slate-700 text-slate-500'
           }`}
           title="Toggle findings poll"
@@ -248,7 +248,7 @@ export default function AlertCenterPanel({ registration }: PanelProps) {
 
       {/* subscriptions list */}
       <div className="mb-3" data-testid="alert-subs">
-        <div className="text-[11px] text-slate-500 mb-1">Subscriptions</div>
+        <div className="text-label text-slate-500 mb-1">Subscriptions</div>
         {subs.length === 0 && (
           <div className="text-slate-600 text-xs">no subscriptions — add one above</div>
         )}
@@ -290,7 +290,7 @@ export default function AlertCenterPanel({ registration }: PanelProps) {
 
       {/* recently fired */}
       <div className="flex-1 overflow-auto" data-testid="alert-fired">
-        <div className="text-[11px] text-slate-500 mb-1">Recently fired</div>
+        <div className="text-label text-slate-500 mb-1">Recently fired</div>
         {fired.length === 0 && (
           <div className="text-slate-600 text-xs">
             {pollOn ? 'watching the findings feed for new findings…' : '(poll paused)'}

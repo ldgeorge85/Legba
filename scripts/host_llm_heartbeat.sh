@@ -25,7 +25,8 @@
 #                    server can answer "PONG" happily and still OOM, truncate
 #                    or hang on a production-sized slice. Runs every Nth tick
 #                    (hourly by default) because it is the expensive one.
-#   4. DISK        — root-filesystem usage (added 2026-09-05). WARN at >=85%
+#   4. DISK        — root-filesystem usage, df's Use% figure (added
+#                    2026-09-05; df figure since N-M 11-13). WARN at >=85%
 #                    (log only), CRITICAL at >=92% (pages). OpenSearch's own
 #                    flood-stage watermark is 95% and SILENTLY blocks corpus
 #                    indexing once crossed — see check_disk_usage below for
@@ -47,7 +48,7 @@ set -u
 PG_CONTAINER="${PG_CONTAINER:-legba-postgres-1}"
 PG_USER="${PG_USER:-legba}"; PG_DB="${PG_DB:-legba}"
 MAX_LLM_AGE_SECS="${MAX_LLM_AGE_SECS:-5400}"   # 90 min: units tick ~30min; 3 misses = real
-NTFY_URL="${NTFY_URL:-http://127.0.0.1:8093/legba-alerts}"
+NTFY_URL="${NTFY_URL:-http://127.0.0.1:8093/engine}"   # X4: the engine topic (engine health), never the world's
 COOLDOWN_STAMP="${COOLDOWN_STAMP:-/tmp/legba-llm-heartbeat.cooldown}"
 COOLDOWN_SECS="${COOLDOWN_SECS:-3600}"
 LOG="${LOG:-/var/log/legba-watchdog.log}"
@@ -99,7 +100,15 @@ DISK_COOLDOWN_STAMP="${DISK_COOLDOWN_STAMP:-/tmp/legba-llm-heartbeat-disk.cooldo
 log() { echo "$(date -u +%FT%TZ) [llm-heartbeat] $*" >> "$LOG"; }
 
 # page <priority> <title> <tags> <body> — the script's existing ntfy idiom.
+# L-1 (single alert path): raise through scripts/lib/legba_alert.sh first; the
+# direct push below is the fallback (and the only path unless LEGBA_ALERT_RAISE=1).
+_legba_alert_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/legba_alert.sh"
+if [ -r "$_legba_alert_lib" ]; then . "$_legba_alert_lib"; else legba_raise() { return 1; }; fi
+
 page() {
+  local kind=host_llm_heartbeat subject; subject=$(legba_slug "$2")
+  case "$2" in *[Dd]isk*) kind=host_disk; subject=/ ;; esac  # one disk episode for both checks
+  legba_raise "$kind" "$(legba_severity_for_priority "$1")" "$subject" "$2" "$4" && return 0
   curl -s -m 10 -H "X-Title: $2" -H "X-Priority: $1" -H "X-Tags: $3" \
     -d "$4" "$NTFY_URL" >/dev/null 2>&1 || log "ntfy send failed ($2)"
 }
@@ -128,13 +137,16 @@ check_silence() {
         'narrative_mapper','analyst_traces_retention','signals_retention',
         'evidence_archiver','fact_contention_arbiter','situation_clustering',
         'integrity_sweep','composition_lineage_sweep','cross_source_coalesce',
-        'signal_summarizer','reenrich_ner','reenrich_translation',
-        'indicator_tracker','thematic_proposal','signal_salience')" 2>/dev/null | tr -d ' ')"
+        'signal_summarizer','reenrich_ner','reenrich_translation','reenrich_pending',
+        'indicator_tracker','thematic_proposal','signal_salience','verify_backfill')" 2>/dev/null | tr -d ' ')"
   # signal_salience is excluded despite being LLM-bearing: it degrades GRACEFULLY
   # during an endpoint outage (status=success with all scores drained), so its
   # success is not evidence the LLM plane is alive — it masked the 2026-07-30
   # outage for 2.5h. indicator_tracker/thematic_proposal are deterministic
-  # handlers added after this list was first written.
+  # handlers added after this list was first written. verify_backfill (W11-F84)
+  # is a deterministic sweep whose only LLM calls are the judge chain on the
+  # (usually empty) backlog of critique-less findings — it succeeds with zero
+  # judge calls, so its success says nothing about the core plane either.
   #
   # NOTE (§31.1): the status filter is now load-bearing in a second way. Dead
   # runs write status='failed' rows, so `status='success'` is what keeps a
@@ -271,7 +283,7 @@ async def main() -> int:
                 [{"role": "user", "content": user}],
                 system=system,
                 max_tokens=64,
-                temperature=0.0,
+                temperature=1.0,
             ),
             timeout=TIMEOUT,
         )
@@ -408,10 +420,14 @@ check_longctx() {
 # before this gauge existed, so the OpenSearch cliff can be one bad ingest
 # burst away by the time CRITICAL fires.
 #
-# The percentage comes from shutil.disk_usage(), run directly on the HOST (no
-# docker exec) because it is the host root filesystem — not a container's
-# writable layer — that actually fills up and that OpenSearch's bind-mounted
-# data volume lives on.
+# The percentage is the figure `df` prints as Use% — used / (used + available),
+# rounded UP — measured with os.statvfs directly on the HOST (no docker exec)
+# because it is the host root filesystem — not a container's writable layer —
+# that actually fills up and that OpenSearch's bind-mounted data volume lives
+# on. N-M (11-13): it used shutil.disk_usage used/total, which counts the
+# root-reserved blocks as capacity and read ~5 points BELOW df (89.4 % while df
+# said 95 % on 11-06 03:00Z), so this CRITICAL never fired. OpenSearch's own
+# figure, (total - available) / total, runs about one point ABOVE df near full.
 #
 # WARN is log-only by design (a two-tier gauge: WARN gives the operator
 # runway, CRITICAL is the page). Wiring WARN into ntfy too would just be a
@@ -420,15 +436,17 @@ check_longctx() {
 check_disk_usage() {
   out="$(DISK_PATH="$DISK_PATH" python3 - <<'DISKPY'
 import os
-import shutil
 
 path = os.environ.get("DISK_PATH", "/")
-du = shutil.disk_usage(path)
-pct = (du.used / du.total * 100) if du.total else 0.0
-print(f"{pct:.1f} {du.used} {du.total}")
+st = os.statvfs(path)
+used = (st.f_blocks - st.f_bfree) * st.f_frsize
+avail = st.f_bavail * st.f_frsize
+# df's Use%: used / (used + avail), rounded up to a whole percent.
+pct = -(-used * 100 // (used + avail)) if (used + avail) else 0
+print(f"{pct} {used} {avail}")
 DISKPY
 )"
-  read -r pct used total <<<"$out"
+  read -r pct used avail <<<"$out"
   case "$pct" in
     ''|*[!0-9.]*)
       log "SKIP disk usage probe returned no numeric percent (raw=${out:0:200})"
@@ -436,13 +454,13 @@ DISKPY
       ;;
   esac
 
-  log "disk.usage pct=${pct}% used=${used} total=${total} path=${DISK_PATH}"
+  log "disk.usage pct=${pct}% (df Use%) used=${used} avail=${avail} path=${DISK_PATH}"
 
   if awk -v p="$pct" -v c="$DISK_CRITICAL_PCT" 'BEGIN{exit !(p>=c)}'; then
     cooled_down "$DISK_COOLDOWN_STAMP" && return 0
     log "FIRE disk usage ${pct}% >= CRITICAL ${DISK_CRITICAL_PCT}% (path=${DISK_PATH})"
     page 5 "Legba: disk CRITICAL ${pct}%" "rotating_light,floppy_disk" \
-      "Root filesystem at ${pct}% (used=${used} total=${total}, path=${DISK_PATH}). OpenSearch's flood-stage watermark is 95% and SILENTLY forces its indices read-only there — corpus indexing stops with no error surfaced in this codebase (the 2026-09-05 event). Free space or grow storage now."
+      "Root filesystem at ${pct}% by df (used=${used} avail=${avail} bytes, path=${DISK_PATH}). OpenSearch's flood-stage watermark is 95% and SILENTLY forces its indices read-only there — corpus indexing stops with no error surfaced in this codebase (the 2026-09-05 event). Free space or grow storage now."
     touch "$DISK_COOLDOWN_STAMP"
     return 0
   fi

@@ -52,6 +52,7 @@ from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 # The helpers live at legba.data level rather than under filters/ precisely
 # so this import cannot close a sources->filters->sources cycle.
 from .._url_canon import canonical_url, normalize_wire_title
+from ..source_classification import lift_declared_tags, preserved_tag
 from ._contract import Signal, SourceContext
 
 logger = logging.getLogger(__name__)
@@ -127,9 +128,19 @@ def default_extractor_registry() -> dict[str, MediaExtractor]:
 
 
 def _coerce_tag(value: Any) -> str | None:
-    """Coerce a raw tag value to the ``[a-z][a-z0-9_]*`` tag shape, or drop."""
+    """Coerce a raw tag value to the tag shape, or drop.
+
+    W10 TAX-2 (W8-F1): a FAMILY-SHAPED ``<family>:<value>`` within the tag shape
+    (``source_classification.preserved_tag``) is kept VERBATIM — the value's case
+    included, because ``bind_tag`` compares a profile's values exactly and a
+    profile value may be upper-case. Everything else is a bare value, flattened
+    to ``[a-z][a-z0-9_]*`` as before (``World News`` -> ``world_news``).
+    """
     if not isinstance(value, str):
         return None
+    kept = preserved_tag(value)
+    if kept is not None:
+        return kept
     norm = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in value.strip().lower())
     norm = norm.strip("_")
     if not norm or not norm[0].isalpha():
@@ -173,6 +184,13 @@ def _enrich_structured(signal: Signal, ctx: SourceContext) -> None:
             coerced = [t for t in (_coerce_tag(x) for x in raw_tags) if t]
             if coerced:
                 signal.tags = coerced[:64]
+
+    # classification (W10 TAX-2) — the source's declared classification, beside
+    # the scope_geo lift: its namespaced keys go on the signal's own tags (first,
+    # so the cap never drops them) where the slice reads them; the canonical
+    # write stamps the bound entries into ``signals.data``. A source that
+    # declares none leaves ``tags`` exactly as it was.
+    signal.tags = lift_declared_tags(signal.tags, getattr(ctx, "classification", ()))
 
     # content_hash: a source SHOULD set this; backstop so dedup (P-09) always
     # has a key (hash of canonical_url + a stable payload projection).
@@ -331,13 +349,21 @@ async def run_baseline(
     # geo rather than a wrong one — a missing tag only under-includes; a wrong
     # one actively misroutes. The origin was parked in payload by
     # :func:`_enrich_structured`.
-    if not signal.geo:
+    at_sea = isinstance(g := signal.payload.get("geo"), dict) and g.get("at_sea") is True
+    if not signal.geo and not at_sea:  # N-R: an at-sea point takes no home country
         origin = signal.payload.get("publisher_origin")
         if isinstance(origin, list):
             hinted = [g for g in origin if isinstance(g, str) and g]
             corroborated = _origin_corroborated_by_content(signal, hinted)
             if corroborated:
                 signal.geo = corroborated
+            else:
+                # Lane N-B: content naming NO country at all takes the
+                # publisher's home as a MARKED low-confidence tag
+                # (payload.geo_fallback) rather than reaching no desk.
+                from ._geo_origin_fallback import origin_fallback
+
+                signal.geo = origin_fallback(signal, hinted) or signal.geo
 
     return signal
 

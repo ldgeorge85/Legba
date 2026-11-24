@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:reenrich_pending": {
+      "source": "analyst_reenrich_pending.yaml",
+      "state": "active"
+    }
+  }
+}

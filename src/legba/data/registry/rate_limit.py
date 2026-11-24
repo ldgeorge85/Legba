@@ -49,14 +49,16 @@ def _principal_key(request: "Request") -> str:
     all real traffic to one bucket (intended — abuse protection, not tenancy).
     When scoped tokens land this becomes naturally per-principal.
     """
-    auth = request.headers.get("authorization") or ""
-    if auth.lower().startswith("bearer "):
-        token = auth[7:].strip()
-        if token:
-            # Don't put the raw secret in limiter state — a short stable digest.
-            import hashlib
-
-            return "tok:" + hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+    # X4 GATE: the key is the AUDIT ACTOR the auth middlewares stamped before
+    # this runs — ``operator:bearer:<sha12>`` / ``service:bearer:<sha12>``
+    # (the bearer middleware: a hashed label, never the secret) or a
+    # signed-in ``user:<id>`` (the session middleware; behind caddy every
+    # browser shares one client address, so keying on it would pool every
+    # user's budget). This module no longer reads the Authorization header —
+    # ``bearer_auth`` is the one place that does.
+    actor = getattr(getattr(request, "state", None), "principal_actor", None)
+    if isinstance(actor, str) and actor and actor != "anonymous":
+        return actor
     client = request.client
     return client.host if client is not None else "anon"
 
@@ -89,7 +91,21 @@ def build_limiter() -> Any:
             exc,
         )
         return _NoopLimiter()
-    limiter = Limiter(key_func=_principal_key, headers_enabled=True)
+    # W11-F85: at LEGBA_REGISTRY_WORKERS > 1 the buckets live in Redis, so a
+    # budget is per principal, not per principal per worker; a Redis that
+    # stops answering falls back to in-memory buckets (slowapi's own switch).
+    # One worker keeps slowapi's in-memory default, unchanged.
+    from .workers import RATE_LIMIT_KEY_PREFIX, rate_limit_storage_uri
+
+    storage_uri = rate_limit_storage_uri()
+    if storage_uri is None:
+        limiter = Limiter(key_func=_principal_key, headers_enabled=True)
+    else:
+        limiter = Limiter(
+            key_func=_principal_key, headers_enabled=True, storage_uri=storage_uri,
+            in_memory_fallback_enabled=True, key_prefix=RATE_LIMIT_KEY_PREFIX,
+        )
+        logger.info("registry rate limiting buckets shared in redis (multi-worker)")
     limiter.enabled = True
     return limiter
 

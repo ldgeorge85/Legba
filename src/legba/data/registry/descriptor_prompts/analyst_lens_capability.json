@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:lens_capability": {
+      "source": "analyst_lens_capability.yaml",
+      "state": "active"
+    }
+  }
+}

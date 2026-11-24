@@ -1,0 +1,10 @@
+{
+  "name": "legba-ui-walk",
+  "private": true,
+  "version": "1.0.0",
+  "description": "The first-time-user browser walk: the UI gate (see README.md). Runs inside mcr.microsoft.com/playwright:v1.49.1-noble.",
+  "type": "module",
+  "dependencies": {
+    "playwright-core": "1.49.1"
+  }
+}

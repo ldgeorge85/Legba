@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.spiegel.international": {
+      "source": "source_spiegel_international.yaml",
+      "state": "draft"
+    }
+  }
+}

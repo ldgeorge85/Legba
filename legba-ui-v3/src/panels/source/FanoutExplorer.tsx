@@ -82,7 +82,7 @@ export default function FanoutExplorerPanel({ registration, scope }: PanelProps)
   const findings = useQuery<FindingsPage>({
     enabled,
     queryKey: ['fanout-findings'],
-    queryFn: () => apiGet<FindingsPage>('/findings?limit=200'),
+    queryFn: () => apiGet<FindingsPage>('/findings?limit=200&fields=full'),
     refetchInterval: 30_000,
   })
 

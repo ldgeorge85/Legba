@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.kyivindependent.news": {
+      "source": "source_kyiv_independent.yaml",
+      "state": "draft"
+    }
+  }
+}

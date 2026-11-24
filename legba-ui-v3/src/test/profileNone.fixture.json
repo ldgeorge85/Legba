@@ -1,0 +1,110 @@
+{
+  "_generated": "scripts/gen_profile_ui.py from profiles/sanctions_export_control/profile.yaml - do not edit by hand",
+  "frames": [
+    {
+      "id": "jurisdiction",
+      "label": "Jurisdiction"
+    },
+    {
+      "id": "regime",
+      "label": "Regime",
+      "parent": "jurisdiction"
+    },
+    {
+      "id": "programme",
+      "label": "Programme",
+      "parent": "regime"
+    },
+    {
+      "id": "corporate_group",
+      "label": "Corporate group"
+    },
+    {
+      "id": "legal_entity",
+      "label": "Legal entity",
+      "parent": "corporate_group"
+    },
+    {
+      "id": "vessel_or_asset",
+      "label": "Vessel or asset",
+      "parent": "legal_entity"
+    }
+  ],
+  "labels": {
+    "overview_title": "Roster at a glance",
+    "roster": {
+      "counterparty": "Counterparties",
+      "regime": "Regimes"
+    },
+    "unscoped_subject": "No regime or counterparty (unscoped)"
+  },
+  "landing": "morning_read",
+  "map": {
+    "geometry": "none"
+  },
+  "missions": [
+    {
+      "id": "desk_watch",
+      "label": "Counterparty watch"
+    }
+  ],
+  "plane": "sanctions_export_control",
+  "profile": "sanctions_export_control",
+  "rosters": {
+    "subject_tags": [
+      "regime",
+      "counterparty"
+    ],
+    "units": [
+      {
+        "id": "designation_change",
+        "question": "What changed in this regime's published designations in the cited window, and in which direction \u2014 tightening, holding, or easing?"
+      },
+      {
+        "id": "counterparty_exposure",
+        "question": "Is this counterparty, or any entity our record links to it, named or implicated by a published determination in the cited window?"
+      },
+      {
+        "id": "licence_deadline",
+        "question": "Which licence, general authorisation or wind-down deadline bearing on this regime falls due next, and on what published date?"
+      },
+      {
+        "id": "instrument_scope",
+        "question": "Which published instrument last changed this regime's scope, and does anything in the window supersede it?"
+      },
+      {
+        "id": "enforcement_practice",
+        "question": "Is any enforcement action in the window signalling how this regime is being read in practice, and against what conduct?"
+      }
+    ]
+  },
+  "schema": "legba/profile_ui/1",
+  "stances": [
+    {
+      "id": "desk",
+      "label": "Regime",
+      "question": "Everything about the one regime or counterparty I have selected."
+    }
+  ],
+  "subject": {
+    "kinds": [
+      {
+        "id": "regime",
+        "plural": "Regimes",
+        "singular": "Regime"
+      },
+      {
+        "id": "counterparty",
+        "plural": "Counterparties",
+        "singular": "Counterparty"
+      }
+    ],
+    "plural": "Regimes",
+    "singular": "Regime"
+  },
+  "top_floor": null,
+  "unit_noun": {
+    "plural": "questions",
+    "singular": "question"
+  }
+}

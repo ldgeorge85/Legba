@@ -36,11 +36,15 @@ actor-side surface.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
 
+from . import consult_context_ceiling as _cc
+from . import consult_evidence_floor as _floor
 from . import consult_transcript as _tx
+from .consult_provenance_census import compose_census
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +56,55 @@ FIDELITY_REBUILT = "rebuilt"
 FIDELITY_UNAVAILABLE = "unavailable"
 
 
+async def _stamp_census(
+    consult: Any,
+    *,
+    deps: Any,
+    classification: Mapping[str, Any] | None,
+) -> Any:
+    """Compose the census over ``consult``'s own answer and stamp it.
+
+    ONE helper for every branch of the recovery that returns an answer — the
+    exact/rebuilt synthesis and (W4b F-9) the ``unavailable`` refusal, which
+    used to skip the census and so could carry cited refs with no provenance
+    line. Same composer as the loop's; the ``uncited`` hold rules apply
+    unchanged (``compose_census`` returns the banner, this prepends it).
+    """
+    census, hold_banner, hold_reason = await compose_census(
+        deps.substrate,
+        answer=consult.answer,
+        cited_refs=consult.cited_substrate_refs,
+        malformed_refs=consult.data.get("cited_refs_malformed"),
+        classification=classification,
+    )
+    census_update: dict[str, Any] = {}
+    if census is not None:
+        census_update["provenance_census"] = census
+    if hold_banner and hold_reason:
+        census_update["hold_reason"] = hold_reason
+        consult = consult.model_copy(
+            update={"answer": (hold_banner + consult.answer)[:65000]}
+        )
+    if census_update:
+        consult = consult.model_copy(
+            update={"data": {**consult.data, **census_update}}
+        )
+    return consult
+
+
+async def _classify_for_census(
+    deps: Any, consult: Any
+) -> tuple[Mapping[str, Any] | None, int | None]:
+    """``(classification, resolved)`` for ``consult``'s cited refs, best-effort."""
+    try:
+        return await _floor.resolved_ref_count(
+            deps.substrate, [str(r) for r in consult.cited_substrate_refs]
+        )
+    except Exception as exc:  # noqa: BLE001 — never fails an answer
+        logger.warning("consult.resynthesis.ref_classification.failed err=%s", exc)
+        return None, None
+
+
 async def run_synthesis_only(
     recovery: Mapping[str, Any],
     *,
@@ -61,8 +114,15 @@ async def run_synthesis_only(
     system_prompt: str,
     record: Any,
     analyst_id: str | None,
+    context_ceiling: int | None = _cc.DEFAULT_CONTEXT_CEILING_TOKENS or None,
+    context_ceiling_source: str | None = None,
+    settle: Any = None,
+    thinking: bool = False,
 ) -> Any:
     """One synthesis turn over a persisted run's evidence.
+
+    ``thinking`` (T-1): the caller's ``consult_thinking`` decision for the
+    ``recovery`` role — the replay writes the answer, as the forced final does.
 
     ``recovery`` is the persisted turn's evidence as the front door read it:
     ``question``, ``steps``, ``cited_refs``, and — for a run recorded after
@@ -72,6 +132,18 @@ async def run_synthesis_only(
     downstream (the finding wrapper, the front-door projection, the turn
     writer) is unchanged. What is new is on the payload's data bag:
     ``replay_fidelity`` and ``replay_note``.
+
+    ``context_ceiling`` is the loop's own input ceiling (F-6): the replayed
+    prompt honours it exactly as the run's calls did, with the persisted turn's
+    ``cited_refs`` joining the planner's cited set, and ``context_compaction``
+    stamps the data bag when it bit.
+
+    ``settle(consult, spend)`` (Q-2) is the turn contract's settle step
+    (``consult_contract.settle_answer`` bound by the caller), run on the
+    synthesised answer at the loop's own point — before the evidence floor and
+    the census — and only when a synthesis came back (the ``unavailable``
+    refusal carries no contract). A hypotheses repair it makes is metered on
+    this run's receipt.
     """
     # Imported here, not at module scope: ``consult_on_demand`` reaches THIS
     # module from inside its own run path, and a module-level import back would
@@ -140,6 +212,19 @@ async def run_synthesis_only(
         drift = [d.as_dict() for d in rebuilt.drift if d.drifted]
         calls_replayed = rebuilt.calls_replayed
 
+    # F-6 — the same ceiling the loop's calls honour. Under it the array is
+    # returned as given, so an exact replay stays byte-identical.
+    messages, ceiling_stamp = _cc.apply_context_ceiling(
+        messages, system=force_system, ceiling=context_ceiling,
+        cited_refs=[str(r) for r in collected_refs],
+        source=context_ceiling_source,
+    )
+    if ceiling_stamp:
+        note += (
+            f"; {ceiling_stamp['results_dropped']} older uncited tool result(s) "
+            f"withheld by the {ceiling_stamp['ceiling']:,}-token context ceiling"
+        )
+
     await record({
         "phase": "plan",
         "kind": "resynthesis",
@@ -176,6 +261,21 @@ async def run_synthesis_only(
                 "resynthesizable": False,
             },
         )
+        # W4b F-9 — the census runs on this branch too. The turn's persisted
+        # ``cited_refs`` ride the refusal (``collected_refs``), and a reader
+        # who sees a recovered answer beside citations must see their
+        # provenance line. No floor here: the refusal's uncertainty is already
+        # 1.0, there is nothing for it to raise.
+        _classification, _resolved = await _classify_for_census(deps, consult)
+        consult = await _stamp_census(
+            consult, deps=deps, classification=_classification
+        )
+        await record({
+            "phase": "reflect",
+            "kind": "resynthesis_uncertainty",
+            "uncertainty": consult.uncertainty,
+            "resolved_refs": _resolved,
+        })
         return AnalystMethodResult(
             finding=_wrap_as_finding(consult, analyst_id=analyst_id),
             consult_response=consult,
@@ -185,13 +285,20 @@ async def run_synthesis_only(
         )
 
     # --- The one call. Tools are never offered on this path. ---------------
+    # X2 / C1 — the recovered turn carries its own usage receipt (one call).
+    from .consult_spend_guard import SpendGuard
+
+    spend = SpendGuard()
+    started = time.monotonic()
     content, usage, _response = await _reason_with_response(
         active_llm,
         messages=messages,
         max_tokens=deps.max_tokens,
         temperature=deps.temperature,
         system_prompt=force_system,
+        thinking=thinking,
     )
+    spend.record(active_llm, _response, usage)
     await record({
         "phase": "reason",
         "kind": "resynthesis_final",
@@ -214,10 +321,45 @@ async def run_synthesis_only(
             "replay_drift": drift,
             "synthesis_status": "complete" if final_payload else "none",
             "resynthesizable": final_payload is None,
+            "usage": spend.receipt(active_llm, elapsed_s=time.monotonic() - started),
             "steps": steps,
             "tool_calls": list(recovery.get("tool_calls") or []),
+            **_cc.stamp_fields(ceiling_stamp),
         },
     )
+    if settle is not None and final_payload is not None:
+        calls_before = spend.calls
+        consult = await settle(consult, spend)
+        if spend.calls != calls_before:  # a repair call: the receipt counts it
+            consult = consult.model_copy(update={"data": {
+                **consult.data,
+                "usage": spend.receipt(active_llm, elapsed_s=time.monotonic() - started),
+            }})
+    # THE EVIDENCE FLOOR, on the recovery path too. A re-synthesis writes an
+    # answer over evidence that was already gathered — and an answer written
+    # over THIN evidence is exactly as thin whichever run gathered it. Same
+    # leaf, same bands, same single ``classify_cited_refs`` read; unmeasured
+    # (no classifier on this substrate) means no floor, never a guessed one.
+    _classification, _resolved = await _classify_for_census(deps, consult)
+    consult = _floor.apply_uncertainty_floor(consult, resolved=_resolved)
+    # 2026-09-28 §B.3 — A RECOVERY GETS ITS OWN CENSUS, over the same classify
+    # read the floor just made. This path wrote a NEW answer over the same
+    # evidence and carried no census at all, so the panel kept printing the
+    # ORIGINAL run's counts beside prose that no longer existed. Same composer
+    # as the loop's, so the two cannot drift.
+    consult = await _stamp_census(consult, deps=deps, classification=_classification)
+    # The judge runs at the caller's settle point (W11-F93), not here.
+    await record({
+        "phase": "reflect",
+        "kind": "resynthesis_uncertainty",
+        "uncertainty": consult.uncertainty,
+        "resolved_refs": _resolved,
+        **{
+            key: consult.data[key]
+            for key in ("uncertainty_floor_applied", "watch_candidates", _cc.STAMP_KEY)
+            if key in consult.data
+        },
+    })
     return AnalystMethodResult(
         finding=_wrap_as_finding(consult, analyst_id=analyst_id),
         consult_response=consult,

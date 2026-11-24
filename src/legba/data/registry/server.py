@@ -15,6 +15,9 @@ Run modes:
                   `LEGBA_REGISTRY_API_HOST` (default 0.0.0.0).
 
 The console script `legba-registry` (pyproject) targets `main()` below.
+`LEGBA_REGISTRY_WORKERS` > 1 launches that many uvicorn workers through
+`app_factory` (W11-F85; what is shared and what stays per worker is in
+`workers.py`). Unset is one worker, launched exactly as before.
 
 Lifespan responsibilities:
   * Connect Postgres + NATS pools on startup; close on shutdown.
@@ -38,11 +41,13 @@ from fastapi.responses import JSONResponse
 from ..config import NatsConfig, PostgresConfig
 from ..nats import NatsStore
 from ..postgres import PostgresStore
+from ..taxon_families import install_vocabulary
 from .api import (
     RegistryAPIDeps,
     build_router,
 )
 from .audit import AuditLogger
+from .auth_state import close_auth_state, open_auth_state
 from .credentials import CredentialVault
 from .descriptor import DescriptorRegistry
 from .dlq import DescriptorDeadLetter
@@ -51,6 +56,7 @@ from .signing import load_default_identity
 from .stack import StackRegistry
 from .streams import ensure_runtime_event_streams
 from .vocabulary_cache import VocabularyCache
+from . import workers as _workers
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +88,9 @@ def create_app(
     health poll runs; default False so unit / integration tests don't spin
     a probe thread unless they ask for it.
     """
-    pg_cfg = pg_config or PostgresConfig.from_env()
+    # W11-F85: at LEGBA_REGISTRY_WORKERS > 1 each worker takes its share of
+    # the pool, so N workers hold what one did (an explicit config is kept).
+    pg_cfg = pg_config or _workers.worker_pg_config(PostgresConfig.from_env())
     nats_cfg = nats_config or NatsConfig.from_env()
 
     pg_store = PostgresStore(pg_cfg)
@@ -91,6 +99,10 @@ def create_app(
     signing_identity = load_default_identity()
     audit_logger = AuditLogger(identity=signing_identity)
     vocab_cache = VocabularyCache(pg_store)
+    # W7 TAXON-1: the four taxon families (salience_class, collection_gap_kind,
+    # band, source_layer) read through this cache in-process; a family it does
+    # not hold reads its code literal (legba.data.taxon_families).
+    install_vocabulary(vocab_cache)
 
     # L-221: the registry's shared NATS emitter, threaded into every registry
     # component that publishes lifecycle events — the DLQ writer (per-row
@@ -145,10 +157,7 @@ def create_app(
         conversion_registry=conversion_registry,
     )
 
-    @contextlib.asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        await pg_store.connect()
-        await nats_store.connect()
+    async def _ensure_streams() -> None:
         # Provision the runtime event streams (descriptor / stack / vocabulary
         # / dlq / vault) so publishes actually land (without a matching
         # JetStream stream `js.publish` returns "no stream matches" and the
@@ -162,21 +171,48 @@ def create_app(
                 "(events will silently drop until streams are provisioned)",
                 exc,
             )
+
+    @contextlib.asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        await pg_store.connect()
+        await nats_store.connect()
+        # W11-F85 — ONCE-ONLY work (stream provisioning, the health loop) runs
+        # on the worker holding the advisory lock; at one worker the lease is
+        # a no-op holder and this is the order it always was.
+        once = _workers.OnceOnlyLease(pg_store)
+        if await once.acquire():
+            await _ensure_streams()
         if enable_vocabulary_subscription:
             await descriptor_registry.start()
         else:
             await vocab_cache.refresh()
         health_task = None
-        if enable_healthcheck_loop:
+        if enable_healthcheck_loop and once.is_holder:
             health_task = stack_registry.start_health_loop()
+
+        async def _promoted() -> None:  # a standby that won the lock later
+            await _ensure_streams()
+            if enable_healthcheck_loop:
+                stack_registry.start_health_loop()
+
+        async def _demoted() -> None:
+            if enable_healthcheck_loop:
+                await stack_registry.stop_health_loop()
+
+        once.watch(on_promote=_promoted, on_demote=_demoted)
+        # X4 GATE — the shared auth state (the sign-in lockout, consult run
+        # owners) in Redis; degrades to per-process, loudly, never blocks boot.
+        await open_auth_state()
         try:
             yield
         finally:
-            if health_task is not None:
+            await close_auth_state()
+            if health_task is not None or (enable_healthcheck_loop and once.enabled):
                 try:
                     await stack_registry.stop_health_loop()
                 except Exception as exc:  # pragma: no cover
                     logger.warning("stack health loop stop failed: %s", exc)
+            await once.stop()
             try:
                 await descriptor_registry.stop()
             except Exception as exc:  # pragma: no cover
@@ -190,6 +226,16 @@ def create_app(
             except Exception:  # pragma: no cover
                 pass
 
+    # X2-B2 — the route-role gate: ONE app-level dependency that gates every
+    # mounted route through route_roles.ROUTE_ROLES (operator /
+    # reader-own-rows / read). Installed HERE, before any include_router, so
+    # every route inherits it. X4 GATE: it reads the stamps the two auth
+    # middlewares below wrote and REFUSES an unstamped caller on every
+    # non-public route; the bearer gate in a route still authenticates.
+    from fastapi import Depends
+
+    from .route_roles import enforce_route_role
+
     app = FastAPI(
         title="Legba Registry API",
         description=(
@@ -202,6 +248,7 @@ def create_app(
         openapi_url=f"{API_PREFIX}/openapi.json",
         docs_url=None,
         redoc_url=None,
+        dependencies=[Depends(enforce_route_role)],
     )
     app.state.registry_deps = deps
 
@@ -212,6 +259,39 @@ def create_app(
     from .rate_limit import install as install_rate_limit
     from .rate_limit import limiter as _rate_limiter
     install_rate_limit(app, _rate_limiter)
+
+    # X2-B4 — the reader DISPLAY POLICY on every JSON response this app serves
+    # (``display_class.DisplayPolicyMiddleware``): a reader-class caller gets
+    # the projection, never archived bytes or publisher text; an operator's
+    # responses pass through unbuffered and byte-identical.
+    from .display_class import DisplayPolicyMiddleware
+    app.add_middleware(DisplayPolicyMiddleware)
+
+    # R-1 — ETag + `Cache-Control: private, max-age=5` on the console landing's
+    # read routes (read_latency.DEFAULT_CACHEABLE_PATHS), a 304 on a matching
+    # If-None-Match. Added AFTER the display policy so it is OUTSIDE it: the
+    # tag is over the bytes this caller was actually served.
+    from .read_latency import ConditionalGetMiddleware
+    app.add_middleware(ConditionalGetMiddleware)
+
+    # X3-B3 — the SESSION COOKIE: a signed-in user's cookie (no bearer
+    # credential) is resolved here and stamped on the request state
+    # (legba_role / legba_subject / principal_actor = user:<id>) BEFORE any
+    # dependency — the route-role gate above and the display class read it.
+    from .session_auth import SessionCookieMiddleware
+    app.add_middleware(SessionCookieMiddleware)
+
+    # X4 GATE (W11-F75) — the BEARER stamp, added LAST so it is the OUTERMOST
+    # layer and runs first: it resolves the Authorization header (the SSE
+    # relay's ?token=, the events socket's subprotocol) through the _deps
+    # resolvers and stamps principal / principal_actor / legba_role =
+    # operator — or records the 401/403/503 the gate then answers — BEFORE
+    # the session middleware (which skips a request that presented a bearer)
+    # and before the route-role gate, which REFUSES whoever neither stamped.
+    # Request order: bearer → session → display policy → rate limit → gate →
+    # route dependencies.
+    from .bearer_auth import BearerPrincipalMiddleware
+    app.add_middleware(BearerPrincipalMiddleware)
 
     app.include_router(build_router(deps), prefix=API_PREFIX)
 
@@ -228,6 +308,17 @@ def create_app(
     # drift guards instead). See since_api.py for the envelope contracts.
     from .since_api import build_since_router
     app.include_router(build_since_router(deps), prefix="/api/v1/v3")
+
+    # S-1 — the signed-in person's own seen cursor (GET/PUT /me/seen); 404
+    # with the sign-in switch off. Registry-slim. See me_seen_api.py.
+    from .me_seen_api import build_me_seen_router
+    app.include_router(build_me_seen_router(deps), prefix="/api/v1/v3")
+
+    # S-2 — acknowledge / snooze an alert episode (contributor+), and the
+    # episode's attention state + history (reader). Registry-slim. See
+    # alert_ack_api.py.
+    from .alert_ack_api import build_alert_ack_router
+    app.include_router(build_alert_ack_router(deps), prefix="/api/v1/v3")
 
     # P4-4 — validity-window timeline read surface (the `system.timeline`
     # panel): facts/situations/findings as RANGED items ([start, end|open) +
@@ -311,6 +402,13 @@ def create_app(
     from .graph_arcs_api import build_graph_arcs_router
     app.include_router(build_graph_arcs_router(deps), prefix="/api/v1/v3")
 
+    # W9 VIEW-1 — the per-profile projection, one plane per profile, read off
+    # the profile_projector's whole-rebuild table; refuses by name
+    # (projection_disabled / projection_empty / projection_stale, plane_unknown
+    # / section_undeclared), never found=False. Registry-slim (the leaf only).
+    from .projection_api import build_projection_router
+    app.include_router(build_projection_router(deps), prefix=API_PREFIX)
+
     # V3/P3 — the decision-time belief register ("what did Legba believe on
     # date D"). Bearer-gated, registry-slim, reads analyst_outputs directly.
     from .belief_api import build_belief_router
@@ -320,6 +418,48 @@ def create_app(
     # (day, calendar) the receipt_anchor handler attested via OpenTimestamps.
     from .receipt_anchors_api import build_receipt_anchors_router
     app.include_router(build_receipt_anchors_router(deps), prefix="/api/v1/v3")
+
+    # RA-1 — the reader's narrow reads of two admin lists: the roster
+    # (subjects / analysts / sources) and the Watch's alert log.
+    from .reader_reads_api import build_reader_reads_router
+    app.include_router(build_reader_reads_router(deps), prefix="/api/v1/v3")
+
+    # ST0-C — the exogenous forecast ledger (migration 0242): every question,
+    # open first by due date, with every issuer's number and the resolution.
+    from .forecast_ledger_api import build_forecast_ledger_router
+    app.include_router(build_forecast_ledger_router(deps), prefix="/api/v1/v3")
+    # ST1 — the forecast scorecard (Brier per arm against the resolutions).
+    from .forecast_scorecard_api import build_forecast_scorecard_router
+    app.include_router(build_forecast_scorecard_router(deps), prefix="/api/v1/v3")
+    # U-11 — one question's resolution record (proposals with their evidence,
+    # and every act on them), for the console's resolution queue. Read-only.
+    from .forecast_records_api import build_forecast_records_router
+    app.include_router(build_forecast_records_router(deps), prefix="/api/v1/v3")
+    # E-3 — the published evaluation record (migration 0260): every version
+    # of every run the owner published, withdrawn ones marked. Read-only.
+    from .eval_runs_api import build_eval_runs_router
+    app.include_router(build_eval_runs_router(deps), prefix="/api/v1/v3")
+    # F-1 — deciding a forecast's outcome from the console (confirm / reject /
+    # judgement / correct, the same store calls as scripts/resolve_forecasts.py)
+    # and the queue a person works; and a seal's inclusion proof in a daily
+    # anchor (migration 0262).
+    from .forecast_resolution_api import build_forecast_resolution_router
+    app.include_router(build_forecast_resolution_router(deps), prefix="/api/v1/v3")
+    from .seal_proof_api import build_seal_proof_router
+    app.include_router(build_seal_proof_router(deps), prefix="/api/v1/v3")
+    # U-4 — the map's two missing reads: a live series at its place (latest,
+    # 30-day baseline, revised flag, last 30 values) and incidents filed at sea.
+    from .map_layers_api import build_map_layers_router
+    app.include_router(build_map_layers_router(deps), prefix="/api/v1/v3")
+
+    # X1-A2 — last backup set + last passing restore drill (host status files).
+    from .backup_status_api import build_backup_status_router
+    app.include_router(build_backup_status_router(deps), prefix="/api/v1/v3")
+
+    # N-J — the Flow canvas's read-only routes: the semantic graph derived from
+    # the descriptor heads, one node's inspector, a stored version, one run.
+    from .flow_api import build_flow_router
+    app.include_router(build_flow_router(deps), prefix="/api/v1/v3")
 
     # 7a — the contrary-evidence pass's records. A SIBLING of
     # `/api/v1/contention` (which serves fact_contention), never an extension of
@@ -341,6 +481,30 @@ def create_app(
     # (`GET /v3/absence?scope=`). Registry-slim, defensive per kind.
     from .absence_api import build_absence_router
     app.include_router(build_absence_router(deps), prefix="/api/v1/v3")
+    # X1/B5 — search health: the degraded share per provider and per upstream
+    # engine over 7 d, by the same rule the absence kinds above are typed with.
+    from .search_health_api import build_search_health_router
+    app.include_router(build_search_health_router(deps), prefix="/api/v1/v3")
+    # I-1 — the ingestion intake's queue: depth by state and reason, refusals
+    # by reason, per-host rates, oldest queued age. Registry-slim (the
+    # stdlib-only intake_visibility leaf).
+    from .intake_api import build_intake_router
+    app.include_router(build_intake_router(deps), prefix="/api/v1/v3")
+    # W11-F271 — signals and findings landed in a window (the World KPI
+    # strip's "24h" cards): two count(*) statements. Registry-slim.
+    from .window_counts_api import build_window_counts_router
+    app.include_router(build_window_counts_router(deps), prefix="/api/v1/v3")
+    # D-1 — source drift: open flags with their dependants and changed
+    # spans, counts by class and source, one address's version history, the
+    # sources that edit after publication most. Registry-slim (the
+    # stdlib-only evidence_drift_reads leaf).
+    from .evidence_drift_api import build_evidence_drift_router
+    app.include_router(build_evidence_drift_router(deps), prefix="/api/v1/v3")
+    # U-10 — the Record sheet's receipts, a version's stored text (bounded;
+    # withheld from a reader and under a refusing licence) and a run's
+    # integrity line. Registry-slim (the stdlib-only record_sheet_reads leaf).
+    from .record_sheet_api import build_record_sheet_router
+    app.include_router(build_record_sheet_router(deps), prefix="/api/v1/v3")
 
     # 7g-2 — the ERA COVERAGE MAP: what a curated collection's manifest
     # DECLARES the provider holds for a desk, what `observations` actually
@@ -446,6 +610,11 @@ def create_app(
         build_retention_policies_router(deps), prefix="/api/v1/v3"
     )
 
+    # Origins and origin groups (data-model lane 9): list, the assignment
+    # log, an admin's correction and the derived assignment.
+    from .origins_api import build_origins_router
+    app.include_router(build_origins_router(deps), prefix="/api/v1/registry")
+
     # Entity knowledge-graph read API — entity_profiles + signal_entity_links
     # + proposed_edges for the Entities / Entity-Graph / Entity-Detail panels.
     from .entities_api import build_entities_router
@@ -506,6 +675,11 @@ def create_app(
     app.include_router(
         build_consult_sessions_router(deps), prefix="/api/v1",
     )
+
+    # X3-B3 — local users: invite / accept / sign-in / sign-out / me + the
+    # operator's user admin (`/api/v1/auth/*`, migration 0236).
+    from .users_api import build_users_router
+    app.include_router(build_users_router(deps), prefix="/api/v1")
 
     # Deep-consult submit + status (anchor §5 PIECE 4) — the DETACHED variant:
     # POST schedules the staged Dapr Workflow and returns a task id; GET polls
@@ -601,20 +775,55 @@ def _resolve_host() -> str:
     return os.getenv(API_HOST_ENV, "0.0.0.0").strip() or "0.0.0.0"
 
 
-def main() -> None:
+def _configure_logging() -> None:
     logging.basicConfig(
         level=os.getenv("LEGBA_LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
-    host = _resolve_host()
-    port = _resolve_port()
-    app = create_app(
+
+
+def _env_app() -> FastAPI:
+    return create_app(
         enable_healthcheck_loop=bool(
             os.getenv("LEGBA_REGISTRY_HEALTH_LOOP", "").strip()
         ),
     )
-    logger.info("legba-registry starting on %s:%d", host, port)
-    uvicorn.run(app, host=host, port=port, log_config=None)
+
+
+def app_factory() -> FastAPI:
+    """The app one WORKER builds at ``LEGBA_REGISTRY_WORKERS > 1`` (uvicorn
+    ``factory=True``): a spawned worker inherits no logging config, so it sets
+    the same one ``main`` does."""
+    _configure_logging()
+    return _env_app()
+
+
+#: The import string uvicorn's workers load (``factory=True``).
+APP_FACTORY = "legba.data.registry.server:app_factory"
+
+
+def main() -> None:
+    _configure_logging()
+    host = _resolve_host()
+    port = _resolve_port()
+    workers = _workers.worker_count()
+    if workers == 1:
+        app = _env_app()
+        logger.info("legba-registry starting on %s:%d", host, port)
+        uvicorn.run(app, host=host, port=port, log_config=None)
+        return
+    # W11-F85: N workers need an import string, not an app object; each
+    # worker builds its own app (pools, NATS, Redis) through app_factory.
+    try:
+        _workers.assert_multi_worker_safe(workers)
+    except _workers.MultiWorkerUnsafe as exc:
+        raise SystemExit(str(exc)) from exc
+    _workers.log_posture(workers)
+    logger.info("legba-registry starting on %s:%d workers=%d", host, port, workers)
+    uvicorn.run(
+        APP_FACTORY, factory=True, host=host, port=port, workers=workers,
+        log_config=None,
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover

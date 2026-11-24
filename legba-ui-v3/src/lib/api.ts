@@ -7,6 +7,7 @@
 
 import type { PanelRegistration, Mode } from '@/types'
 import type { TimelineResponse } from '@/lib/timelineWindows'
+import { cachedGet, dropCachedGets } from '@/lib/queryCache'
 
 export class ApiError extends Error {
   status: number
@@ -68,7 +69,16 @@ function recordTiming(path: string, ms: number): void {
   }
 }
 
-export async function apiGet<T>(path: string): Promise<T> {
+/**
+ * GET `path`. X4 READPATH — routed through `lib/queryCache`: identical GETs
+ * on a cached route (`/findings`) share one in-flight request and a 30 s
+ * answer; every other route fetches exactly as before.
+ */
+export function apiGet<T>(path: string): Promise<T> {
+  return cachedGet(path, () => fetchGet<T>(path))
+}
+
+async function fetchGet<T>(path: string): Promise<T> {
   const started = performance.now()
   try {
     const res = await fetch(`${API_BASE}${path}`, {
@@ -95,6 +105,7 @@ export async function apiPostWithStatus<T>(
   path: string,
   body: unknown,
 ): Promise<{ status: number; body: T }> {
+  dropCachedGets() // a write: no later read is served from before it
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
     headers: {
@@ -189,6 +200,7 @@ export function downloadExportArtifact(artifact: ExportArtifact): void {
 }
 
 export async function apiPut<T>(path: string, body: unknown): Promise<T> {
+  dropCachedGets()
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'PUT',
     headers: {
@@ -205,6 +217,7 @@ export async function apiPut<T>(path: string, body: unknown): Promise<T> {
 }
 
 export async function apiDelete<T>(path: string): Promise<T> {
+  dropCachedGets()
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'DELETE',
     headers: { Accept: 'application/json', ...authHeaders() },
@@ -366,12 +379,13 @@ export async function triggerBackfill(
 
 // ---------------------------------------------------------------------------
 // Consult model picker (F1) — which registered LLM plane answers a consult /
-// deep_consult request. "opus" = the billed Anthropic Opus 5 plane (the
-// default, preserving today's behavior); "fable" = the billed Anthropic
-// Claude Fable 5.1 plane (selectable, never default); "core" = the free
-// self-hosted core plane. The registry maps this friendly value → a
-// sanctioned component id server-side. Mirrors `CONSULT_MODEL_ALLOWLIST` in
-// `consult_api.py`.
+// deep_consult request. "core" = the self-hosted core plane, thinking (the
+// default for a new session and for any preference never explicitly chosen;
+// roll 84, the owner: "yes, agreed, but keep opus and fable available");
+// "opus" = the billed Anthropic Opus plane and "fable" = the billed Anthropic
+// Claude Fable 5.1 plane, both selectable, never default. The registry maps
+// this friendly value → a sanctioned component id server-side. Mirrors
+// `CONSULT_MODEL_ALLOWLIST` in `consult_api.py`.
 // ---------------------------------------------------------------------------
 
 export type ConsultModel = 'opus' | 'fable' | 'core'
@@ -386,22 +400,31 @@ export const CONSULT_MODEL_OPTIONS: { value: ConsultModel; label: string }[] = [
 ]
 
 const CONSULT_MODEL_STORAGE_KEY = 'legba_consult_model'
+/** Set ONLY by a pick in the picker (`saveConsultModel`). A stored paid plane
+ *  without it was never explicitly chosen (an older build's default), so it
+ *  reads as core. */
+const CONSULT_MODEL_CHOSEN_KEY = 'legba_consult_model_chosen'
 
-/** Last-chosen plane, persisted across panel opens; defaults to the Opus plane. */
+/** Last-chosen plane, persisted across panel opens; defaults to the core
+ *  plane (2026-10-03, DEC-17a: an accidental press must never bill Anthropic;
+ *  roll 84: a stored Opus/Fable counts only when it was explicitly picked;
+ *  the server's default matches). */
 export function loadConsultModel(): ConsultModel {
   try {
     const stored = localStorage.getItem(CONSULT_MODEL_STORAGE_KEY)
-    return (CONSULT_MODEL_VALUES as readonly string[]).includes(stored ?? '')
-      ? (stored as ConsultModel)
-      : 'opus'
+    if (!(CONSULT_MODEL_VALUES as readonly string[]).includes(stored ?? '')) return 'core'
+    if (stored === 'core') return 'core'
+    return localStorage.getItem(CONSULT_MODEL_CHOSEN_KEY) === '1' ? (stored as ConsultModel) : 'core'
   } catch {
-    return 'opus'
+    return 'core'
   }
 }
 
+/** Persist an EXPLICIT pick (the picker's change handler is the only caller). */
 export function saveConsultModel(model: ConsultModel): void {
   try {
     localStorage.setItem(CONSULT_MODEL_STORAGE_KEY, model)
+    localStorage.setItem(CONSULT_MODEL_CHOSEN_KEY, '1')
   } catch {
     // Ignore storage failures (private mode, quota) — the choice still applies
     // for this session, it just won't persist.
@@ -504,6 +527,41 @@ export interface ConsultTurnOut {
    */
   request_id?: string | null
   synthesis_status?: 'complete' | 'partial' | 'none'
+  /**
+   * Migration 0223 — the turn's RESPONSE BAG, lifted. `response_recorded` is
+   * false for a turn with no bag (written before 0223, or a run that produced
+   * no answer to measure); every field below is then null and the panel says
+   * "not measured", never zero. Optional so an older registry still parses.
+   */
+  response_recorded?: boolean
+  uncertainty?: number | null
+  provenance_census?: ConsultProvenanceCensus | null
+  hold_reason?: string | null
+  uncertainty_floor_applied?: ConsultUncertaintyFloor | null
+  watch_candidates?: string[] | null
+  /** W3 / F-4 — see {@link ConsultWatchMint}; absent = no mint attempted. */
+  watch_minted?: ConsultWatchMint[] | null
+  model?: string | null
+  /**
+   * C-1b — the case this turn presented (`case/1`, the bag's `case` key).
+   * Null = no case. Parsed defensively by `lib/caseModel.parseCaseRecord`.
+   */
+  case?: unknown
+  /**
+   * C-2b-1 — the turn's consult writes (the bag's `writes` key): `null` = the
+   * turn was not armed, `[]` = armed and nothing written. The ledger
+   * (`GET /consult/writes`) is the authority; this is the reload copy.
+   */
+  writes?: { write_id: string | null; status: string; tool?: string | null; summary?: string | null; cause?: string | null }[] | null
+  /**
+   * X2 / C1 — the turn's usage receipt (`consult_usage/1`; `{}` = none
+   * recorded) and verification stamp (`consult_verification/1`; `null` = the
+   * row predates judging, migration 0234). Parsed by `lib/consultTurnStamp`.
+   */
+  usage?: unknown
+  verification?: unknown
+  /** Q-1 — the turn contract (`consult_contract/1`); parsed by `lib/consultContract`. */
+  contract?: unknown
 }
 
 /** A session header + its ordered turns. */
@@ -554,6 +612,8 @@ export interface ConsultRunStatus {
   response?: ConsultResponseBody | null
   error_status?: number
   error_detail?: unknown
+  /** A failed run's partial (markdown): the streamed answer first, if any. */
+  partial_answer?: string
 }
 
 /**
@@ -584,10 +644,52 @@ export interface ConsultProvenanceCensus {
   seed?: number | null
   unclassified?: number | null
   unresolved?: number | null
+  /** A well-formed uuid in citation position matching NO substrate table. */
+  fabricated?: number | null
+  /** Citation tokens that were not uuids at all (`sit-001`). Bounded server-side. */
+  malformed?: string[] | null
+  /** What the resolved ids ARE: `{signal: 51, finding: 15, situation: 8, …}`. */
+  by_kind?: Record<string, number> | null
   cited_total?: number | null
   model_knowledge?: number | null
   sentences_examined?: number | null
   basis?: string | null
+}
+
+/**
+ * The EVIDENCE FLOOR stamp (`analysts.consult_evidence_floor`): present only
+ * when the server raised the model's own uncertainty because too few cited
+ * refs resolved to a real record. `resolved` is that count (null when the
+ * classifier could not say — no floor applies then, so it is never stamped).
+ */
+export interface ConsultUncertaintyFloor {
+  from: number
+  to: number
+  resolved?: number | null
+}
+
+/**
+ * W3 / F-4 — what became of ONE watch candidate (`analysts.consult_watch_mint`):
+ * minted as a standing open question that `claim_watch` matches new reporting
+ * against (`hypothesis_id`; `folded` when it re-used a watch already standing),
+ * or refused by name (`unmintable_no_test`, `hypothesis_refused_no_resolves_by`,
+ * `ungrounded_office`, `dead_letter`, `mint_failed`). The list is absent when
+ * no mint was attempted — never read that as "0 standing".
+ */
+export interface ConsultWatchMint {
+  candidate: string
+  hypothesis_id?: string | null
+  refused: boolean
+  reason?: string | null
+  resolves_by?: string | null
+  folded?: boolean
+  detail?: string | null
+  /** W4-F1 — the standing watch this candidate folded onto (its id). */
+  folded_onto?: string | null
+  /** W4-F1 — cosine between the two claim cores (1.0 = identical cores). */
+  similarity?: number | null
+  /** W4-F1 — how the fold was decided: key · core · semantic · no_peers · unavailable · over_cap. */
+  fold_check?: string | null
 }
 
 export interface ConsultResponseBody {
@@ -614,6 +716,27 @@ export interface ConsultResponseBody {
   /** Whether the server still holds this run's evidence to re-synthesise from. */
   resynthesizable?: boolean
   usage?: ConsultUsage | null
+  /** 7g-2 — what this answer rests on, counted server-side. */
+  provenance_census?: ConsultProvenanceCensus | null
+  /**
+   * 2026-09-28 §B.3 — set when the SERVER held this answer: not one cited
+   * reference resolved to live or held reporting and the prose still asserts.
+   * A token, not prose — the answer already leads with the banner a reader
+   * reads. `null`/absent is the normal case and means nothing was held; it
+   * never means "not measured", because the hold is a decision the server
+   * either took or did not.
+   */
+  hold_reason?: string | null
+  /** §B.4 — see {@link ConsultUncertaintyFloor}. Absent = no floor moved it. */
+  uncertainty_floor_applied?: ConsultUncertaintyFloor | null
+  /** §B.4 — the answer's "what would change my mind" items; absent = none written. */
+  watch_candidates?: string[] | null
+  /** W3 / F-4 — see {@link ConsultWatchMint}; absent = no mint attempted. */
+  watch_minted?: ConsultWatchMint[] | null
+  /** X2 / C1 — the `consult_verification/1` stamp; see `lib/consultTurnStamp`. */
+  verification?: unknown
+  /** Q-1 — the recovery's own turn contract, when the server sends one. */
+  contract?: unknown
 }
 
 /**
@@ -651,11 +774,23 @@ export interface ConsultStopResult {
  * "spend no more", not "throw it away", which is what makes
  * {@link synthesizeConsultRun} the natural next call.
  */
-export async function stopConsultRun(requestId: string): Promise<ConsultStopResult> {
+export async function stopConsultRun(
+  requestId: string,
+  body: ConsultStopBody = {},
+): Promise<ConsultStopResult> {
   return apiPost<ConsultStopResult>(
     `/consult/runs/${encodeURIComponent(requestId)}/stop`,
-    {},
+    body,
   )
+}
+
+/**
+ * The stop route's optional body (C-1b). A case turn tells the server the last
+ * step the workstation EXECUTED, so the persisted record stops at the same
+ * step the reader saw (`case.stopped_after_seq`). A plain turn sends `{}`.
+ */
+export interface ConsultStopBody {
+  executed_through_seq?: number
 }
 
 /**
@@ -735,6 +870,8 @@ export type JournalEntryKind =
   | 'lens_diff'
   | 'inquiry'
   | 'crossroads'
+  /** N-G — an append-only correction citing the rows it withdrew. */
+  | 'correction'
   | string
 
 /** One `journal_entries` row at `fields=full` weight (today's shape, plus
@@ -761,6 +898,15 @@ export interface JournalEntry {
    *  `  - [judge_unsupported] ...` / `  - [no_citation] ...` line. `null`
    *  when no critique exists. */
   verify_body: string | null
+  /** A lens row's declared-prior header as the row itself stamped it
+   *  (`data.lens_prior`, e.g. "the Historian; asks how often this actually
+   *  happens"). `null` for every other kind and for a lens row written before
+   *  the stamp existed — never back-filled. Optional: older payloads omit it. */
+  lens_prior?: string | null
+  /** N-G — the id of the `correction` row that withdrew this one (the row
+   *  stays readable by id; the stream no longer serves it). `null` otherwise.
+   *  Optional: older payloads omit it. */
+  corrected_by?: string | null
 }
 
 /** One `journal_entries` row at `fields=summary` weight (§3.3) — the
@@ -778,6 +924,10 @@ export interface JournalEntrySummary {
   analyst_id: string | null
   analyst_version: string | null
   verify_score: number | null
+  /** See `JournalEntry.lens_prior`. */
+  lens_prior?: string | null
+  /** See `JournalEntry.corrected_by`. */
+  corrected_by?: string | null
 }
 
 /** The substrate-derived calibration posture for the §10 honesty banner —
@@ -791,9 +941,13 @@ export interface JournalCalibration {
   forecast_acute_sample_size: number | null
   forecast_acute_status: string | null
   produced_at: string | null
+  /** Lane E — legacy/untrusted label + the headline population's staleness */
+  label?: string
+  stale?: boolean | null
+  newest_member_at?: string | null
 }
 
-/** `GET /journal?fields=full` body (default). Mirrors `JournalOut`. */
+/** `GET /journal?fields=full` body. Mirrors `JournalOut`. */
 export interface JournalResponse {
   consolidation: JournalEntry | null
   entries: JournalEntry[]
@@ -836,7 +990,8 @@ export async function fetchJournal(
     fields?: 'full'
   } = {},
 ): Promise<JournalResponse> {
-  return apiGet<JournalResponse>(`/journal${journalQueryString(opts)}`)
+  // P-8: the route's default is the summary weight; this reader names full.
+  return apiGet<JournalResponse>(`/journal${journalQueryString({ ...opts, fields: 'full' })}`)
 }
 
 /** `fields=summary` variant — the grouped-list read (§2b/§3.3): list-cheap
@@ -908,6 +1063,18 @@ export async function getSystemAnalystCadence(): Promise<AnalystCadenceRow[]> {
 /** Per-source firing matrix (signals + poll-outcome backed). */
 export async function getSystemSourceFiring(): Promise<SourceFiringRow[]> {
   return apiGet<SourceFiringRow[]>('/v3/system/source-firing')
+}
+
+/** X1-A2 — `GET /api/v1/v3/system/backup-status`: ISO-8601 UTC times of the
+ *  last successful encrypted backup set and the last PASSING restore drill
+ *  (host status files). `null` = none recorded — never a fabricated time. */
+export interface BackupStatus {
+  last_backup_at: string | null
+  last_drill_at: string | null
+}
+
+export async function getSystemBackupStatus(): Promise<BackupStatus> {
+  return apiGet<BackupStatus>('/v3/system/backup-status')
 }
 
 /** One escalation-delivery audit row. Mirrors a `public.alert_sink_deliveries`
@@ -1442,6 +1609,41 @@ export interface SourceEarned {
   computed_at: string
 }
 
+/** The staleness tripwire's verdict (server: `legba.runtime.source_staleness`,
+ *  the one place "no new items for N× the expected interval" is decided).
+ *  `factor` is null exactly when `state` is `unknown` — absence, never a 0. */
+export type StalenessState = 'fresh' | 'quiet' | 'stale' | 'dead' | 'unknown'
+
+export interface StalenessQuality {
+  state: StalenessState
+  factor: number | null
+  reason: string
+  age_s: number | null
+  expected_interval_s: number | null
+  weekday_only: boolean
+  upstream_quiet: boolean | null
+  /** The newest poll came back `gated` (the feed delivered; the keyword gate
+   *  dropped every entry): a clean poll, not a new item. Absent on older servers. */
+  last_poll_gated?: boolean
+  last_new_item_at: string | null
+  last_poll_ok_at: string | null
+}
+
+/** One enrichment stage's timing over a single poll (`enrichment_timing`). */
+export interface EnrichmentStageTiming {
+  calls: number
+  total_ms: number
+  max_ms: number
+  errors: number
+}
+
+/** Where the wall time of a source's newest ENRICHED poll went, per stage kind.
+ *  `polled_at` is the figure's as-of. */
+export interface EnrichmentLastPoll {
+  stages: Record<string, EnrichmentStageTiming>
+  polled_at: string | null
+}
+
 export interface ComputedQuality {
   freshness_grade: string
   budget_minutes: number | null
@@ -1450,6 +1652,11 @@ export interface ComputedQuality {
   age_seconds: number | null
   signals_24h: number
   signals_7d: number
+  /** `null`/absent = NOT MEASURED (not an active head, or the poll evidence
+   *  could not be read); `{state: 'unknown'}` = measured but unmeasurable. */
+  staleness?: StalenessQuality | null
+  /** `null`/absent = enrichment latency NOT MEASURED for this source (never a 0). */
+  enrichment_last_poll?: EnrichmentLastPoll | null
 }
 
 /** `earned` is null ONLY when no track-record row exists at all — a row with

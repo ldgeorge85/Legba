@@ -1,0 +1,59 @@
+# X3/G0 — substrate_read_raw: the bake-off's ARM B read surface (DRAFT).
+#
+# planning/reviews/BAKEOFF_DESIGN.md v1.0 §2, arm B — "frontier consult over the
+# RAW corpus": only what the sources said, nothing the analysis plane derived.
+# Exactly the six raw readers; every finding/situation/event/hypothesis/
+# prediction/graph reader, the fact store, the curated background corpora and
+# the curated history collections are ABSENT, so the agency gate refuses them at
+# dispatch (not a tool of this pack) as well as the loop never offering them.
+#
+# The handlers are the SAME ones substrate_read binds (agency/substrate_read.py);
+# no tool config here — the raw readers have no scope to set.
+#
+# Bound by the runtime as the consult kind's governed read binding when a consult
+# descriptor GRANTS it (data/analysts/consult_bakeoff.consult_read_pack_for) —
+# today only analyst_consult_bakeoff_raw.yaml. Universally applicable by design,
+# like substrate_read (no applies_to_tags, no predicate; self-allowed on the
+# consult binding).
+#
+# DRAFT. NOT in scripts/bringup_register_action_packs.py. The operator registers
+# it for the bake-off window (G1) and retires it after — the G1 steps are in
+# scripts/bakeoff/run_arm.py's module docstring.
+
+identity:
+  id: substrate_read_raw
+  name: Substrate Read — raw sources only (bake-off arm B)
+  schema_uri: legba/action_pack/1.0.0
+  version: "<content-hash stamped at register time>"
+  abstraction_level: L1
+  state: draft
+  owner: x3_g0_bakeoff
+  created: "2026-10-09T00:00:00Z"
+
+tools:
+  - name: search_signals
+    config: {}
+  - name: search_corpus
+    config: {}
+  - name: read_document
+    config: {}
+  - name: vector_search
+    config: {}
+  - name: list_targets
+    config: {}
+  - name: list_sources
+    config: {}
+
+prompt_fragments:
+  - >-
+    This run reads the ingested source documents and nothing derived from them.
+    Cite the signal ids the tools returned; a claim with no document behind it
+    is model knowledge and must be labelled as such.
+
+rules:
+  - "Never fabricate substrate refs — cite only UUIDs the tools returned."
+
+governor:
+  budget_account: substrate_read_raw
+  max_invocations_per_hour: 600
+  api_rate_per_minute: 60

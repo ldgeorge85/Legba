@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.rsshub.apnews.niger": {
+      "source": "source_rsshub_apnews_niger.yaml",
+      "state": "draft"
+    }
+  }
+}

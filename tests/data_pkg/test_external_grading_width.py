@@ -1377,8 +1377,15 @@ def test_the_mistral_grader_passes_the_fence_that_refuses_the_judge_and_the_writ
     assert route.component_id == MISTRAL_GRADER and route.family == "mistral"
 
 
-def test_the_mistral_grader_descriptor_is_the_registrar_source_of_truth():
-    """One body, one place — and the id the fence knows is the id on disk."""
+def test_the_gateway_grader_descriptor_is_the_registrar_source_of_truth():
+    """One body, one place — and the id the fence knows is the id on disk.
+
+    Cutover 2026-10-23: the third-family slot moved off OpenRouter Mistral (its
+    credits ran out 10-17) onto Nemotron Lightning on our own box behind the
+    innoai gateway. The retired Mistral descriptor stays on disk as history and
+    the registrar must NOT load it — a fresh bring-up must not seed a dead paid
+    lane.
+    """
     import importlib.util
     from pathlib import Path
 
@@ -1388,37 +1395,41 @@ def test_the_mistral_grader_descriptor_is_the_registrar_source_of_truth():
     from legba.runtime.external_grader_route import GRADER_FAMILY_BY_COMPONENT
 
     repo = Path(__file__).resolve().parents[2]
-    name = "stack_component_llm_judge_openrouter_mistral_large.yaml"
+    name = "stack_component_llm_grader_innoai_lightning.yaml"
     body = yaml.safe_load((repo / "descriptors" / name).read_text())
     model = LLMProvider.model_validate(body)
 
-    assert model.id == MISTRAL_GRADER
+    assert model.id == GATEWAY_GRADER
     # `.openai_compat` is load-bearing: it routes to the vLLM handler, which is
-    # the wire shape OpenRouter speaks.
+    # the wire shape the gateway speaks.
     assert model.id.endswith(".openai_compat")
     assert model.state.value == "draft", "registering it must activate nothing"
-    assert model.config.model_name.raw == "mistralai/mistral-medium-3.1"
-    # the SAME OpenRouter vault ref the nemotron judge lane uses — one key.
-    assert model.config.api_key.raw == "llm.judge.openrouter.api_key"
-    assert "openrouter.ai" in model.config.api_endpoint.raw
-    # a PAID lane, unlike the `:free` nemotron lanes: priced AND gauged.
-    assert model.config.price_input_per_m.raw > 0
-    assert model.config.price_output_per_m.raw > 0
-    assert model.config.daily_burn_alert_usd.raw > 0
+    assert model.config.model_name.raw == "lightning"
+    # the ONE gateway vault ref every box lane shares.
+    assert model.config.api_key.raw == "llm.innoai.api_key"
+    assert "api.innoai.net" in model.config.api_endpoint.raw
+    # a $0 lane on our own box: no list price, so the burn gauge reports it
+    # ungauged rather than inventing a number.
+    assert model.config.price_input_per_m is None
+    assert model.config.price_output_per_m is None
     # the family lives in the fence map, because both stack schemas are
     # extra="forbid" and a `family:` key here would fail validation outright.
     assert "family" not in body
-    assert GRADER_FAMILY_BY_COMPONENT[model.id] == "mistral"
+    assert GRADER_FAMILY_BY_COMPONENT[model.id] == "nvidia"
 
     spec = importlib.util.spec_from_file_location(
-        "_brs_mistral", repo / "scripts" / "bringup_register_stack.py",
+        "_brs_gateway", repo / "scripts" / "bringup_register_stack.py",
     )
     registrar = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(registrar)
     ids = [cid for cid, _ in registrar.COMPONENTS]
-    assert MISTRAL_GRADER in ids, "the registrar must list the third-family grader"
-    registered = next(b for cid, b in registrar.COMPONENTS if cid == MISTRAL_GRADER)
+    assert GATEWAY_GRADER in ids, "the registrar must list the third-family grader"
+    registered = next(b for cid, b in registrar.COMPONENTS if cid == GATEWAY_GRADER)
     assert registered == body, "the registrar must LOAD the descriptor, not copy it"
+    assert MISTRAL_GRADER not in ids, "the retired OpenRouter lane must not be seeded"
+    # …but the retired lane keeps its family declared, so a repoint back onto it
+    # is fenced by family, not by id equality alone.
+    assert GRADER_FAMILY_BY_COMPONENT[MISTRAL_GRADER] == "mistral"
 
 
 # ---------------------------------------------------------------------------
@@ -2097,3 +2108,50 @@ def test_width_heartbeat_block_reports_the_evidence_walk_and_the_stamp():
     assert block["window_basis"] == "evidence"
     assert block["evidence_window"]["signals"] == 8465
     assert block["pipeline_version"] == "2026-09-21/4"
+
+
+# ─── Cutover 2026-10-22: the judge, its second family and the grader on the box ─
+
+GATEWAY_JUDGE = "llm.verify.innoai_gemma.openai_compat"
+GATEWAY_JUDGE_RUNG2 = "llm.judge.innoai_lightning_think.openai_compat"
+GATEWAY_GRADER = "llm.grader.innoai_lightning.openai_compat"
+
+
+def test_the_gateway_grader_passes_the_fence_that_refuses_the_gateway_judge_and_the_core(
+    monkeypatch,
+):
+    """From the 2026-10-22 cutover every model is behind one gateway, so family
+    distinctness is carried by the MAP alone — three ids on one host would all
+    look alike to any substring guess. This pins: the writer (MiMo on the same
+    `llm.primary.openai_compat` id), the judge (Gemma) and the grader (Lightning)
+    are three DECLARED families; the grader clears the fence; the judge's second
+    rung shares the grader's family and is therefore refused as a grader when
+    Lightning leads the judge chain.
+    """
+    from legba.runtime import analyst_deps_builder as ab
+
+    monkeypatch.setenv("LEGBA_JUDGE_STACK_REF", GATEWAY_JUDGE)
+
+    for cid in (GATEWAY_JUDGE, GATEWAY_JUDGE_RUNG2, GATEWAY_GRADER,
+                "llm.primary.openai_compat"):
+        assert cid in ab.GRADER_FAMILY_BY_COMPONENT, cid
+    assert ab.grader_family_for_component("llm.primary.openai_compat") == "xiaomi_mimo"
+    assert ab.grader_family_for_component(GATEWAY_JUDGE) == "google_gemma"
+    assert ab.grader_family_for_component(GATEWAY_JUDGE_RUNG2) == "nvidia"
+    assert ab.grader_family_for_component(GATEWAY_GRADER) == "nvidia"
+
+    def refuse(component, judge=GATEWAY_JUDGE):
+        return ab.grader_fence_refusal(
+            component,
+            primary_component_id="llm.primary.openai_compat",
+            judge_component_id=judge,
+        )
+
+    # ACCEPTED — Lightning (think off) is neither the writer's family nor Gemma's.
+    assert refuse(GATEWAY_GRADER) == ""
+    # REFUSED — the judge itself, and the writer marking its own homework.
+    assert refuse(GATEWAY_JUDGE) == ab.GRADER_REFUSE_JUDGE_FAMILY
+    assert refuse("llm.primary.openai_compat") == ab.GRADER_REFUSE_WRITER_FAMILY
+    # If the interlock promotes Lightning to lead the judge chain, the Lightning
+    # grader is the SAME family as the judge and the fence must say so.
+    assert refuse(GATEWAY_GRADER, judge=GATEWAY_JUDGE_RUNG2) == ab.GRADER_REFUSE_JUDGE_FAMILY

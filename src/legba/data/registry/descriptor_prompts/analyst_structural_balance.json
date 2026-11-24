@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:structural_balance": {
+      "source": "analyst_structural_balance.yaml",
+      "state": "active"
+    }
+  }
+}

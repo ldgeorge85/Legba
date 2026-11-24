@@ -164,22 +164,13 @@ def allocate_round_bodies(
         [len(b) for b in natural], total_bound=bound, min_each=min_each,
     )
     out: list[str] = []
-    for body, limit in zip(natural, limits):
-        out.append(body if len(body) <= limit else render_at(body, limit, render))
+    for raw, body, limit in zip(results, natural, limits):
+        # Always re-render from the RAW result, never from ``body``: ``body`` is
+        # already a trimmed copy when the natural pass exceeded ``bound + 1``,
+        # and trimming a trimmed copy overwrote ``rows_total`` with the
+        # trimmed row count (list_findings 30 -> 12; W11-F150).
+        out.append(body if len(body) <= limit else render(raw, limit))
     return out
-
-
-def render_at(natural: str, limit: int, render: Any) -> str:
-    """Re-render a body at ``limit``.
-
-    Separated so the natural-size pass above reads as one thing. ``render`` is
-    given the already-parsed value when the natural body is JSON, so the
-    caller's truncation marker logic sees a real object rather than a string.
-    """
-    try:
-        return render(json.loads(natural), limit)
-    except (json.JSONDecodeError, ValueError):
-        return natural[:limit]
 
 
 # ---------------------------------------------------------------------------

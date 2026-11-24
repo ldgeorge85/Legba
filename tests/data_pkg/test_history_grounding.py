@@ -327,7 +327,7 @@ def test_the_history_block_is_last_and_is_a_registered_receipt():
 
 
 def test_the_descriptor_grant_is_declared_and_bounded():
-    from legba.data.analysts.handler_options import known_kind_option_names
+    from legba.data.option_catalog.handler_options import known_kind_option_names
 
     names = set(known_kind_option_names("inline_target"))
     assert {"offer_history", "history_series_limit"} <= names
@@ -380,3 +380,100 @@ def test_a_signal_endnote_is_untouched_by_the_observation_branch():
         "resolved": True,
     })
     assert line == "- [3] A headline — https://example.invalid/a"
+
+
+# ---------------------------------------------------------------------------
+# SW-2 — the per-run WITNESS: WHY the block is or is not in the prompt
+# ---------------------------------------------------------------------------
+
+
+def _witnessed(entries, **witness):
+    row = _row(entries)
+    row[hg.HISTORY_WITNESS_KEY] = {
+        "offered": True, "subjects_resolved": None, "series_rows": None,
+        "read_failed": False, **witness,
+    }
+    return row
+
+
+def _situations():
+    return {
+        ug.UNIT_GROUNDING_ROW_KEY: ug.GROUNDING_SITUATIONS,
+        ug.GROUNDING_PAYLOAD_KEY: [
+            {"situation_id": "s1", "name": "frame", "status": "open"}
+        ],
+    }
+
+
+def test_the_detail_says_not_offered_when_no_history_row_exists():
+    assert hg.history_receipt_detail([_situations()]) == {
+        "offered": False, "subjects_resolved": None, "series_rows": None,
+        "rendered": False, "reason": "not_offered",
+    }
+
+
+@pytest.mark.parametrize(
+    ("witness", "reason"),
+    [
+        ({"subjects_resolved": 0, "series_rows": 0}, "no_subjects"),
+        ({"subjects_resolved": 1, "series_rows": 0}, "no_rows"),
+        ({"read_failed": True}, "read_failed"),
+    ],
+)
+def test_each_empty_offer_names_its_own_absence(witness, reason):
+    detail = hg.history_receipt_detail([_witnessed([], **witness)])
+    assert detail["offered"] is True
+    assert detail["rendered"] is False
+    assert detail["series_rows"] == 0
+    assert detail["reason"] == reason
+
+
+def test_a_read_that_never_resolved_the_desk_reports_none_not_zero():
+    detail = hg.history_receipt_detail([_witnessed([], read_failed=True)])
+    assert detail["subjects_resolved"] is None
+
+
+def test_the_detail_after_the_render_is_read_off_the_stamped_rows():
+    row = _witnessed([_obs(), _obs(series_id="wb.cpi")], subjects_resolved=1)
+    text, stamped = ug.render_grounding_section([row], start_ordinal=7)
+    assert text
+    assert hg.history_receipt_detail([row], stamped=stamped) == {
+        "offered": True, "subjects_resolved": 1, "series_rows": 2,
+        "rendered": True, "reason": "rendered",
+    }
+    # A row the render did not stamp did not reach the model.
+    assert hg.history_receipt_detail([row], stamped=[])["rendered"] is False
+
+
+def test_an_empty_granted_row_renders_nothing_and_receipts_zero():
+    """The flip-kit bar for the always-emitted row: a granted desk with no
+    holding renders the SAME BYTES as an ungranted one."""
+    empty = _witnessed([], subjects_resolved=0, series_rows=0)
+    without, stamped_without = ug.render_grounding_section(
+        [_situations()], start_ordinal=3
+    )
+    with_empty, stamped_with = ug.render_grounding_section(
+        [_situations(), empty], start_ordinal=3
+    )
+    assert with_empty == without
+    assert [n for n, _ in stamped_with] == [n for n, _ in stamped_without]
+    assert ug.grounding_receipts([_situations(), empty])["grounding_history_ref"] == 0
+    assert ug.grounding_receipts([empty])["grounding_history_ref"] == 0
+
+
+@pytest.mark.asyncio
+async def test_a_granted_gather_always_emits_its_witnessed_row():
+    conn = _Conn()
+    rows = await ug.gather_unit_grounding_rows(
+        conn, analyst_id=None, target_filter="country_g20_us", offer_history=True,
+    )
+    history = [
+        r for r in rows if r.get(ug.UNIT_GROUNDING_ROW_KEY) == hg.GROUNDING_HISTORY
+    ]
+    assert len(history) == 1
+    assert history[0][ug.GROUNDING_PAYLOAD_KEY] == []
+    assert history[0][hg.HISTORY_WITNESS_KEY] == {
+        "offered": True, "subjects_resolved": 0, "series_rows": 0,
+        "read_failed": False,
+    }
+    assert hg.history_receipt_detail(rows)["reason"] == "no_subjects"

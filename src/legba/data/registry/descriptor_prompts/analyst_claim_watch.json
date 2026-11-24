@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:claim_watch": {
+      "source": "analyst_claim_watch.yaml",
+      "state": "draft"
+    }
+  }
+}

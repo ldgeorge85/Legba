@@ -95,6 +95,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from .. import consult_clocks as _clocks
+
 logger = logging.getLogger(__name__)
 
 #: How long a finished run stays queryable via ``GET /consult/runs/{id}``.
@@ -108,7 +110,15 @@ MAX_REMEMBERED_RUNS = 256
 
 #: Cap on steps accumulated per run. The analyst's own round ceiling bounds the
 #: real number; this only stops a runaway publisher from growing the record.
+#: ``answer_delta`` frames do NOT count against it (see
+#: :data:`MAX_ACCUMULATED_ANSWER_CHARS`): they are the answer itself, and a
+#: long tool-heavy run must not lose its answer to the trace that preceded it.
 MAX_ACCUMULATED_STEPS = 400
+
+#: Cap on the streamed answer text (``answer_delta`` frames) a run holds. The
+#: provider's own output-token cap bounds the real number; this only bounds a
+#: runaway publisher. Two million characters is far past any real answer.
+MAX_ACCUMULATED_ANSWER_CHARS = 2_000_000
 
 RunStatus = Literal["running", "complete", "error"]
 
@@ -142,6 +152,39 @@ def sync_wait_seconds() -> float:
     return _env_float("LEGBA_CONSULT_SYNC_WAIT_SECONDS", 20.0)
 
 
+#: Margin the invoke timeout keeps ABOVE the loop's worst case, for the actor's
+#: own envelope assembly and the persist hop back. Never zero: a budget that is
+#: precisely equal to the clock that kills it is the bug this exists to remove.
+INVOKE_TIMEOUT_MARGIN_SECONDS = 300.0
+
+#: The env pins already warned about, so a below-floor pin is said LOUDLY once
+#: per (pin, floor) pair rather than on every consult.
+_warned_floor_pins: set[tuple[float, float]] = set()
+
+
+def invoke_timeout_floor_seconds() -> float:
+    """The least invoke timeout the loop's own clocks allow.
+
+    Read through the SAME env readers the loop runs under
+    (:mod:`legba.data.consult_clocks`, re-exported by ``consult_round_protocol``):
+
+        drilling never runs past        total_budget   (480s default)
+        the synthesis then gets   max(remaining, final_floor)  (240s floor)
+        the actor envelope + persist hop gets the margin    (300s)
+                                                        floor = 1020s
+
+    Deriving it, rather than documenting a sum an operator has to re-check, is
+    the run 9b902fec fix: ``LEGBA_CONSULT_BUDGET_SECONDS=900`` beside a 900s
+    invoke timeout cut a 26 KB answer one second before the loop's own final
+    slice would have delivered it.
+    """
+    return (
+        _clocks.default_total_budget_seconds()
+        + _clocks.default_final_floor_seconds()
+        + INVOKE_TIMEOUT_MARGIN_SECONDS
+    )
+
+
 def invoke_timeout_seconds() -> float:
     """The detached run's own read timeout against the Dapr sidecar.
 
@@ -150,24 +193,39 @@ def invoke_timeout_seconds() -> float:
     actor's own assembly, so the loop's *own* graceful degradation is what ends
     a long run — never the caller's clock.
 
-    RAISED 600 → 900 by the c8a0105c train, because the analyst's worst case
-    grew and 600 stopped clearing it. The arithmetic, which is the only reason
-    this constant has a value at all:
+    It is now ``max(env_pin, floor)`` where the floor is
+    :func:`invoke_timeout_floor_seconds` — ``total_budget + final_floor + 300``
+    off the loop's own env readers. With nothing set that is
+    ``480 + 240 + 300 = 1020s``, which beats the 900s default pin: the derived
+    floor wins, by design. An env pin below the floor is RAISED to it and
+    logged once, loudly, naming both numbers — the two clocks can never be
+    equal again, whatever the operator sets.
 
-        drilling stops at most at  wall_budget (210s)
-                                 + one round_deadline (150s)   = 360s
-        the synthesis then gets   max(remaining, final_floor)  = 240s floor
-                                                        total  = 600s
-
-    — i.e. exactly the old timeout, with zero headroom for the actor envelope.
-    A budget that is precisely equal to the clock that kills it is the same
-    bug this train exists to remove, one level out. 900 leaves 300s of margin.
-
-    Env: ``LEGBA_CONSULT_INVOKE_TIMEOUT_SECONDS``. Raising the analyst's own
-    budgets (``LEGBA_CONSULT_BUDGET_SECONDS``,
-    ``LEGBA_CONSULT_FINAL_FLOOR_SECONDS``) means re-checking this sum.
+    Env: ``LEGBA_CONSULT_INVOKE_TIMEOUT_SECONDS`` (default 900). Raising the
+    analyst's own budgets (``LEGBA_CONSULT_BUDGET_SECONDS``,
+    ``LEGBA_CONSULT_FINAL_FLOOR_SECONDS``) raises this with them.
     """
-    return _env_float("LEGBA_CONSULT_INVOKE_TIMEOUT_SECONDS", 900.0)
+    pinned = _env_float("LEGBA_CONSULT_INVOKE_TIMEOUT_SECONDS", 900.0)
+    floor = invoke_timeout_floor_seconds()
+    if pinned >= floor:
+        return pinned
+    key = (pinned, floor)
+    if key not in _warned_floor_pins and os.getenv("LEGBA_CONSULT_INVOKE_TIMEOUT_SECONDS", "").strip():
+        _warned_floor_pins.add(key)
+        logger.warning(
+            "consult.invoke_timeout.below_loop_floor "
+            "LEGBA_CONSULT_INVOKE_TIMEOUT_SECONDS=%.0fs is below the consult "
+            "loop's own worst case (total budget %.0fs + final floor %.0fs + "
+            "%.0fs margin = %.0fs); using %.0fs so the loop's partial delivery, "
+            "not the registry's clock, ends a long run",
+            pinned,
+            _clocks.default_total_budget_seconds(),
+            _clocks.default_final_floor_seconds(),
+            INVOKE_TIMEOUT_MARGIN_SECONDS,
+            floor,
+            floor,
+        )
+    return floor
 
 
 @dataclass
@@ -188,10 +246,63 @@ class ConsultRun:
     started_at: float = field(default_factory=time.monotonic)
     finished_at: float | None = None
     task: asyncio.Task[Any] | None = None
+    #: C-1b — the case-frame accumulator for a turn the operator ARMED
+    #: (``present_case``); ``None`` for every plain turn, which is then exactly
+    #: what it was. Fed from the same step watch as ``steps``, NOT capped by
+    #: :data:`MAX_ACCUMULATED_STEPS` (a case is capped by its own gate).
+    case: Any | None = None
+    #: Characters of streamed answer (``answer_delta`` frames) held in
+    #: ``steps``, and how many such frames — the step cap excludes them.
+    answer_chars: int = 0
+    answer_frames: int = 0
 
     @property
     def elapsed_s(self) -> float:
         return round((self.finished_at or time.monotonic()) - self.started_at, 1)
+
+    def accumulate(self, step: dict[str, Any]) -> None:
+        """Append one step frame under the run's caps.
+
+        ``answer_delta`` frames are the answer, not the trace: they are bounded
+        by :data:`MAX_ACCUMULATED_ANSWER_CHARS` and never count against
+        :data:`MAX_ACCUMULATED_STEPS`, so a tool-heavy run cannot lose the
+        answer it was writing to the frames that preceded it.
+        """
+        if step.get("kind") == "answer_delta":
+            text = step.get("text")
+            if not isinstance(text, str) or not text:
+                return
+            if self.answer_chars + len(text) > MAX_ACCUMULATED_ANSWER_CHARS:
+                return
+            self.answer_chars += len(text)
+            self.answer_frames += 1
+            self.steps.append(step)
+            return
+        if len(self.steps) - self.answer_frames >= MAX_ACCUMULATED_STEPS:
+            return
+        self.steps.append(step)
+
+    def _answer_deltas(self) -> list[dict[str, Any]]:
+        return [
+            s for s in self.steps
+            if s.get("kind") == "answer_delta" and isinstance(s.get("text"), str)
+        ]
+
+    def streamed_answer(self) -> str:
+        """The answer text the run streamed before it stopped, or ``""``.
+
+        The concatenated ``text`` of the run's ``answer_delta`` frames, in
+        arrival order. The loop tags each frame with the ``segment`` that
+        produced it (``round-<n>`` for a drilling round, ``final`` for the
+        forced synthesis); only the LAST segment is the answer in flight — an
+        earlier one is a tool round's preamble, written before the model called
+        its tools. Frames with no segment (an older runtime) are one segment.
+        """
+        deltas = self._answer_deltas()
+        if not deltas:
+            return ""
+        last = deltas[-1].get("segment")
+        return "".join(s["text"] for s in deltas if s.get("segment") == last)
 
     def partial_summary(self) -> str:
         """Plain-language account of a run that did not produce an answer.
@@ -199,6 +310,12 @@ class ConsultRun:
         This is the CONTENT of the persisted assistant turn on failure, so it
         has to read as something an operator wants to see in a transcript, not
         as a status code. It names what landed, where it stopped, and why.
+
+        When the run STREAMED answer text before it was cut, that text comes
+        FIRST, under a one-line note saying it was cut and where. Run 9b902fec
+        (2026-10-29) held 26 KB of answer in this run's own step frames while
+        the persisted turn read "What it had gathered: <tool list>". Paid paths
+        deliver the partial; the account of the stop follows it.
         """
         rounds = sorted(
             {
@@ -211,7 +328,23 @@ class ConsultRun:
         detail = ""
         if self.error is not None:
             detail = str(self.error[1])
-        lines = ["_This consult did not finish._", ""]
+        lines: list[str] = []
+        streamed = self.streamed_answer().strip()
+        if streamed:
+            segment = self._answer_deltas()[-1].get("segment")
+            if segment == "final":
+                where = "during its final synthesis"
+            elif isinstance(segment, str) and segment.startswith("round-"):
+                where = f"while answering in round {segment[len('round-'):]}"
+            else:
+                where = "while it was writing its answer"
+            lines.append(
+                f"_This consult was cut {where}, after {self.elapsed_s:.0f}s; "
+                f"below is the {len(streamed):,} characters of answer it had "
+                f"written, unfinished._"
+            )
+            lines.extend(["", streamed, "", "---", ""])
+        lines.extend(["_This consult did not finish._", ""])
         if rounds:
             lines.append(
                 f"It ran {len(rounds)} round(s) and completed "
@@ -250,6 +383,10 @@ class ConsultRun:
         if self.error is not None:
             payload["error_status"] = self.error[0]
             payload["error_detail"] = self.error[1]
+            # The same partial the terminal frame carries, so a client that
+            # reconnects after that frame went out renders the streamed answer
+            # rather than "the server recorded no partial".
+            payload["partial_answer"] = self.partial_summary()
         return payload
 
 
@@ -288,6 +425,7 @@ class ConsultRunManager:
         session_id: str | None,
         execute: Callable[[], Awaitable[dict[str, Any]]],
         on_complete: Callable[[ConsultRun], Awaitable[None]] | None = None,
+        case: Any | None = None,
     ) -> ConsultRun:
         """Launch ``execute`` as a detached run and return its record.
 
@@ -298,7 +436,7 @@ class ConsultRunManager:
         other way to learn the run died.
         """
         self._sweep()
-        run = ConsultRun(request_id=request_id, session_id=session_id)
+        run = ConsultRun(request_id=request_id, session_id=session_id, case=case)
         self._runs[request_id] = run
         run.task = asyncio.ensure_future(self._drive(run, execute, on_complete))
         return run
@@ -320,10 +458,12 @@ class ConsultRunManager:
                 return
             if not isinstance(frame, dict) or frame.get("type") != "step":
                 return
-            if len(run.steps) >= MAX_ACCUMULATED_STEPS:
-                return
             step = {k: v for k, v in frame.items() if k != "type"}
-            run.steps.append(step)
+            if run.case is not None:
+                # Before the cap check: the record must not depend on how
+                # chatty the trace was. Marks a post-stop frame ``after_stop``.
+                run.case.observe(step)
+            run.accumulate(step)
 
         try:
             return await self._nats_store.nc.subscribe(
@@ -469,6 +609,10 @@ async def publish_terminal_frame(
         # The partial the panel renders instead of a bare error string.
         frame["partial_answer"] = run.partial_summary()
         frame["steps"] = list(run.steps)
+        if run.case is not None:
+            # C-1b — the case as the registry recorded it (stopped / unsealed,
+            # with any gap named), so the player reconciles without a reload.
+            frame["case"] = run.case.compose()
     try:
         await nats_store.nc.publish(
             f"legba.consult.steps.{request_id}",
@@ -479,12 +623,15 @@ async def publish_terminal_frame(
 
 
 __all__ = [
+    "MAX_ACCUMULATED_ANSWER_CHARS",
     "MAX_ACCUMULATED_STEPS",
     "MAX_REMEMBERED_RUNS",
     "RUN_RETENTION_SECONDS",
     "ConsultRun",
     "ConsultRunError",
     "ConsultRunManager",
+    "INVOKE_TIMEOUT_MARGIN_SECONDS",
+    "invoke_timeout_floor_seconds",
     "invoke_timeout_seconds",
     "publish_terminal_frame",
     "sync_wait_seconds",

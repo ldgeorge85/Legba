@@ -22,6 +22,18 @@ DB selection (env, both forms honored by PostgresConfig.from_env):
     bring-up scripts default it to ``legba_pivot_test`` if unset.
   * ``LEGBA_DATA_PG_HOST`` / ``LEGBA_DATA_PG_PORT`` / ``..._USER`` / ``..._PASSWORD``
 
+NO DESCRIPTOR EVENT (lane N-R, documented 2026-11-13): :func:`open_registry`
+builds the :class:`DescriptorRegistry` WITHOUT a bus connection
+(``nats_store=None``), so a head this walker registers, updates or advances
+emits no ``descriptor.*`` NATS event. The runtime's reconcile informer
+therefore does not hear about it; the new or changed actor is picked up by the
+reconcile loop's periodic resync (``resync_interval``, 5 minutes in
+``runtime/reconcile.py``). Expect up to ~5 minutes between the walker's
+``registered`` line and ``reconcile.action ... create_actor``. This is
+deliberate and acceptable (the walker must not depend on a reachable bus);
+a registration through the registry SERVER (REST) does emit the event and is
+reconciled within seconds.
+
 THE OTHER TRANSPORT: the bring-up scripts that POST to the registry SERVER
 rather than the database share :mod:`_bringup_http` instead. Keep them apart —
 importing this module sets the ``LEGBA_DATA_PG_DB`` default below at import
@@ -49,7 +61,13 @@ from legba.data.registry.descriptor import (  # noqa: E402
 from legba.data.schemas import content_hash  # noqa: E402
 from legba.data.schemas.lifecycle import ALLOWED_TRANSITIONS, LifecycleState  # noqa: E402
 
-ACTOR = "p17_reregister"
+#: The walker's audit actor (X2-B1): the FLEET's principal. It writes direct-DB
+#: (no bearer crosses the registry), so the `service:` prefix the registry gate
+#: stamps on the service token's rows is stamped here by hand, and the role
+#: says the same — an audit row the walker wrote reads `service`, never
+#: `operator`.
+ACTOR = "service:p17_reregister"
+ACTOR_ROLE = "service"
 
 
 def _legal_path(src: LifecycleState, dst: LifecycleState) -> list[LifecycleState] | None:
@@ -145,7 +163,7 @@ async def register_descriptor(
         # RE-registration of an existing draft head, so the bug was invisible on
         # re-runs and only bit the very first boot.
         if head is None:
-            row = await reg.register(descriptor, actor=ACTOR)
+            row = await reg.register(descriptor, actor=ACTOR, actor_role=ACTOR_ROLE)
             post = await _head(pg, family, descriptor_id)
             post_state = LifecycleState(post[1]) if post else LifecycleState.DRAFT
             if declared_state == post_state:
@@ -158,7 +176,7 @@ async def register_descriptor(
                 )
             last_version = row.version
             for step_state in path:
-                r2 = await reg.update(descriptor_id, _with_state(descriptor, step_state), actor=ACTOR)
+                r2 = await reg.update(descriptor_id, _with_state(descriptor, step_state), actor=ACTOR, actor_role=ACTOR_ROLE)
                 last_version = r2.version
             return RegisterResult(
                 family.value, descriptor_id, "registered", last_version,
@@ -175,7 +193,7 @@ async def register_descriptor(
         # If the live state already matches the declared state, a single
         # update() (which carries live state when equal) lands the new body.
         if cur_state == declared_state:
-            row = await reg.update(descriptor_id, descriptor, actor=ACTOR)
+            row = await reg.update(descriptor_id, descriptor, actor=ACTOR, actor_role=ACTOR_ROLE)
             return RegisterResult(family.value, descriptor_id, "updated", row.version)
 
         # Live state differs from declared. Walk the legal FSM path
@@ -192,7 +210,7 @@ async def register_descriptor(
         last_version = cur_version
         for step_state in path:
             stepped = _with_state(descriptor, step_state)
-            row = await reg.update(descriptor_id, stepped, actor=ACTOR)
+            row = await reg.update(descriptor_id, stepped, actor=ACTOR, actor_role=ACTOR_ROLE)
             last_version = row.version
         return RegisterResult(family.value, descriptor_id, "updated", last_version)
     except VersionConflict as exc:
@@ -225,6 +243,7 @@ def print_results(title: str, results: list[RegisterResult]) -> int:
 __all__ = [
     "RegisterResult",
     "ACTOR",
+    "ACTOR_ROLE",
     "open_registry",
     "close_registry",
     "register_descriptor",

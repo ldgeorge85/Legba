@@ -9,8 +9,9 @@ from the per-target config's ``impl`` dotted path.
 Currently shipped:
 
   * :mod:`legba.data.sources.scrapers.example_news` — generic RSS- /
-    sitemap-driven news-article scraper. Demonstrates the contract; not a
-    production scraper for any specific site.
+    sitemap-driven news-article scraper. Demonstrates the contract and serves
+    as a test fixture; not a production path (lane I-2: a single page is
+    fetched and landed by the ``page`` source kind, ``data/sources/page.py``).
 """
 
 from __future__ import annotations

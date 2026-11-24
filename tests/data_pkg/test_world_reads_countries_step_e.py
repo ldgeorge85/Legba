@@ -40,6 +40,7 @@ What this file proves, in the order the tier runs:
 from __future__ import annotations
 
 import copy
+import re
 from uuid import uuid4
 
 import pytest
@@ -49,6 +50,7 @@ from legba.data.analysts import assembly_payload as ap
 from legba.data.analysts import assembly_render as ar
 from legba.data.analysts import assembly_spans as asp
 from legba.data.analysts import assessment_channel as ac
+from legba.data.analysts import assessment_prompt_world_v4 as v4mod
 from legba.data.analysts import assessment_prompts as apr
 from legba.data.analysts import assessment_unsupported as au
 from legba.data.analysts import composition_citations as cc
@@ -698,17 +700,42 @@ def test_a_country_voice_that_quotes_a_connective_cannot_take_the_run_down() -> 
 # ---------------------------------------------------------------------------
 
 
-def test_a_world_record_with_context_gets_the_v5_voice_and_version() -> None:
-    """H8 (2026-09-24): the world voice with context is v5 — v4 plus the two
-    measured clauses. v4 stays exported, byte-identical, for the before/after."""
+def test_a_world_record_with_context_gets_the_v6_voice_and_version() -> None:
+    """H8 (2026-09-24) made the world voice with context v5 — v4 plus the two
+    measured clauses; the world read dig (2026-11-07, item 3) made it v6 — v5
+    plus the weakest-cap line. v4 and v5 stay exported, byte-identical, for
+    the before/after."""
     candidates = _three_countries()
     payload = _world(candidates, context_heads=_context_heads(candidates))
 
     assert apr.has_context_spans(payload) is True
-    assert apr.prompt_version_for(payload) == "assessment_prompt.v5"
-    assert apr.prompt_version_for(payload) == apr.PROMPT_VERSION_V5
-    assert apr.system_prompt_for(payload) is apr.WORLD_ASSESSMENT_SYSTEM_V5
+    assert apr.prompt_version_for(payload) == "assessment_prompt.v6"
+    assert apr.prompt_version_for(payload) == apr.PROMPT_VERSION_V6
+    assert apr.system_prompt_for(payload) is apr.WORLD_ASSESSMENT_SYSTEM_V6
     assert apr.PROMPT_VERSION_V4 == "assessment_prompt.v4"
+    assert apr.PROMPT_VERSION_V5 == "assessment_prompt.v5"
+
+
+def test_v6_is_v5_plus_the_weakest_cap_line_in_section_3_and_nothing_else() -> None:
+    """The 64f74201 read (v5) relayed every thread as "held by a cap" and
+    named none of the caps as the one to doubt. v6 adds one clause to section
+    (3) and moves no other byte."""
+    v5, v6 = apr.WORLD_ASSESSMENT_SYSTEM_V5, apr.WORLD_ASSESSMENT_SYSTEM_V6
+    anchor = "and which country read you are least sure of; "
+    assert v5.count(anchor) == 1
+    head, _, tail = v5.partition(anchor)
+    assert v6 == head + anchor + v4mod.WEAKEST_CAP_CLAUSE + tail
+    for clause in ("THE WEAKEST CAP", "you read as weakest", "the observable that would show it failing",
+                   "with its date", "never as a ranking of the world", "fewer than two threads"):
+        assert clause in v6 and clause not in v5
+    # it sits inside section (3), before the aperture section
+    i3 = v6.index("(3) '## What would change this'")
+    i4 = v6.index("(4) '## What this reading misses'")
+    assert i3 < v6.index("THE WEAKEST CAP") < i4
+    # perspective, not a rank of the world: no term the RANK marker fires on
+    from legba.data.analysts.assessment_unsupported import _RANK_TERMS
+    low = v4mod.WEAKEST_CAP_CLAUSE.lower()
+    assert not [t for t in _RANK_TERMS if re.search(r"\b" + re.escape(t) + r"\b", low)]
 
 
 def test_v5_is_v4_plus_the_two_H8_clauses_and_nothing_else() -> None:
@@ -756,13 +783,14 @@ def test_the_country_voice_and_the_v3_world_voice_are_BYTE_UNCHANGED() -> None:
     assert apr.COUNTRY_PROMPT_VERSION == "country_assessment_prompt.v1"
     assert apr.CONTEXT_SECTION_HEADER == "THE DESK READS IN FULL"
     assert apr.COUNTRY_SECTION_HEADER == "THE COUNTRY READS IN FULL"
-    # The four constants are four distinct voices; neither v4 nor v5 is a copy.
+    # The five constants are five distinct voices; none of v4/v5/v6 is a copy.
     assert len({
         _h(apr.ASSESSMENT_SYSTEM),
         _h(apr.COUNTRY_ASSESSMENT_SYSTEM),
         _h(apr.WORLD_ASSESSMENT_SYSTEM_V4),
         _h(apr.WORLD_ASSESSMENT_SYSTEM_V5),
-    }) == 4
+        _h(apr.WORLD_ASSESSMENT_SYSTEM_V6),
+    }) == 5
 
 
 def test_the_v4_prompt_hands_over_the_country_reads_under_their_ordinals() -> None:
@@ -1076,7 +1104,7 @@ async def test_the_channel_writes_from_the_country_reads_and_nothing_else() -> N
     )
 
     assert llm.calls == 1
-    assert llm.system is apr.WORLD_ASSESSMENT_SYSTEM_V5
+    assert llm.system is apr.WORLD_ASSESSMENT_SYSTEM_V6
     for head in heads.values():
         first = head["body"].split("\n")[0].replace("[[ref:", "(child ref ")
         assert first.split("(child ref")[0].strip()[:40] in llm.prompt
@@ -1086,7 +1114,7 @@ async def test_the_channel_writes_from_the_country_reads_and_nothing_else() -> N
 
     assessment = result.finding.data["assessment"]
     assert assessment["spine_id"] == str(spine_id)
-    assert assessment["prompt_version"] == apr.PROMPT_VERSION_V5
+    assert assessment["prompt_version"] == apr.PROMPT_VERSION_V6
     assert assessment["spine_blocks"] == 3
 
     cits = result.finding.data["citations"]
@@ -1137,11 +1165,20 @@ async def test_the_same_spine_without_context_runs_the_v3_voice_unchanged() -> N
 
 def test_the_assembler_reads_the_context_off_the_slice_rows() -> None:
     """The ``unit_names_of`` idiom: resolved where a connection exists, stamped
-    onto the rows, read back by the DB-less ``_run``."""
+    onto the rows, read back by the DB-less ``_run``.
+
+    W4 F-3 moved ``_run``'s ASSEMBLE section into ``composition_assemble`` (the
+    size-gate seam), so the read lives in that leaf and ``_run`` hands it
+    ``inputs`` — both halves are pinned."""
     import inspect
 
-    src = inspect.getsource(synth._run)
+    from legba.data.analysts import composition_assemble as ca
+
+    src = inspect.getsource(ca.assemble_deterministic_read)
     assert "context_heads=_slice.country_assessment_context_of(inputs)" in src
+    run_src = inspect.getsource(synth._run)
+    assert "assemble_deterministic_read(" in run_src
+    assert "inputs=inputs," in run_src
     assert "context_heads" in inspect.signature(ap.build_assembly).parameters
 
 

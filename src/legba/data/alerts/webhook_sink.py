@@ -17,8 +17,8 @@ Configuration (env)
   at startup, and every fan-out writes a ``skipped_unconfigured`` ledger
   row so the missing edge is visible, never a silent drop.
 * ``LEGBA_ALERT_WEBHOOK_MIN_SEVERITY`` — severity floor (default
-  ``high``). Alerts below the floor skip this sink (no ledger row — a
-  configured filter working as designed).
+  ``high``). Alerts below the floor skip this sink and the dispatcher
+  writes a ``skipped_below_severity`` ledger row with the reason.
 
 Wire format
 -----------
@@ -169,7 +169,7 @@ class WebhookAlertSink:
                 outcome="skipped_unconfigured",
                 detail=f"webhook sink not configured ({ENV_WEBHOOK_URL} unset)",
             )
-        if not self.accepts_severity(payload.severity):
+        if not payload.rule_paged and not self.accepts_severity(payload.severity):
             return DeliveryResult(
                 sink_kind=self.sink_kind,
                 outcome="skipped_below_severity",

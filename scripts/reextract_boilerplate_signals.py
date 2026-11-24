@@ -105,7 +105,8 @@ from legba.data.analysts.deterministic_handlers.evidence_archiver import (
     _extract_text,
     _match_wall_pattern,
 )
-from legba.data.archive import archive_root, cas_path, sha256_from_object_ref
+from legba.data.archive import archive_root, sha256_from_object_ref
+from legba.data.archive_store import EvidenceStore
 
 
 async def _connect_pg() -> asyncpg.Connection:
@@ -264,12 +265,14 @@ async def run(
             if digest is None:
                 counters["no_object_ref"] += 1
                 continue
-            obj_path = cas_path(root, digest)
-            if not obj_path.exists():
+            # The ORIGINAL bytes: decoded from the at-rest codec and
+            # re-verified against the address (a corrupt object counts as
+            # missing — never re-extracted from bytes that do not match).
+            body = EvidenceStore(root).get(digest)
+            if body is None:
                 counters["bytes_missing"] += 1
                 continue
 
-            body = obj_path.read_bytes()
             new_text = _extract_text(body, None, max_chars=_DEFAULT_MAX_TEXT_CHARS)
             new_pattern = _match_wall_pattern(new_text) if new_text is not None else None
             still_wall = new_text is None or new_pattern is not None

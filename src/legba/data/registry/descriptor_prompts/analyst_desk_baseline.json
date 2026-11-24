@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:desk_baseline": {
+      "source": "analyst_desk_baseline.yaml",
+      "state": "draft"
+    }
+  }
+}

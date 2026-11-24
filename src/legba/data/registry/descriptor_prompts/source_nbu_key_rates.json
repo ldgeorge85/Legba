@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.nbu.key_rates": {
+      "source": "source_nbu_key_rates.yaml",
+      "state": "draft"
+    }
+  }
+}

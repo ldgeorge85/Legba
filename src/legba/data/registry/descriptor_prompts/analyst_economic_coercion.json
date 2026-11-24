@@ -1,0 +1,15 @@
+{
+  "prompts": {
+    "economic_coercion": {
+      "chars": 24902,
+      "sha256": "26b12fa40dccc2d205f2c92fb1f259555ec03301babb98f1c4d1bf075ebd240c",
+      "source": "analyst_economic_coercion.yaml"
+    }
+  },
+  "states": {
+    "analyst:economic_coercion": {
+      "source": "analyst_economic_coercion.yaml",
+      "state": "active"
+    }
+  }
+}

@@ -1,0 +1,70 @@
+# K-1 cyber desk (2026-11-14) — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# Google Cloud's public service-health Atom feed. Probed 2026-11-13: HTTP 200,
+# application/atom+xml, ONE entry (the feed holds recent incidents only; the
+# one entry was a resolved multi-service incident in europe-west2 with a
+# ~32 KB update history). CLASS, geography and credibility: as
+# source_aws_status.yaml. Every fifteen minutes.
+#
+# Desk routing: scope.classifications `geopolitics.topic:cyber` is stamped on
+# every signal (W10 TAX-2) — the cyber desk's tag arm (target_cyber.yaml).
+
+identity:
+  id: source.gcp.status
+  name: Google Cloud Service Health — incidents (Atom)
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: cyber_desk_k1
+  created: "2026-11-14T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [cyber, outage, status, cloud, cyber_desk]
+  classifications: ["geopolitics.topic:cyber"]
+  source_class: official
+  license_class: permissive_feed_unreviewed
+  access_class: public          # free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "*/15 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+  expect_quiet: true             # days with no incident are the norm
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://status.cloud.google.com/en/feed.atom"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor (the conservative default of the official-feed drafts).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

@@ -17,7 +17,11 @@ and every existing caller and test is unchanged.
 
 from __future__ import annotations
 
-from ._tradecraft import RETRIEVED_CONTEXT_RULE, as_of_rule
+from ._tradecraft import (
+    CARRIED_ANCHOR_RULE,
+    RETRIEVED_CONTEXT_RULE,
+    as_of_rule,
+)
 from .window_ledger import window_ledger_rule
 
 __all__ = [
@@ -149,6 +153,25 @@ UNIT_GROUNDING_CLAUSE: str = (
     # your own ledger contradicts" — deserves to be readable on its own.
     + "\n\n"
     + window_ledger_rule("[N]")
+    # Q4 (2026-09-28) — THE CARRIED DATED ANCHOR, LAST and deliberately so: it
+    # is the rule that BOUNDS the two blocks the two paragraphs above have just
+    # licensed. The clause says cite your prior read and carry your ledger; the
+    # ledger rule says a ledger line is ALREADY ESTABLISHED and must be dated
+    # from the line — and neither says what happens when the thing being
+    # carried is a FORWARD date that no signal ever established in the first
+    # place. The France head (§A) rode exactly that gap for three months at
+    # faithfulness 1.00, so the bound is stated where the licence is granted
+    # rather than in a ninth descriptor paragraph nobody reads.
+    #
+    # IT RIDES THE SAME UNCONDITIONAL APPEND for the D1 reason: this is the ONE
+    # append every inline_target analyst passes through, and the four
+    # non-unit ones (country_assessor, escalation, cross_doc_corroborator,
+    # corpus_researcher) carry a prior read too. A run with no memory blocks
+    # shown reads one paragraph about blocks it will not see — the same cost
+    # the "no DESK GROUNDING ⇒ FIRST read" leg already pays, for the same
+    # reason: one definition, no drift.
+    + "\n\n"
+    + CARRIED_ANCHOR_RULE
 )
 
 _CLAUSE_FINGERPRINT = "DESK GROUNDING (what this desk already knew)."

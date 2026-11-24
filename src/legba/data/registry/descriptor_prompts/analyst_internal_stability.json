@@ -1,0 +1,15 @@
+{
+  "prompts": {
+    "internal_stability": {
+      "chars": 22753,
+      "sha256": "551777df81074af05411fb3cb077cf2bc3adba952989fd4f64f9a0abc2a2c016",
+      "source": "analyst_internal_stability.yaml"
+    }
+  },
+  "states": {
+    "analyst:internal_stability": {
+      "source": "analyst_internal_stability.yaml",
+      "state": "active"
+    }
+  }
+}

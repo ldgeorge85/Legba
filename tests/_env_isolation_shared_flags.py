@@ -74,4 +74,41 @@ RUNTIME_SHARED_PROGRAM_FLAG_DEFAULTS: tuple[tuple[str, str, str], ...] = (
      "values in _TRUTHY turn it on. Read from tests/data_pkg "
      "(test_native_tool_rounds.py, the GATHER loop) AND tests/runtime "
      "(the actor path that drives it)"),
+    # 2026-11-14, D-1 SOURCE DRIFT. The desk slice's "source text changed"
+    # mark is a flag-off byte-identity flag like GEO v2: a leaked ON from the
+    # live .env would add a line to every marked row of every desk prompt. The
+    # reader is runtime/actor_substrate_slice.py, the mark and render live in
+    # data/ (evidence_drift_slice.py, slice_render.py).
+    ("LEGBA_SLICE_SOURCE_DRIFT_MARK", "off (unset/falsey)",
+     "evidence_drift_slice.py:slice_drift_mark_enabled — code-default OFF; "
+     "read from tests/data_pkg (test_evidence_drift_classify.py, "
+     "test_evidence_drift_db.py) AND the runtime slice reader"),
+    # 2026-11-14, D-2 DRIFT ASSESSMENT. The model step and the tracked
+    # auto-close are default-OFF switches read by data/ (the assessment
+    # store) and by the runtime drift loop; a leaked ON from the live .env
+    # would call a model handler / close flags inside any test that runs a
+    # drift pass.
+    ("LEGBA_DRIFT_ASSESS_MODEL", "off (unset/falsey)",
+     "evidence_drift_assess_store.py:model_enabled — code-default OFF; read from "
+     "tests/data_pkg (test_evidence_drift_assess*.py) AND runtime/evidence_drift_loop.py"),
+    ("LEGBA_DRIFT_AUTO_CLOSE", "off (unset/falsey)",
+     "evidence_drift_assess_store.py:auto_close_enabled — code-default OFF; read from "
+     "tests/data_pkg (test_evidence_drift_assess*.py) AND runtime/evidence_drift_loop.py"),
+    # 2026-11-14, D-1 DESK ROWS SHADOW. A comma list of analyst ids whose desk
+    # runs get a detached contract-v2 shadow (a model call + a ledger write).
+    # Read by data/ (the launch in inline_target) and by the runtime deps
+    # builder; a leaked value from the live .env would launch shadows inside
+    # any desk test.
+    ("LEGBA_DESK_ROWS_SHADOW", "unset (empty — no desk shadowed)",
+     "desk_rows_shadow.py:shadow_analysts — code-default empty; read from "
+     "tests/data_pkg (test_desk_rows_*.py, the inline_target run path) AND "
+     "runtime/desk_rows_shadow_wiring.py"),
+    # DM-A (2026-11-15): citations as rows. Every finding write (data_pkg's
+    # writes tests AND the runtime's actor path) reads both.
+    ("LEGBA_CITATION_ROWS", "on (unset — the dual write runs)",
+     "citation_rows_store.py:citation_rows_enabled — code-default ON; a leaked "
+     "0 would silently skip the rows inside every finding-write test"),
+    ("LEGBA_CITATION_REFUSE_UNRESOLVED", "off (unset)",
+     "citation_rows_store.py:refuse_unresolved_enabled — code-default OFF; a "
+     "leaked ON would refuse every test finding with an id-less citation"),
 )

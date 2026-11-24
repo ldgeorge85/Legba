@@ -1,0 +1,76 @@
+# K-1 cyber desk (2026-11-14) — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# CyberScoop (Scoop News Group, Washington) — original reporting on
+# cybersecurity policy, U.S. government and intelligence-community cyber
+# activity, nation-state operations and major incidents. Chosen as one of
+# three trade outlets (lane report). Probed 2026-11-13 (one GET, generic
+# client identity): HTTP 200, application/rss+xml, 10 items over three days,
+# FULL TEXT in content:encoded (median ~4.9 KB) and a ~400-character summary.
+#
+# Geography: deliberately NO declared geo (see source_therecord.yaml).
+# robots.txt (read 2026-11-13) disallows only GPTBot and allows
+# `User-agent: *` everything. Credibility: cyberscoop.com 0.78 / wire. Hourly.
+#
+# Desk routing: scope.classifications `geopolitics.topic:cyber` is stamped on
+# every signal (W10 TAX-2) — the cyber desk's tag arm (target_cyber.yaml).
+
+identity:
+  id: source.cyberscoop.news
+  name: CyberScoop
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: cyber_desk_k1
+  created: "2026-11-14T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [cyber, news, trade, cyber_desk]
+  classifications: ["geopolitics.topic:cyber"]
+  source_class: reporting
+  license_class: permissive_feed_unreviewed
+  access_class: public          # free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "13 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://cyberscoop.com/feed/"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor (the conservative default of the official-feed drafts).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

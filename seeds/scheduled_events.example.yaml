@@ -1,0 +1,35 @@
+# scheduled_events.example.yaml — the SCHEMA DOC for the calendar seed file.
+#
+# W11-F141. Copy to ``seeds/scheduled_events.yaml`` (gitignored — curated
+# DATA never ships, only the machinery does) and fill in the real rows.
+# Every row below is FICTIONAL.
+#
+#   title        required — what the event is, one line.
+#   starts_at    required — ISO-8601; a bare date means midnight UTC.
+#   ends_at      optional — for a ranged event (a summit, a strike window);
+#                absent = a point event.
+#   scope        optional, default "global" — a country/target code the
+#                event belongs to, or "global".
+#   subject_keys optional list — free-form keys a scoped read matches on.
+#   source_url   optional — where the claim came from.
+#   confidence   optional, default "confirmed" — one of
+#                confirmed | reported | tentative.
+#
+# Rows inserted by the loader carry provenance='seed'. Re-running is a
+# no-op per (title, starts_at); a cancelled event is retired in the DB
+# (retired_at), never deleted.
+
+events:
+  - title: "Klarvian parliamentary elections"
+    starts_at: "2027-03-14"
+    scope: "kv"
+    subject_keys: ["klarvia", "elections"]
+    source_url: "https://example.org/klarvia/election-date"
+    confidence: confirmed
+  - title: "Fictional Global Widget Standards Summit"
+    starts_at: "2027-04-02T09:00:00Z"
+    ends_at: "2027-04-04T17:00:00Z"
+    scope: "global"
+    subject_keys: ["standards", "widgets"]
+    source_url: "https://example.org/summits/widget-standards-2027"
+    confidence: reported

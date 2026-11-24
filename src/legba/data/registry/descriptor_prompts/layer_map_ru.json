@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:layer_map_ru": {
+      "source": "layer_map_ru.yaml",
+      "state": "reviewed"
+    }
+  }
+}

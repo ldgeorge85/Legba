@@ -74,7 +74,7 @@ method:
   # Validated against handler_options.ANALYST_KIND_OPTIONS['relationship_reifier'];
   # anything rejected lands on the run trace rather than failing silently.
   #
-  # THE ARITHMETIC (docs/TYPING_BAKEOFF_2026-08-03.md §5, §7.5). Cadence is
+  # THE ARITHMETIC (docs/history/TYPING_BAKEOFF.md §5, §7.5). Cadence is
   # unchanged at twice daily, so per-run × 2 = per-day:
   #
   #   candidates typed/day   600 × 2                = 1,200
@@ -98,8 +98,8 @@ method:
   # growing. Today's 80 calls/day produce ZERO edges — every one lands on a dead
   # row (§1) — so the comparison is 205 against 12, not against 80.
   options:
-    max_candidates: 600        # per RUN; ×2 runs/day = 1,200 candidates/day
-    batch_size: 12             # measured optimum — see §7.2/§7.3
+    max_candidates: 600        # per RUN cap; live runs find ~47 typeable each (10-01..10-03)
+    batch_size: 6              # the 09-24 live operating point (was 12 — see the 2026-10-04 note below)
     qualification_bar: 0.42    # ~12,005 qualifying of ~176,000 pending (6.9%)
     min_independent_sources: 2 # hard floor; 92.1% of the pool rests on one
   retry:
@@ -116,7 +116,13 @@ cadence:
   # GPU; running more often would add scheduling surface for no additional work,
   # because steady-state throughput is bounded by ~450 qualifying ARRIVALS/day,
   # not by how often the sweep looks.
-  fallback_schedule: "45 */12 * * *"
-  cooldown_seconds: 39600        # 11h (below the 12h interval)
+  # 2026-10-04 (W6 SPLIT-1 fold): the LIVE operating point since the 09-24 PUT is
+  # three runs an hour (72/day) with a 15-min cooldown and batch 6. Measured
+  # 10-01..10-03: ~3,400 typed/day, ~330 accepted edges/day (the acceptance rate
+  # is ~10%, not the 46.8% the paragraph above assumed), ~570 LLM calls/day on
+  # the $0 core plane. The designed 2-runs/day setting would cut edges/day by
+  # ~3×, so the tree now carries the live point; the arithmetic test pins it.
+  fallback_schedule: "5,25,45 * * * *"
+  cooldown_seconds: 900          # 15 min (below the 20-min interval)
 
 outputs: []

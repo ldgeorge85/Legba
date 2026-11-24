@@ -64,6 +64,10 @@ class FilterContext(BaseModel):
     # handlers that want to filter or restrict by language / geo.
     scope_geo: list[str] = Field(default_factory=list)
     scope_languages: list[str] = Field(default_factory=list)
+    # Lane N-O: the source's ``scope.source_class``. ``official`` + a declared
+    # ``scope_geo`` makes the geocoder treat the declared country as the
+    # issuing state (always in geo; text countries added beside it).
+    source_class: str | None = None
 
 
 # ---------------------------------------------------------------------------

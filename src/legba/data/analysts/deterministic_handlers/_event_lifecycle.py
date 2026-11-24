@@ -82,10 +82,89 @@ _SILENCE_HORIZON_BY_STATE = {
 #: true. A signal's ``linked_at`` is a property of its own link row, so it is
 #: uniform across that link's pairs and the FILTER partitions the distinct
 #: ids exactly as it partitioned the rows.
+#: N-Z (2026-11-14): the query below joined ``signal_event_links`` AND
+#: ``event_entity_links`` to the same event row, so every event produced
+#: (its signal links × its entity links) rows before the DISTINCT aggregates
+#: folded them back — 12.2 million rows for the 718 open events on live
+#: (one event alone 245,960), and the lifecycle phase took 59-80 s of the
+#: 60 s front share, so the signal slice processed nothing for hours.
+#: :data:`_OPEN_EVENT_STATS_SQL` picks the scan's rows first (filter, order,
+#: limit — none of which read an aggregate) and then aggregates each link
+#: table on its own in a LATERAL. Every output column is the same value: each
+#: aggregate is DISTINCT or a max, which the cross product never changed, and
+#: an event with no links still yields count 0 / max NULL / ``'{}'``. The old
+#: text is kept as :data:`_OPEN_EVENT_STATS_SQL_FANNED` for the equivalence
+#: test and was compared row for row against the new one on live.
 _OPEN_EVENT_STATS_SQL = """
+    WITH picked AS (
+        SELECT e.id, e.lifecycle_state, e.confidence, e.geo,
+               e.lifecycle_changed_at,
+               fresh.link_since_ledger, fresh.entity_link_since_ledger
+          FROM events e
+          LEFT JOIN LATERAL (
+              SELECT CASE WHEN e.lifecycle_state = 'resolved' THEN EXISTS (
+                         SELECT 1 FROM signal_event_links sl
+                          WHERE sl.event_id = e.id
+                            AND sl.created_at > COALESCE(
+                                    (SELECT max(ele.created_at)
+                                       FROM event_lifecycle_events ele
+                                      WHERE ele.event_id = e.id),
+                                    '-infinity'::timestamptz)
+                     ) ELSE FALSE END AS link_since_ledger,
+                     CASE WHEN e.lifecycle_state IN ('active','evolving')
+                          THEN EXISTS (
+                         SELECT 1 FROM event_entity_links el2
+                          WHERE el2.event_id = e.id
+                            AND el2.created_at > COALESCE(
+                                    (SELECT max(ele.created_at)
+                                       FROM event_lifecycle_events ele
+                                      WHERE ele.event_id = e.id),
+                                    '-infinity'::timestamptz)
+                     ) ELSE FALSE END AS entity_link_since_ledger
+          ) fresh ON TRUE
+         WHERE e.lifecycle_state <> 'resolved'
+            OR e.id = ANY($2::uuid[])
+            OR fresh.link_since_ledger
+         ORDER BY e.lifecycle_changed_at ASC, e.id ASC
+         LIMIT $3
+    )
+    SELECT p.id, p.lifecycle_state, p.confidence, p.geo,
+           s.signal_count, s.distinct_source_count, s.latest_linked_at,
+           s.link_rate_24h, s.baseline_rate_7d, s.signal_ids,
+           en.entity_ids,
+           p.link_since_ledger, p.entity_link_since_ledger
+      FROM picked p
+      LEFT JOIN LATERAL (
+          SELECT count(DISTINCT sel.signal_id)::int AS signal_count,
+                 count(DISTINCT NULLIF(sel.source_id, '')) FILTER (WHERE sel.source_class <> 'claim')::int
+                     AS distinct_source_count,
+                 max(sel.linked_at) AS latest_linked_at,
+                 count(DISTINCT sel.signal_id) FILTER (
+                     WHERE sel.linked_at >= $1::timestamptz - interval '24 hours'
+                 )::float / 24.0 AS link_rate_24h,
+                 count(DISTINCT sel.signal_id) FILTER (
+                     WHERE sel.linked_at >= $1::timestamptz - interval '7 days'
+                 )::float / 168.0 AS baseline_rate_7d,
+                 COALESCE(array_agg(DISTINCT sel.signal_id)
+                          FILTER (WHERE sel.signal_id IS NOT NULL),
+                          '{}'::uuid[]) AS signal_ids
+            FROM signal_event_links sel
+           WHERE sel.event_id = p.id
+      ) s ON TRUE
+      LEFT JOIN LATERAL (
+          SELECT COALESCE(array_agg(DISTINCT eel.entity_id)
+                          FILTER (WHERE eel.entity_id IS NOT NULL),
+                          '{}'::uuid[]) AS entity_ids
+            FROM event_entity_links eel
+           WHERE eel.event_id = p.id
+      ) en ON TRUE
+     ORDER BY p.lifecycle_changed_at ASC, p.id ASC
+"""
+
+_OPEN_EVENT_STATS_SQL_FANNED = """
     SELECT e.id, e.lifecycle_state, e.confidence, e.geo,
            count(DISTINCT sel.signal_id)::int AS signal_count,
-           count(DISTINCT NULLIF(sel.source_id, ''))::int
+           count(DISTINCT NULLIF(sel.source_id, '')) FILTER (WHERE sel.source_class <> 'claim')::int
                AS distinct_source_count,
            max(sel.linked_at) AS latest_linked_at,
            count(DISTINCT sel.signal_id) FILTER (

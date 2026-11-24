@@ -1,0 +1,1097 @@
+{
+ "source_gdelt_doc_api": [
+  {
+   "canonical_signal_id": null,
+   "canonical_url": "https://upstream.invalid/item/0",
+   "content_hash": "90fa375e7fc96a3a102e26b047711c0b8ee84161a5c0790af0b31150afbafa6f",
+   "derived_from": [],
+   "embedding_ref": null,
+   "entity_classes": [],
+   "geo": [],
+   "language": null,
+   "language_hint": "en",
+   "media_ref": null,
+   "media_ref_expires_at": null,
+   "mime_type": null,
+   "modality": "text",
+   "object_ref": null,
+   "owner_tenant": "default",
+   "payload": {
+    "_published_at_dt": "2026-11-13T11:30:00Z",
+    "external_id": "https://upstream.invalid/item/0",
+    "item": {
+     "extra": {
+      "place": "Strait of Hormuz",
+      "untouched": 0
+     },
+     "latitude": 26.4,
+     "longitude": 56.5,
+     "seendate": "2026-11-13T11:30:00Z",
+     "title": "  Title 0 — Attack  ",
+     "url": "https://upstream.invalid/item/0"
+    },
+    "link": "https://upstream.invalid/item/0",
+    "published_at": "2026-11-13T11:30:00+00:00",
+    "raw_body": "",
+    "source_url": "https://api.gdeltproject.org/api/v2/doc/doc?query=(conflict%20OR%20disaster%20OR%20protest)%20sourcelang:english&mode=artlist&format=json&maxrecords=100&timespan=1h",
+    "title": "Title 0 — Attack"
+   },
+   "produced_by_id": null,
+   "produced_by_kind": "source",
+   "raw_provenance": {
+    "fetch_kind": "json_api",
+    "kind": "json_api",
+    "request_url": "https://api.gdeltproject.org/api/v2/doc/doc?query=(conflict%20OR%20disaster%20OR%20protest)%20sourcelang:english&mode=artlist&format=json&maxrecords=100&timespan=1h",
+    "schema_version": "legba/source.json_api/1-0-0",
+    "url_template": "https://api.gdeltproject.org/api/v2/doc/doc?query=(conflict%20OR%20disaster%20OR%20protest)%20sourcelang:english&mode=artlist&format=json&maxrecords=100&timespan=1h",
+    "window_end": "2026-11-13T12:00:00+00:00",
+    "window_start": "2026-11-01T00:00:00+00:00"
+   },
+   "retention_class": "reference_only",
+   "schema_uri": "iglu:legba/signal/jsonschema/3-0-0",
+   "source_credibility": null,
+   "source_id": "source.source_gdelt_doc_api",
+   "source_version": "",
+   "tags": []
+  },
+  {
+   "canonical_signal_id": null,
+   "canonical_url": "https://upstream.invalid/item/1",
+   "content_hash": "67a7271ce9cdd3a3d432a4565defed8dc9bfb5bdd1b7e543889e819ecfb805fc",
+   "derived_from": [],
+   "embedding_ref": null,
+   "entity_classes": [],
+   "geo": [],
+   "language": null,
+   "language_hint": "en",
+   "media_ref": null,
+   "media_ref_expires_at": null,
+   "mime_type": null,
+   "modality": "text",
+   "object_ref": null,
+   "owner_tenant": "default",
+   "payload": {
+    "_published_at_dt": "2026-11-13T10:00:00Z",
+    "external_id": "https://upstream.invalid/item/1",
+    "item": {
+     "extra": {
+      "place": "Strait of Hormuz",
+      "untouched": 1
+     },
+     "latitude": 26.4,
+     "longitude": 56.5,
+     "seendate": "2026-11-13T10:00:00+00:00",
+     "title": "  Title 1 — Attack  ",
+     "url": "https://upstream.invalid/item/1"
+    },
+    "link": "https://upstream.invalid/item/1",
+    "published_at": "2026-11-13T10:00:00+00:00",
+    "raw_body": "",
+    "source_url": "https://api.gdeltproject.org/api/v2/doc/doc?query=(conflict%20OR%20disaster%20OR%20protest)%20sourcelang:english&mode=artlist&format=json&maxrecords=100&timespan=1h",
+    "title": "Title 1 — Attack"
+   },
+   "produced_by_id": null,
+   "produced_by_kind": "source",
+   "raw_provenance": {
+    "fetch_kind": "json_api",
+    "kind": "json_api",
+    "request_url": "https://api.gdeltproject.org/api/v2/doc/doc?query=(conflict%20OR%20disaster%20OR%20protest)%20sourcelang:english&mode=artlist&format=json&maxrecords=100&timespan=1h",
+    "schema_version": "legba/source.json_api/1-0-0",
+    "url_template": "https://api.gdeltproject.org/api/v2/doc/doc?query=(conflict%20OR%20disaster%20OR%20protest)%20sourcelang:english&mode=artlist&format=json&maxrecords=100&timespan=1h",
+    "window_end": "2026-11-13T12:00:00+00:00",
+    "window_start": "2026-11-01T00:00:00+00:00"
+   },
+   "retention_class": "reference_only",
+   "schema_uri": "iglu:legba/signal/jsonschema/3-0-0",
+   "source_credibility": null,
+   "source_id": "source.source_gdelt_doc_api",
+   "source_version": "",
+   "tags": []
+  },
+  {
+   "canonical_signal_id": null,
+   "canonical_url": "https://upstream.invalid/item/2",
+   "content_hash": "a2972f6dac6cc5219870b3fdcd244a946e0099e6f42cec8006d41079f578d1cd",
+   "derived_from": [],
+   "embedding_ref": null,
+   "entity_classes": [],
+   "geo": [],
+   "language": null,
+   "language_hint": "en",
+   "media_ref": null,
+   "media_ref_expires_at": null,
+   "mime_type": null,
+   "modality": "text",
+   "object_ref": null,
+   "owner_tenant": "default",
+   "payload": {
+    "_published_at_dt": "2026-11-13T09:15:00Z",
+    "external_id": "https://upstream.invalid/item/2",
+    "item": {
+     "extra": {
+      "place": "Strait of Hormuz",
+      "untouched": 2
+     },
+     "latitude": 26.4,
+     "longitude": 56.5,
+     "seendate": "20261113T091500Z",
+     "title": "  Title 2 — Attack  ",
+     "url": "https://upstream.invalid/item/2"
+    },
+    "link": "https://upstream.invalid/item/2",
+    "published_at": "2026-11-13T09:15:00+00:00",
+    "raw_body": "",
+    "source_url": "https://api.gdeltproject.org/api/v2/doc/doc?query=(conflict%20OR%20disaster%20OR%20protest)%20sourcelang:english&mode=artlist&format=json&maxrecords=100&timespan=1h",
+    "title": "Title 2 — Attack"
+   },
+   "produced_by_id": null,
+   "produced_by_kind": "source",
+   "raw_provenance": {
+    "fetch_kind": "json_api",
+    "kind": "json_api",
+    "request_url": "https://api.gdeltproject.org/api/v2/doc/doc?query=(conflict%20OR%20disaster%20OR%20protest)%20sourcelang:english&mode=artlist&format=json&maxrecords=100&timespan=1h",
+    "schema_version": "legba/source.json_api/1-0-0",
+    "url_template": "https://api.gdeltproject.org/api/v2/doc/doc?query=(conflict%20OR%20disaster%20OR%20protest)%20sourcelang:english&mode=artlist&format=json&maxrecords=100&timespan=1h",
+    "window_end": "2026-11-13T12:00:00+00:00",
+    "window_start": "2026-11-01T00:00:00+00:00"
+   },
+   "retention_class": "reference_only",
+   "schema_uri": "iglu:legba/signal/jsonschema/3-0-0",
+   "source_credibility": null,
+   "source_id": "source.source_gdelt_doc_api",
+   "source_version": "",
+   "tags": []
+  },
+  {
+   "canonical_signal_id": null,
+   "canonical_url": null,
+   "content_hash": "6273785a3af1dddea1f2cc3062b576be5f132ea4d0480b377dd77a0ff1a2fe3e",
+   "derived_from": [],
+   "embedding_ref": null,
+   "entity_classes": [],
+   "geo": [],
+   "language": null,
+   "language_hint": "en",
+   "media_ref": null,
+   "media_ref_expires_at": null,
+   "mime_type": null,
+   "modality": "text",
+   "object_ref": null,
+   "owner_tenant": "default",
+   "payload": {
+    "external_id": "d66706fdfd6583fa1eaabfca",
+    "item": {
+     "other": "only"
+    },
+    "link": "",
+    "published_at": null,
+    "raw_body": "",
+    "source_url": "https://api.gdeltproject.org/api/v2/doc/doc?query=(conflict%20OR%20disaster%20OR%20protest)%20sourcelang:english&mode=artlist&format=json&maxrecords=100&timespan=1h",
+    "title": ""
+   },
+   "produced_by_id": null,
+   "produced_by_kind": "source",
+   "raw_provenance": {
+    "fetch_kind": "json_api",
+    "kind": "json_api",
+    "request_url": "https://api.gdeltproject.org/api/v2/doc/doc?query=(conflict%20OR%20disaster%20OR%20protest)%20sourcelang:english&mode=artlist&format=json&maxrecords=100&timespan=1h",
+    "schema_version": "legba/source.json_api/1-0-0",
+    "url_template": "https://api.gdeltproject.org/api/v2/doc/doc?query=(conflict%20OR%20disaster%20OR%20protest)%20sourcelang:english&mode=artlist&format=json&maxrecords=100&timespan=1h",
+    "window_end": "2026-11-13T12:00:00+00:00",
+    "window_start": "2026-11-01T00:00:00+00:00"
+   },
+   "retention_class": "reference_only",
+   "schema_uri": "iglu:legba/signal/jsonschema/3-0-0",
+   "source_credibility": null,
+   "source_id": "source.source_gdelt_doc_api",
+   "source_version": "",
+   "tags": []
+  }
+ ],
+ "source_isw": [
+  {
+   "canonical_signal_id": null,
+   "canonical_url": "https://upstream.invalid/item/0",
+   "content_hash": "c4a291ce69ea61da14d03e553f7f00c85bc4c2936d66154abc779a7c30cd26bf",
+   "derived_from": [],
+   "embedding_ref": null,
+   "entity_classes": [],
+   "geo": [],
+   "language": null,
+   "language_hint": "en",
+   "media_ref": null,
+   "media_ref_expires_at": null,
+   "mime_type": null,
+   "modality": "text",
+   "object_ref": null,
+   "owner_tenant": "default",
+   "payload": {
+    "_published_at_dt": "2026-11-13T11:30:00Z",
+    "external_id": "id-0",
+    "item": {
+     "date_gmt": "2026-11-13T11:30:00Z",
+     "excerpt": {
+      "rendered": "Body 0: vessel reported an incident."
+     },
+     "extra": {
+      "place": "Strait of Hormuz",
+      "untouched": 0
+     },
+     "id": "id-0",
+     "latitude": 26.4,
+     "link": "https://upstream.invalid/item/0",
+     "longitude": 56.5,
+     "title": {
+      "rendered": "  Title 0 — Attack  "
+     }
+    },
+    "link": "https://upstream.invalid/item/0",
+    "published_at": "2026-11-13T11:30:00+00:00",
+    "raw_body": "Body 0: vessel reported an incident.",
+    "source_url": "https://www.understandingwar.org/wp-json/wp/v2/posts?per_page=20&_fields=id,date,date_gmt,link,title,excerpt&after=2026-11-01T00%3A00%3A00%2B00%3A00",
+    "title": "Title 0 — Attack"
+   },
+   "produced_by_id": null,
+   "produced_by_kind": "source",
+   "raw_provenance": {
+    "fetch_kind": "json_api",
+    "kind": "json_api",
+    "request_url": "https://www.understandingwar.org/wp-json/wp/v2/posts?per_page=20&_fields=id,date,date_gmt,link,title,excerpt&after=2026-11-01T00%3A00%3A00%2B00%3A00",
+    "schema_version": "legba/source.json_api/1-0-0",
+    "url_template": "https://www.understandingwar.org/wp-json/wp/v2/posts?per_page=20&_fields=id,date,date_gmt,link,title,excerpt&after={window_start_iso}",
+    "window_end": "2026-11-13T12:00:00+00:00",
+    "window_start": "2026-11-01T00:00:00+00:00"
+   },
+   "retention_class": "reference_only",
+   "schema_uri": "iglu:legba/signal/jsonschema/3-0-0",
+   "source_credibility": null,
+   "source_id": "source.source_isw",
+   "source_version": "",
+   "tags": []
+  },
+  {
+   "canonical_signal_id": null,
+   "canonical_url": "https://upstream.invalid/item/1",
+   "content_hash": "60db7dd6efc0c1e0971ec5caefcd34f5fe3f5151fd646e18882bf22f4068e0c4",
+   "derived_from": [],
+   "embedding_ref": null,
+   "entity_classes": [],
+   "geo": [],
+   "language": null,
+   "language_hint": "en",
+   "media_ref": null,
+   "media_ref_expires_at": null,
+   "mime_type": null,
+   "modality": "text",
+   "object_ref": null,
+   "owner_tenant": "default",
+   "payload": {
+    "_published_at_dt": "2026-11-13T10:00:00Z",
+    "external_id": "1001",
+    "item": {
+     "date_gmt": "2026-11-13T10:00:00+00:00",
+     "excerpt": {
+      "rendered": "Body 1: vessel reported an incident."
+     },
+     "extra": {
+      "place": "Strait of Hormuz",
+      "untouched": 1
+     },
+     "id": 1001,
+     "latitude": 26.4,
+     "link": "https://upstream.invalid/item/1",
+     "longitude": 56.5,
+     "title": {
+      "rendered": "  Title 1 — Attack  "
+     }
+    },
+    "link": "https://upstream.invalid/item/1",
+    "published_at": "2026-11-13T10:00:00+00:00",
+    "raw_body": "Body 1: vessel reported an incident.",
+    "source_url": "https://www.understandingwar.org/wp-json/wp/v2/posts?per_page=20&_fields=id,date,date_gmt,link,title,excerpt&after=2026-11-01T00%3A00%3A00%2B00%3A00",
+    "title": "Title 1 — Attack"
+   },
+   "produced_by_id": null,
+   "produced_by_kind": "source",
+   "raw_provenance": {
+    "fetch_kind": "json_api",
+    "kind": "json_api",
+    "request_url": "https://www.understandingwar.org/wp-json/wp/v2/posts?per_page=20&_fields=id,date,date_gmt,link,title,excerpt&after=2026-11-01T00%3A00%3A00%2B00%3A00",
+    "schema_version": "legba/source.json_api/1-0-0",
+    "url_template": "https://www.understandingwar.org/wp-json/wp/v2/posts?per_page=20&_fields=id,date,date_gmt,link,title,excerpt&after={window_start_iso}",
+    "window_end": "2026-11-13T12:00:00+00:00",
+    "window_start": "2026-11-01T00:00:00+00:00"
+   },
+   "retention_class": "reference_only",
+   "schema_uri": "iglu:legba/signal/jsonschema/3-0-0",
+   "source_credibility": null,
+   "source_id": "source.source_isw",
+   "source_version": "",
+   "tags": []
+  },
+  {
+   "canonical_signal_id": null,
+   "canonical_url": "https://upstream.invalid/item/2",
+   "content_hash": "34dd98db9f3e98670537231cf8b83371838f291c7900ffe832fa61f38cfdc26f",
+   "derived_from": [],
+   "embedding_ref": null,
+   "entity_classes": [],
+   "geo": [],
+   "language": null,
+   "language_hint": "en",
+   "media_ref": null,
+   "media_ref_expires_at": null,
+   "mime_type": null,
+   "modality": "text",
+   "object_ref": null,
+   "owner_tenant": "default",
+   "payload": {
+    "_published_at_dt": "2026-11-13T09:15:00Z",
+    "external_id": "id-2",
+    "item": {
+     "date_gmt": "20261113T091500Z",
+     "excerpt": {
+      "rendered": "Body 2: vessel reported an incident."
+     },
+     "extra": {
+      "place": "Strait of Hormuz",
+      "untouched": 2
+     },
+     "id": "id-2",
+     "latitude": 26.4,
+     "link": "https://upstream.invalid/item/2",
+     "longitude": 56.5,
+     "title": {
+      "rendered": "  Title 2 — Attack  "
+     }
+    },
+    "link": "https://upstream.invalid/item/2",
+    "published_at": "2026-11-13T09:15:00+00:00",
+    "raw_body": "Body 2: vessel reported an incident.",
+    "source_url": "https://www.understandingwar.org/wp-json/wp/v2/posts?per_page=20&_fields=id,date,date_gmt,link,title,excerpt&after=2026-11-01T00%3A00%3A00%2B00%3A00",
+    "title": "Title 2 — Attack"
+   },
+   "produced_by_id": null,
+   "produced_by_kind": "source",
+   "raw_provenance": {
+    "fetch_kind": "json_api",
+    "kind": "json_api",
+    "request_url": "https://www.understandingwar.org/wp-json/wp/v2/posts?per_page=20&_fields=id,date,date_gmt,link,title,excerpt&after=2026-11-01T00%3A00%3A00%2B00%3A00",
+    "schema_version": "legba/source.json_api/1-0-0",
+    "url_template": "https://www.understandingwar.org/wp-json/wp/v2/posts?per_page=20&_fields=id,date,date_gmt,link,title,excerpt&after={window_start_iso}",
+    "window_end": "2026-11-13T12:00:00+00:00",
+    "window_start": "2026-11-01T00:00:00+00:00"
+   },
+   "retention_class": "reference_only",
+   "schema_uri": "iglu:legba/signal/jsonschema/3-0-0",
+   "source_credibility": null,
+   "source_id": "source.source_isw",
+   "source_version": "",
+   "tags": []
+  },
+  {
+   "canonical_signal_id": null,
+   "canonical_url": null,
+   "content_hash": "6273785a3af1dddea1f2cc3062b576be5f132ea4d0480b377dd77a0ff1a2fe3e",
+   "derived_from": [],
+   "embedding_ref": null,
+   "entity_classes": [],
+   "geo": [],
+   "language": null,
+   "language_hint": "en",
+   "media_ref": null,
+   "media_ref_expires_at": null,
+   "mime_type": null,
+   "modality": "text",
+   "object_ref": null,
+   "owner_tenant": "default",
+   "payload": {
+    "external_id": "d66706fdfd6583fa1eaabfca",
+    "item": {
+     "other": "only"
+    },
+    "link": "",
+    "published_at": null,
+    "raw_body": "",
+    "source_url": "https://www.understandingwar.org/wp-json/wp/v2/posts?per_page=20&_fields=id,date,date_gmt,link,title,excerpt&after=2026-11-01T00%3A00%3A00%2B00%3A00",
+    "title": ""
+   },
+   "produced_by_id": null,
+   "produced_by_kind": "source",
+   "raw_provenance": {
+    "fetch_kind": "json_api",
+    "kind": "json_api",
+    "request_url": "https://www.understandingwar.org/wp-json/wp/v2/posts?per_page=20&_fields=id,date,date_gmt,link,title,excerpt&after=2026-11-01T00%3A00%3A00%2B00%3A00",
+    "schema_version": "legba/source.json_api/1-0-0",
+    "url_template": "https://www.understandingwar.org/wp-json/wp/v2/posts?per_page=20&_fields=id,date,date_gmt,link,title,excerpt&after={window_start_iso}",
+    "window_end": "2026-11-13T12:00:00+00:00",
+    "window_start": "2026-11-01T00:00:00+00:00"
+   },
+   "retention_class": "reference_only",
+   "schema_uri": "iglu:legba/signal/jsonschema/3-0-0",
+   "source_credibility": null,
+   "source_id": "source.source_isw",
+   "source_version": "",
+   "tags": []
+  }
+ ],
+ "source_nhk_world": [
+  {
+   "canonical_signal_id": null,
+   "canonical_url": null,
+   "content_hash": "c4a291ce69ea61da14d03e553f7f00c85bc4c2936d66154abc779a7c30cd26bf",
+   "derived_from": [],
+   "embedding_ref": null,
+   "entity_classes": [],
+   "geo": [
+    "JP"
+   ],
+   "language": null,
+   "language_hint": "en",
+   "media_ref": null,
+   "media_ref_expires_at": null,
+   "mime_type": null,
+   "modality": "text",
+   "object_ref": null,
+   "owner_tenant": "default",
+   "payload": {
+    "_published_at_dt": "2026-11-13T11:30:00Z",
+    "external_id": "id-0",
+    "item": {
+     "description": "Body 0: vessel reported an incident.",
+     "extra": {
+      "place": "Strait of Hormuz",
+      "untouched": 0
+     },
+     "id": "id-0",
+     "latitude": 26.4,
+     "longitude": 56.5,
+     "pubDate": "2026-11-13T11:30:00Z",
+     "title": "  Title 0 — Attack  "
+    },
+    "link": "",
+    "published_at": "2026-11-13T11:30:00+00:00",
+    "raw_body": "Body 0: vessel reported an incident.",
+    "source_url": "https://www3.nhk.or.jp/nhkworld/data/en/news/all.json",
+    "title": "Title 0 — Attack"
+   },
+   "produced_by_id": null,
+   "produced_by_kind": "source",
+   "raw_provenance": {
+    "fetch_kind": "json_api",
+    "kind": "json_api",
+    "request_url": "https://www3.nhk.or.jp/nhkworld/data/en/news/all.json",
+    "schema_version": "legba/source.json_api/1-0-0",
+    "url_template": "https://www3.nhk.or.jp/nhkworld/data/en/news/all.json",
+    "window_end": "2026-11-13T12:00:00+00:00",
+    "window_start": "2026-11-01T00:00:00+00:00"
+   },
+   "retention_class": "reference_only",
+   "schema_uri": "iglu:legba/signal/jsonschema/3-0-0",
+   "source_credibility": null,
+   "source_id": "source.source_nhk_world",
+   "source_version": "",
+   "tags": []
+  },
+  {
+   "canonical_signal_id": null,
+   "canonical_url": null,
+   "content_hash": "60db7dd6efc0c1e0971ec5caefcd34f5fe3f5151fd646e18882bf22f4068e0c4",
+   "derived_from": [],
+   "embedding_ref": null,
+   "entity_classes": [],
+   "geo": [
+    "JP"
+   ],
+   "language": null,
+   "language_hint": "en",
+   "media_ref": null,
+   "media_ref_expires_at": null,
+   "mime_type": null,
+   "modality": "text",
+   "object_ref": null,
+   "owner_tenant": "default",
+   "payload": {
+    "_published_at_dt": "2026-11-13T10:00:00Z",
+    "external_id": "1001",
+    "item": {
+     "description": "Body 1: vessel reported an incident.",
+     "extra": {
+      "place": "Strait of Hormuz",
+      "untouched": 1
+     },
+     "id": 1001,
+     "latitude": 26.4,
+     "longitude": 56.5,
+     "pubDate": "2026-11-13T10:00:00+00:00",
+     "title": "  Title 1 — Attack  "
+    },
+    "link": "",
+    "published_at": "2026-11-13T10:00:00+00:00",
+    "raw_body": "Body 1: vessel reported an incident.",
+    "source_url": "https://www3.nhk.or.jp/nhkworld/data/en/news/all.json",
+    "title": "Title 1 — Attack"
+   },
+   "produced_by_id": null,
+   "produced_by_kind": "source",
+   "raw_provenance": {
+    "fetch_kind": "json_api",
+    "kind": "json_api",
+    "request_url": "https://www3.nhk.or.jp/nhkworld/data/en/news/all.json",
+    "schema_version": "legba/source.json_api/1-0-0",
+    "url_template": "https://www3.nhk.or.jp/nhkworld/data/en/news/all.json",
+    "window_end": "2026-11-13T12:00:00+00:00",
+    "window_start": "2026-11-01T00:00:00+00:00"
+   },
+   "retention_class": "reference_only",
+   "schema_uri": "iglu:legba/signal/jsonschema/3-0-0",
+   "source_credibility": null,
+   "source_id": "source.source_nhk_world",
+   "source_version": "",
+   "tags": []
+  },
+  {
+   "canonical_signal_id": null,
+   "canonical_url": null,
+   "content_hash": "34dd98db9f3e98670537231cf8b83371838f291c7900ffe832fa61f38cfdc26f",
+   "derived_from": [],
+   "embedding_ref": null,
+   "entity_classes": [],
+   "geo": [
+    "JP"
+   ],
+   "language": null,
+   "language_hint": "en",
+   "media_ref": null,
+   "media_ref_expires_at": null,
+   "mime_type": null,
+   "modality": "text",
+   "object_ref": null,
+   "owner_tenant": "default",
+   "payload": {
+    "_published_at_dt": "2026-11-13T09:15:00Z",
+    "external_id": "id-2",
+    "item": {
+     "description": "Body 2: vessel reported an incident.",
+     "extra": {
+      "place": "Strait of Hormuz",
+      "untouched": 2
+     },
+     "id": "id-2",
+     "latitude": 26.4,
+     "longitude": 56.5,
+     "pubDate": "20261113T091500Z",
+     "title": "  Title 2 — Attack  "
+    },
+    "link": "",
+    "published_at": "2026-11-13T09:15:00+00:00",
+    "raw_body": "Body 2: vessel reported an incident.",
+    "source_url": "https://www3.nhk.or.jp/nhkworld/data/en/news/all.json",
+    "title": "Title 2 — Attack"
+   },
+   "produced_by_id": null,
+   "produced_by_kind": "source",
+   "raw_provenance": {
+    "fetch_kind": "json_api",
+    "kind": "json_api",
+    "request_url": "https://www3.nhk.or.jp/nhkworld/data/en/news/all.json",
+    "schema_version": "legba/source.json_api/1-0-0",
+    "url_template": "https://www3.nhk.or.jp/nhkworld/data/en/news/all.json",
+    "window_end": "2026-11-13T12:00:00+00:00",
+    "window_start": "2026-11-01T00:00:00+00:00"
+   },
+   "retention_class": "reference_only",
+   "schema_uri": "iglu:legba/signal/jsonschema/3-0-0",
+   "source_credibility": null,
+   "source_id": "source.source_nhk_world",
+   "source_version": "",
+   "tags": []
+  },
+  {
+   "canonical_signal_id": null,
+   "canonical_url": null,
+   "content_hash": "6273785a3af1dddea1f2cc3062b576be5f132ea4d0480b377dd77a0ff1a2fe3e",
+   "derived_from": [],
+   "embedding_ref": null,
+   "entity_classes": [],
+   "geo": [
+    "JP"
+   ],
+   "language": null,
+   "language_hint": "en",
+   "media_ref": null,
+   "media_ref_expires_at": null,
+   "mime_type": null,
+   "modality": "text",
+   "object_ref": null,
+   "owner_tenant": "default",
+   "payload": {
+    "external_id": "d66706fdfd6583fa1eaabfca",
+    "item": {
+     "other": "only"
+    },
+    "link": "",
+    "published_at": null,
+    "raw_body": "",
+    "source_url": "https://www3.nhk.or.jp/nhkworld/data/en/news/all.json",
+    "title": ""
+   },
+   "produced_by_id": null,
+   "produced_by_kind": "source",
+   "raw_provenance": {
+    "fetch_kind": "json_api",
+    "kind": "json_api",
+    "request_url": "https://www3.nhk.or.jp/nhkworld/data/en/news/all.json",
+    "schema_version": "legba/source.json_api/1-0-0",
+    "url_template": "https://www3.nhk.or.jp/nhkworld/data/en/news/all.json",
+    "window_end": "2026-11-13T12:00:00+00:00",
+    "window_start": "2026-11-01T00:00:00+00:00"
+   },
+   "retention_class": "reference_only",
+   "schema_uri": "iglu:legba/signal/jsonschema/3-0-0",
+   "source_credibility": null,
+   "source_id": "source.source_nhk_world",
+   "source_version": "",
+   "tags": []
+  }
+ ],
+ "source_reliefweb_api": [
+  {
+   "canonical_signal_id": null,
+   "canonical_url": "https://upstream.invalid/item/0",
+   "content_hash": "c4a291ce69ea61da14d03e553f7f00c85bc4c2936d66154abc779a7c30cd26bf",
+   "derived_from": [],
+   "embedding_ref": null,
+   "entity_classes": [],
+   "geo": [],
+   "language": null,
+   "language_hint": "en",
+   "media_ref": null,
+   "media_ref_expires_at": null,
+   "mime_type": null,
+   "modality": "text",
+   "object_ref": null,
+   "owner_tenant": "default",
+   "payload": {
+    "_published_at_dt": "2026-11-13T11:30:00Z",
+    "external_id": "id-0",
+    "item": {
+     "extra": {
+      "place": "Strait of Hormuz",
+      "untouched": 0
+     },
+     "fields": {
+      "body": "Body 0: vessel reported an incident.",
+      "date": {
+       "created": "2026-11-13T11:30:00Z"
+      },
+      "title": "  Title 0 — Attack  ",
+      "url": "https://upstream.invalid/item/0"
+     },
+     "id": "id-0",
+     "latitude": 26.4,
+     "longitude": 56.5
+    },
+    "link": "https://upstream.invalid/item/0",
+    "published_at": "2026-11-13T11:30:00+00:00",
+    "raw_body": "Body 0: vessel reported an incident.",
+    "source_url": "https://api.reliefweb.int/v2/reports?appname=legba&limit=50&sort[]=date.created:desc&fields[include][]=title&fields[include][]=url&fields[include][]=date.created&fields[include][]=body&filter[field]=date.created&filter[value][from]=2026-11-01T00%3A00%3A00%2B00%3A00",
+    "title": "Title 0 — Attack"
+   },
+   "produced_by_id": null,
+   "produced_by_kind": "source",
+   "raw_provenance": {
+    "fetch_kind": "json_api",
+    "kind": "json_api",
+    "request_url": "https://api.reliefweb.int/v2/reports?appname=legba&limit=50&sort[]=date.created:desc&fields[include][]=title&fields[include][]=url&fields[include][]=date.created&fields[include][]=body&filter[field]=date.created&filter[value][from]=2026-11-01T00%3A00%3A00%2B00%3A00",
+    "schema_version": "legba/source.json_api/1-0-0",
+    "url_template": "https://api.reliefweb.int/v2/reports?appname=legba&limit=50&sort[]=date.created:desc&fields[include][]=title&fields[include][]=url&fields[include][]=date.created&fields[include][]=body&filter[field]=date.created&filter[value][from]={window_start_iso}",
+    "window_end": "2026-11-13T12:00:00+00:00",
+    "window_start": "2026-11-01T00:00:00+00:00"
+   },
+   "retention_class": "reference_only",
+   "schema_uri": "iglu:legba/signal/jsonschema/3-0-0",
+   "source_credibility": null,
+   "source_id": "source.source_reliefweb_api",
+   "source_version": "",
+   "tags": []
+  },
+  {
+   "canonical_signal_id": null,
+   "canonical_url": "https://upstream.invalid/item/1",
+   "content_hash": "60db7dd6efc0c1e0971ec5caefcd34f5fe3f5151fd646e18882bf22f4068e0c4",
+   "derived_from": [],
+   "embedding_ref": null,
+   "entity_classes": [],
+   "geo": [],
+   "language": null,
+   "language_hint": "en",
+   "media_ref": null,
+   "media_ref_expires_at": null,
+   "mime_type": null,
+   "modality": "text",
+   "object_ref": null,
+   "owner_tenant": "default",
+   "payload": {
+    "_published_at_dt": "2026-11-13T10:00:00Z",
+    "external_id": "1001",
+    "item": {
+     "extra": {
+      "place": "Strait of Hormuz",
+      "untouched": 1
+     },
+     "fields": {
+      "body": "Body 1: vessel reported an incident.",
+      "date": {
+       "created": "2026-11-13T10:00:00+00:00"
+      },
+      "title": "  Title 1 — Attack  ",
+      "url": "https://upstream.invalid/item/1"
+     },
+     "id": 1001,
+     "latitude": 26.4,
+     "longitude": 56.5
+    },
+    "link": "https://upstream.invalid/item/1",
+    "published_at": "2026-11-13T10:00:00+00:00",
+    "raw_body": "Body 1: vessel reported an incident.",
+    "source_url": "https://api.reliefweb.int/v2/reports?appname=legba&limit=50&sort[]=date.created:desc&fields[include][]=title&fields[include][]=url&fields[include][]=date.created&fields[include][]=body&filter[field]=date.created&filter[value][from]=2026-11-01T00%3A00%3A00%2B00%3A00",
+    "title": "Title 1 — Attack"
+   },
+   "produced_by_id": null,
+   "produced_by_kind": "source",
+   "raw_provenance": {
+    "fetch_kind": "json_api",
+    "kind": "json_api",
+    "request_url": "https://api.reliefweb.int/v2/reports?appname=legba&limit=50&sort[]=date.created:desc&fields[include][]=title&fields[include][]=url&fields[include][]=date.created&fields[include][]=body&filter[field]=date.created&filter[value][from]=2026-11-01T00%3A00%3A00%2B00%3A00",
+    "schema_version": "legba/source.json_api/1-0-0",
+    "url_template": "https://api.reliefweb.int/v2/reports?appname=legba&limit=50&sort[]=date.created:desc&fields[include][]=title&fields[include][]=url&fields[include][]=date.created&fields[include][]=body&filter[field]=date.created&filter[value][from]={window_start_iso}",
+    "window_end": "2026-11-13T12:00:00+00:00",
+    "window_start": "2026-11-01T00:00:00+00:00"
+   },
+   "retention_class": "reference_only",
+   "schema_uri": "iglu:legba/signal/jsonschema/3-0-0",
+   "source_credibility": null,
+   "source_id": "source.source_reliefweb_api",
+   "source_version": "",
+   "tags": []
+  },
+  {
+   "canonical_signal_id": null,
+   "canonical_url": "https://upstream.invalid/item/2",
+   "content_hash": "34dd98db9f3e98670537231cf8b83371838f291c7900ffe832fa61f38cfdc26f",
+   "derived_from": [],
+   "embedding_ref": null,
+   "entity_classes": [],
+   "geo": [],
+   "language": null,
+   "language_hint": "en",
+   "media_ref": null,
+   "media_ref_expires_at": null,
+   "mime_type": null,
+   "modality": "text",
+   "object_ref": null,
+   "owner_tenant": "default",
+   "payload": {
+    "_published_at_dt": "2026-11-13T09:15:00Z",
+    "external_id": "id-2",
+    "item": {
+     "extra": {
+      "place": "Strait of Hormuz",
+      "untouched": 2
+     },
+     "fields": {
+      "body": "Body 2: vessel reported an incident.",
+      "date": {
+       "created": "20261113T091500Z"
+      },
+      "title": "  Title 2 — Attack  ",
+      "url": "https://upstream.invalid/item/2"
+     },
+     "id": "id-2",
+     "latitude": 26.4,
+     "longitude": 56.5
+    },
+    "link": "https://upstream.invalid/item/2",
+    "published_at": "2026-11-13T09:15:00+00:00",
+    "raw_body": "Body 2: vessel reported an incident.",
+    "source_url": "https://api.reliefweb.int/v2/reports?appname=legba&limit=50&sort[]=date.created:desc&fields[include][]=title&fields[include][]=url&fields[include][]=date.created&fields[include][]=body&filter[field]=date.created&filter[value][from]=2026-11-01T00%3A00%3A00%2B00%3A00",
+    "title": "Title 2 — Attack"
+   },
+   "produced_by_id": null,
+   "produced_by_kind": "source",
+   "raw_provenance": {
+    "fetch_kind": "json_api",
+    "kind": "json_api",
+    "request_url": "https://api.reliefweb.int/v2/reports?appname=legba&limit=50&sort[]=date.created:desc&fields[include][]=title&fields[include][]=url&fields[include][]=date.created&fields[include][]=body&filter[field]=date.created&filter[value][from]=2026-11-01T00%3A00%3A00%2B00%3A00",
+    "schema_version": "legba/source.json_api/1-0-0",
+    "url_template": "https://api.reliefweb.int/v2/reports?appname=legba&limit=50&sort[]=date.created:desc&fields[include][]=title&fields[include][]=url&fields[include][]=date.created&fields[include][]=body&filter[field]=date.created&filter[value][from]={window_start_iso}",
+    "window_end": "2026-11-13T12:00:00+00:00",
+    "window_start": "2026-11-01T00:00:00+00:00"
+   },
+   "retention_class": "reference_only",
+   "schema_uri": "iglu:legba/signal/jsonschema/3-0-0",
+   "source_credibility": null,
+   "source_id": "source.source_reliefweb_api",
+   "source_version": "",
+   "tags": []
+  },
+  {
+   "canonical_signal_id": null,
+   "canonical_url": null,
+   "content_hash": "6273785a3af1dddea1f2cc3062b576be5f132ea4d0480b377dd77a0ff1a2fe3e",
+   "derived_from": [],
+   "embedding_ref": null,
+   "entity_classes": [],
+   "geo": [],
+   "language": null,
+   "language_hint": "en",
+   "media_ref": null,
+   "media_ref_expires_at": null,
+   "mime_type": null,
+   "modality": "text",
+   "object_ref": null,
+   "owner_tenant": "default",
+   "payload": {
+    "external_id": "d66706fdfd6583fa1eaabfca",
+    "item": {
+     "other": "only"
+    },
+    "link": "",
+    "published_at": null,
+    "raw_body": "",
+    "source_url": "https://api.reliefweb.int/v2/reports?appname=legba&limit=50&sort[]=date.created:desc&fields[include][]=title&fields[include][]=url&fields[include][]=date.created&fields[include][]=body&filter[field]=date.created&filter[value][from]=2026-11-01T00%3A00%3A00%2B00%3A00",
+    "title": ""
+   },
+   "produced_by_id": null,
+   "produced_by_kind": "source",
+   "raw_provenance": {
+    "fetch_kind": "json_api",
+    "kind": "json_api",
+    "request_url": "https://api.reliefweb.int/v2/reports?appname=legba&limit=50&sort[]=date.created:desc&fields[include][]=title&fields[include][]=url&fields[include][]=date.created&fields[include][]=body&filter[field]=date.created&filter[value][from]=2026-11-01T00%3A00%3A00%2B00%3A00",
+    "schema_version": "legba/source.json_api/1-0-0",
+    "url_template": "https://api.reliefweb.int/v2/reports?appname=legba&limit=50&sort[]=date.created:desc&fields[include][]=title&fields[include][]=url&fields[include][]=date.created&fields[include][]=body&filter[field]=date.created&filter[value][from]={window_start_iso}",
+    "window_end": "2026-11-13T12:00:00+00:00",
+    "window_start": "2026-11-01T00:00:00+00:00"
+   },
+   "retention_class": "reference_only",
+   "schema_uri": "iglu:legba/signal/jsonschema/3-0-0",
+   "source_credibility": null,
+   "source_id": "source.source_reliefweb_api",
+   "source_version": "",
+   "tags": []
+  }
+ ],
+ "source_who_disease_outbreak_news": [
+  {
+   "canonical_signal_id": null,
+   "canonical_url": null,
+   "content_hash": "c4a291ce69ea61da14d03e553f7f00c85bc4c2936d66154abc779a7c30cd26bf",
+   "derived_from": [],
+   "embedding_ref": null,
+   "entity_classes": [],
+   "geo": [],
+   "language": null,
+   "language_hint": "en",
+   "media_ref": null,
+   "media_ref_expires_at": null,
+   "mime_type": null,
+   "modality": "text",
+   "object_ref": null,
+   "owner_tenant": "default",
+   "payload": {
+    "_published_at_dt": "2026-11-13T11:30:00Z",
+    "external_id": "id-0",
+    "item": {
+     "Id": "id-0",
+     "PublicationDateAndTime": "2026-11-13T11:30:00Z",
+     "Summary": "Body 0: vessel reported an incident.",
+     "Title": "  Title 0 — Attack  ",
+     "extra": {
+      "place": "Strait of Hormuz",
+      "untouched": 0
+     },
+     "latitude": 26.4,
+     "longitude": 56.5
+    },
+    "link": "",
+    "published_at": "2026-11-13T11:30:00+00:00",
+    "raw_body": "Body 0: vessel reported an incident.",
+    "source_url": "https://www.who.int/api/news/diseaseoutbreaknews?%24top=50&%24orderby=PublicationDateAndTime%20desc",
+    "title": "Title 0 — Attack"
+   },
+   "produced_by_id": null,
+   "produced_by_kind": "source",
+   "raw_provenance": {
+    "fetch_kind": "json_api",
+    "kind": "json_api",
+    "request_url": "https://www.who.int/api/news/diseaseoutbreaknews?%24top=50&%24orderby=PublicationDateAndTime%20desc",
+    "schema_version": "legba/source.json_api/1-0-0",
+    "url_template": "https://www.who.int/api/news/diseaseoutbreaknews?%24top=50&%24orderby=PublicationDateAndTime%20desc",
+    "window_end": "2026-11-13T12:00:00+00:00",
+    "window_start": "2026-11-01T00:00:00+00:00"
+   },
+   "retention_class": "reference_only",
+   "schema_uri": "iglu:legba/signal/jsonschema/3-0-0",
+   "source_credibility": null,
+   "source_id": "source.source_who_disease_outbreak_news",
+   "source_version": "",
+   "tags": []
+  },
+  {
+   "canonical_signal_id": null,
+   "canonical_url": null,
+   "content_hash": "60db7dd6efc0c1e0971ec5caefcd34f5fe3f5151fd646e18882bf22f4068e0c4",
+   "derived_from": [],
+   "embedding_ref": null,
+   "entity_classes": [],
+   "geo": [],
+   "language": null,
+   "language_hint": "en",
+   "media_ref": null,
+   "media_ref_expires_at": null,
+   "mime_type": null,
+   "modality": "text",
+   "object_ref": null,
+   "owner_tenant": "default",
+   "payload": {
+    "_published_at_dt": "2026-11-13T10:00:00Z",
+    "external_id": "1001",
+    "item": {
+     "Id": 1001,
+     "PublicationDateAndTime": "2026-11-13T10:00:00+00:00",
+     "Summary": "Body 1: vessel reported an incident.",
+     "Title": "  Title 1 — Attack  ",
+     "extra": {
+      "place": "Strait of Hormuz",
+      "untouched": 1
+     },
+     "latitude": 26.4,
+     "longitude": 56.5
+    },
+    "link": "",
+    "published_at": "2026-11-13T10:00:00+00:00",
+    "raw_body": "Body 1: vessel reported an incident.",
+    "source_url": "https://www.who.int/api/news/diseaseoutbreaknews?%24top=50&%24orderby=PublicationDateAndTime%20desc",
+    "title": "Title 1 — Attack"
+   },
+   "produced_by_id": null,
+   "produced_by_kind": "source",
+   "raw_provenance": {
+    "fetch_kind": "json_api",
+    "kind": "json_api",
+    "request_url": "https://www.who.int/api/news/diseaseoutbreaknews?%24top=50&%24orderby=PublicationDateAndTime%20desc",
+    "schema_version": "legba/source.json_api/1-0-0",
+    "url_template": "https://www.who.int/api/news/diseaseoutbreaknews?%24top=50&%24orderby=PublicationDateAndTime%20desc",
+    "window_end": "2026-11-13T12:00:00+00:00",
+    "window_start": "2026-11-01T00:00:00+00:00"
+   },
+   "retention_class": "reference_only",
+   "schema_uri": "iglu:legba/signal/jsonschema/3-0-0",
+   "source_credibility": null,
+   "source_id": "source.source_who_disease_outbreak_news",
+   "source_version": "",
+   "tags": []
+  },
+  {
+   "canonical_signal_id": null,
+   "canonical_url": null,
+   "content_hash": "34dd98db9f3e98670537231cf8b83371838f291c7900ffe832fa61f38cfdc26f",
+   "derived_from": [],
+   "embedding_ref": null,
+   "entity_classes": [],
+   "geo": [],
+   "language": null,
+   "language_hint": "en",
+   "media_ref": null,
+   "media_ref_expires_at": null,
+   "mime_type": null,
+   "modality": "text",
+   "object_ref": null,
+   "owner_tenant": "default",
+   "payload": {
+    "_published_at_dt": "2026-11-13T09:15:00Z",
+    "external_id": "id-2",
+    "item": {
+     "Id": "id-2",
+     "PublicationDateAndTime": "20261113T091500Z",
+     "Summary": "Body 2: vessel reported an incident.",
+     "Title": "  Title 2 — Attack  ",
+     "extra": {
+      "place": "Strait of Hormuz",
+      "untouched": 2
+     },
+     "latitude": 26.4,
+     "longitude": 56.5
+    },
+    "link": "",
+    "published_at": "2026-11-13T09:15:00+00:00",
+    "raw_body": "Body 2: vessel reported an incident.",
+    "source_url": "https://www.who.int/api/news/diseaseoutbreaknews?%24top=50&%24orderby=PublicationDateAndTime%20desc",
+    "title": "Title 2 — Attack"
+   },
+   "produced_by_id": null,
+   "produced_by_kind": "source",
+   "raw_provenance": {
+    "fetch_kind": "json_api",
+    "kind": "json_api",
+    "request_url": "https://www.who.int/api/news/diseaseoutbreaknews?%24top=50&%24orderby=PublicationDateAndTime%20desc",
+    "schema_version": "legba/source.json_api/1-0-0",
+    "url_template": "https://www.who.int/api/news/diseaseoutbreaknews?%24top=50&%24orderby=PublicationDateAndTime%20desc",
+    "window_end": "2026-11-13T12:00:00+00:00",
+    "window_start": "2026-11-01T00:00:00+00:00"
+   },
+   "retention_class": "reference_only",
+   "schema_uri": "iglu:legba/signal/jsonschema/3-0-0",
+   "source_credibility": null,
+   "source_id": "source.source_who_disease_outbreak_news",
+   "source_version": "",
+   "tags": []
+  },
+  {
+   "canonical_signal_id": null,
+   "canonical_url": null,
+   "content_hash": "6273785a3af1dddea1f2cc3062b576be5f132ea4d0480b377dd77a0ff1a2fe3e",
+   "derived_from": [],
+   "embedding_ref": null,
+   "entity_classes": [],
+   "geo": [],
+   "language": null,
+   "language_hint": "en",
+   "media_ref": null,
+   "media_ref_expires_at": null,
+   "mime_type": null,
+   "modality": "text",
+   "object_ref": null,
+   "owner_tenant": "default",
+   "payload": {
+    "external_id": "d66706fdfd6583fa1eaabfca",
+    "item": {
+     "other": "only"
+    },
+    "link": "",
+    "published_at": null,
+    "raw_body": "",
+    "source_url": "https://www.who.int/api/news/diseaseoutbreaknews?%24top=50&%24orderby=PublicationDateAndTime%20desc",
+    "title": ""
+   },
+   "produced_by_id": null,
+   "produced_by_kind": "source",
+   "raw_provenance": {
+    "fetch_kind": "json_api",
+    "kind": "json_api",
+    "request_url": "https://www.who.int/api/news/diseaseoutbreaknews?%24top=50&%24orderby=PublicationDateAndTime%20desc",
+    "schema_version": "legba/source.json_api/1-0-0",
+    "url_template": "https://www.who.int/api/news/diseaseoutbreaknews?%24top=50&%24orderby=PublicationDateAndTime%20desc",
+    "window_end": "2026-11-13T12:00:00+00:00",
+    "window_start": "2026-11-01T00:00:00+00:00"
+   },
+   "retention_class": "reference_only",
+   "schema_uri": "iglu:legba/signal/jsonschema/3-0-0",
+   "source_credibility": null,
+   "source_id": "source.source_who_disease_outbreak_news",
+   "source_version": "",
+   "tags": []
+  }
+ ]
+}

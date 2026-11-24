@@ -805,7 +805,7 @@ def test_crossroads_descriptor_validates(crossroads_body):
     here rather than the other lane's progress. The autouse
     ``_preserve_analyst_kind_registry`` fixture restores the kind registry at
     the test boundary; the catalog entry is popped in the finally."""
-    from legba.data.analysts.handler_options import (
+    from legba.data.option_catalog.handler_options import (
         ANALYST_KIND_OPTIONS,
         OptionSpec,
     )
@@ -848,7 +848,8 @@ def test_crossroads_descriptor_grants_and_cadence(crossroads_body):
     assert "journal_propose" in packs             # the dispatch: a contradiction goes out as a proposal through the journal gate (merge decision 2026-09-24)
     assert crossroads_body["outputs"] == []
     # daily, AFTER the lens band (the six leans finish at 11:30 UTC)
-    assert crossroads_body["cadence"]["fallback_schedule"] == "0 12 * * *"
+    # (T-2: 12:15, off country_assessment's 12:00 burst; inquiry_pilot still follows at 12:30)
+    assert crossroads_body["cadence"]["fallback_schedule"] == "15 12 * * *"
     assert int(crossroads_body["cadence"]["cooldown_seconds"]) < 86400
     assert crossroads_body.get("grounding", {}).get("enabled") is False
 
@@ -898,7 +899,7 @@ def test_the_inquiry_option_catalog_must_declare_the_pre_pass_hook(crossroads_bo
     catalog-absent case simply has nothing yet to check rather than opting the
     test out.
     """
-    from legba.data.analysts.handler_options import ANALYST_KIND_OPTIONS
+    from legba.data.option_catalog.handler_options import ANALYST_KIND_OPTIONS
 
     assert set(crossroads_body["method"]["options"]) == {"pre_pass_module"}
     specs = ANALYST_KIND_OPTIONS.get("inquiry")

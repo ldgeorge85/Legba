@@ -92,7 +92,9 @@ from ..provenance.kinds import (
     verify_exempt_reason,
 )
 from ..provenance.verify import fail_class_for_reason
+from ..display_policy import display_payload
 from .api import RegistryAPIDeps, require_bearer
+from .display_class import request_display_class
 from .export_absences import (
     APPENDIX_MAX_CHARS,
     ExportAppendixIn,
@@ -142,6 +144,7 @@ JOURNAL_TIER_LABELS: dict[str, str] = {
     "lens_diff": "lens_diff (weekly chorus diff)",
     "inquiry": "inquiry (standing investigation, carries a ledger)",
     "crossroads": "crossroads (cross-desk patterns, drifts, silences)",
+    "correction": "correction (withdraws earlier rows, append-only)",
 }
 
 # Non-ASCII citation brackets wrapping a bare integer (``【3】``/``［3］``/…)
@@ -568,7 +571,9 @@ def _finding_verify(
         # Q-1: an UNASSESSABLE block still returns here — the pass ran, and saying
         # "no faithfulness verdict recorded" about it would be false. The state
         # string carries the distinction; the fail-flag counts are unchanged.
-        if verification.get("score_state") == "unassessable" or (
+        if verification.get("score_state") in (
+            "unassessable", "carried_ungraded"  # SW-9: a pass ran, no number
+        ) or (
             isinstance(score, (int, float)) and not isinstance(score, bool)
         ):
             return (
@@ -1302,6 +1307,7 @@ def build_export_router(deps: RegistryAPIDeps) -> APIRouter:
     async def export_collection(
         req: ExportRequest,
         principal: str = Depends(require_bearer),
+        display_class: str = Depends(request_display_class),
     ) -> Response:
         if not req.items:
             raise HTTPException(
@@ -1420,6 +1426,9 @@ def build_export_router(deps: RegistryAPIDeps) -> APIRouter:
             appendix=req.appendix_markdown,
             absences=absences,
         )
+        # X2-B4: a reader's export carries no archived bytes or publisher text
+        # (both formats — the markdown renders from this same document).
+        doc = display_payload(doc, display_class)
 
         stamp = generated_at.strftime("%Y%m%d")
         if req.format == "json":

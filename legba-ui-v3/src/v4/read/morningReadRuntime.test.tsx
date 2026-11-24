@@ -32,7 +32,7 @@ import type { ReactElement } from 'react'
 
 import { COMPONENTS } from '@/App'
 import { PANEL_REGISTRY } from '@/panel-registry/registry'
-import { WORKSPACES, LANDING_WORKSPACE } from '@/lib/workspaces'
+import { LANDING_SURFACE, findSurface } from '@/lib/surfaces'
 import { __pendingReadEvents, __resetReadTelemetry } from '@/lib/readTelemetry'
 import { __resetReadLayout } from '@/lib/readLayout'
 import worldRow from './__fixtures__/assembly.world.json'
@@ -116,10 +116,11 @@ describe('the Morning Read mounts through the real workstation', () => {
     const api = await mountDock()
     addSingleton(api, KIND)
     // Lazy import + Suspense + the panel boundary all have to resolve for this.
-    await screen.findByTestId('morning-read', {}, { timeout: 5000 })
+    await screen.findByTestId('morning-read', {}, { timeout: 15000 })
     expect(screen.getByTestId('read-record')).toBeTruthy()
     expect(api.panels.length).toBe(1)
-  })
+    // The first lazy import of the read can take seconds on a loaded runner.
+  }, 20000)
 
   it('survives the saved-layout round trip an operator performs on every reload', async () => {
     const api = await mountDock()
@@ -147,11 +148,12 @@ describe('the Morning Read mounts through the real workstation', () => {
     expect(kinds().filter((k) => k === 'brief_read')).toHaveLength(1)
   })
 
-  it('is the tab the landing stance opens on', () => {
-    const landing = WORKSPACES.find((w) => w.id === LANDING_WORKSPACE)!
-    expect(landing.seed.map((p) => p.kind)).toContain(KIND)
-    expect(landing.active).toContain(KIND)
-    // The legacy prose one-pager stays seeded beside it for the whole A/B.
-    expect(landing.seed.map((p) => p.kind)).toContain('v4.assessment')
+  it("is what the Board's stage opens on (the landing, U-6)", () => {
+    const board = findSurface(LANDING_SURFACE)!
+    expect(board.stage).toBe(KIND)
+    // One place per view: not also a panel.
+    expect(board.regions.flatMap((r) => r.views)).not.toContain(KIND)
+    // The legacy prose one-pager is not seeded; it is a catalog kind.
+    expect(board.regions.flatMap((r) => r.views)).not.toContain('v4.assessment')
   })
 })

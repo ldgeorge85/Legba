@@ -24,8 +24,12 @@ import {
   UNSCOPED_DESK,
   VISIT_KEY,
   bandTestId,
-  changedBand,
+  alertMarkText,
+  changedDeskCount,
+  changedList,
+  changedRankSeverity,
   checkedBand,
+  confidenceText,
   dueBand,
   forecastMarkLabel,
   formatElapsed,
@@ -44,6 +48,7 @@ import {
 } from '@/lib/morningReadBands'
 import { __resetReadTelemetry, sessionNonce } from '@/lib/readTelemetry'
 import type { CountryScorecard, DimensionBand } from '@/lib/evalOps'
+import type { SinceAlert, SinceFinding, SituationChange } from '@/lib/wallModel'
 
 beforeEach(() => {
   localStorage.clear()
@@ -229,54 +234,56 @@ describe('the visit clock', () => {
 // ---------------------------------------------------------------------------
 
 describe('CHANGED', () => {
-  it('is empty — and honestly so — for a desk with nothing in the window', () => {
-    expect(changedBand(emptySince())).toEqual([])
-    expect(changedBand(null)).toEqual([])
-    // A response missing the sections entirely (an older server) is empty, not
-    // a crash.
-    expect(changedBand({} as JudgmentSince)).toEqual([])
+  const f = (over: Partial<SinceFinding> & { id: string }): SinceFinding => ({
+    analyst_id: 'security_desk',
+    target_id: 'desk_alpha',
+    title: 'a finding',
+    severity: 'medium',
+    confidence: 0.8,
+    faithfulness_score: 0.9,
+    effective_confidence: 0.8,
+    produced_at: '2026-09-24T07:00:00Z',
+    ...over,
+  })
+  const alert = (over: Partial<SinceAlert> & { id: string }): SinceAlert => ({
+    severity: 'high',
+    channel: 'verified_finding',
+    summary: 'an alert',
+    target_id: 'desk_alpha',
+    produced_at: '2026-09-24T08:00:00Z',
+    ...over,
+  })
+  const sit = (over: Partial<SituationChange> & { id: string }): SituationChange => ({
+    name: 'a situation',
+    target_id: 'desk_alpha',
+    category: 'hazard',
+    change: 'escalating',
+    from_status: null,
+    to_status: 'active',
+    status: 'active',
+    last_event_at: '2026-09-24T06:00:00Z',
+    updated_at: '2026-09-24T06:10:00Z',
+    intensity_score: 0.4,
+    ...over,
   })
 
-  it('folds four row families into one cited list per desk', () => {
+  it('is empty — and honestly so — for a desk with nothing in the window', () => {
+    expect(changedList(emptySince())).toEqual([])
+    expect(changedList(null)).toEqual([])
+    // A response missing the sections entirely (an older server) is empty, not
+    // a crash.
+    expect(changedList({} as JudgmentSince)).toEqual([])
+  })
+
+  it('folds four row families into ONE list ranked by severity, then recency — not grouped by desk', () => {
     const since: JudgmentSince = {
       ...emptySince(),
-      new_findings: section([
-        {
-          id: 'f1',
-          analyst_id: 'security_desk',
-          target_id: 'country_g20_br',
-          title: 'Border incident',
-          severity: 'high',
-          confidence: 0.8,
-          faithfulness_score: 0.9,
-          effective_confidence: 0.8,
-          produced_at: '2026-09-24T07:00:00Z',
-        },
-      ]),
+      new_findings: section([f({ id: 'f1', target_id: 'country_g20_br', title: 'Border incident', severity: 'high' })]),
       alerts: section([
-        {
-          id: 'a1',
-          severity: 'critical',
-          channel: 'band_crossing',
-          summary: 'Band deterioration',
-          target_id: 'country_g20_br',
-          produced_at: '2026-09-24T08:00:00Z',
-        },
+        alert({ id: 'a1', severity: 'critical', channel: 'band_crossing', summary: 'Band deterioration', target_id: 'country_g20_br' }),
       ]),
       situations: section([
-        {
-          id: 's1',
-          name: 'Flood cluster',
-          target_id: 'country_g20_in',
-          category: 'hazard',
-          change: 'appeared',
-          from_status: null,
-          to_status: 'active',
-          status: 'active',
-          last_event_at: '2026-09-24T06:00:00Z',
-          updated_at: '2026-09-24T06:10:00Z',
-          intensity_score: 0.4,
-        },
+        sit({ id: 's1', name: 'Flood cluster', target_id: 'country_g20_in', change: 'appeared' }),
       ]),
       band_changes: section([
         {
@@ -288,57 +295,175 @@ describe('CHANGED', () => {
           severity: 'high',
           from_scorecard_row_id: 'sc0',
           to_scorecard_row_id: 'sc1',
-          changed_at: '2026-09-24T05:00:00Z',
+          changed_at: '2026-09-24T08:30:00Z',
         },
       ]),
     }
 
-    const groups = changedBand(since)
-    // Brazil carries a critical + a high; India a high + an unscored situation.
-    expect(groups.map((g) => g.targetId)).toEqual(['country_g20_br', 'country_g20_in'])
-    expect(groups[0].label).not.toContain('_')
-
-    const br = groups[0].items
-    // Worst first INSIDE the desk too — the critical alert leads the high finding.
-    expect(br.map((i) => i.kind)).toEqual(['alert', 'finding'])
+    const rows = changedList(since)
+    // critical alert, then the two highs most-recent first (the band at 08:30
+    // before the finding at 07:00 — across desks), then the unscored situation.
+    expect(rows.map((r) => r.id)).toEqual(['a1', 'sc1', 'f1', 's1'])
+    expect(rows.map((r) => r.deskId)).toEqual(['country_g20_br', 'country_g20_in', 'country_g20_br', 'country_g20_in'])
+    expect(rows.every((r) => !r.deskLabel.includes('_'))).toBe(true)
     // Every row is citable: a substrate kind and a real id.
-    expect(br.every((i) => i.id !== '' && i.rowKind !== '')).toBe(true)
-
-    const inRows = groups[1].items
-    expect(inRows.map((i) => i.kind)).toEqual(['band', 'situation'])
-    expect(inRows[0].headline).toBe('security: watch → elevated')
-    expect(inRows[1].note).toBe('situation appeared · now active')
+    expect(rows.every((i) => i.id !== '' && i.rowKind !== '')).toBe(true)
+    expect(rows[1].headline).toBe('security: watch → elevated')
+    expect(rows[3].note).toBe('situation appeared · now active')
     // A situation carries intensity, not severity — the two scales stay apart.
-    expect(inRows[1].severity).toBeNull()
+    expect(rows[3].severity).toBeNull()
+    expect(changedDeskCount(rows)).toBe(2)
+  })
+
+  it('an alert that points at a listed finding collapses INTO it: one row, the alert as a mark', () => {
+    const since: JudgmentSince = {
+      ...emptySince(),
+      new_findings: section([
+        f({ id: 'f1', title: 'Port closed', severity: 'medium' }),
+        f({ id: 'f2', title: 'Other thing', severity: 'medium', produced_at: '2026-09-24T07:30:00Z' }),
+      ]),
+      alerts: section([alert({ id: 'a1', finding_id: 'f1', summary: 'Verified high-severity finding: Port closed' })]),
+    }
+    const rows = changedList(since)
+    expect(rows.map((r) => r.id)).toEqual(['f1', 'f2'])
+    expect(rows[0].kind).toBe('finding')
+    expect(rows[0].alerts.map((a) => a.id)).toEqual(['a1'])
+    expect(rows[1].alerts).toEqual([])
+    // The alert's severity raises its item's rank (f1 now outranks the newer f2).
+    expect(changedRankSeverity(rows[0])).toBeGreaterThan(changedRankSeverity(rows[1]))
+    expect(alertMarkText(rows[0].alerts[0].channel)).toBe('alerted: verified')
+  })
+
+  it('without a pointer (an older registry), an alert folds by its own title shape on the same desk only', () => {
+    const since: JudgmentSince = {
+      ...emptySince(),
+      new_findings: section([
+        f({ id: 'f1', title: 'Port closed after strike on the quay', target_id: 'desk_alpha' }),
+        f({ id: 'f9', title: 'Port closed after strike on the quay', target_id: 'desk_beta' }),
+      ]),
+      situations: section([sit({ id: 's1', name: 'Quay strikes', from_status: 'active', to_status: 'escalating' })]),
+      alerts: section([
+        alert({ id: 'a1', summary: 'Verified high-severity finding: Port closed after strike' }),
+        alert({ id: 'a2', channel: 'situation_escalation', summary: 'Situation escalated: Quay strikes (active -> escalating)' }),
+      ]),
+    }
+    const rows = changedList(since)
+    expect(rows.filter((r) => r.kind === 'alert')).toEqual([])
+    expect(rows.find((r) => r.id === 'f1')!.alerts.map((a) => a.id)).toEqual(['a1'])
+    expect(rows.find((r) => r.id === 'f9')!.alerts).toEqual([])
+    expect(rows.find((r) => r.id === 's1')!.alerts.map((a) => a.id)).toEqual(['a2'])
+  })
+
+  it('an alert whose item is not in the list stays a row; identical alerts on one desk are one row', () => {
+    const since: JudgmentSince = {
+      ...emptySince(),
+      alerts: section([
+        alert({ id: 'a1', finding_id: 'not-listed', summary: 'Verified high-severity finding: Elsewhere' }),
+        alert({ id: 'a2', channel: 'band_crossing', summary: 'Band moved' }),
+        alert({ id: 'a3', channel: 'band_crossing', summary: 'Band moved', produced_at: '2026-09-24T08:05:00Z' }),
+      ]),
+    }
+    const rows = changedList(since)
+    expect(rows.map((r) => r.kind)).toEqual(['alert', 'alert'])
+    const moved = rows.find((r) => r.headline === 'Band moved')!
+    expect(moved.alerts).toHaveLength(1)
+  })
+
+  it('a transition from a state to the same state is not a change', () => {
+    const since: JudgmentSince = {
+      ...emptySince(),
+      situations: section([
+        sit({ id: 's-same', from_status: 'escalating', to_status: 'escalating' }),
+        sit({ id: 's-new', from_status: null, to_status: 'active' }),
+      ]),
+      band_changes: section([
+        {
+          target_id: 'desk_alpha',
+          dimension: 'economy',
+          from_band: 'watch',
+          to_band: 'watch',
+          direction: 'indeterminate',
+          severity: 'low',
+          from_scorecard_row_id: 'b0',
+          to_scorecard_row_id: 'b1',
+          changed_at: '2026-09-24T05:00:00Z',
+        },
+      ]),
+      alerts: section([
+        // By the route's fields …
+        alert({ id: 'a-fields', channel: 'situation_escalation', summary: 'x', state_from: 'escalating', state_to: 'escalating' }),
+        // … and by the title alone (an older registry).
+        alert({ id: 'a-title', channel: 'situation_escalation', summary: 'Situation escalated: Something (escalating -> escalating)' }),
+      ]),
+    }
+    const rows = changedList(since)
+    expect(rows.map((r) => r.id)).toEqual(['s-new'])
   })
 
   it('buckets a row with no desk rather than dropping it', () => {
     const since: JudgmentSince = {
       ...emptySince(),
-      new_findings: section([
-        {
-          id: 'f9',
-          analyst_id: 'world_assessor',
-          target_id: null,
-          title: 'World read',
-          severity: 'low',
-          confidence: 0.7,
-          faithfulness_score: 0.8,
-          effective_confidence: 0.7,
-          produced_at: '2026-09-24T07:00:00Z',
-        },
-      ]),
+      new_findings: section([f({ id: 'f9', analyst_id: 'world_assessor', target_id: null, title: 'World read', severity: 'low' })]),
     }
-    const groups = changedBand(since)
-    expect(groups).toHaveLength(1)
-    expect(groups[0].targetId).toBe(UNSCOPED_DESK)
-    expect(groups[0].label).toContain('No desk')
+    const rows = changedList(since)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].deskId).toBe(UNSCOPED_DESK)
+    expect(rows[0].deskLabel).toContain('No desk')
   })
 })
 
-// ---------------------------------------------------------------------------
-// Band 2 — CHECKED
-// ---------------------------------------------------------------------------
+describe('CHANGED — W11-F73 guard', () => {
+  it('renders `—` for a since-finding without effective_confidence, and never throws', () => {
+    const row = {
+      id: 'f-no-ec',
+      analyst_id: 'escalation',
+      target_id: 'country_g20_jp',
+      title: 'Escalation read',
+      severity: 'elevated',
+      confidence: 0.87,
+      faithfulness_score: 0.9,
+      produced_at: '2026-09-24T07:00:00Z',
+    } as unknown as JudgmentSince['new_findings']['items'][number]
+    const nan = { ...row, id: 'f-nan', effective_confidence: Number.NaN }
+    const rows = changedList({ ...emptySince(), new_findings: section([row, nan]) })
+    const notes = rows.map((i) => i.note)
+    expect(notes).toEqual([
+      'Escalation · effective confidence —',
+      'Escalation · effective confidence —',
+    ])
+    expect(confidenceText(0.5)).toBe('0.50')
+    expect(confidenceText(undefined)).toBe('—')
+    expect(confidenceText(null)).toBe('—')
+  })
+})
+
+describe('CHECKED — the registry\'s unverified state (X4 READPATH)', () => {
+  const PENDING = { score_state: 'pending', since: '2026-09-24T08:59:00+00:00', judge_window_s: 900, reason: 'awaiting_verify' }
+  const ABSENT = { ...PENDING, score_state: 'absent', reason: 'no_verdict' }
+  const EXEMPT = { ...ABSENT, reason: 'verify_exempt' }
+
+  it('a state block is never counted as verified, and splits pending from not judged', () => {
+    const desks = checkedBand([
+      finding({ id: 'v1', verification: verifyBlock([]) }),
+      finding({ id: 'p1', title: 'fresh read', verification: PENDING }),
+      finding({ id: 'a1', title: 'lost read', verification: ABSENT }),
+      finding({ id: 'x1', analyst_id: 'graph_mining', verification: EXEMPT }),
+    ])
+    expect(desks).toHaveLength(1)
+    expect(desks[0]).toMatchObject({ verified: 1, unsupported: 0, unchecked: 3, pending: 1, notJudged: 2 })
+    // The exempt producer is counted, not listed — it never enters the pass.
+    expect(desks[0].unverified.map((u) => [u.findingId, u.info.state])).toEqual([
+      ['p1', 'pending'],
+      ['a1', 'absent'],
+    ])
+  })
+
+  it('a null block from an older registry is `not judged`, never pending and never a pass', () => {
+    const [desk] = checkedBand([finding({ id: 'n1', verification: null })])
+    expect(desk).toMatchObject({ verified: 0, pending: 0, notJudged: 1, unchecked: 1 })
+    expect(desk.unverified[0].info).toMatchObject({ state: 'absent', basis: 'unstated' })
+  })
+})
 
 describe('CHECKED', () => {
   it('the shared fixture carries exactly the fields fields=judgment returns', () => {
@@ -585,13 +710,14 @@ function gapCard(target: string, dims: Record<string, unknown> = {}): CountrySco
 }
 
 describe('the gaps band reads typed absence', () => {
-  it('always carries all eight kinds, in the route’s declaration order', () => {
+  it('always carries all nine kinds, in the route’s declaration order', () => {
     const view = deskGapView(ABSENCE_DESK, [], absResp(), 'ready', 2)
     expect(view.kinds.map((k) => k.kind)).toEqual([...ABSENCE_KIND_ORDER])
-    // 7g-2 added `history_gap` as the eighth. The derivation is kind-agnostic
-    // — it drives entirely off ABSENCE_KIND_ORDER — so the only thing this
-    // number pins is that the vocabulary and the reader stayed in step.
-    expect(view.kinds).toHaveLength(8)
+    // 7g-2 added `history_gap` as the eighth, W11-F14 `carried_unsupported` as
+    // the ninth. The derivation is kind-agnostic — it drives entirely off
+    // ABSENCE_KIND_ORDER — so the only thing this number pins is that the
+    // vocabulary and the reader stayed in step.
+    expect(view.kinds).toHaveLength(9)
   })
 
   it('renders an eighth kind the reader has never seen before', () => {

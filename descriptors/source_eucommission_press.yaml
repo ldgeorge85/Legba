@@ -1,0 +1,78 @@
+# X-1 source expansion (2026-11-14) — draft SourceDescriptor. Ships DRAFT;
+# the reference host walks it to CONFIGURED (descriptors/LIFECYCLE.md), never
+# active — activation is the owner's call per source.
+#
+# European Commission — Press corner, English press releases. The
+# Commission's own announcements (proposals, decisions, sanctions packages,
+# statements): OFFICIAL, an EU institution's primary publication. Fills the
+# EU-institution gap.
+# Checked 2026-11-14 by the source-expansion review (one GET, generic client
+# identity): HTTP 200, application/rss+xml, 10 items, newest 2026-11-13 15:26
+# UTC, oldest 2026-11-12 13:46 — about 10 a day in a ten-item window, so the
+# feed holds roughly one day. Hourly polling keeps inside it.
+#
+# Language: en. Region: EU — no declared geo (the EU is not a country code;
+# the in-body geocoder files each release).
+#
+# robots.txt allows the feed path for `*`. Credibility: ec.europa.eu 0.90 / gov.
+#
+# First poll: the default first-poll age cap (30 days).
+
+identity:
+  id: source.eucommission.press
+  name: European Commission — Press corner (EN)
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: x1_source_expansion
+  created: "2026-11-14T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [eu, gov, policy, institution, press_release]
+  source_class: official
+  license_class: cc_by            # Commission legal notice: CC BY 4.0
+  attribution: "© European Union, CC BY 4.0 (European Commission Press corner)"
+  access_class: public            # free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "29 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 60
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://ec.europa.eu/commission/presscorner/api/rss?language=en"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

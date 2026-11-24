@@ -1,0 +1,118 @@
+# I-5 series-kind capabilities (2026-11-14) — the Japan Meteorological
+# Agency's earthquake bulletin list (bosai quake list.json), as structured
+# text signals. Ships DRAFT; the reference host walks it to CONFIGURED
+# (descriptors/LIFECYCLE.md), never active — activation is the owner's call.
+# Kind: json_api (the document root is the item array: `items_path` empty).
+#
+# WHY: a national quake authority beside USGS (the review's Area B row,
+# "add (json_api)"). X-1 could not write it: the review recorded the shape
+# (a top-level array of 206) but not the item field names.
+#
+# THE ENDPOINT. https://www.jma.go.jp/bosai/quake/data/list.json. Checked
+# 2026-11-14 by the source-expansion review (generic client identity): 200,
+# application/json, a top-level array of 206 bulletins. Field names read by
+# lane I-5 from ONE plain GET of the same URL on 2026-11-14 (generic client,
+# no identifying headers; the body kept only in that lane's scratchpad):
+# 206 bulletins over 162 events spanning 2026-10-16..2026-11-15 (JST), every
+# item carrying ctt, eid, rdt, ttl, ift, ser, at, anm, acd, cod, mag, maxi,
+# int, json, en_ttl, en_anm. Read here: `json` — the bulletin's own file name
+# (unique per bulletin: 206 of 206), the id; `rdt` — the report time (ISO
+# 8601 with +09:00), the timestamp; `at` — the origin time; `en_ttl` /
+# `ttl` — the bulletin type in English / Japanese; `en_anm` / `anm` — the
+# epicentral area; `mag` — magnitude; `maxi` — maximum seismic intensity on
+# the JMA scale ("1".."7", "5-", "5+"); `cod` — the hypocentre as an ISO 6709
+# string (not split into coordinates here, so no `geometry` block; the
+# geocoder reads the area name). One event yields several bulletins (an
+# intensity flash, then the hypocentre, then the combined report): each is
+# its own signal, as JMA issues them. About five a day.
+#
+# robots.txt: none (404).
+# Class: official (a national meteorological and seismological agency).
+
+identity:
+  id: source.jma.quake_list
+  name: Japan Meteorological Agency — earthquake bulletins (list.json)
+  kind: json_api
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: i5_series_kind_capabilities
+  created: "2026-11-14T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [JP]
+  languages: [en, ja]
+  tags: [earthquake, seismic, hazards, natural_disaster, gov, structured, japan]
+  source_class: official
+  license_class: cc_by               # Public Data License 1.0, compatible with CC BY 4.0
+  attribution: "Source: Japan Meteorological Agency (jma.go.jp), earthquake information"
+  access_class: public
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "*/10 * * * *"
+  cooldown_seconds: 120
+  jitter_seconds: 60
+  expect_quiet: true             # hours without a felt quake are normal
+
+config:
+  url_template:
+    factory_kind: text
+    raw: "https://www.jma.go.jp/bosai/quake/data/list.json"
+  items_path:
+    factory_kind: text
+    raw: ""                      # the document root is the array
+  id_path:
+    factory_kind: text
+    raw: "json"
+  title_path:
+    factory_kind: text
+    raw: "ttl"
+  title_template:
+    factory_kind: text
+    raw: "JMA {en_ttl}: {en_anm} M{mag}"
+  timestamp_path:
+    factory_kind: text
+    raw: "rdt"
+  body_template:
+    factory_kind: text
+    raw: "{en_ttl}. Epicentral area: {en_anm}. Origin time (JST): {at}. Magnitude: {mag}. Maximum seismic intensity (JMA scale): {maxi}. Hypocentre (ISO 6709): {cod}. Bulletin: {ttl} {anm}"
+  language:
+    factory_kind: text
+    raw: "en"
+  static_tags:
+    factory_kind: list
+    raw: [earthquake, jma]
+  max_items_per_pull:
+    factory_kind: number
+    raw: 250
+  timeout_seconds:
+    factory_kind: number
+    raw: 60                      # a ~340 KB document
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1
+      config: {}
+    - kind: dedupe_tier_2
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

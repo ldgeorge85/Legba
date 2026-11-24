@@ -77,6 +77,7 @@ a config-level decision per analyst descriptor (the descriptor's
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import asyncio
 import json
@@ -89,17 +90,28 @@ from typing import Any, Awaitable, Callable, Mapping, Protocol, runtime_checkabl
 from uuid import UUID
 
 from ..pinned_context import render_pinned_context_block
+from ..provenance.citation_markers import normalize_inline_citation_markers
 from ..provenance.models import ConsultResponsePayload, FindingPayload
 from ..stack.llm import tool_round_compaction as _tc
+from ..stack.llm.base import StreamInterruptedFailure
+from ..stack.llm.call_gate import interactive_calls
 from ..stack.llm.stream_observer import TextDeltaSink, capture_text_deltas
+from . import consult_thinking as _think  # T-1: which consult calls think
+from . import consult_context_ceiling as _cc
 from . import consult_round_protocol as _cp
 from . import consult_transcript as _tx
 # V3/P3 — the SubstrateQueryPort protocol moved to a leaf when the temporal
 # params grew this module past its size ceiling; imported back and
 # re-exported so every call site is byte-identical.
-from .consult_provenance_census import build_provenance_census
+from .consult_provenance_census import compose_census
+from . import consult_evidence_floor as _floor
+from . import consult_judging as _judging
+from . import consult_prompt_context as _pctx
+from . import consult_watch_mint as _wm
 from .consult_substrate_port import SubstrateQueryPort
 from .consult_spend_guard import SpendGuard
+from . import consult_contract as _ct  # Q-1: the turn contract (window, explanations, record-only)
+from .consult_turn_cost import arm_turn_ceiling_observed
 
 logger = logging.getLogger(__name__)
 
@@ -137,11 +149,9 @@ MAX_TOOL_ROUNDS = 6
 CHAT_DEFAULT_ROUNDS = 10
 ROUNDS_CEILING = 30
 
-#: Max tools a planner may request in ONE batch round (the ``{"tools": [...]}``
-#: shape). Extra calls past this are dropped and duplicate ``(tool, args)`` pairs
-#: deduped, so a runaway planner can't open an unbounded number of concurrent
-#: substrate calls in a single round.
-MAX_TOOLS_PER_BATCH = 5
+#: Max tools a planner may request in ONE batch round — defined beside the
+#: round normalizer in ``consult_tool_routing`` (C-1b extraction), re-exported.
+from .consult_tool_routing import MAX_TOOLS_PER_BATCH  # noqa: E402
 
 #: Below this much remaining total budget, the forced-final synthesis is not
 #: attempted at all — starting an Opus synthesis with 8 seconds left produces a
@@ -336,6 +346,14 @@ class AnalystMethodResult:
     usage: dict[str, int] = field(default_factory=dict)
     derived_from: list[UUID] = field(default_factory=list)
     intermediate_steps: list[dict[str, Any]] = field(default_factory=list)
+    # CONSULT_REVIEW_2026-09-28 B.10: the run's own summed cost estimate
+    # (``SpendGuard.cost_usd`` — the running total ridden on each step's
+    # ``usage.est_cost_usd``), so the runtime's budget_ledger write can carry
+    # THIS number into ``cost_estimate_usd`` instead of recomputing from
+    # (provider, model, aggregate tokens), which loses call-to-call model
+    # changes (a plane override mid-run) that SpendGuard tracked per call.
+    # ``None`` for every other analyst kind — the runtime keeps recomputing.
+    cost_estimate_usd: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -343,64 +361,12 @@ class AnalystMethodResult:
 # ---------------------------------------------------------------------------
 
 
-from ._tradecraft import with_preamble  # noqa: E402
 
-_SYSTEM_PROMPT = with_preamble(
-    """TASK — answer an operator's question over the substrate. You may call tools to gather evidence before answering; each call is a single strict-JSON object.
+# The system prompt text lives in its own leaf (wave Q, 2026-09-28 — the size
+# gate); imported one way and re-exported under the same name so readers of
+# ``consult_on_demand._SYSTEM_PROMPT`` are unaffected.
+from .consult_system_prompt import _SYSTEM_PROMPT  # noqa: E402
 
-Available tools:
-  - search_signals(query, [limit], [scope_predicate]) — full-text search over indexed signals (title + summary).
-  - query_facts([subject], [predicate], [value], [limit], [as_of]) — fact store; at least one of subject/predicate/value is required. as_of (ISO-8601) reads the facts that held on that date, including rows superseded since.
-  - inspect_entity(name) — canonical entity profile + recent facts.
-  - vector_search(query, [limit]) — semantic similarity over signal embeddings.
-  - search_context(query, [corpus], [country], [k]) — semantic search over the CURATED reference corpora (world_context = country/topic priors + doctrine summaries; tradecraft = analytic standards / SAT handbooks). Returns cited chunks (corpus, doc_id, title, section, countries, source_url, effective_date). corpus narrows to one of world_context / tradecraft; country filters to chunks tagged for that country. This is BACKGROUND / method knowledge, NOT live substrate — use it to ground an assessment or recall a technique, not as current evidence. Its chunk refs are `ctx:`-prefixed and NON-CITABLE: never put a ctx: ref (or its bare UUID) in cited_refs — cite only substrate UUIDs other tools returned.
-  - search_corpus(query, [filters], [size]) — LEXICAL BM25 keyword search over the FULL raw text of ALL ingested signals (the live news/report corpus, ~106k docs), returning scored rows. Optional keyword filters narrow by facet: geo, tags, source_id, language, modality, entity_classes, retention_class, license_class (a scalar or a list per key). Use it to FIND source documents by keyword across the whole corpus (broader recall than search_signals' title+summary FTS and complementary to vector_search's semantic match). A row's id is the signal id — pass it to read_document for the full body.
-  - read_document(doc_id) — fetch ONE signal's full stored body + metadata by its doc_id (the signal id, e.g. from a search_corpus / search_signals hit) when you need the WHOLE article text, not a snippet. Returns status ('found' / 'not_found') and the full indexed document (title, raw_body, facets).
-  - query_nexuses([subject], [object], [rel_type], [polarity], [limit], [as_of]) — open signed/typed relationships (A->[intermediary]->B; polarity +1 supportive / -1 antagonistic / 0 neutral/dual-use). as_of reads the relationships that held on that date.
-  - query_hypotheses([target_id], [status], [situation_id], [limit]) — competing-hypothesis (ACH) rows (thesis vs counter_thesis, evidence balance, status: active / confirmed / refuted).
-  - get_timeline(subject, [limit], [since], [until]) — time-ordered merge of current facts and recent signals about one subject; since/until (ISO-8601) bound the window on each item's anchor.
-  - compare_targets(target_ids) — side-by-side substrate rollup for two or more target ids.
-  - query_paths(subject, object, [max_hops<=3], [polarity_product], [limit], [families], [as_of]) — ranked SIGNED paths A->...->B over the open entity graph; each path carries its net polarity_product (the structural-balance sign of the chain: +1 net-supportive / -1 net-antagonistic). polarity_product filters to that net sign. as_of walks the graph as it stood on that date.
-  - find_proxy_chains(subject, object, [max_hops<=3], [polarity_product], [limit], [families], [as_of]) — INDIRECT links only (multi-hop chains + reified A->via->B cut-outs); the proxy path from A to B.
-  - query_brokers(camp_a, camp_b, [max_hops<=3], [limit], [families], [as_of]) — entities that SIT ON paths between two entity sets (the broker between two camps), ranked by how many A->B paths run through them.
-
-  All three walks traverse ASSERTED relationships only (families relation/reference). A co-mention is not a relationship, so pass families=["cooccurrence"] to walk the co-mention cloud deliberately. An endpoint naming no entity (or an ambiguous one) comes back in `warnings` — an empty result with a warning is NOT "they are unconnected".
-
-Finished intelligence — the platform's OWN analysis (analysis-derived; consult these FIRST, they encode prior work — weigh per the provenance rules above):
-  - list_findings([target_id], [analyst_id], [severity], [since_hours], [include_superseded], [believed_as_of], [limit]) — recent LIVE findings the platform already produced (country/world situational assessments, meta-findings; superseded revisions are excluded unless include_superseded=true); effective_confidence folds in the critic's grade. believed_as_of (ISO-8601) reads what the platform had published and not yet superseded on that date, with the verdict it held then. Cite the finding id.
-  - list_situations([status], [target_id], [since_hours], [as_of], [limit]) — ongoing clustered situation frames, each with intensity_score + event_count (rank severity by these); call with NO filters (limit 20-30) for a world-state survey. as_of reads the frames that held on that date, including ones since closed. Pass a returned situation_id to query_hypotheses for its ACH rows.
-  - query_events([target_id], [geo], [category], [lifecycle_state], [entity], [situation_id], [since], [until], [as_of], [limit]) — bounded real-world occurrences the platform has clustered (a thing that HAPPENED, where a situation is a thing being watched). lifecycle_state is one of emerging/developing/active/evolving/resolved; geo is an ISO2 code or list; entity is an actor-name substring; situation_id returns the events a situation tracks; since/until (ISO-8601) bound the occurrence span by overlap; as_of reads the events that held on that date.
-  - inspect_event(event_id) — the one-event dossier: the event row, its ranked evidence signals, its actors with roles, its event edges, the situations tracking it, and its lifecycle ledger oldest→newest. The row ids it returns are citable refs.
-  - belief_as_of(as_of, [target_id], [fold_verdicts], [limit]) — the findings Legba had published and not yet superseded on date as_of (ISO-8601, required), each with its own effective_confidence under the verdict fold you name: 'as_of' (default — the verdict held on that date; ungraded-yet rows come back effective_confidence=null and count in verdict_pending_at_as_of) or 'latest' (today's verdict). There is no pooled score by design.
-  - query_predictions([target_id], [status], [limit]) — event-volume forecasts (forecast_method 'naive_mean' ⇒ no trend could be fit, low-confidence; 'auto_arima' ⇒ fitted). The feed is FROZEN (writer retired 2026-07-01) — treat rows as historical, check latest_produced_at, never present one as a current forecast. Cite the id.
-  - list_targets() — the monitored targets + their ids (e.g. country_g20_ir); call this to resolve a place/topic to a valid target_id before query_hypotheses / compare_targets / list_findings.
-  - list_sources([active_only], [silent_only]) — ingest sources + freshness; use to tell "no coverage on X" apart from "a quiet feed".
-
-OUTPUT CONTRACT — there are TWO reply shapes, and which round you are in decides which one you use:
-  * A TOOL round (you want more evidence first) is EXACTLY ONE strict-JSON object and NOTHING else: no text before or after it, no markdown code fences, no comments, no trailing commas; all keys and string values in double quotes; the first character is { and the last is }. Any character outside that single JSON object breaks the parser and wastes a round.
-  * The FINAL round (you are answering) is NOT JSON. It is the sentinel line <<<FINAL>>>, then a short header block, then your answer written straight out as markdown. Never wrap the answer in a JSON object, never escape it as a JSON string, never put it in ``` fences. This clause OVERRIDES the preamble's output-discipline rule for the final reply only — every other reply is strict JSON as that rule requires.
-
-Loop protocol:
-  - To call ONE tool, reply with strict JSON: {"tool": "<name>", "args": {...}}
-  - To call SEVERAL INDEPENDENT tools in the SAME round (they run concurrently and cost ONE round, not one per tool), reply with strict JSON: {"tools": [{"tool": "<name>", "args": {...}}, {"tool": "<name>", "args": {...}}]} — up to 5. Batch ONLY tools that do NOT depend on each other's output; a call that needs a prior call's result (e.g. compare_targets after list_targets resolves the ids) must wait for the next round.
-  - To finish, reply in EXACTLY this shape:
-
-    <<<FINAL>>>
-    uncertainty: 0.35
-    cited_refs: 792fd4d7-ff16-4a34-80bf-f1af1a58c14c, d6b35902-1b3f-410f-8c2f-009275454a35
-    unanswered_aspects: what the substrate could not tell you; another genuine gap
-
-    ## Bottom line
-    ...the rest of your answer, as ordinary GitHub-flavored markdown...
-
-    <<<FINAL>>> is the FIRST line. The three header lines follow, one per line, in any order; drop a header only when it is genuinely empty. cited_refs is a comma-separated list of bare UUIDs and unanswered_aspects is a semicolon-separated list of phrases — plain text, no brackets, no quotes, no JSON. A blank line ends the header block and EVERYTHING after it is your answer, written directly with no quoting and no escaping.
-
-Strategy — SURVEY THEN DRILL:
-  - For a BROAD / world-state / open-ended question ("how's the world looking", "what's going on", anything not about a single named entity), your FIRST round MUST survey the platform's own active picture: batch list_situations (NO filters, limit 20-30 — it ranks the live frames by intensity_score and event_count) WITH list_findings, and add query_predictions when forecasts are relevant. An answer to a broad question that never called list_situations is INCOMPLETE — you cannot describe "the world" without first reading the active situation frames.
-  - For a NARROW question about one place/topic, go straight to the relevant reader; resolve the place to a target_id with list_targets first if you need one for list_findings / query_hypotheses / compare_targets.
-  - In BOTH cases the platform's OWN finished intelligence — list_findings / list_situations (and query_predictions) — comes FIRST; build on it, and use raw search_signals / vector_search to survey broadly, verify, update, or fill gaps, not to re-derive from scratch. THEN drill into the specific entities, facts, or time windows. Prefer two or three cheap wide calls (batched into one round) over one narrow guess. Only finish once you have gathered enough or exhausted the useful calls.
-Answer quality: the answer under the header block is plain GitHub-flavored MARKDOWN prose written for a human reader — headings (##), **bold**, bullet lists, `---` rules as needed. LEAD with the bottom-line judgment, then support it with cited substrate (`cited_refs` = the UUIDs you actually used). Set `uncertainty` as 1 minus your calibrated confidence in the answer (high — >= 0.7 — when the substrate lacks the material), and list the parts you could not address in `unanswered_aspects`. Do not invent UUIDs or facts the tools did not return. Because the answer is NOT inside a JSON string there is no escaping to get wrong and no envelope that has to close — spend the room on substance: give the operator the analysis the question deserves rather than a shortened one."""
-)
 
 
 def _render_user_prompt(
@@ -446,6 +412,7 @@ from .consult_reply_parsing import (  # noqa: E402
     _unescape_json_str,
     _unwrap_double_envelope,
     final_payload_from_text,
+    split_ref_tokens,
 )
 
 # Tool-result rendering moved to ``consult_tool_rendering`` under the
@@ -459,10 +426,21 @@ from .consult_tool_rendering import (  # noqa: E402
     _bounded_tool_json,
     _shed_citation_payload,
     _trim_args,
+    tool_context_renderer,
 )
 
 
 def _coerce_uuid_list(raw: Any) -> list[UUID]:
+    """STRICT uuid coercion — the ids in ``raw``, anything else dropped.
+
+    Deliberately unchanged, and deliberately NOT the tolerant reader below.
+    This one parses ids the PLATFORM produced — a tool result's ``refs``, a
+    persisted turn's ``cited_refs`` — where a token that is not a bare uuid is
+    not a citable substrate row and must not become one. ``search_context``
+    returns ``ctx:<uuid>`` chunk ids for exactly that reason: the prefix is
+    what stops a corpus chunk masquerading as a signal, and a reader that
+    reached inside the token for the uuid would undo it.
+    """
     if not isinstance(raw, list):
         return []
     out: list[UUID] = []
@@ -472,6 +450,32 @@ def _coerce_uuid_list(raw: Any) -> list[UUID]:
         except (ValueError, AttributeError):
             continue
     return out
+
+
+def _coerce_refs_audited(raw: Any) -> tuple[list[UUID], list[str]]:
+    """``(refs, malformed)`` for the MODEL's own ``cited_refs`` header.
+
+    2026-09-28 §B.3, and the counterpart to the strict reader above. A bare
+    ``UUID(str(item))`` under ``except: continue`` threw away two different
+    things in the same silence: a REAL id the model wrapped in a bracket (the
+    core plane writes ``【a1b2…】`` by default) and a FABRICATED label
+    (``sit-001``). The first is our parse bug and is recoverable; the second is
+    a fact about the answer. ``split_ref_tokens`` separates them at the seam
+    and the malformed tail is carried on the response rather than dropped.
+
+    Tolerance is right HERE and wrong in :func:`_coerce_uuid_list`, because
+    this reads prose a model wrote and that one reads data we wrote. The refs
+    this recovers are still filtered against the tool-confirmed set by the
+    caller, so recovering one can never admit an id no tool returned.
+    """
+    tokens, malformed = split_ref_tokens(raw)
+    out: list[UUID] = []
+    for token in tokens:
+        try:
+            out.append(UUID(token))
+        except (ValueError, AttributeError):  # pragma: no cover — regex-gated
+            continue
+    return out, malformed
 
 
 def _merge_refs(*lists: list[UUID]) -> list[UUID]:
@@ -487,377 +491,24 @@ def _merge_refs(*lists: list[UUID]) -> list[UUID]:
 
 
 # ---------------------------------------------------------------------------
-# Tool dispatcher
+# Tool dispatcher — EXTRACTED to ``consult_tool_routing`` (C-1b)
+#
+# The whitelist, the round normalizer, the per-tool dispatcher and the one-call
+# governed router moved out one-way under the module-size ratchet. Re-exported
+# so every importer (the deep consult workflow, the inline assessors, the
+# tests) is unchanged and the loop below reads exactly as it did.
 # ---------------------------------------------------------------------------
 
-
-_KNOWN_TOOLS = {
-    "search_signals",
-    "query_facts",
-    "inspect_entity",
-    "vector_search",
-    "search_context",
-    "search_corpus",
-    "read_document",
-    "query_nexuses",
-    "query_hypotheses",
-    "get_timeline",
-    "compare_targets",
-    "query_paths",
-    "find_proxy_chains",
-    "query_brokers",
-    "list_findings",
-    "list_situations",
-    "query_predictions",
-    "list_targets",
-    "list_sources",
-    # V3/P3 — the decision-time register (spec §3.4).
-    "belief_as_of",
-    # V3/P6 — the event surface (spec §6.1).
-    "query_events",
-    "inspect_event",
-    # 7g-2 — the COLLECTION series reads. Consult is the first reader the
-    # collections firewall opts IN (`firewall.readers_opt_in`), and these are
-    # the tools that make "compare the last ten years" a question with
-    # citable numbers behind it instead of model knowledge.
-    "series_history",
-    "series_compare",
-}
-
-
-def _normalize_calls(
-    parsed: Mapping[str, Any], *, cap: int = MAX_TOOLS_PER_BATCH,
-) -> list[dict[str, Any]]:
-    """Normalize a planner round into a list of ``{tool, args}`` calls.
-
-    ``cap`` is the per-round width. It defaults to :data:`MAX_TOOLS_PER_BATCH`
-    so every existing caller is unchanged; the native route passes the tighter
-    :func:`consult_round_protocol.native_batch_cap` instead, because on that
-    route a round's results are replayed into every LATER prompt — width there
-    is not a one-round cost, it is a multiplier on the rest of the run.
-
-    Accepts BOTH the single shape ``{"tool": name, "args": {...}}`` and the
-    batch shape ``{"tools": [{"tool": ..., "args": {...}}, ...]}`` — so the
-    parser is backward-compatible with every single-tool planner. Malformed
-    entries (no tool name, non-mapping args) are dropped; duplicate
-    ``(tool, args)`` pairs are deduped; the list is capped at
-    :data:`MAX_TOOLS_PER_BATCH` so a runaway planner can't fan out unbounded.
-    Returns ``[]`` when neither a ``tool`` nor a ``tools`` list is present (the
-    caller treats that as "neither tool nor final" and asks for a correction).
-    """
-    tools = parsed.get("tools")
-    if isinstance(tools, list):
-        raw_calls: list[Any] = tools
-    elif parsed.get("tool"):
-        raw_calls = [parsed]
-    else:
-        return []
-    out: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for rc in raw_calls:
-        if not isinstance(rc, Mapping):
-            continue
-        name = str(rc.get("tool") or "")
-        if not name:
-            continue
-        args = rc.get("args") or {}
-        if not isinstance(args, Mapping):
-            args = {}
-        dedupe_key = name + "::" + json.dumps(dict(args), sort_keys=True, default=str)
-        if dedupe_key in seen:
-            continue
-        seen.add(dedupe_key)
-        out.append({"tool": name, "args": dict(args)})
-        if len(out) >= max(1, cap):
-            break
-    return out
-
-
-async def _dispatch_tool(
-    port: SubstrateQueryPort,
-    *,
-    name: str,
-    args: Mapping[str, Any],
-    scope_predicate: str | None,
-) -> dict[str, Any]:
-    """Invoke a whitelisted tool by name.
-
-    Unknown tool names are surfaced as a structured error so the planner
-    sees the failure and can recover (rather than crashing the run).
-    """
-    if name not in _KNOWN_TOOLS:
-        return {"error": f"unknown_tool: {name!r}"}
-    try:
-        if name == "search_signals":
-            return await port.search_signals(
-                query=str(args.get("query", "")),
-                limit=int(args.get("limit", 20)),
-                scope_predicate=scope_predicate,
-            )
-        if name == "query_facts":
-            return await port.query_facts(
-                subject=args.get("subject"),
-                predicate=args.get("predicate"),
-                value=args.get("value"),
-                limit=int(args.get("limit", 30)),
-                as_of=args.get("as_of"),
-            )
-        if name == "inspect_entity":
-            return await port.inspect_entity(name=str(args.get("name", "")))
-        if name == "vector_search":
-            return await port.vector_search(
-                query=str(args.get("query", "")),
-                limit=int(args.get("limit", 10)),
-            )
-        if name == "search_context":
-            return await port.search_context(
-                query=str(args.get("query", "")),
-                corpus=args.get("corpus"),
-                country=args.get("country"),
-                k=int(args.get("k", 6)),
-            )
-        if name == "search_corpus":
-            return await port.search_corpus(
-                query=str(args.get("query", "")),
-                filters=args.get("filters"),
-                size=int(args.get("size", 10)),
-            )
-        if name == "read_document":
-            return await port.read_document(
-                doc_id=str(args.get("doc_id", "")),
-            )
-        if name == "query_nexuses":
-            polarity = args.get("polarity")
-            return await port.query_nexuses(
-                subject=args.get("subject"),
-                obj=args.get("object"),
-                rel_type=args.get("rel_type"),
-                polarity=int(polarity) if polarity is not None else None,
-                limit=int(args.get("limit", 30)),
-                as_of=args.get("as_of"),
-            )
-        if name == "query_hypotheses":
-            return await port.query_hypotheses(
-                target_id=args.get("target_id"),
-                status=args.get("status"),
-                situation_id=args.get("situation_id"),
-                limit=int(args.get("limit", 30)),
-            )
-        if name == "get_timeline":
-            return await port.get_timeline(
-                subject=str(args.get("subject", "")),
-                limit=int(args.get("limit", 40)),
-                since=args.get("since"),
-                until=args.get("until"),
-            )
-        if name == "compare_targets":
-            raw_targets = args.get("target_ids") or []
-            target_ids = (
-                [str(t) for t in raw_targets]
-                if isinstance(raw_targets, list)
-                else []
-            )
-            return await port.compare_targets(target_ids=target_ids)
-        if name == "query_paths":
-            pp = args.get("polarity_product")
-            return await port.query_paths(
-                subject=str(args.get("subject", "")),
-                obj=str(args.get("object", "")),
-                max_hops=int(args.get("max_hops", 3)),
-                polarity_product=int(pp) if pp is not None else None,
-                limit=int(args.get("limit", 30)),
-                families=(
-                    [str(x) for x in args["families"]]
-                    if isinstance(args.get("families"), list) else None
-                ),
-                as_of=args.get("as_of"),
-            )
-        if name == "find_proxy_chains":
-            pp = args.get("polarity_product")
-            return await port.find_proxy_chains(
-                subject=str(args.get("subject", "")),
-                obj=str(args.get("object", "")),
-                max_hops=int(args.get("max_hops", 3)),
-                polarity_product=int(pp) if pp is not None else None,
-                limit=int(args.get("limit", 30)),
-                families=(
-                    [str(x) for x in args["families"]]
-                    if isinstance(args.get("families"), list) else None
-                ),
-                as_of=args.get("as_of"),
-            )
-        if name == "query_brokers":
-            raw_a = args.get("camp_a") or []
-            raw_b = args.get("camp_b") or []
-            return await port.query_brokers(
-                camp_a=[str(x) for x in raw_a] if isinstance(raw_a, list) else [],
-                camp_b=[str(x) for x in raw_b] if isinstance(raw_b, list) else [],
-                max_hops=int(args.get("max_hops", 3)),
-                limit=int(args.get("limit", 50)),
-                families=(
-                    [str(x) for x in args["families"]]
-                    if isinstance(args.get("families"), list) else None
-                ),
-                as_of=args.get("as_of"),
-            )
-        if name == "list_findings":
-            return await port.list_findings(
-                target_id=args.get("target_id"),
-                analyst_id=args.get("analyst_id"),
-                severity=args.get("severity"),
-                since_hours=int(args["since_hours"])
-                    if args.get("since_hours") is not None else None,
-                # R1 / W2-T1: superseded findings excluded by default; opt in
-                # for history/audit reads.
-                include_superseded=str(
-                    args.get("include_superseded", False)
-                ).lower() in ("true", "1"),
-                limit=int(args.get("limit", 20)),
-                believed_as_of=args.get("believed_as_of"),
-            )
-        if name == "list_situations":
-            return await port.list_situations(
-                status=args.get("status"),
-                target_id=args.get("target_id"),
-                since_hours=int(args["since_hours"])
-                    if args.get("since_hours") is not None else None,
-                limit=int(args.get("limit", 20)),
-                as_of=args.get("as_of"),
-            )
-        if name == "belief_as_of":
-            return await port.belief_as_of(
-                as_of=str(args.get("as_of", "")),
-                target_id=args.get("target_id"),
-                fold_verdicts=str(args.get("fold_verdicts", "as_of")),
-                limit=int(args.get("limit", 20)),
-            )
-        if name == "query_events":
-            raw_geo = args.get("geo")
-            return await port.query_events(
-                target_id=args.get("target_id"),
-                geo=(
-                    [str(g) for g in raw_geo]
-                    if isinstance(raw_geo, list)
-                    else (str(raw_geo) if raw_geo is not None else None)
-                ),
-                category=args.get("category"),
-                lifecycle_state=args.get("lifecycle_state"),
-                entity=args.get("entity"),
-                situation_id=args.get("situation_id"),
-                since=args.get("since"),
-                until=args.get("until"),
-                as_of=args.get("as_of"),
-                include_origin=(
-                    [str(c) for c in args["include_origin"]]
-                    if isinstance(args.get("include_origin"), list) else None
-                ),
-                limit=int(args.get("limit", 20)),
-            )
-        if name == "inspect_event":
-            return await port.inspect_event(
-                event_id=str(args.get("event_id", "")),
-            )
-        if name == "query_predictions":
-            return await port.query_predictions(
-                target_id=args.get("target_id"),
-                status=args.get("status"),
-                limit=int(args.get("limit", 20)),
-            )
-        if name == "list_targets":
-            return await port.list_targets(
-                active_only=bool(args.get("active_only", True)),
-            )
-        if name == "list_sources":
-            return await port.list_sources(
-                active_only=bool(args.get("active_only", True)),
-                silent_only=bool(args.get("silent_only", False)),
-                silent_hours=int(args.get("silent_hours", 48)),
-            )
-    except Exception as exc:                                # noqa: BLE001
-        # Defensive: tool implementations may hit Postgres / Qdrant in
-        # ways that raise. Surface the error to the planner rather than
-        # bubbling out — the loop has its own cap, so the run terminates.
-        logger.warning(
-            "consult_on_demand.tool.error tool=%s err=%s",
-            name, exc,
-        )
-        return {"error": f"tool_failed: {exc!s}"}
-    # Unreachable — _KNOWN_TOOLS membership was checked above.
-    return {"error": "unreachable"}                          # pragma: no cover
-
-
-async def _run_one_call(
-    deps: ConsultOnDemandDeps,
-    *,
-    tool_name: str,
-    tool_args: Mapping[str, Any],
-    scope_predicate: str | None,
-    analyst_id: str | None,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Execute ONE tool call through the governed binding (or, for tests /
-    embedders with no binding, the direct port dispatcher).
-
-    Returns ``(tool_result, meta)`` where ``meta`` carries
-    ``{"governed": bool, "admitted": bool | None}`` for the trace. This NEVER
-    raises — any failure (including an unexpected binding error) is folded into
-    ``tool_result`` as ``{"error": ...}`` so one call in a concurrent batch can
-    fail without aborting the whole round (and a single call behaves exactly as
-    the historical dispatcher did: error mapped into the conversation).
-    """
-    if deps.agency_binding is not None:
-        # Governed path (A-3a): the binding shapes the ToolCall and runs the
-        # full hard-gate pipeline (resolve ∩ allow ∩ applicability, the pack
-        # governor, the ledger). scope_predicate is INJECTED here (caller-
-        # pinned) so the planner cannot override an operator scope.
-        try:
-            outcome = await deps.agency_binding.run_tool(
-                tool_name,
-                {**dict(tool_args), "scope_predicate": scope_predicate},
-            )
-        except Exception as exc:  # noqa: BLE001 — one call's failure ≠ round failure
-            logger.warning(
-                "consult_on_demand.tool.governed_error tool=%s err=%s",
-                tool_name, exc,
-            )
-            return {"error": f"tool_failed: {exc!s}"}, {
-                "governed": True, "admitted": False,
-            }
-        if not outcome.admitted:
-            return (
-                {"error": f"tool_blocked: {outcome.block_cause}: {outcome.detail}"},
-                {"governed": True, "admitted": False},
-            )
-        if outcome.tool_result is None or outcome.tool_result.status == "failed":
-            err = (
-                outcome.tool_result.error
-                if outcome.tool_result is not None
-                else "tool produced no result"
-            )
-            return (
-                {"error": f"tool_failed: {err}"},
-                {"governed": True, "admitted": True},
-            )
-        return dict(outcome.tool_result.output), {"governed": True, "admitted": True}
-
-    # UNGOVERNED direct-port dispatch. Reachable only from hand-constructed deps
-    # (tests / non-runtime embedders) — the production deps resolver ALWAYS binds
-    # the substrate_read pack and fail-closes when it can't
-    # (dapr_host._analyst_deps_resolver). Log at WARNING so this can never be a
-    # *silent* bypass if it ever appears on a production path.
-    logger.warning(
-        "consult_on_demand.tool.UNGOVERNED analyst_id=%s tool=%s — agency_binding "
-        "not wired; dispatching direct at the substrate port (expected only for "
-        "tests/embedders, never the runtime)",
-        analyst_id, tool_name,
-    )
-    tool_result = await _dispatch_tool(
-        deps.substrate,
-        name=tool_name,
-        args=tool_args,
-        scope_predicate=scope_predicate,
-    )
-    return tool_result, {"governed": False, "admitted": None}
-
+from . import consult_bakeoff as _bk  # noqa: E402 — X3/G0, the bake-off arms
+from . import consult_case as _case  # noqa: E402 — C-1b, the case gate
+from . import consult_tool_providers as _prov  # noqa: E402 — C-2a §7, the hook
+from . import consult_tool_routing as _route  # noqa: E402
+from .consult_tool_routing import (  # noqa: E402,F401
+    _KNOWN_TOOLS,
+    _dispatch_tool,
+    _normalize_calls,
+    _run_one_call,
+)
 
 # ---------------------------------------------------------------------------
 # Result coercion
@@ -909,6 +560,16 @@ def _build_consult_response(
     # already markdown and passes through untouched; this covers the normal
     # final, the forced-final, and replayed sessions — all funnel through here.
     answer = _unwrap_double_envelope(str(final_payload.get("answer") or ""))[:65000]
+    # 2026-09-28 §B.3 — NORMALIZE THE MARKERS ONCE, HERE, and persist the
+    # result. The core plane writes ``【3】`` / ``【ref:2】`` / ``【2†L1-L2】``
+    # where ``[3]`` belongs; every other analyst path has normalized that at
+    # write time since 2026-06-30, and consult was the one that did not,
+    # because the rule lived in a module consult cannot import (see the note in
+    # ``provenance.citation_markers``). Un-normalized, the answer's own
+    # ordinals are invisible to the provenance census, which then grades a
+    # correctly-cited sentence as model knowledge. Idempotent on ASCII prose,
+    # so a normal answer is byte-identical through it.
+    answer = normalize_inline_citation_markers(answer)
     raw_uncertainty = final_payload.get("uncertainty", 0.5)
     try:
         uncertainty = float(raw_uncertainty)
@@ -916,7 +577,7 @@ def _build_consult_response(
         uncertainty = 0.5
     uncertainty = max(0.0, min(1.0, uncertainty))
 
-    llm_refs = _coerce_uuid_list(final_payload.get("cited_refs"))
+    llm_refs, malformed_refs = _coerce_refs_audited(final_payload.get("cited_refs"))
     # The collected-from-tools refs are the authoritative set; we trust
     # those over LLM-emitted ones (planner could hallucinate UUIDs).
     # The LLM's cited_refs are kept but filtered to those we actually
@@ -926,6 +587,23 @@ def _build_consult_response(
     # Prefer the LLM-confirmed subset (the planner's narrowing); fall
     # back to the full collected set when the planner didn't narrow.
     cited = confirmed_llm_refs if confirmed_llm_refs else list(collected_refs)
+    # 2026-09-28 §B.3 — STAMP WHICH FALLBACK THIS WAS. "The planner declined to
+    # narrow" and "every ref the planner named failed to parse or to intersect"
+    # arrive here as the same empty ``confirmed_llm_refs`` and leave as the same
+    # whole collected set, and the operator cannot tell a deliberate breadth
+    # from a swallowed citation list. Three numbers separate them, and they are
+    # only emitted when the fallback actually fired: how many refs the header
+    # carried, how many of those no tool had returned, and how many tokens were
+    # not refs at all.
+    refs_audit: dict[str, Any] = {}
+    if malformed_refs:
+        refs_audit["cited_refs_malformed"] = malformed_refs
+    if not confirmed_llm_refs and (llm_refs or malformed_refs):
+        refs_audit["header_refs_unparsed"] = len(malformed_refs)
+        refs_audit["header_refs_unconfirmed"] = len(llm_refs)
+        refs_audit["cited_refs_fallback"] = "collected_set"
+    elif confirmed_llm_refs and len(confirmed_llm_refs) < len(llm_refs):
+        refs_audit["header_refs_unconfirmed"] = len(llm_refs) - len(confirmed_llm_refs)
 
     unanswered_raw = final_payload.get("unanswered_aspects") or []
     if not isinstance(unanswered_raw, list):
@@ -938,6 +616,18 @@ def _build_consult_response(
     if uncertainty >= 0.7 and not unanswered:
         unanswered = [question[:512]]
 
+    # WATCH CANDIDATES (CONSULT_REVIEW_2026-09-28 §B.4) — the answer's own
+    # "what would change my mind" items, off the header line, structured. The
+    # key is ABSENT when the model wrote none: an empty list would read as
+    # "nothing would change this call", which is a claim and not the same
+    # fact as "it did not say". Nothing is minted HERE: once the answer is
+    # accepted, ``consult_watch_mint`` (F-4) turns them into the open questions
+    # claim_watch watches, and stamps ``watch_minted`` on this same bag.
+    watch_raw = final_payload.get("watch_candidates") or []
+    if not isinstance(watch_raw, list):
+        watch_raw = [str(watch_raw)]
+    watch = [str(w).strip()[:512] for w in watch_raw if str(w).strip()][:8]
+
     return ConsultResponsePayload(
         question=question,
         answer=answer,
@@ -948,6 +638,8 @@ def _build_consult_response(
             "rounds_used": rounds_used,
             "forced_final": forced_final,
             "subprovider": subprovider,
+            **({"watch_candidates": watch} if watch else {}),
+            **refs_audit,
             **extra,
         },
     )
@@ -997,6 +689,7 @@ async def _reason_via_llm(
     max_tokens: int,
     temperature: float,
     system_prompt: str,
+    thinking: bool = False,
 ) -> tuple[str, dict[str, int]]:
     """One chat_complete turn.  Mirrors inline_target's helper.
 
@@ -1012,6 +705,7 @@ async def _reason_via_llm(
         max_tokens=max_tokens,
         temperature=temperature,
         system_prompt=system_prompt,
+        thinking=thinking,
     )
     return content, usage
 
@@ -1024,6 +718,7 @@ async def _reason_with_response(
     temperature: float,
     system_prompt: str,
     tools: list[dict[str, Any]] | None = None,
+    thinking: bool = False,
 ) -> tuple[str, dict[str, int], Any]:
     """One chat_complete turn, returning ``(content, usage, response)``.
 
@@ -1040,13 +735,19 @@ async def _reason_with_response(
     kwargs: dict[str, Any] = {}
     if tools:
         kwargs["tools"] = tools
-    response = await llm.chat_complete(
-        messages,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        system=system_prompt,
-        **kwargs,
-    )
+    # T-1: ``thinking`` rides only when True (the caller checked the plane can
+    # think), so a thinking-off call is byte-identical to before. Every consult
+    # call is INTERACTIVE on the core-plane gate: a person is waiting.
+    if thinking:
+        kwargs["thinking"] = True
+    with interactive_calls():
+        response = await llm.chat_complete(
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            system=system_prompt,
+            **kwargs,
+        )
     content = getattr(response, "content", "") or ""
     usage_raw = getattr(response, "usage", None)
     usage_dict = {
@@ -1061,10 +762,53 @@ async def _reason_with_response(
     return content, usage_dict, response
 
 
+def _raise_if_stream_cut(content: str, response: Any) -> None:
+    """Raise a RETURNED stream cut as the loop's one cut shape (W11-F133).
+
+    Anthropic's handler returns a cut stream as the partial body with
+    ``finish_reason="error"`` and a ``legba_stream_error`` marker; the core
+    plane raises :class:`StreamInterruptedFailure`. The loop handles one shape,
+    so a cut generation is never mistaken for a finished answer, nor a cut
+    tool call for a round. Loop-only: the shared ``_reason*`` helpers (deep
+    consult's stages, the recovery replay) are unchanged.
+    """
+    raw = getattr(response, "raw_response", None)
+    stream_cut = raw.get("legba_stream_error") if isinstance(raw, Mapping) else None
+    if stream_cut:
+        raise StreamInterruptedFailure(
+            f"stream interrupted after {len(content)} chars: {stream_cut}",
+            partial_text=content,
+            tool_use_started=bool(getattr(response, "tool_calls", None)),
+            partial_body=raw,
+        )
+
+
 def _refs_from_tool_result(tool_result: Mapping[str, Any]) -> list[UUID]:
     """Lift any substrate UUIDs out of a tool's JSON response."""
     raw = tool_result.get("refs") if isinstance(tool_result, Mapping) else None
     return _coerce_uuid_list(raw or [])
+
+
+#: The payload keys the whitelist's tools carry their result list under, in
+#: probe order. ``rows``/``items`` were the only two the trace looked at, so
+#: ``compare_targets`` — which returns ``targets`` — logged count 0 on every
+#: call it has ever made and a six-target comparison read as an empty result
+#: in the 2026-09-28 review. ``count`` still wins when a tool reports its own.
+_RESULT_LIST_KEYS: tuple[str, ...] = (
+    "rows", "items", "targets", "compared", "entries",
+)
+
+
+def _tool_result_count(tool_result: Mapping[str, Any]) -> int:
+    """How many things one tool result carries, for the ``act`` trace step."""
+    own = tool_result.get("count")
+    if isinstance(own, int) and not isinstance(own, bool):
+        return own
+    for key in _RESULT_LIST_KEYS:
+        value = tool_result.get(key)
+        if isinstance(value, (list, tuple)):
+            return len(value)
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -1127,7 +871,7 @@ class ConsultOnDemandDeps:
     # therefore only takes effect on a plane that still accepts the parameter —
     # today that is the `"core"` picker override (llm.primary.openai_compat).
     # Do not tune consult determinism here expecting it to reach Opus.
-    temperature: float = 0.2
+    temperature: float = HOUSE_TEMPERATURE
     system_prompt: str = _SYSTEM_PROMPT
     max_rounds: int = MAX_TOOL_ROUNDS
     # Per-round native call width. None ⇒ ``_cp.native_batch_cap()`` (4, env
@@ -1157,6 +901,40 @@ class ConsultOnDemandDeps:
     # source of truth. None = no streaming (the trace is still built as today).
     # Never let a publish failure break the run (the emitter swallows).
     step_publish: Callable[[dict[str, Any]], Awaitable[None]] | None = None
+    # F-4: the write surface the watch mint (``consult_watch_mint``) writes through;
+    # None (hand-built deps) => no candidate is minted and no stamp is written.
+    pg_pool: Any | None = None
+    # C-1b: the ``workstation_drive`` pack binding ("present a case"). Used ONLY
+    # on a turn the operator armed (``present_case``), re-pointed per request;
+    # an armed turn without it fails loud (``case_unavailable``), never plain.
+    drive_binding: Any | None = None
+    # C-2a §7 — the per-analyst binding of every provider pack the consult
+    # descriptor grants, keyed by pack id (``runtime/consult_bindings``). A
+    # family is offered only on a turn armed for it; ``drive_binding`` above is
+    # C-1b's spelling of the drive pack's entry and is still honoured.
+    provider_bindings: Mapping[str, Any] | None = None
+    # X2 / C1 — the by-id LLM resolver the turn's JUDGE is built through (the
+    # host's cached handler factory, unfiltered by the plane allowlist: the
+    # judge is not a consult plane). None ⇒ the turn is labelled
+    # ``not_judged: no_judge_route`` — never silently unjudged.
+    judge_resolver: Callable[[str], Awaitable[Any]] | None = None
+    # Q-1 — the TURN CONTRACT (``consult_contract``): armed by the production
+    # builder; off for hand-built deps, whose turns stay byte-identical.
+    # ``contract_pool`` is the READ pool its coverage / resolution reads use
+    # (falls back to ``pg_pool``; deep consult passes its pool here so the
+    # watch mint, which writes through ``pg_pool``, stays off on that path).
+    turn_contract: bool = False
+    contract_pool: Any | None = None
+    # Q-2 — the READ pool the settle-point JUDGE reads cited evidence through
+    # (falls back to ``pg_pool``). Deep consult sets it beside
+    # ``judge_resolver`` so its turns are judged, while ``pg_pool`` — and so
+    # the chat-only watch mint — stays unset on that path.
+    judge_pool: Any | None = None
+    # T-1 — ``method.llm.thinking`` of the descriptor (``consult_default`` and
+    # ``deep_consult`` declare "on"). Off by default: hand-built deps and the
+    # bake-off arms (whose descriptors declare nothing) call as before. Which
+    # CALLS think is ``consult_thinking``'s table, not this flag.
+    thinking: bool = False
 
 
 async def run_method(
@@ -1238,12 +1016,46 @@ async def run_method(
     # unchanged. See ``consult_round_protocol``.
     native_tools_route = _cp.supports_native_tools(active_llm)
     native_wire = _cp.native_wire(active_llm)
+    # C-1b (decision D1), generalised by the C-2a §7 hook: a provider family
+    # (the case's drive actions, the write plane) is OPT-IN per turn. Unarmed,
+    # nothing below differs by a byte; armed, the family's tools and its
+    # protocol block are offered, and an armed turn with no binding refuses
+    # rather than silently answering plainly.
+    flags = _prov.RunFlags.from_request(first)
+    offered = _prov.offered_providers(flags)
+    for _p in offered:
+        if _prov.binding_for(deps, _p.pack_id) is None:
+            raise ValueError(_p.unavailable)
+    # X3/G0 — a bake-off ARM (the consult descriptor's read pack decides; see
+    # ``consult_bakeoff``) offers only its pack's tools and reads its own prompt.
+    arm = _bk.variant_for_binding(deps.agency_binding)
+    base_tools = set(arm.tools) if arm else _KNOWN_TOOLS
     native_tool_payload = (
-        _cp.render_tools_for(native_wire, _KNOWN_TOOLS)
+        _cp.render_tools_for(
+            native_wire,
+            [*sorted(base_tools), *(n for _p in offered for n in _p.tool_names)]
+            if offered else base_tools,
+        )
         if native_tools_route
         else None
     )
-    effective_system_prompt = deps.system_prompt + (
+    # --- RUN CONTEXT (CONSULT_REVIEW_2026-09-28 §B.4) -------------------
+    # What is TRUE at this run's start, appended to the standing prompt rather
+    # than baked into it: which curated series the platform actually holds
+    # (the reason series_history/series_compare had been invoked zero times —
+    # nothing ever said there was anything to read), and the substrate_read
+    # pack's OWN prompt_fragments + rules, read off the live descriptor the
+    # binding already resolved. The runtime injected those fragments only on
+    # the inline_target GATHER binding; the consult path is governed through
+    # the same pack and never saw them. It lands BEFORE the native-protocol
+    # suffix so the output contract stays the last thing the model reads, and
+    # it is empty (prompt byte-identical) for a deps bundle with neither a
+    # holdings reader nor a binding.
+    run_context = await _pctx.render_run_context(
+        substrate=None if arm else deps.substrate,  # an arm holds no series tools
+        agency_binding=deps.agency_binding,
+    ) + "".join(_p.fragment(_prov.binding_for(deps, _p.pack_id)) for _p in offered)
+    effective_system_prompt = (arm.system_prompt if arm else deps.system_prompt) + run_context + (
         _cp.native_system_suffix(FINAL_SENTINEL) if native_tools_route else ""
     )
 
@@ -1273,6 +1085,16 @@ async def run_method(
         steps.append(step)
         await _emit_step(step)
 
+    # T-1 — this turn's thinking (``consult_thinking``): the descriptor's
+    # choice, a request row's per-turn override, never on a bake-off arm, and
+    # only on a plane that can think. Recorded when asked for, so a turn's
+    # trace says whether it thought and, if not, why.
+    thinking = _think.ConsultThinking.decide(
+        deps.thinking, first=first, arm=arm is not None, llm=active_llm,
+    )
+    if thinking.requested:
+        await _record(thinking.step())
+
     # --- Recovery: finish a run that was cut, without drilling again -------
     # ``synthesize_from`` carries a PERSISTED turn's evidence. The whole ReAct
     # loop below is skipped: this path writes an answer over evidence that
@@ -1280,11 +1102,42 @@ async def run_method(
     # than the front door because the tools, the governed binding and the model
     # planes are all here, and it arrives on the request row so the actor
     # surface is unchanged.
+    # F-6: the input ceiling every call below honours (``consult_context_ceiling``).
+    context_ceiling = _cc.resolve_ceiling(options)
+    ceiling_source = _cc.SOURCE_DESCRIPTOR
+    if context_ceiling is None:
+        # W11-F133 (consult 6cd91190): no descriptor ceiling is no longer "no
+        # ceiling" — the route's own window bounds the loop's input.
+        context_ceiling, ceiling_source = _cc.derive_ceiling(
+            active_llm, max_tokens=deps.max_tokens,
+        )
+    ceiling_stamp: dict[str, Any] | None = None
     recovery = first.get("synthesize_from")
     if recovery:
         from . import consult_resynthesis as _rs
 
-        return await _rs.run_synthesis_only(
+        # Q-2 — the recovered answer carries the turn contract like any other:
+        # the original turn's window / grounding / coverage, settled over the
+        # NEW prose by the same functions (``consult_contract``).
+        r_contract = await _ct.open_recovery_turn(recovery=recovery, deps=deps, record=_record)
+
+        async def _settle_recovered(consult: Any, r_spend: Any) -> Any:
+            async def _r_repair(system: str, msgs: list[dict[str, Any]]) -> str:
+                text, rep_usage, rep_response = await _reason_with_response(
+                    active_llm, messages=msgs, max_tokens=deps.max_tokens,
+                    temperature=deps.temperature, system_prompt=system,
+                    thinking=thinking.for_role(_think.ROLE_REPAIR),
+                )
+                r_spend.record(active_llm, rep_response, rep_usage)
+                return text
+
+            return await _ct.settle_answer(
+                consult, r_contract, steps=[], spend=r_spend, llm_call=_r_repair,
+                record=_record, turn_ref=str(first.get("request_id") or ""),
+                first={"on_screen": r_contract.on_screen} if r_contract and r_contract.on_screen else {},
+            )
+
+        recovered = await _rs.run_synthesis_only(
             recovery,
             deps=deps,
             active_llm=active_llm,
@@ -1292,7 +1145,15 @@ async def run_method(
             system_prompt=effective_system_prompt,
             record=_record,
             analyst_id=analyst_id,
+            context_ceiling=context_ceiling,
+            context_ceiling_source=ceiling_source,
+            settle=_settle_recovered if r_contract is not None else None,
+            thinking=thinking.for_role(_think.ROLE_RECOVERY),
         )
+        recovered = await _wm.mint_on_result(recovered, first=first, options=options, deps=deps, record=_record)
+        # W11-F93 — the recovered answer is judged once it has SETTLED, too.
+        recovered = await _judging.judge_settled_result(recovered, deps=deps, record=_record)
+        return await _ct.enforce_after_judge(recovered, r_contract, record=_record)
 
     # --- Effective round count (Piece 1, D1; re-defaulted after c8a0105c) ---
     # The per-run override may arrive on the question row or in ``options``;
@@ -1316,7 +1177,9 @@ async def run_method(
     rounds_source = "request"
     if requested is None:
         rounds_source = "default"
-        effective_rounds = deps.max_rounds
+        effective_rounds = (
+            _case.V.LIMITS["case_rounds_default"] if flags.present_case else deps.max_rounds
+        )
     else:
         try:
             effective_rounds = int(requested)
@@ -1327,17 +1190,36 @@ async def run_method(
 
     # --- Per-run spend ceiling ----------------------------------------
     # Per RUN, never on ``deps`` (shared across concurrent runs).
-    spend = SpendGuard(
-        **{
+    spend = _bk.spend_guard_for(  # X3/G0: a bake-off row arms its hard stop
+        first,
+        stock_kwargs={
             k: v
             for k, v in (
                 ("max_input_tokens", deps.max_input_tokens_per_run),
                 ("max_cost_usd", deps.max_cost_usd_per_run),
             )
             if v is not None
-        }
+        },
+        max_output_tokens=deps.max_tokens,
     )
+    # Q-1 (E) — the per-TURN ceiling (``consult_turn_cost``), on a priced route.
+    out_limit = _cp.output_limit(active_llm, deps.max_tokens)  # the model's own (no output caps)
+    spend = await arm_turn_ceiling_observed(spend, active_llm, pool=deps.pg_pool or deps.contract_pool)
     batch_cap = _cp.native_batch_cap(deps.native_batch_cap)
+
+    # C-1b / C-2a §7 — each offered family's RUN-SCOPED GATE (the case gate:
+    # read set, seq, cap, seal; the write gate: read set, caps, spend), over a
+    # binding re-pointed at this request. Armed turns only.
+    gates = {
+        _p.pack_id: _p.open_gate(
+            _prov.binding_for(deps, _p.pack_id).for_request(
+                session_id=first.get("session_id"), request_id=first.get("request_id"),
+            ),
+            record=_record, first=first, spend=spend,
+        )
+        for _p in offered
+    }
+    case = gates.get(_case.V.WORKSTATION_DRIVE_PACK_ID)
 
     def _normalize_round_calls(parsed: Mapping[str, Any]) -> list[dict[str, Any]]:
         """``_normalize_calls`` at THIS run's per-round width."""
@@ -1360,9 +1242,13 @@ async def run_method(
             "rounds_source": rounds_source,
             "native_batch_cap": batch_cap,
             "round_result_bytes": _tc.round_result_bound(),
+            "context_ceiling_tokens": context_ceiling,
+            "context_ceiling_source": ceiling_source,
+            "run_context_chars": len(run_context),
             "total_budget_s": deps.total_budget_seconds,
             "final_floor_s": _cp.default_final_floor_seconds(),
             **spend.snapshot(),
+            **({"present_case": True} if case else {}),
         }
     )
 
@@ -1391,6 +1277,15 @@ async def run_method(
             analyst_id, len(pinned_block),
         )
     user_prompt = _render_user_prompt(question, scope_predicate, pinned_block)
+    # Q-1 (A, C) — the window in force, the grounding mode, the coverage read.
+    # Q-2: ``contract_question`` is the ASKER's question when the row's
+    # ``question`` carries more (deep consult appends its pre-acquired evidence
+    # brief, whose dates and words are not the asker's window or mode).
+    contract = await _ct.open_turn(
+        first=first, question=str(first.get("contract_question") or question),
+        deps=deps, arm=arm, record=_record,
+    )
+    user_prompt = _ct.lead_user_prompt(user_prompt, contract, first)  # + ON SCREEN (U-6)
     messages: list[Mapping[str, Any]] = [
         *seeded,
         {"role": "user", "content": user_prompt},
@@ -1398,6 +1293,10 @@ async def run_method(
 
     collected_refs: list[UUID] = []
     aggregate_usage = {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0}
+    # Roll 86: per-call receipts = the run account's entries from here on (unbound → none).
+    from ..registry.consult_turn_stamps import call_receipts as _call_receipts
+    from ..run_accounting import llm_call_watermark as _acct_wm, llm_calls_since as _acct_since
+    _calls_from = _acct_wm()
 
     final_payload: dict[str, Any] | None = None
     forced_final = False
@@ -1416,6 +1315,9 @@ async def run_method(
     #: kind — this is a fact the loop knows and nobody else should have to
     #: reconstruct.
     synthesis_status = "complete"
+    #: A terminal round answered with no body (W11-F160): settled as "none"
+    #: with no forced final, which would burn the same output cap again.
+    answered_empty = False
     #: The synthesis request as sent, recorded so a CUT run can be finished
     #: later over the same prompt rather than a summary of it. Only set once
     #: the forced-final block builds it, and only PERSISTED when the run turns
@@ -1429,6 +1331,53 @@ async def run_method(
 
     def _remaining_total() -> float:
         return deps.total_budget_seconds - _elapsed()
+
+    # --- Live answer capture (c8a0105c, extended by 9b902fec) ----------
+    # A sink installed around a generation holds every streamed token, so a
+    # timeout cancels the call but leaves the paid-for prefix in the caller's
+    # hands; deltas are relayed live so the panel shows the answer forming.
+    # Run 9b902fec (2026-10-29) is why this is no longer forced-final-only: on
+    # the native route a DRILLING round with no tool call IS the answer, and
+    # round 13 was cut at 480s with no sink installed — the answer was thrown
+    # away and a second long generation bought to replace it.
+    #
+    # Relay is throttled by CHARACTERS, not per delta: Anthropic emits many
+    # small text_deltas and one frame each would flood the SSE relay's
+    # 256-slot queue, which drops on full — the live answer would arrive with
+    # holes in it. Each frame names its ``segment`` (``round-<n>`` / ``final``)
+    # so a reader can tell a tool round's preamble from the answer in flight.
+    relay_tasks: set[Any] = set()
+
+    def _answer_sink(segment: str) -> tuple[TextDeltaSink, Callable[[], None]]:
+        relay_buf: list[str] = []
+        relay_len = 0
+
+        def _flush_delta() -> None:
+            nonlocal relay_len
+            if not relay_buf:
+                return
+            chunk = "".join(relay_buf)
+            relay_buf.clear()
+            relay_len = 0
+            task = asyncio.ensure_future(
+                _emit_step({
+                    "phase": "narrate",
+                    "kind": "answer_delta",
+                    "segment": segment,
+                    "text": chunk,
+                })
+            )
+            relay_tasks.add(task)
+            task.add_done_callback(relay_tasks.discard)
+
+        def _on_delta(chunk: str) -> None:
+            nonlocal relay_len
+            relay_buf.append(chunk)
+            relay_len += len(chunk)
+            if relay_len >= _ANSWER_DELTA_CHARS:
+                _flush_delta()
+
+        return TextDeltaSink(on_delta=_on_delta), _flush_delta
 
     for round_idx in range(effective_rounds):
         # Wall-clock guard: once we've spent the budget, stop drilling and fall
@@ -1476,21 +1425,75 @@ async def run_method(
             break
         rounds_used = round_idx + 1
         round_budget = max(1.0, min(deps.round_deadline_seconds, _remaining_total()))
+        sent, ceiling_stamp = _cc.apply_context_ceiling(
+            messages, system=effective_system_prompt, ceiling=context_ceiling,
+            source=ceiling_source,
+        )
+        # Native route only: there a reply with no tool call IS the answer, so
+        # streamed text may be the product. On the JSON-text route the text is
+        # a tool-call object as often as an answer and is never relayed.
+        round_sink, round_flush = (
+            _answer_sink(f"round-{rounds_used}") if native_tools_route
+            else (TextDeltaSink(), lambda: None)
+        )
         try:
-            content, usage, llm_response = await asyncio.wait_for(
-                _reason_with_response(
-                    active_llm,
-                    messages=messages,
-                    max_tokens=deps.max_tokens,
-                    temperature=deps.temperature,
-                    system_prompt=effective_system_prompt,
-                    tools=native_tool_payload,
-                ),
-                timeout=round_budget,
-            )
+            with capture_text_deltas(round_sink):
+                content, usage, llm_response = await asyncio.wait_for(
+                    _reason_with_response(
+                        active_llm,
+                        messages=sent,
+                        max_tokens=deps.max_tokens,
+                        temperature=deps.temperature,
+                        system_prompt=effective_system_prompt,
+                        tools=native_tool_payload,
+                        thinking=thinking.for_role(_think.ROLE_ROUND),
+                    ),
+                    timeout=round_budget,
+                )
+            round_flush()
+            _raise_if_stream_cut(content, llm_response)
         except asyncio.TimeoutError:
+            round_flush()
+            partial_text = round_sink.text if native_tools_route else ""
+            # A reply that opens as JSON is the old text tool-call shape in
+            # flight (``text_tool_round_fallback``), not prose: not an answer.
+            json_shaped = partial_text.lstrip().startswith(("{", "```json"))
+            if partial_text.strip() and not round_sink.tool_use_started and not json_shaped:
+                # Run 9b902fec. The model was ANSWERING (text, no tool call on
+                # the native route) when the round's deadline fired. That text
+                # is the answer, it is paid for, and it is delivered — the
+                # forced final is SKIPPED, because re-generating the answer
+                # from scratch is a second bill for what was just discarded.
+                cut_reason = (
+                    f"round {rounds_used} exceeded its {round_budget:.0f}s "
+                    f"deadline while writing the answer"
+                )
+                stop_reason = cut_reason
+                last_raw = partial_text
+                await _record({
+                    "phase": "reflect",
+                    "kind": "partial_final",
+                    "reason": "round_deadline_exceeded_while_answering",
+                    "round": rounds_used,
+                    "deadline_s": round(round_budget, 1),
+                    "elapsed_s": round(_elapsed(), 1),
+                    "chars": len(partial_text),
+                    "approx_tokens": round_sink.approx_tokens,
+                })
+                synthesis_status = "partial"
+                final_payload = _cp.partial_final_payload(
+                    partial_text=partial_text,
+                    rounds_used=rounds_used,
+                    rounds_available=effective_rounds,
+                    elapsed_s=_elapsed(),
+                    reason=cut_reason,
+                    # The answering round was SENT every prior tool result.
+                    last_tool_incorporated=True,
+                )
+                break
             # A single stuck call must not consume the run. Record it and fall
-            # through to the forced final with whatever the prior rounds got.
+            # through to the forced final with whatever the prior rounds got —
+            # nothing streamed, or the round was a tool call in progress.
             stop_reason = (
                 f"round {rounds_used} exceeded its {round_budget:.0f}s deadline"
             )
@@ -1502,7 +1505,57 @@ async def run_method(
             })
             rounds_used = max(0, rounds_used - 1)
             break
-        except Exception:
+        except Exception as exc:
+            # W11-F133 (consult 6cd91190): ANY cut, not only the deadline. The
+            # same test as the TimeoutError arm — native route, text streamed,
+            # no tool call begun, not the JSON tool shape — and the same
+            # outcome: the text IS the answer, delivered, no forced final.
+            round_flush()
+            partial_text = round_sink.text if native_tools_route else ""
+            json_shaped = partial_text.lstrip().startswith(("{", "```json"))
+            tool_use = round_sink.tool_use_started or bool(
+                getattr(exc, "tool_use_started", False)
+            )
+            if partial_text.strip() and not tool_use and not json_shaped:
+                cut_reason = (
+                    f"round {rounds_used}'s generation failed while writing the "
+                    f"answer ({type(exc).__name__})"
+                )
+                stop_reason = cut_reason
+                last_raw = partial_text
+                await _record({
+                    "phase": "reflect",
+                    "kind": "partial_final",
+                    "reason": type(exc).__name__,
+                    "error": str(exc)[:300],
+                    "round": rounds_used,
+                    "elapsed_s": round(_elapsed(), 1),
+                    "chars": len(partial_text),
+                    "approx_tokens": round_sink.approx_tokens,
+                })
+                synthesis_status = "partial"
+                final_payload = _cp.partial_final_payload(
+                    partial_text=partial_text,
+                    rounds_used=rounds_used,
+                    rounds_available=effective_rounds,
+                    elapsed_s=_elapsed(),
+                    reason=cut_reason,
+                    last_tool_incorporated=True,
+                )
+                break
+            if isinstance(exc, StreamInterruptedFailure):
+                # The stream was cut mid-tool-call (or on the JSON-text route):
+                # a cut like the deadline's, and handled like it — the forced
+                # final synthesises what the prior rounds gathered.
+                stop_reason = f"round {rounds_used}'s stream was interrupted"
+                await _record({
+                    "phase": "reason",
+                    "kind": "round_stream_interrupted",
+                    "round": rounds_used,
+                    "error": str(exc)[:300],
+                })
+                rounds_used = max(0, rounds_used - 1)
+                break
             await _record({"phase": "reason", "kind": "llm_error", "round": rounds_used})
             raise
         pending_tool_results = False
@@ -1522,6 +1575,7 @@ async def run_method(
             "round": rounds_used,
             "tokens": usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0),
             "usage": spend.snapshot(),
+            **_cc.stamp_fields(ceiling_stamp),
         })
 
         # --- Round protocol: native vs JSON-in-text (D-7) --------------
@@ -1608,7 +1662,15 @@ async def run_method(
             continue
 
         if parsed.get("final") is True:
-            final_payload = parsed
+            # W11-F160: an empty body settles "none", a cap-cut one "partial".
+            final_payload, synthesis_status, settle_step = _cp.settle_final_reply(
+                parsed, llm_response, usage, max_tokens=out_limit,
+                rounds_used=rounds_used, rounds_available=effective_rounds,
+                elapsed_s=_elapsed(), last_tool_incorporated=True,
+            )
+            answered_empty = final_payload is None
+            if settle_step is not None:
+                await _record({**settle_step, "round": rounds_used})
             await _record({
                 "phase": "reflect",
                 "kind": "final",
@@ -1670,16 +1732,12 @@ async def run_method(
         # reserve (shared txn / advisory lock around the gate) is the correct
         # hardening but lives in the shared agency/governor layer — tracked as a
         # follow-up, not blocking this read-only path.
-        results = await asyncio.gather(*[
-            _run_one_call(
-                deps,
-                tool_name=call["tool"],
-                tool_args=call["args"],
-                scope_predicate=scope_predicate,
-                analyst_id=analyst_id,
-            )
-            for call in calls
-        ])
+        # C-1b: drive tools (an armed case turn) run AFTER the reads, serially,
+        # in emitted order; a round without one is the same gather as ever.
+        results = await _route.run_round(
+            deps, calls, scope_predicate=scope_predicate,
+            analyst_id=analyst_id, gates=gates, round_no=rounds_used,
+        )
 
         # Render this round's bodies under ONE shared bound instead of a
         # per-tool one. The per-tool 8 KB bound multiplied by the batch width:
@@ -1687,8 +1745,12 @@ async def run_method(
         # replayed on every later round. The round bound (16 KB) is allocated
         # max-min fair, so a small result is never truncated to make room for a
         # large sibling — the cut lands on the payloads that hold the tokens.
+        # X2-B4: the renderer is the CONSULT CONTEXT BUILDER's display-policy
+        # choice — a reader's consult sees tool results through the reader
+        # projection (cited spans, never archived text); an operator's renders
+        # exactly as before. See consult_tool_rendering.tool_context_renderer.
         round_bodies = _tc.allocate_round_bodies(
-            [r[0] for r in results], render=_bounded_tool_json,
+            [r[0] for r in results], render=tool_context_renderer(first),
         )
 
         # Coalesce: record each call (with a compact result summary for the
@@ -1713,18 +1775,14 @@ async def run_method(
                     tool_result.get("error")
                     if not ok
                     else {
-                        # Most tools return a "count"; the rest carry "rows" or
-                        # (get_timeline) "items" — fall back so the trace count
-                        # isn't null for the common readers.
-                        "count": (
-                            tool_result.get("count")
-                            if tool_result.get("count") is not None
-                            else len(
-                                tool_result.get("rows")
-                                or tool_result.get("items")
-                                or []
-                            )
-                        ),
+                        # Most tools return a "count"; the rest name their
+                        # payload themselves. Probing only rows/items logged
+                        # compare_targets as count 0 on EVERY call it has ever
+                        # made — it returns "targets" — so the 2026-09-28
+                        # review read a six-target comparison as an empty
+                        # result. Probe every payload key the whitelist
+                        # actually returns.
+                        "count": _tool_result_count(tool_result),
                         "refs": len(new_refs),
                     }
                 ),
@@ -1740,6 +1798,11 @@ async def run_method(
                 # is the same one; only the budget it is given changed.
                 "content": round_bodies[idx],
             })
+        for _gate in gates.values():
+            # This round's READ results join each gate's read set only now,
+            # after its provider calls ran: a ref from the same batch never
+            # counts (C-1a §2, C-2a §5.2).
+            _gate.harvest(rounds_used, calls, results)
         if native_round is not None:
             # Native route: hand the results back through the SAME structured
             # channel the calls came in on, in the shape this provider wants.
@@ -1779,7 +1842,7 @@ async def run_method(
             })
 
     # ---- Force a final turn if the cap was hit without final --------
-    if final_payload is None:
+    if final_payload is None and not answered_empty:
         forced_final = True
         # D-7: the forced final gets its OWN slice of the total budget, and if
         # there is none left it does not run at all. An unbounded synthesis
@@ -1796,7 +1859,8 @@ async def run_method(
         # it happens when the prompt is at its biggest. So it gets the
         # REMAINDER of the budget, floored — ``max``, not ``min``. Overrunning
         # the total by a minute to finish the answer is the correct trade; the
-        # detached run's invoke timeout (600s) is the real outer bound.
+        # detached run's invoke timeout (derived from these same clocks plus a
+        # margin, ``consult_runs.invoke_timeout_seconds``) is the outer bound.
         final_budget = _cp.final_synthesis_budget(_remaining_total())
         if final_budget < _MIN_FINAL_SECONDS:
             await _record({
@@ -1817,9 +1881,12 @@ async def run_method(
         # ``consult_transcript``. A second copy of the wording here is exactly
         # what would make "the replay sends the same prompt" quietly false.
         force_system = _tx.synthesis_system(effective_system_prompt, FINAL_SENTINEL)
-        synthesis_messages = messages + [
-            {"role": "user", "content": _tx.synthesis_instruction(FINAL_SENTINEL)},
-        ]
+        synthesis_messages, ceiling_stamp = _cc.apply_context_ceiling(
+            messages + [
+                {"role": "user", "content": _tx.synthesis_instruction(FINAL_SENTINEL)},
+            ],
+            system=force_system, ceiling=context_ceiling, source=ceiling_source,
+        )
         # Record the request BEFORE sending it: a run that is cut mid-synthesis
         # is precisely the run whose prompt we will want back, and recording it
         # after the call would miss exactly that case.
@@ -1829,47 +1896,10 @@ async def run_method(
         if final_payload is not None:
             pass  # already degraded above — no budget left to synthesise in
         else:
-            # Watch the synthesis as it streams. The handler has always
-            # streamed this generation off the wire; what it lacked was a way
-            # to let the caller hold the prefix. With a sink installed, a
+            # Watch the synthesis as it streams (``_answer_sink`` above): a
             # timeout cancels the call but leaves every delivered token in
-            # ``sink`` — which is the difference between an apology and an
-            # answer. Deltas are relayed live so the panel shows the answer
-            # forming rather than a spinner.
-            #
-            # Relay is throttled by CHARACTERS, not per delta: Anthropic emits
-            # many small text_deltas and one frame each would flood the SSE
-            # relay's 256-slot queue, which drops on full — the live answer
-            # would arrive with holes in it.
-            relay_buf: list[str] = []
-            relay_len = 0
-            relay_tasks: set[Any] = set()
-
-            def _flush_delta() -> None:
-                nonlocal relay_len
-                if not relay_buf:
-                    return
-                chunk = "".join(relay_buf)
-                relay_buf.clear()
-                relay_len = 0
-                task = asyncio.ensure_future(
-                    _emit_step({
-                        "phase": "narrate",
-                        "kind": "answer_delta",
-                        "text": chunk,
-                    })
-                )
-                relay_tasks.add(task)
-                task.add_done_callback(relay_tasks.discard)
-
-            def _on_delta(chunk: str) -> None:
-                nonlocal relay_len
-                relay_buf.append(chunk)
-                relay_len += len(chunk)
-                if relay_len >= _ANSWER_DELTA_CHARS:
-                    _flush_delta()
-
-            sink = TextDeltaSink(on_delta=_on_delta)
+            # ``sink`` — the difference between an apology and an answer.
+            sink, _flush_delta = _answer_sink("final")
             try:
                 # Tools are WITHHELD here (no ``tools=``), on both routes. On
                 # the native route that is what leaves "reply with text" as the
@@ -1882,10 +1912,12 @@ async def run_method(
                             max_tokens=deps.max_tokens,
                             temperature=deps.temperature,
                             system_prompt=force_system,
+                            thinking=thinking.for_role(_think.ROLE_FINAL),
                         ),
                         timeout=final_budget,
                     )
                 _flush_delta()
+                _raise_if_stream_cut(content, synth_response)
                 for k in aggregate_usage:
                     aggregate_usage[k] += usage.get(k, 0)
                 spend.record(active_llm, synth_response, usage)
@@ -1895,6 +1927,7 @@ async def run_method(
                     "kind": "forced_final",
                     "tokens": usage.get("prompt_tokens", 0)
                     + usage.get("completion_tokens", 0),
+                    **_cc.stamp_fields(ceiling_stamp),
                 })
                 # Forced-final is the terminal turn (tools withheld). If the
                 # model wrote a bare prose answer — no sentinel header block
@@ -1904,9 +1937,18 @@ async def run_method(
                 # accepting it costs only the metadata. The SAME builder as
                 # the native arm above, so there is exactly one place that can
                 # decide this turn's uncertainty (review defect 4).
-                final_payload = final_payload_from_text(content)
-                if not final_payload.get("answer"):
-                    final_payload = None
+                #
+                # W11-F160 (turn 91b6260c): a header-only reply is NO answer
+                # (status "none", re-synthesizable), and a reply cut at the
+                # output cap is "partial" with its prose kept.
+                final_payload, synthesis_status, settle_step = _cp.settle_final_reply(
+                    final_payload_from_text(content), synth_response, usage,
+                    max_tokens=out_limit, rounds_used=rounds_used,
+                    rounds_available=effective_rounds, elapsed_s=_elapsed(),
+                    last_tool_incorporated=not pending_tool_results,
+                )
+                if settle_step is not None:
+                    await _record(settle_step)
             except asyncio.TimeoutError:
                 # The synthesis ran past its slice. What happens next depends
                 # on whether it had produced anything: DELIVER the partial if
@@ -1955,10 +1997,43 @@ async def run_method(
                         reason=cut_reason,
                         last_tool_incorporated=not pending_tool_results,
                     )
-            except Exception:
-                await _record({"phase": "reason", "kind": "forced_final_error"})
-                # Re-raise — let the runtime classify (transient vs hard).
-                raise
+            except Exception as exc:
+                # W11-F133 (consult 6cd91190): a synthesis that FAILED — the
+                # connection dropped, the stream was cut, the provider erred —
+                # after writing text is delivered exactly like one that ran
+                # out of time. Only a failure with nothing written propagates.
+                _flush_delta()
+                partial_text = sink.text or str(getattr(exc, "partial_text", "") or "")
+                if not partial_text.strip():
+                    await _record({"phase": "reason", "kind": "forced_final_error"})
+                    # Re-raise — let the runtime classify (transient vs hard).
+                    raise
+                cut_reason = f"the synthesis failed ({type(exc).__name__})"
+                last_raw = partial_text
+                await _record({
+                    "phase": "reflect",
+                    "kind": "partial_final",
+                    "reason": type(exc).__name__,
+                    "error": str(exc)[:300],
+                    "elapsed_s": round(_elapsed(), 1),
+                    "chars": len(partial_text),
+                    "approx_tokens": sink.approx_tokens,
+                })
+                synthesis_status = "partial"
+                final_payload = _cp.partial_final_payload(
+                    partial_text=partial_text,
+                    rounds_used=rounds_used,
+                    rounds_available=effective_rounds,
+                    elapsed_s=_elapsed(),
+                    reason=cut_reason,
+                    last_tool_incorporated=not pending_tool_results,
+                )
+
+    # Every relayed answer frame reaches the stream BEFORE the run returns, so
+    # the registry (which builds a cut run's partial from these frames) and the
+    # panel never see the terminal frame overtake the answer's last chunk.
+    if relay_tasks:
+        await asyncio.gather(*list(relay_tasks), return_exceptions=True)
 
     # --- REFLECT / NARRATE --------------------------------------------
     # SYNTHESIS STATUS is a first-class fact about the turn, not something to
@@ -1979,7 +2054,13 @@ async def run_method(
         extra_data={
             "synthesis_status": synthesis_status,
             "resynthesizable": synthesis_status != "complete",
-            "usage": spend.snapshot(),
+            # X2 / C1 — the receipt: the meter plus model, elapsed, priced.
+            "usage": {
+                **spend.receipt(active_llm, elapsed_s=_elapsed()),
+                # Roll 86: one receipt per model call (consult_turn_stamps.call_receipts).
+                "call_receipts": _call_receipts(_acct_since(_calls_from)),
+            },
+            **_cc.stamp_fields(ceiling_stamp),
             # Carried ONLY for a run that may need finishing. A run that
             # answered has nothing to replay, and storing its prompt would put
             # a copy of every transcript in the turns table for no reader.
@@ -1989,6 +2070,21 @@ async def run_method(
                 else {}
             ),
         },
+    )
+    # Q-1 (A, B, E) — window lines, typed explanations (one bounded repair),
+    # coverage block, the cost-stop line. Before the census, mint and judge.
+    async def _repair_call(system: str, msgs: list[dict[str, Any]]) -> str:
+        text, rep_usage, rep_response = await _reason_with_response(
+            active_llm, messages=msgs, max_tokens=deps.max_tokens,
+            temperature=deps.temperature, system_prompt=system,
+            thinking=thinking.for_role(_think.ROLE_REPAIR),
+        )
+        spend.record(active_llm, rep_response, rep_usage)
+        return text
+
+    consult = await _ct.settle_answer(
+        consult, contract, steps=steps, spend=spend, llm_call=_repair_call,
+        record=_record, turn_ref=str(first.get("request_id") or ""), first=first,
     )
     # Project the per-round tool trace into the payload's data bag so the
     # consult front door (consult_api._project_consult_response reads
@@ -2013,6 +2109,32 @@ async def run_method(
     # (previously never populated). Rounds are hard-capped (ROUNDS_CEILING), so
     # the trace is bounded; the raw fields on unparseable steps are truncated.
     data_update: dict[str, Any] = {"tool_calls": tool_trace, "steps": list(steps)}
+    # ONE classification of the answer's cited refs, read here and used twice
+    # below: by the EVIDENCE FLOOR and by the PROVENANCE CENSUS. Reading the
+    # rows twice would let the two numbers printed beside each other disagree.
+    _cited = [str(r) for r in consult.cited_substrate_refs]
+    for _gate in gates.values():
+        # The census union (C-1a §5): the turn's cited set is the answer's refs
+        # plus every record the case's actions cite (narration included). Each
+        # gate's record lands on the bag under its own key.
+        _cited += [r for r in _gate.cited_uuids() if r not in _cited]
+        data_update.update(_gate.bag())
+    _classification: Mapping[str, Any] | None = None
+    _resolved: int | None = None
+    try:
+        _classification, _resolved = await _floor.resolved_ref_count(
+            deps.substrate, _cited
+        )
+    except Exception as exc:  # noqa: BLE001 — never fails an answer
+        logger.warning("consult.ref_classification.failed err=%s", exc)
+    # THE EVIDENCE FLOOR (CONSULT_REVIEW_2026-09-28 §B.3/§B.4). Until now the
+    # turn's uncertainty was the model's own header number and nothing else:
+    # session 96d7bfc2 made two tool calls, one of them carrying a fabricated
+    # result in its ARGS, and published `uncertainty: 0.30`. The floor is keyed
+    # to the count of cited refs that RESOLVE to a real row — the same
+    # measurement the census below reports, read ONCE above and shared, so the
+    # two can never disagree. An unmeasured run is not floored; see the leaf.
+    consult = _floor.apply_uncertainty_floor(consult, resolved=_resolved)
     # 7g-2 — THE PROVENANCE CENSUS. "Mostly model knowledge" was a judgement a
     # reader had to take on trust; this is the count behind it. Composed HERE,
     # on the server, off the answer's own cited refs and its own prose: a
@@ -2020,19 +2142,35 @@ async def run_method(
     # beside. Best-effort by contract — a census that cannot be measured
     # reports None per class (never a fabricated zero) and never costs the
     # caller an answer.
-    try:
-        _classification = None
-        _classify = getattr(deps.substrate, "classify_cited_refs", None)
-        _cited = [str(r) for r in consult.cited_substrate_refs]
-        if callable(_classify) and _cited:
-            _classification = await _classify(refs=_cited)
-        data_update["provenance_census"] = build_provenance_census(
-            answer=consult.answer,
-            cited_refs=_cited,
-            classification=_classification,
+    # 2026-09-28 §B.3 — THE CENSUS + THE PROVENANCE HOLD, over the SAME classify
+    # read the floor just made (one read serves both; the two cannot disagree).
+    # An answer that resolved not one citation to live or held reporting, and
+    # still asserts, leads with a line saying so. The banner goes on the ANSWER
+    # (it is what a reader reads) and the reason goes on the wire (it is what
+    # the panel keys on).
+    _census, _hold_banner, _hold_reason = await compose_census(
+        deps.substrate,
+        answer=consult.answer,
+        cited_refs=_cited,
+        malformed_refs=consult.data.get("cited_refs_malformed"),
+        classification=_classification,
+    )
+    if _census is not None:
+        data_update["provenance_census"] = _census
+    if _hold_banner and _hold_reason:
+        data_update["hold_reason"] = _hold_reason
+        consult = consult.model_copy(
+            update={"answer": (_hold_banner + consult.answer)[:65000]}
         )
-    except Exception as exc:  # noqa: BLE001 — a census never fails an answer
-        logger.warning("consult.provenance_census.failed err=%s", exc)
+    # C-2a §5.4 — THE TRUTH LINE: an armed write turn ENDS with the server's
+    # count of what changed (``writes: executed n · staged n · refused n`` or
+    # ``writes: none``), whatever the prose above it claims.
+    for _gate in gates.values():
+        _suffix = _gate.answer_suffix() if hasattr(_gate, "answer_suffix") else ""
+        if _suffix:
+            consult = consult.model_copy(
+                update={"answer": consult.answer[: 65000 - len(_suffix)] + _suffix}
+            )
     # Also stash the raw final reply so the operator can audit
     # malformed-but-recovered cases.
     if final_payload is None:
@@ -2040,12 +2178,24 @@ async def run_method(
     consult = consult.model_copy(
         update={"data": {**consult.data, **data_update}}
     )
+    # The JUDGE is not here: it runs at the settle point below (W11-F93).
+    # Both B.4 facts ride the FRAME as well as the payload, deliberately: the
+    # payload's ``data`` bag dies at the consult front door (``consult_turns``
+    # has no column for it, and the chat path writes no analyst_outputs row),
+    # while ``steps`` is what a turn durably persists. A later lane reading
+    # watch candidates back out of a turn reads them from here.
     await _record({
         "phase": "reflect",
         "kind": "build_consult_response",
         "uncertainty": consult.uncertainty,
         "cited_refs_count": len(consult.cited_substrate_refs),
         "unanswered_aspects_count": len(consult.unanswered_aspects),
+        "resolved_refs": _resolved,
+        **{
+            key: consult.data[key]
+            for key in ("uncertainty_floor_applied", "watch_candidates", _cc.STAMP_KEY)
+            if key in consult.data
+        },
     })
 
     finding = _wrap_as_finding(consult, analyst_id=analyst_id)
@@ -2055,13 +2205,24 @@ async def run_method(
         "tags": len(finding.tags),
     })
 
-    return AnalystMethodResult(
+    result = AnalystMethodResult(
         finding=finding,
         consult_response=consult,
         usage=aggregate_usage,
         derived_from=list(collected_refs),
         intermediate_steps=steps,
+        cost_estimate_usd=spend.cost_usd,
     )
+    result = await _wm.mint_on_result(result, first=first, options=options, deps=deps, record=_record)
+    # X2 / C1, W11-F93 — THE SETTLE POINT. The judge grades the answer and the
+    # cited refs this run RETURNS, after every edit and the mint, and stamps a
+    # digest of them the front door re-checks against what it persists. It is
+    # exempt from the run's spend ceiling (``spend`` above never meters it): a
+    # turn the cap stopped is judged, on the judge's own input budget.
+    result = await _judging.judge_settled_result(result, deps=deps, record=_record)
+    # Q-1 (C, D) — record-only enforcement over the model's prose, using the
+    # judge's list; the verification digest is chained, never silently broken.
+    return await _ct.enforce_after_judge(result, contract, record=_record)
 
 
 # ---------------------------------------------------------------------------
@@ -2084,7 +2245,7 @@ class ConsultOnDemandRunner:
         substrate: SubstrateQueryPort,
         *,
         max_tokens: int | None = None,
-        temperature: float = 0.2,
+        temperature: float = HOUSE_TEMPERATURE,
         system_prompt: str | None = None,
         max_rounds: int = MAX_TOOL_ROUNDS,
     ) -> None:

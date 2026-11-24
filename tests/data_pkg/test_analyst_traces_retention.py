@@ -145,8 +145,9 @@ async def test_migration_0101_purge_index_exists(pg_pool):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_purge_truth_table_deletes_aged_keeps_recent(pg_pool):
+async def test_purge_truth_table_deletes_aged_keeps_recent(pg_pool, monkeypatch):
     """Deletes strictly older than the TTL; keeps rows at/under the TTL."""
+    monkeypatch.setenv("LEGBA_ANALYST_TRACES_DELETE_ENABLED", "1")
     from legba.runtime.deps import StandardDeps
 
     now = datetime.now(tz=timezone.utc)
@@ -214,9 +215,10 @@ async def test_disabled_ttl_is_a_live_noop(pg_pool):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_purge_cascades_linked_critique_and_reports_it(pg_pool):
+async def test_purge_cascades_linked_critique_and_reports_it(pg_pool, monkeypatch):
     """An aged trace's linked critique is CASCADE-deleted (no orphan) and the
     summary honestly counts it."""
+    monkeypatch.setenv("LEGBA_ANALYST_TRACES_DELETE_ENABLED", "1")
     from legba.runtime.deps import StandardDeps
 
     old_id = uuid4()
@@ -249,4 +251,86 @@ async def test_purge_cascades_linked_critique_and_reports_it(pg_pool):
         async with pg_pool.acquire() as conn:
             await conn.execute(
                 "DELETE FROM analyst_critiques WHERE trace_id=$1", old_id)
+            await conn.execute("DELETE FROM analyst_traces WHERE run_id=$1", old_id)
+
+
+# ---------------------------------------------------------------------------
+# Owner decision 2026-11-15: traces are kept. The delete is OFF by default and
+# reachable only by an explicit setting.
+# ---------------------------------------------------------------------------
+
+
+class _CountingPool:
+    """A pool stand-in. The engine tolerates a failed policy-row load, and the
+    purge also goes through ``acquire``, so counting acquires proves whether
+    the purge ran."""
+
+    def __init__(self):
+        self.acquires = 0
+
+    def acquire(self):
+        self.acquires += 1
+        raise RuntimeError("no db in unit test")
+
+
+@pytest.mark.asyncio
+async def test_positive_ttl_without_the_switch_never_reaches_the_purge(monkeypatch):
+    monkeypatch.delenv("LEGBA_ANALYST_TRACES_DELETE_ENABLED", raising=False)
+    monkeypatch.setenv("LEGBA_ANALYST_TRACES_TTL_DAYS", "45")
+    pool = _CountingPool()
+
+    class _Deps:
+        pg_pool = pool
+
+    res = await analyst_traces_retention.handle(
+        [], {"sub_handler": "analyst_traces_retention"}, _Deps()
+    )
+    # Only the policy-row load touched the pool; the purge never did.
+    assert pool.acquires == 1
+    assert res.finding.data["deletion"] == "off"
+    assert "traces_purged" not in res.finding.data
+    assert "switched off" in res.finding.title
+
+
+@pytest.mark.asyncio
+async def test_switch_env_restores_the_old_behaviour(monkeypatch):
+    monkeypatch.setenv("LEGBA_ANALYST_TRACES_DELETE_ENABLED", "1")
+    monkeypatch.setenv("LEGBA_ANALYST_TRACES_TTL_DAYS", "45")
+    pool = _CountingPool()
+
+    class _Deps:
+        pg_pool = pool
+
+    res = await analyst_traces_retention.handle(
+        [], {"sub_handler": "analyst_traces_retention"}, _Deps()
+    )
+    # Policy load + the purge attempt both reached the pool (the stub then
+    # fails, which the engine swallows into a zeroed run).
+    assert pool.acquires == 2
+    assert res.finding.data["traces_purged"] == 0
+    assert "deletion" not in res.finding.data
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_default_leaves_an_ancient_trace_in_place(pg_pool, monkeypatch):
+    from legba.runtime.deps import StandardDeps
+
+    monkeypatch.delenv("LEGBA_ANALYST_TRACES_DELETE_ENABLED", raising=False)
+    old_id = uuid4()
+    async with pg_pool.acquire() as conn:
+        await _insert_trace(
+            conn, old_id, datetime.now(tz=timezone.utc) - timedelta(days=400)
+        )
+    try:
+        res = await analyst_traces_retention.handle(
+            [], {"ttl_days": 45, "batch_limit": 1_000_000},
+            StandardDeps(pg_pool=pg_pool),
+        )
+        assert res.finding.data["deletion"] == "off"
+        async with pg_pool.acquire() as conn:
+            assert await conn.fetchval(
+                "SELECT 1 FROM analyst_traces WHERE run_id=$1", old_id) == 1
+    finally:
+        async with pg_pool.acquire() as conn:
             await conn.execute("DELETE FROM analyst_traces WHERE run_id=$1", old_id)

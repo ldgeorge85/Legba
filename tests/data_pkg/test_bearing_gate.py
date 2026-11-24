@@ -12,7 +12,9 @@ question raises no review flag — lives in ``test_claim_watch.py``.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -740,3 +742,229 @@ async def test_the_confirm_prompt_carries_every_pair_with_its_echo_id():
     prompt = confirm.prompts[0]
     for token in ("id=e0", "id=e1", "T-A", "S-A", "T-B", "S-B"):
         assert token in prompt
+
+
+# ---------------------------------------------------------------------------
+# W11-F148 — the gate asks a DECISION component (clef-flash) when given one;
+# a chat component keeps the chat path byte for byte
+# ---------------------------------------------------------------------------
+
+_GOLDEN = Path(__file__).resolve().parent / "fixtures" / "bearing_gate_llm_call_golden.json"
+_DESCRIPTOR = Path(__file__).resolve().parents[2] / "descriptors" / "analyst_claim_watch.yaml"
+_CLEF = "llm.decide.innoai_clef_flash"
+_GEMMA = "llm.verify.innoai_gemma.openai_compat"
+
+
+class _FakeDecider:
+    """Scripted ``decide`` keyed on the signal text. ``answers`` maps a signal
+    to a choice string, a full answer mapping, or an Exception (raised)."""
+
+    def __init__(self, answers: dict[str, Any] | None = None, *, default: Any = "yes") -> None:
+        self.answers = answers or {}
+        self.default = default
+        self.calls: list[dict[str, Any]] = []
+
+    async def decide(self, state, questions, *, leg=None, max_retries=None, model=None):
+        self.calls.append({"state": state, "questions": questions, "leg": leg,
+                           "max_retries": max_retries})
+        got = self.default
+        for signal, a in self.answers.items():
+            if f'News item: "{signal}"' in state:
+                got = a
+        if isinstance(got, BaseException):
+            raise got
+        if isinstance(got, dict):
+            return {"bears": got}
+        p_yes = 0.9 if got == "yes" else 0.2
+        return {"bears": {"type": "choice", "choice": got,
+                          "confidence": max(p_yes, 1 - p_yes),
+                          "probabilities": {"yes": p_yes, "no": round(1 - p_yes, 6)}}}
+
+    # A real DecisionProviderHandler HAS a chat_complete that refuses; the gate
+    # must branch on decide() and never reach it.
+    async def chat_complete(self, messages, **kwargs):  # pragma: no cover - asserted unused
+        raise AssertionError("a decision component's chat surface was called")
+
+
+async def _run_ref(cands, *, deps, gate_ref, asked=None):
+    counters: dict[str, Any] = {}
+    kept = await bg.run_bearing_pipeline(
+        cands, deps=deps, mode="on", gate_ref=gate_ref, gate_cap=100, confirm_cap=100,
+        counters=counters, asked=asked,
+    )
+    return kept, counters
+
+
+def _golden_cand(desk: str) -> bg.EdgeCandidate:
+    now = datetime(2026, 11, 5, tzinfo=timezone.utc)
+    return bg.EdgeCandidate(
+        signal_id="s1", signal_as_of=now, signal_text="Iran rejects the Omani proposal",
+        question_id="q1", question_as_of=now,
+        question_thesis="Will Iran close the  Strait of\nHormuz?", weight=0.5,
+        desk_label=desk,
+    )
+
+
+async def test_the_chat_gate_call_is_byte_identical_to_the_golden():
+    """The golden was captured from the chat path at ea7a7c8b, BEFORE the
+    decide branch existed: the messages (system prompt, eight exemplars, the
+    row) and the call kwargs must not move by one byte."""
+
+    class _Rec:
+        def __init__(self):
+            self.calls: list[dict[str, Any]] = []
+
+        async def chat_complete(self, messages, **kwargs):
+            self.calls.append({"messages": messages, "kwargs": kwargs})
+            return _Resp("YES")
+
+    rec = _Rec()
+    for c in (_golden_cand("G20 — Türkiye [country_g20_tr]"), _golden_cand("")):
+        assert await bg._gate_one(rec, c) == "yes"
+    assert rec.calls == json.loads(_GOLDEN.read_text(encoding="utf-8"))
+
+
+async def test_a_chat_gate_stamps_the_llm_shape_and_an_unchanged_edge():
+    cand = _cand()
+    kept, counters = await _run_ref([cand], deps=_gate_deps(_FakeLLM("YES")), gate_ref=_GEMMA)
+    assert counters["bearing_gate_shape"] == "llm"
+    assert counters["bearing_gate_prompt"] == bg.GATE_PROMPT_VERSION
+    # The edge payload carries exactly the pre-F148 keys — nothing added.
+    assert set(cand.data_payload()) == {
+        "bearing_gate", "bearing_gate_ref", "bearing_gate_prompt", "bearing_watch"}
+    assert cand.data_payload()["bearing_gate_prompt"] == bg.GATE_PROMPT_VERSION
+
+
+async def test_a_decision_gate_asks_the_one_shared_question_over_the_gate_row():
+    decider = _FakeDecider()
+    cand = _cand(thesis="THESIS-TEXT", signal="SIGNAL-TEXT")
+    cand.desk_label = "G20 — Türkiye [country_g20_tr]"
+    await _run_ref([cand], deps=_gate_deps(decider), gate_ref=_CLEF)
+    [call] = decider.calls
+    assert call["state"] == bg.gate_row_text(cand)
+    assert call["questions"] == bg.bearing_questions()
+    assert call["leg"] == bg.GATE_DECIDE_LEG == "bearing_gate"
+    assert call["max_retries"] == bg.GATE_DECIDE_MAX_RETRIES
+
+
+@pytest.mark.parametrize(
+    "answer, verdict, kept_n",
+    [("yes", "yes", 1), ("no", None, 0), ("YES", "yes", 1)],
+)
+async def test_a_decision_gates_choice_is_the_verdict(answer, verdict, kept_n):
+    cand = _cand(signal="sig")
+    asked: list = []
+    kept, counters = await _run_ref(
+        [cand], deps=_gate_deps(_FakeDecider({"sig": answer})), gate_ref=_CLEF, asked=asked)
+    assert len(kept) == kept_n
+    assert counters["bearing_gate_calls"] == 1
+    if verdict == "yes":
+        assert cand.gate == "yes" and counters["bearing_gate_yes"] == 1
+    else:
+        assert counters["bearing_gated_out"] == 1  # a decide NO refuses the edge too
+    assert asked == [(cand, "yes" if kept_n else "no")]  # the shadow's population
+
+
+async def test_a_decision_gate_carries_its_confidence_and_shape_on_the_edge():
+    cand = _cand(signal="sig")
+    kept, counters = await _run_ref(
+        [cand], deps=_gate_deps(_FakeDecider({"sig": "yes"})), gate_ref=_CLEF)
+    data = cand.data_payload()
+    assert data["bearing_gate"] == "yes"
+    assert data["bearing_gate_ref"] == _CLEF
+    assert data["bearing_gate_shape"] == "decide"
+    assert data["bearing_gate_confidence"] == pytest.approx(0.9)
+    assert data["bearing_gate_p_yes"] == pytest.approx(0.9)
+    assert data["bearing_gate_prompt"] == bg.GATE_DECIDE_QUESTION_VERSION
+    assert counters["bearing_gate_shape"] == "decide"
+    assert counters["bearing_gate_prompt"] == bg.GATE_DECIDE_QUESTION_VERSION
+    assert counters["bearing_gate_ref"] == _CLEF
+
+
+async def test_a_decision_gate_without_confidence_falls_back_to_the_larger_probability():
+    cand = _cand(signal="sig")
+    answer = {"choice": "yes", "probabilities": {"yes": 0.7, "no": 0.3}}
+    await _run_ref([cand], deps=_gate_deps(_FakeDecider({"sig": answer})), gate_ref=_CLEF)
+    assert cand.gate_confidence == pytest.approx(0.7)
+    assert cand.gate_p_yes == pytest.approx(0.7)
+    bare = _cand(signal="bare")
+    await _run_ref([bare], deps=_gate_deps(_FakeDecider({"bare": {"choice": "yes"}})),
+                   gate_ref=_CLEF)
+    assert bare.gate == "yes" and bare.gate_confidence is None
+    assert "bearing_gate_confidence" not in bare.data_payload()
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [RuntimeError("gateway gone"), TimeoutError("hung"), {"choice": "maybe"}, {"x": 1}],
+)
+async def test_an_unanswerable_decision_gate_stamps_and_writes(answer):
+    cand = _cand(signal="sig")
+    asked: list = []
+    kept, counters = await _run_ref(
+        [cand], deps=_gate_deps(_FakeDecider({"sig": answer})), gate_ref=_CLEF, asked=asked)
+    assert kept == [cand] and cand.gate == "unavailable"
+    assert counters["bearing_gate_errors"] == 1
+    assert asked == [(cand, "unavailable")]
+
+
+async def test_a_decision_gate_keeps_the_cap_and_the_deferred_stamp():
+    cands = [_cand(signal=f"s{i}") for i in range(4)]
+    counters: dict[str, Any] = {}
+    decider = _FakeDecider()
+    kept = await bg.run_bearing_pipeline(
+        cands, deps=_gate_deps(decider), mode="on", gate_ref=_CLEF, gate_cap=2,
+        confirm_cap=0, counters=counters)
+    assert len(decider.calls) == 2 and len(kept) == 4
+    assert counters["bearing_gate_deferred"] == 2
+    assert [c.gate for c in cands] == ["yes", "yes", "deferred", "deferred"]
+
+
+async def test_a_decision_gate_built_from_the_registry_is_cached(monkeypatch):
+    builds: list[str] = []
+
+    async def _build(ref):
+        builds.append(ref)
+        return _FakeDecider()
+
+    monkeypatch.setattr(bg, "build_component_handler", _build)
+    for _ in range(2):
+        _, counters = await _run_ref([_cand()], deps=_Deps(), gate_ref=_CLEF)
+        assert counters["bearing_gate_shape"] == "decide"
+    assert builds == [_CLEF]
+
+
+def test_the_shape_counter_is_seeded_empty():
+    assert bg.bearing_counter_defaults()["bearing_gate_shape"] == ""
+
+
+async def test_an_off_gate_leaves_the_shape_empty():
+    _, counters = await _run([_cand()], deps=_gate_deps(_FakeDecider()), mode="off")
+    assert counters["bearing_gate_shape"] == ""
+
+
+def test_the_descriptor_swaps_the_roles_and_validates():
+    """11-05 decision: clef-flash is the GATE, the Gemma chat judge its
+    SHADOW. The descriptor must still parse on the runtime's own model and
+    its options must land whole through the catalog."""
+    import yaml
+
+    from legba.data.option_catalog.handler_options import resolve_handler_options
+    from legba.data.schemas.analyst import AnalystDescriptor
+
+    raw = yaml.safe_load(_DESCRIPTOR.read_text(encoding="utf-8"))
+    # The walker's own placeholder for the register-time content hash
+    # (scripts/bringup_register_descriptors.py stamps "0" * 16 the same way).
+    raw["identity"]["version"] = "0" * 16
+    desc = AnalystDescriptor.model_validate(raw)
+    opts = raw["method"]["options"]
+    assert opts["bearing_gate_ref"] == _CLEF
+    assert opts["bearing_shadow_ref"] == _GEMMA
+    assert opts["bearing_gate"] == "on"
+    res = resolve_handler_options("claim_watch", opts)
+    assert res.rejected == ()
+    assert res.accepted["bearing_gate_ref"] == _CLEF
+    assert res.accepted["bearing_shadow_ref"] == _GEMMA
+    assert desc.method.sub_handler == "claim_watch"
+    text = _DESCRIPTOR.read_text(encoding="utf-8")
+    assert "2026-11-05" in text and "CLEF_ADJUDICATION_2026-10-25_prelabelled" in text

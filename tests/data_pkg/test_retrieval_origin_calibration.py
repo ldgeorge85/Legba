@@ -176,7 +176,9 @@ def test_source_class_was_not_overloaded():
     from typing import get_args
 
     members = set(get_args(SourceClass))
-    assert members == {"reporting", "analysis", "official", "state_media"}
+    # C-1 added `claim` — an EDITORIAL class (what the content is: a party's
+    # own claim), not a retrieval origin, so the rule above still holds.
+    assert members == {"reporting", "analysis", "official", "state_media", "claim"}
     assert not any("web" in m or "search" in m for m in members)
 
 

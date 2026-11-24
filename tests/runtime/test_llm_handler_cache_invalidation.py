@@ -32,6 +32,11 @@ from typing import Any
 
 import pytest
 
+# Imported at module top, i.e. at COLLECTION, so the gate's import-time
+# registration lands in the process registry before any ``_isolate_registry``
+# snapshot — test_bearing_gate_registers_its_cache_at_import reads it there.
+from legba.data.analysts.deterministic_handlers import bearing_gate
+from legba.runtime import llm_handler_cache
 from legba.runtime.llm_handler_cache import (
     clear_handler_cache_registry,
     evict_all_llm_handlers,
@@ -73,12 +78,20 @@ def _informer(evict) -> NatsStackComponentInformer:
 def _isolate_registry():
     """Each test owns the sweep set. The registry is module-level (it must be —
     the informer evicts through it from outside any runtime closure), so leaking
-    a test's cache into the next one would make failures order-dependent."""
-    saved = registered_cache_labels()
+    a test's cache into the next one would make failures order-dependent.
+
+    The PROCESS's registrations are put back exactly at teardown (W11-F112).
+    They are made once, at module import (``bearing_gate`` / ``bearing_shadow``
+    call ``register_handler_cache`` at top level), and nothing re-makes them —
+    this fixture used to end on a bare clear, so every test after this module
+    in a shuffled session saw an empty sweep set
+    (``test_bearing_shadow.py::test_the_shadow_registers_its_handler_cache``,
+    nightly 2026-10-23, seed 188314428). Yields the snapshot so a test can
+    assert on the import-time registrations without re-importing anything."""
+    saved = list(llm_handler_cache._CACHES)
     clear_handler_cache_registry()
-    yield
-    clear_handler_cache_registry()
-    assert saved is not None  # the import-time registrations are re-made lazily
+    yield tuple(saved)
+    llm_handler_cache._CACHES[:] = saved
 
 
 # ---------------------------------------------------------------------------
@@ -228,17 +241,22 @@ def test_eviction_sweeps_every_registered_cache():
     assert gate_cache == {}
 
 
-def test_bearing_gate_registers_its_cache_at_import():
+def test_bearing_gate_registers_its_cache_at_import(_isolate_registry):
     """The gate holds a SECOND process-lifetime handler cache with the same
-    defect; importing it must put it in the sweep set."""
-    clear_handler_cache_registry()
-    import importlib
+    defect; importing it must put it in the sweep set — BY IDENTITY, the very
+    dict the gate reads, so an eviction actually reaches it.
 
-    module = importlib.import_module(
-        "legba.data.analysts.deterministic_handlers.bearing_gate"
+    Read from the registry as it stood before this test's fixture cleared it
+    (the module is imported at collection, above). No ``importlib.reload``: a
+    reload rebinds the module's ``_GATE_CLIENT_CACHE`` and its classes under
+    every later test in the session (``bearing_shadow`` holds the old
+    ``EdgeCandidate``), and the restored registry would point at a dict the
+    reloaded gate no longer uses."""
+    assert any(
+        label == "claim_watch.bearing_gate"
+        and cache is bearing_gate._GATE_CLIENT_CACHE
+        for label, cache in _isolate_registry
     )
-    importlib.reload(module)
-    assert "claim_watch.bearing_gate" in registered_cache_labels()
 
 
 def test_register_is_idempotent_by_identity_and_unregister_removes():

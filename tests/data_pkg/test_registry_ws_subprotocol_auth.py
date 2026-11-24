@@ -35,10 +35,15 @@ from legba.data.registry.api import (
     _bearer_from_subprotocol,
 )
 
+from legba.data.registry._deps import principal_actor
+
 from .test_registry_api_unit import _build_app
 
 _WS_PATH = "/api/v1/registry/events?filter=>"
 _TOKEN = "ws-subproto-token"
+# X2-B1: the gate returns the AUDIT ACTOR — the operator principal before the
+# hashed label — never the credential.
+_LABEL = principal_actor("operator", _TOKEN)
 
 
 def _offer(token: str) -> str:
@@ -155,15 +160,15 @@ def test_subprotocol_wins_and_the_older_paths_are_untouched(monkeypatch) -> None
     monkeypatch.delenv(DEV_MODE_ENV, raising=False)
 
     # Subprotocol alone authenticates.
-    assert _authorize_ws_token(None, None, _offer(_TOKEN)) == _TOKEN
+    assert _authorize_ws_token(None, None, _offer(_TOKEN)) == _LABEL
     # And WINS over the other two, even when they disagree.
     assert _authorize_ws_token(
         "wrong-query", "Bearer wrong-header", _offer(_TOKEN),
-    ) == _TOKEN
+    ) == _LABEL
     # Header bearer still works (Caddy injects it on the proxied upgrade).
-    assert _authorize_ws_token(None, f"Bearer {_TOKEN}", None) == _TOKEN
+    assert _authorize_ws_token(None, f"Bearer {_TOKEN}", None) == _LABEL
     # Query token still works — the deprecation window.
-    assert _authorize_ws_token(_TOKEN, None, None) == _TOKEN
+    assert _authorize_ws_token(_TOKEN, None, None) == _LABEL
 
 
 def test_query_token_use_logs_a_deprecation_warning(monkeypatch, caplog) -> None:
@@ -189,7 +194,7 @@ def test_sse_query_token_is_not_deprecated(monkeypatch, caplog) -> None:
     monkeypatch.delenv(DEV_MODE_ENV, raising=False)
     caplog.set_level(logging.WARNING, logger="legba.data.registry.api")
 
-    assert _authorize_ws_token(_TOKEN, None, surface="sse") == _TOKEN
+    assert _authorize_ws_token(_TOKEN, None, surface="sse") == _LABEL
 
     assert not any(
         "deprecated_query_token" in r.getMessage() for r in caplog.records

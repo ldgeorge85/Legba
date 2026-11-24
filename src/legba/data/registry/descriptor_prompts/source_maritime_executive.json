@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.maritimeexecutive.news": {
+      "source": "source_maritime_executive.yaml",
+      "state": "draft"
+    }
+  }
+}

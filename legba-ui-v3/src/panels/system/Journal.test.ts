@@ -13,7 +13,13 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { journalRefLabel, journalKindBadge, cycleBand, splitCycleBands } from './Journal'
+import {
+  journalRefLabel,
+  journalKindBadge,
+  cycleBand,
+  splitCycleBands,
+  isDeclaredUnavailable,
+} from './Journal'
 import type { JournalEntrySummary, JournalRef } from '@/lib/api'
 
 describe('journalRefLabel', () => {
@@ -206,5 +212,16 @@ describe('cycleBand / splitCycleBands', () => {
 
   it('an empty cycle yields two empty bands rather than throwing', () => {
     expect(splitCycleBands([])).toEqual({ synthesis: [], diary: [] })
+  })
+})
+
+describe('N-G declared "no entry" + correction kind', () => {
+  it('a row flagged evidence_unavailable is the declared no-entry state', () => {
+    expect(isDeclaredUnavailable({ honesty_flags: ['evidence_unavailable'] })).toBe(true)
+    expect(isDeclaredUnavailable({ honesty_flags: ['forecast_unproven'] })).toBe(false)
+  })
+
+  it('the correction kind has its own label', () => {
+    expect(journalKindBadge('correction').label).toBe('Correction')
   })
 })

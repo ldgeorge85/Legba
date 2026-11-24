@@ -115,13 +115,13 @@ export default function LineagePanel({ registration }: PanelProps) {
     enabled: walkTarget.trim().length > 0,
     queryKey: ['lineage-walk-findings', walkTarget],
     queryFn: () =>
-      listByTarget(`/findings?target_id=${encodeURIComponent(walkTarget)}&limit=25`),
+      listByTarget(`/findings?target_id=${encodeURIComponent(walkTarget)}&limit=25&fields=summary`),
   })
   const targetSignals = useQuery<WalkRow[]>({
     enabled: walkTarget.trim().length > 0,
     queryKey: ['lineage-walk-signals', walkTarget],
     queryFn: () =>
-      listByTarget(`/signals?target_id=${encodeURIComponent(walkTarget)}&limit=25`),
+      listByTarget(`/signals?target_id=${encodeURIComponent(walkTarget)}&limit=25&fields=full`),
   })
 
   /** Seed the walk from a picked row (no UUID paste). */

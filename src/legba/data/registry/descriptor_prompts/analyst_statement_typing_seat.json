@@ -1,0 +1,15 @@
+{
+  "prompts": {
+    "statement_typing_seat": {
+      "chars": 5546,
+      "sha256": "aa19da18d42d7fb3bac90b6c5b75dab6cf936fa7ea333746d8550ec549d98a26",
+      "source": "analyst_statement_typing_seat.yaml"
+    }
+  },
+  "states": {
+    "analyst:statement_typing_seat": {
+      "source": "analyst_statement_typing_seat.yaml",
+      "state": "draft"
+    }
+  }
+}

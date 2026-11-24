@@ -53,11 +53,14 @@ from legba.data.registry.lineage_api import (
 # ---------------------------------------------------------------------------
 # Trace fixtures + an in-memory connection stub.
 #
-# ``_attach_receipts_to_walk`` issues exactly two query shapes per node:
-#   1. ``... WHERE $1 = ANY(output_row_refs) ...``  (map node id → its trace)
-#   2. ``... FROM audit_checkpoints WHERE analyst_id = $1 AND chain_head_hash
-#      = $2 ...``                                    (covering checkpoint, if any)
-# The stub answers both from in-memory dicts so no DB is needed.
+# ``_attach_receipts_to_walk`` issues exactly two queries for the WHOLE walk
+# (P-4; it was two per node, each trace lookup a seq scan of analyst_traces):
+#   1. ``... WHERE t.output_row_refs && $1::uuid[] ...`` (node ids → the newest
+#      producing trace per node, one row per node: ``node_id`` + trace columns)
+#   2. ``... FROM audit_checkpoints c JOIN unnest($1::text[], $2::text[]) ...``
+#      (the newest covering checkpoint per (analyst_id, chain_head_hash))
+# The stub answers both from in-memory dicts so no DB is needed, and records
+# every query so the per-walk bound is pinned.
 # ---------------------------------------------------------------------------
 
 
@@ -115,25 +118,34 @@ class _StubConn:
     ) -> None:
         self._traces = traces
         self._checkpoints = checkpoints or []
+        self.queries: list[str] = []
+
+    async def fetch(self, sql: str, *args: Any):
+        self.queries.append(sql)
+        if "FROM analyst_traces t" in sql:
+            # _fetch_traces_for_nodes: $1 = every node id in the walk; one row
+            # per node that some trace produced (the newest such trace).
+            out = []
+            for node_id in args[0]:
+                hits = [
+                    t for t in self._traces if node_id in t["output_row_refs"]
+                ]
+                if hits:
+                    newest = max(
+                        hits, key=lambda t: t.get("run_started_at") or 0,
+                    )
+                    out.append({"node_id": node_id, **newest})
+            return out
+        if "audit_checkpoints" in sql:
+            keys = set(zip(args[0], args[1]))
+            return [
+                c for c in self._checkpoints
+                if (c["analyst_id"], c["chain_head_hash"]) in keys
+            ]
+        raise AssertionError(f"unexpected query: {sql!r}")
 
     async def fetchrow(self, sql: str, *args: Any):
-        if "output_row_refs" in sql:
-            # _fetch_trace_for_node id-containment lookup: $1 = node id.
-            node_id = args[0]
-            hits = [
-                t for t in self._traces if node_id in t["output_row_refs"]
-            ]
-            return hits[0] if hits else None
-        if "audit_checkpoints" in sql:
-            analyst_id, head = args
-            for c in self._checkpoints:
-                if (
-                    c["analyst_id"] == analyst_id
-                    and c["chain_head_hash"] == head
-                ):
-                    return c
-            return None
-        raise AssertionError(f"unexpected query: {sql!r}")
+        raise AssertionError(f"walk receipts must batch, got fetchrow {sql!r}")
 
 
 def _node(node_id: UUID, *, row_kind: str) -> LineageNode:
@@ -268,6 +280,66 @@ async def test_signer_did_only_from_covering_checkpoint_per_node():
     assert by_id[str(uncovered_id)].receipt.signer_did is None
     # Even with a covering checkpoint, the per-node badge stays honest.
     assert by_id[str(covered_id)].receipt.badge == "chain-consistent (single-node)"
+
+
+@pytest.mark.asyncio
+async def test_walk_receipts_are_two_queries_whatever_the_walk_size():
+    """P-4: the live walk took 20-30 s because every node paid its own
+    ``$1 = ANY(output_row_refs)`` lookup — a predicate the GIN index on
+    ``output_row_refs`` cannot serve, so a seq scan of analyst_traces per node.
+    The whole walk is now ONE GIN-indexable overlap read plus ONE checkpoint
+    read, however many nodes it has, and the per-node form is gone."""
+    ids = [uuid4() for _ in range(40)]
+    traces = [
+        _make_trace(
+            output_payload={"i": i}, output_row_refs=[nid],
+            analyst_id=f"an_{i % 3}",
+        )
+        for i, nid in enumerate(ids[:25])
+    ]
+    conn = _StubConn(traces)
+    nodes = [_node(nid, row_kind="finding") for nid in ids]
+    await _attach_receipts_to_walk(conn, nodes)  # type: ignore[arg-type]
+
+    assert len(conn.queries) == 2
+    assert "output_row_refs && $1::uuid[]" in conn.queries[0]
+    assert "audit_checkpoints" in conn.queries[1]
+    assert not any("= ANY(output_row_refs)" in q for q in conn.queries)
+    # Only the columns the re-hash reads — never SELECT * (the TOAST-heavy
+    # llm_calls / intermediate_steps / input_payload stay on disk).
+    assert "SELECT *" not in conn.queries[0]
+    assert "llm_calls" not in conn.queries[0]
+    with_receipt = [n for n in nodes if n.receipt is not None]
+    assert len(with_receipt) == 25
+    assert all(n.receipt.chain_consistent for n in with_receipt)
+
+
+@pytest.mark.asyncio
+async def test_wide_walk_switches_to_the_hash_join_read():
+    """A walk of thousands of nodes (16,385 on one live finding) uses the
+    unnest + hash-join form: ``&&`` against that long an array cost 4.3 s."""
+    from legba.data.registry import lineage_api as L
+
+    ids = [uuid4() for _ in range(L._TRACES_WIDE_FROM)]
+    traces = [_make_trace(output_payload={"w": 1}, output_row_refs=[ids[7]])]
+    conn = _StubConn(traces)
+    nodes = [_node(nid, row_kind="finding") for nid in ids]
+    await _attach_receipts_to_walk(conn, nodes)  # type: ignore[arg-type]
+    assert conn.queries[0] == L._TRACES_BY_OUTPUT_REF_WIDE_SQL
+    assert "&&" not in conn.queries[0]
+    assert nodes[7].receipt is not None and nodes[7].receipt.chain_consistent
+    assert sum(1 for n in nodes if n.receipt is not None) == 1
+
+    conn2 = _StubConn(traces)
+    await _attach_receipts_to_walk(conn2, nodes[: L._TRACES_WIDE_FROM - 1])  # type: ignore[arg-type]
+    assert conn2.queries[0] == L._TRACES_BY_OUTPUT_REF_SQL
+
+
+@pytest.mark.asyncio
+async def test_empty_walk_issues_no_receipt_query():
+    conn = _StubConn([])
+    await _attach_receipts_to_walk(conn, [])  # type: ignore[arg-type]
+    assert conn.queries == []
 
 
 @pytest.mark.asyncio
@@ -454,3 +526,122 @@ async def test_walk_carries_receipt_per_analyst_node(walk_receipt_app):
     assert body2["root"]["receipt"]["chain_consistent"] is True
     # The stored hash is still surfaced verbatim on the tampered node.
     assert by_id2[str(finding_id)]["receipt"]["receipt_hash"] == finding_hash
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_batched_walk_receipt_is_the_newest_trace_and_newest_checkpoint(
+    walk_receipt_app,
+):
+    """P-4 batched the per-node trace + checkpoint reads into one query each.
+    Pin, on the real SQL, the row each node gets: when two recorded runs both
+    list a node in ``output_row_refs``, the node carries the one with the
+    newest ``run_started_at`` (what the per-node ``ORDER BY run_started_at
+    DESC LIMIT 1`` returned), and when two checkpoints signed that head, the
+    newest one's signer. A sibling node in the same walk keeps its own trace,
+    and the response shape is unchanged."""
+    client, pg_store = walk_receipt_app
+
+    root_id = uuid4()
+    twice_id = uuid4()
+    once_id = uuid4()
+    old_run, new_run, once_run = uuid4(), uuid4(), uuid4()
+    analyst = f"an_p4_{uuid4().hex[:8]}"
+    t_old = datetime(2026, 7, 1, 10, 0, 0, tzinfo=timezone.utc)
+    t_new = datetime(2026, 7, 2, 10, 0, 0, tzinfo=timezone.utc)
+
+    async with pg_store.acquire() as conn:
+        for oid, title in ((twice_id, "twice"), (once_id, "once")):
+            await conn.execute(
+                """
+                INSERT INTO analyst_outputs
+                    (id, kind, title, body, analyst_id, analyst_version,
+                     produced_at, derived_from, schema_uri)
+                VALUES ($1, 'finding', $2, '', $3, 'v1', NOW(), '{}'::uuid[],
+                        'iglu:legba/finding/jsonschema/1-0-0')
+                """,
+                oid, title, analyst,
+            )
+        await conn.execute(
+            """
+            INSERT INTO analyst_outputs
+                (id, kind, title, body, analyst_id, analyst_version,
+                 produced_at, derived_from, schema_uri)
+            VALUES ($1, 'finding', 'root', '', $2, 'v1', NOW(), $3::uuid[],
+                    'iglu:legba/finding/jsonschema/1-0-0')
+            """,
+            root_id, analyst, [twice_id, once_id],
+        )
+        chain = RuntimeReceiptChain(pg_store.pool)
+        hashes: dict[UUID, str] = {}
+        for run, refs, started in (
+            (old_run, [twice_id], t_old),
+            (new_run, [twice_id], t_new),
+            (once_run, [once_id], t_old),
+        ):
+            hashes[run], _ = await chain.record(
+                run_id=run, analyst_id=analyst, analyst_version="v1",
+                cadence_trigger="manual", target_id=None,
+                input_row_refs=[], input_payload={"r": str(run)},
+                prompt_module_hash="pmod", prompt_rendered="render",
+                output_row_refs=refs, output_payload={"r": str(run)},
+                run_started_at=started, run_ended_at=started,
+            )
+        for signer, at in (
+            ("did:key:z6MkOlderSigner", t_old),
+            ("did:key:z6MkNewerSigner", t_new),
+        ):
+            await conn.execute(
+                """
+                INSERT INTO audit_checkpoints
+                    (analyst_id, chain_head_hash, trace_count,
+                     checkpointed_at, signature, signer_did)
+                VALUES ($1, $2, 1, $3, '\\x00'::bytea, $4)
+                """,
+                analyst, hashes[new_run], at, signer,
+            )
+
+    r = await client.get(
+        f"/api/v1/lineage/finding/{root_id}",
+        params={"direction": "upstream", "depth": 3},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert set(body) == {"root", "nodes", "edges", "truncated_at_depth"}
+    by_id = {n["id"]: n for n in body["nodes"]}
+    assert set(by_id) == {str(twice_id), str(once_id)}
+    assert set(by_id[str(twice_id)]) == {
+        "id", "row_kind", "title", "produced_at", "target_id", "analyst_id",
+        "schema_uri", "depth", "body", "canonical_url", "media_ref",
+        "modality", "mime_type", "archived", "archive_sha256", "receipt",
+    }
+
+    twice = by_id[str(twice_id)]["receipt"]
+    assert twice["run_id"] == str(new_run)
+    assert twice["receipt_hash"] == hashes[new_run]
+    assert twice["chain_consistent"] is True
+    assert twice["signer_did"] == "did:key:z6MkNewerSigner"
+    assert set(twice) == {
+        "run_id", "receipt_hash", "prev_receipt_hash", "chain_consistent",
+        "signer_did", "badge",
+    }
+
+    once = by_id[str(once_id)]["receipt"]
+    assert once["run_id"] == str(once_run)
+    assert once["receipt_hash"] == hashes[once_run]
+    assert once["chain_consistent"] is True
+    assert once["signer_did"] is None
+    # The root has no run_id and no trace lists it: honestly no receipt.
+    assert body["root"]["receipt"] is None
+
+    # The narrow (GIN) and wide (hash-join) trace reads return the same rows.
+    from legba.data.registry import lineage_api as L
+
+    probe = [twice_id, once_id, root_id, uuid4(), twice_id]
+    async with pg_store.acquire() as conn:
+        narrow = await conn.fetch(L._TRACES_BY_OUTPUT_REF_SQL, probe)
+        wide = await conn.fetch(L._TRACES_BY_OUTPUT_REF_WIDE_SQL, probe)
+    assert [dict(r) for r in narrow] == [dict(r) for r in wide]
+    assert {r["node_id"]: r["run_id"] for r in narrow} == {
+        twice_id: new_run, once_id: once_run,
+    }

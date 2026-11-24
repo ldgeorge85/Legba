@@ -60,7 +60,10 @@ SUB_HANDLER_NAME = "inquiry_yield"
 #: cross-reference rules ("anticipated" / "blind spot"). Bump when any of
 #: those move, so a yield diff across a change reads as an instrument
 #: revision, never a change in what the inquiries actually did.
-METHOD_VERSION = "inquiry_yield/2026-09.1"
+#: 2026-10.1 — the findings read pages over the whole week (it was one
+#: ``LIMIT 5000`` read, ~40% of a normal week), so "anticipated" can count
+#: higher for the same ledger than a 09.1 receipt did.
+METHOD_VERSION = "inquiry_yield/2026-10.1"
 
 #: The rolling window this instrument scores — a full week ending "now".
 WINDOW_DAYS = 7
@@ -69,7 +72,20 @@ WINDOW_DAYS = 7
 #: runaway findings slice can never turn a weekly tick into a full-table
 #: walk. Mirrors the `LIMIT 500` idiom forecast_acute already uses.
 _MAX_LEDGER_ROWS = 20_000
-_MAX_FINDING_ROWS = 5_000
+
+#: The findings read PAGES (keyset on ``(produced_at, id)``) in chunks of this
+#: many rows. Until 2026-10 this was a single ``LIMIT 5000`` read — and a
+#: normal week carries ~12.6k in-window findings with a non-empty
+#: ``derived_from`` (live, 2026-10-03), so the 09-28 yield read 40% of its
+#: week and warned ``inquiry_yield.findings_capped``. A page bounds ONE
+#: statement's result set, never the week.
+_FINDING_PAGE_ROWS = 5_000
+
+#: The hard ceiling across ALL pages — ~20x a normal week, so
+#: ``findings_capped`` means a pathological week, never an ordinary one. It
+#: stays a ceiling (not unbounded) for the same reason the ledger cap does:
+#: one weekly tick must never hold an unbounded slice in memory.
+_MAX_FINDING_ROWS = 250_000
 
 
 # ---------------------------------------------------------------------------
@@ -299,14 +315,21 @@ SELECT descriptor_id, kind, status, dispatched_to, cited_refs,
 # Findings produced INSIDE the window with a non-empty derived_from — the
 # only rows that could possibly be "later than" an in-window observation
 # close (closed_at is itself >= week_start, so nothing produced before
-# week_start can ever be "later").
+# week_start can ever be "later"). Read in KEYSET pages over
+# (produced_at, id): the first page passes NULL cursors, every later page the
+# last row's pair — `id` breaks produced_at ties, so a page boundary that
+# falls inside a run of equal timestamps neither skips nor repeats a row. The
+# range's lower bound ADVANCES with the cursor (COALESCE), so every page is an
+# index range scan starting at its own cursor, never a rescan from the week's
+# start with the row comparison as a filter (live EXPLAIN, generic plan).
 _FINDING_REFS_SQL = """
-SELECT produced_at, derived_from
+SELECT id, produced_at, derived_from
   FROM analyst_outputs
- WHERE produced_at >= $1 AND produced_at < $2
+ WHERE produced_at >= COALESCE($3::timestamptz, $1) AND produced_at < $2
    AND array_length(derived_from, 1) IS NOT NULL
- ORDER BY produced_at
- LIMIT $3
+   AND ($3::timestamptz IS NULL OR (produced_at, id) > ($3::timestamptz, $4::uuid))
+ ORDER BY produced_at, id
+ LIMIT $5
 """
 
 # The desks/targets that produced ANYTHING this cycle — a dispatched
@@ -317,6 +340,40 @@ SELECT DISTINCT analyst_id, target_id
   FROM analyst_outputs
  WHERE produced_at >= $1 AND produced_at < $2
 """
+
+
+async def fetch_finding_refs(
+    conn: Any,
+    week_start: datetime,
+    week_end: datetime,
+    *,
+    page_rows: int | None = None,
+    max_rows: int | None = None,
+) -> tuple[list[Any], bool]:
+    """Every in-window finding with a non-empty ``derived_from``, read in
+    keyset pages of ``page_rows`` (default :data:`_FINDING_PAGE_ROWS`).
+    Returns ``(rows, capped)`` — ``capped`` is True only when ``max_rows``
+    (default :data:`_MAX_FINDING_ROWS`, across all pages) stopped the read
+    before the window was exhausted."""
+    page_rows = _FINDING_PAGE_ROWS if page_rows is None else page_rows
+    max_rows = _MAX_FINDING_ROWS if max_rows is None else max_rows
+    rows: list[Any] = []
+    cursor_ts: datetime | None = None
+    cursor_id: Any = None
+    while len(rows) < max_rows:
+        limit = min(page_rows, max_rows - len(rows))
+        page = await conn.fetch(
+            _FINDING_REFS_SQL, week_start, week_end, cursor_ts, cursor_id, limit,
+        )
+        rows.extend(page)
+        if len(page) < limit:
+            return rows, False
+        cursor_ts, cursor_id = page[-1]["produced_at"], page[-1]["id"]
+    # The ceiling was reached exactly: capped only if one more row exists.
+    more = await conn.fetch(
+        _FINDING_REFS_SQL, week_start, week_end, cursor_ts, cursor_id, 1,
+    )
+    return rows, bool(more)
 
 
 async def handle(
@@ -346,12 +403,14 @@ async def handle(
 
     async with pool.acquire() as conn:
         ledger_rows = await conn.fetch(_LEDGER_SQL, _MAX_LEDGER_ROWS)
-        finding_rows = await conn.fetch(_FINDING_REFS_SQL, week_start, week_end, _MAX_FINDING_ROWS)
+        finding_rows, findings_capped = await fetch_finding_refs(
+            conn, week_start, week_end,
+        )
         read_rows = await conn.fetch(_READ_TARGETS_SQL, week_start, week_end)
 
     if len(ledger_rows) >= _MAX_LEDGER_ROWS:
         warnings.append("inquiry_yield.ledger_capped")
-    if len(finding_rows) >= _MAX_FINDING_ROWS:
+    if findings_capped:
         warnings.append("inquiry_yield.findings_capped")
 
     ledger = [dict(r) for r in ledger_rows]
@@ -389,6 +448,7 @@ async def handle(
 
 __all__ = [
     "handle",
+    "fetch_finding_refs",
     "build_finding",
     "compute_yield",
     "YieldCounts",

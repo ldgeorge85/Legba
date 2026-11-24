@@ -61,7 +61,7 @@ from legba.data.analysts.deterministic_handlers import _contrary_query as cq
 from legba.data.analysts.deterministic_handlers import _contrary_stance as cs
 from legba.data.analysts.deterministic_handlers import _contrary_store as store
 from legba.data.analysts.deterministic_handlers import contrary_evidence_pass as cep
-from legba.data.analysts.handler_options import HANDLER_OPTIONS
+from legba.data.option_catalog.handler_options import HANDLER_OPTIONS
 from legba.data.provenance.kinds import TRACE_ONLY
 
 _DESCRIPTORS = Path(__file__).resolve().parents[2] / "descriptors"

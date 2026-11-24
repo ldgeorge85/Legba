@@ -36,6 +36,8 @@ import os
 
 import asyncpg
 
+from legba.data.case_columns import bind_entity_type
+
 MAX_ENTITIES_PER_SIGNAL = 8   # cap pairwise co-occurrence edges per signal
 MIN_NAME_LEN = 2
 
@@ -142,7 +144,9 @@ async def main() -> None:
                             geo_country = COALESCE(entity_profiles.geo_country, EXCLUDED.geo_country)
                     RETURNING id
                     """,
-                    text, cls, cls, json.dumps({"source": "ner_backfill"}),
+                    # TAX-4: entity_type binds entity_class (seed literal; no
+                    # vocabulary provider in a script) or reads `unclassified`.
+                    text, bind_entity_type(cls), cls, json.dumps({"source": "ner_backfill"}),
                     lat, lon, country, 0.3,
                 )
                 eid = str(row["id"])

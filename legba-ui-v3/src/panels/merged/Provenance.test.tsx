@@ -1,9 +1,11 @@
 /**
  * Component test for the merged Provenance (`system.provenance`) — proves the
- * tab strip actually swaps between the FIVE original, unmodified
- * implementations rather than silently dropping one: the U-3 trio (Why /
- * Lineage / Flow) plus the two GLASS-2 surfaces that landed here as tabs
- * instead of spending a sidebar row (Trajectory / Narratives).
+ * tab strip actually swaps between the THREE original, unmodified
+ * implementations rather than silently dropping one: Why, Lineage, and the
+ * Fan-out Explorer UI-B1/merges folded in (UI-D1 Table A "Evidence: Why ·
+ * Lineage · Fan-out"). Flow, Trajectory and Narratives LEFT (the Registry's
+ * Canvas, the Register's two tabs) — a stale saved tab naming one falls back
+ * to Why, never to an empty surface.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
@@ -47,6 +49,14 @@ describe('ProvenanceMerged', () => {
     expect(screen.getByTestId('provenance-tab-why')).toHaveAttribute('aria-selected', 'true')
   })
 
+  it('carries exactly Why · Lineage · Fan-out', () => {
+    render(wrap(<ProvenanceMerged registration={reg()} scope={{}} mode="personal" />))
+    for (const id of ['why', 'lineage', 'fanout']) expect(screen.getByTestId(`provenance-tab-${id}`)).toBeInTheDocument()
+    for (const gone of ['flow', 'trajectory', 'narratives']) {
+      expect(screen.queryByTestId(`provenance-tab-${gone}`)).not.toBeInTheDocument()
+    }
+  })
+
   it('switching to Lineage mounts the original lineage-walk panel', async () => {
     render(wrap(<ProvenanceMerged registration={reg()} scope={{}} mode="personal" />))
     await screen.findByTestId('why-findings-search')
@@ -55,31 +65,22 @@ describe('ProvenanceMerged', () => {
     expect(screen.queryByTestId('why-findings-search')).not.toBeInTheDocument()
   })
 
-  it('switching to Flow mounts the original registry-graph canvas (empty or loading text)', async () => {
+  it('switching to Fan-out mounts the original Fan-out Explorer (UI-B1/merges)', async () => {
     render(wrap(<ProvenanceMerged registration={reg()} scope={{}} mode="personal" />))
     await screen.findByTestId('why-findings-search')
-    fireEvent.click(screen.getByTestId('provenance-tab-flow'))
-    expect(
-      await screen.findByText(/no descriptors registered|projecting the registry graph/i),
-    ).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('provenance-tab-fanout'))
+    expect(await screen.findByTestId('fanout-empty')).toBeInTheDocument()
     expect(screen.queryByTestId('why-findings-search')).not.toBeInTheDocument()
   })
 
-  it('switching to Trajectory mounts the situation-register surface (GLASS-2)', async () => {
-    render(wrap(<ProvenanceMerged registration={reg()} scope={{}} mode="personal" />))
-    await screen.findByTestId('why-findings-search')
-    fireEvent.click(screen.getByTestId('provenance-tab-trajectory'))
-    expect(await screen.findByTestId('trajectory-frames')).toBeInTheDocument()
-    expect(screen.queryByTestId('why-findings-search')).not.toBeInTheDocument()
+  it('a deep link onto Fan-out (source.fanout\'s alias tab) opens there', async () => {
+    render(wrap(<ProvenanceMerged registration={reg()} scope={{}} mode="personal" initialTab="fanout" />))
+    expect(await screen.findByTestId('fanout-empty')).toBeInTheDocument()
+    expect(screen.getByTestId('provenance-tab-fanout')).toHaveAttribute('aria-selected', 'true')
   })
 
-  it('switching to Narratives mounts the contested-claim surface with its honesty note (GLASS-2)', async () => {
-    render(wrap(<ProvenanceMerged registration={reg()} scope={{}} mode="personal" />))
-    await screen.findByTestId('why-findings-search')
-    fireEvent.click(screen.getByTestId('provenance-tab-narratives'))
-    expect(await screen.findByTestId('narratives-honesty-note')).toHaveTextContent(
-      /NOT a causal or coordination claim/,
-    )
-    expect(screen.queryByTestId('trajectory-frames')).not.toBeInTheDocument()
+  it('a stale saved tab from before the re-cut (flow / trajectory) falls back to Why', async () => {
+    render(wrap(<ProvenanceMerged registration={reg()} scope={{}} mode="personal" initialTab="trajectory" />))
+    expect(await screen.findByTestId('why-findings-search')).toBeInTheDocument()
   })
 })

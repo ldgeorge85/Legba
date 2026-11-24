@@ -15,7 +15,7 @@
 # of instability and the primary predictor of whether a settlement holds.
 # Who pays, who gains.
 #
-# The declared prior LIVES in the persona module (legba.prompts.lens_left) — the
+# The declared prior LIVES in the persona module (legba_geopolitics.lens_left) — the
 # descriptor content hash IS the prior version (DL-2). Re-authoring the prior is a
 # descriptor PUT with a visible hash change; these six are DRAFTS and expected to
 # be re-authored.
@@ -57,7 +57,7 @@ method:
   kind: llm_planner
   # COLON form ('module:ATTR') — a dotted path silently falls back to the kind
   # default and loses the entire lens stance + declared prior.
-  prompt_module: "legba.prompts.lens_left:LENS_SYSTEM"
+  prompt_module: "legba_geopolitics.lens_left:LENS_SYSTEM"
   llm:
     # Model-card sampling (gpt-oss ships generation_config temperature=1.0; the vLLM
     # client always sends temperature, so the card default can never apply on its own).

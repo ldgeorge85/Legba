@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:country_composition": {
+      "source": "analyst_country_composition.yaml",
+      "state": "active"
+    }
+  }
+}

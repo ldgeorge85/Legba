@@ -67,31 +67,31 @@ function DeskRow({ desk }: { desk: DeskRosterRow }) {
   const unmeasured = desk.latest.correctness_share == null
   return (
     <tr
-      className="text-slate-300 align-baseline"
+      className="text-ink-1 align-baseline"
       data-testid={`grader-roster-row-${key}`}
       title={desk.latest.badge}
     >
       <td className="py-0.5 pr-2">
-        <span className="text-slate-300">{humanizeId(desk.target_id)}</span>
-        <span className="text-slate-600"> · </span>
-        <span className="text-slate-400">{humanizeId(desk.analyst_id)}</span>
+        <span className="text-ink-1">{humanizeId(desk.target_id)}</span>
+        <span className="text-ink-3"> · </span>
+        <span className="text-ink-2">{humanizeId(desk.analyst_id)}</span>
       </td>
       <td
         className={`text-right font-mono py-0.5 ${
-          unmeasured ? 'text-slate-500 italic' : 'text-slate-200'
+          unmeasured ? 'text-ink-3 italic' : 'text-ink-1'
         }`}
         data-testid={`grader-roster-correctness-${key}`}
       >
         {correctnessCell(desk.latest)}
       </td>
       <td
-        className="text-right font-mono py-0.5 text-slate-200"
+        className="text-right font-mono py-0.5 text-ink-1"
         data-testid={`grader-roster-coverage-${key}`}
       >
         {coverageCell(desk.latest)}
       </td>
       <td
-        className="text-right font-mono py-0.5 text-slate-400"
+        className="text-right font-mono py-0.5 text-ink-2"
         data-testid={`grader-roster-nights-${key}`}
         title={
           `window mean correctness ${pct(desk.window.correctness_mean)} · ` +
@@ -102,14 +102,14 @@ function DeskRow({ desk }: { desk: DeskRosterRow }) {
       </td>
       <td
         className={`py-0.5 pl-2 ${
-          desk.latest.reference_state === 'current' ? 'text-slate-500' : 'text-amber-300'
+          desk.latest.reference_state === 'current' ? 'text-ink-3' : 'text-amber-300'
         }`}
         data-testid={`grader-roster-reference-${key}`}
       >
         {referenceCell(desk.latest)}
       </td>
       <td
-        className="py-0.5 pl-2 text-slate-500"
+        className="py-0.5 pl-2 text-ink-3"
         data-testid={`grader-roster-family-${key}`}
         title={
           desk.latest.single_family
@@ -138,16 +138,16 @@ export function EvalGraderRoster({
 
   return (
     <div
-      className="bg-surface-100 border border-slate-800 rounded p-2 mb-2 space-y-1.5 text-xs"
+      className="bg-surf-2 border border-line rounded p-2 mb-2 space-y-1.5 text-xs"
       data-testid="eval-grader-roster"
     >
       <div className="flex items-baseline gap-2 flex-wrap">
-        <span className="text-slate-500 text-[10px] uppercase tracking-wide">
+        <span className="text-ink-3 text-label uppercase tracking-wide">
           grader correctness, roster
         </span>
         <InfoTip
           text={GRADER_ROSTER_EXPLAIN}
-          className="text-slate-600 text-[10px]"
+          className="text-ink-3 text-label"
           testId="grader-roster-explain"
         >
           correctness AND coverage per desk (machine grader, never pooled)
@@ -156,7 +156,7 @@ export function EvalGraderRoster({
 
       {!graded ? (
         <div
-          className="text-slate-500 text-[10px] py-1"
+          className="text-ink-3 text-label py-1"
           data-testid="grader-roster-empty"
         >
           no grader rows yet — the correctness grader has written nothing inside this
@@ -176,25 +176,25 @@ export function EvalGraderRoster({
               >
                 <InfoTip
                   text={ROSTER_MEAN_EXPLAIN}
-                  className="w-28 shrink-0 text-slate-400"
+                  className="w-28 shrink-0 text-ink-2"
                   testId={`grader-roster-basis-${h.label.replace(/\s+/g, '-')}`}
                 >
                   {h.label}
                 </InfoTip>
-                <span className="text-slate-300">
+                <span className="text-ink-1">
                   correctness{' '}
-                  <span className="font-mono text-slate-200">{h.correctness}</span>
+                  <span className="font-mono text-ink-1">{h.correctness}</span>
                 </span>
-                <span className="text-slate-300">
-                  coverage <span className="font-mono text-slate-200">{h.coverage}</span>
+                <span className="text-ink-1">
+                  coverage <span className="font-mono text-ink-1">{h.coverage}</span>
                 </span>
-                <span className="text-slate-600 text-[10px]">{h.basis}</span>
+                <span className="text-ink-3 text-label">{h.basis}</span>
               </div>
             ))}
           </div>
 
           <div
-            className="flex items-baseline gap-2 flex-wrap text-slate-600 text-[10px]"
+            className="flex items-baseline gap-2 flex-wrap text-ink-3 text-label"
             data-testid="grader-roster-counts"
           >
             <span data-testid="grader-roster-desks">
@@ -226,11 +226,11 @@ export function EvalGraderRoster({
           {/* Thinnest coverage first — the desks the reference never looked at
               are the point of the section. */}
           <table
-            className="w-full text-[10px] border-collapse"
+            className="w-full text-label border-collapse"
             data-testid="grader-roster-table"
           >
             <thead>
-              <tr className="text-slate-600">
+              <tr className="text-ink-3">
                 <th className="text-left font-normal py-0.5">desk</th>
                 <th className="text-right font-normal py-0.5 w-40">correctness</th>
                 <th className="text-right font-normal py-0.5 w-32">coverage</th>
@@ -247,7 +247,7 @@ export function EvalGraderRoster({
           </table>
 
           <div
-            className="text-slate-600 text-[10px] italic"
+            className="text-ink-3 text-label italic"
             data-testid="grader-roster-honesty-note"
           >
             {roster!.honesty_note}

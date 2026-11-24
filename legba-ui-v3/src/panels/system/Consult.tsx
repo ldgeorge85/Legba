@@ -57,78 +57,133 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { PanelChrome } from '@/components/PanelChrome'
 import {
-  apiPostWithStatus,
-  ApiError,
-  getConsultRun,
   listConsultSessions,
   loadConsultSession,
   loadConsultModel,
   saveConsultModel,
-  stopConsultRun,
-  synthesizeConsultRun,
   CONSULT_MODEL_OPTIONS,
   type ConsultModel,
-  type ConsultRunStatus,
   type ConsultSessionSummary,
-  type ConsultSynthesisBody,
+  type ConsultUncertaintyFloor,
   type ConsultUsage,
+  type ConsultWatchMint,
 } from '@/lib/api'
 import { RecordLink } from '@/components/inspector/RecordLink'
 import { Pin, X } from 'lucide-react'
-import { selectionKindOf, useSelection } from '@/state/selection'
-import { useScope } from '@/state/scope'
+import { useSelection } from '@/state/selection'
 import {
   isScopePin,
   pinnedContext,
   questionWithPins,
-  scopePin,
+  turnPinLine,
+  turnPinOf,
+  useAmbientPin,
 } from '@/lib/consultContext'
 import {
   consultActions,
-  isDetached,
   useConsultPanel,
-  CONSULT_PAGE_LOAD_ID,
+  stripFinalFrame,
   type ChatTurn,
-  type ConsultCitedRef,
-  type ConsultToolCall,
   type StepFrame,
 } from '@/state/consultSession'
 import type { ProvenanceCensus } from '@/state/consultSession'
+import { formatApiError, useConsultTurn } from '@/state/useConsultTurn'
+import { casePlayer, isCasePlaying, useCasePlayer } from '@/state/casePlayer'
+import { CaseRail } from '@/components/CaseRail'
+import { ConsultPointLine } from '@/components/ConsultPointLine'
+import { useDriveMode } from '@/state/driveMode'
+import { ConsultWritesBlock } from '@/components/ConsultWrites'
+import { ConsultTurnStamp } from '@/components/ConsultTurnStamp'
+import { useElementWidth } from '@/lib/useElementWidth'
+import { selectionKindLabel } from '@/lib/subjectNoun'
+import { useConsultFrame } from '@/components/ConsultFrameContext'
+import { CitedRecords } from '@/components/CitedRecords'
+import { describeOnScreen } from '@/lib/onScreen'
+import {
+  GROUNDING_CHOICES,
+  WINDOW_CHOICES,
+  loadGroundingMode,
+  loadWindowChoice,
+  saveGroundingMode,
+  saveWindowChoice,
+  windowChoiceWords,
+  type GroundingMode,
+  type WindowChoiceId,
+} from '@/lib/consultContract'
+import { ConsultContractBlock } from '@/components/ConsultContract'
+import { useWorldState } from '@/v4/world/worldState'
+import { spanPresetFor } from '@/lib/mapTime'
 import type { PanelProps } from '@/types'
 
-interface ConsultResponse {
-  answer: string
-  finding_id: string | null
-  derived_from: string[]
-  tool_calls: ConsultToolCall[]
-  cited_refs: ConsultCitedRef[]
-  receipt_hash?: string | null
-  uncertainty?: number | null
-  unanswered_aspects?: string[]
-  session_id?: string | null
-  // F1: which LLM plane answered ("opus"/"core"), echoed by the server.
-  model?: string | null
-  /**
-   * `'accepted'` (with HTTP 202) when the run outlived the request and `answer`
-   * is therefore empty — the answer arrives on the step stream's terminal
-   * frame instead. `'complete'` is the fast path, byte-identical to the
-   * response shape that existed before the run was detached.
-   */
-  status?: 'complete' | 'accepted'
-  request_id?: string | null
-  /**
-   * Did the FINAL SYNTHESIS finish? Orthogonal to `status`, which is about the
-   * request. `'partial'`/`'none'` is the 2026-09-16 shape — an expensive run
-   * whose answer was cut — and both are recoverable from persisted evidence.
-   */
-  synthesis_status?: 'complete' | 'partial' | 'none'
-  resynthesizable?: boolean
-  usage?: ConsultUsage | null
-  /** Set only by the synthesize endpoint — see {@link ConsultSynthesisBody}. */
-  replay_fidelity?: 'exact' | 'rebuilt' | 'unavailable'
-  replay_note?: string | null
-  /** 7g-2 — what this answer rests on, counted server-side. */
-  provenance_census?: ProvenanceCensus | null
+/** Below this tile width the case rail collapses to the step counter + STOP. */
+const CASE_RAIL_COMPACT_PX = 380
+
+/**
+ * The EVIDENCE FLOOR stamp beside the uncertainty: the server raised the
+ * model's own number because too few cited refs resolved to a real record.
+ * Printed only when the server stamped it — the stamp is a claim that the
+ * floor MOVED the number, and its absence claims nothing.
+ */
+function UncertaintyFloorStamp({ floor }: { floor: ConsultUncertaintyFloor }) {
+  const resolved =
+    typeof floor.resolved === 'number'
+      ? `${floor.resolved} cited ref${floor.resolved === 1 ? '' : 's'} resolved`
+      : 'resolved refs: not measured'
+  return (
+    <span
+      className="font-mono text-label text-amber-400/80"
+      data-testid="consult-uncertainty-floor"
+      title={`the model said ${floor.from.toFixed(2)}; the evidence floor raised it to ${floor.to.toFixed(2)} (${resolved})`}
+    >
+      floored from {floor.from.toFixed(2)} · {resolved}
+    </span>
+  )
+}
+
+/**
+ * W3 / F-4 — how many of this answer's watch candidates now STAND as open
+ * questions `claim_watch` matches new reporting against. Rendered only when
+ * the server attempted the mint; its absence claims nothing. A refused
+ * candidate is counted beside the standing ones and named, with its reason,
+ * on the tooltip — never silently dropped. W4-F1: a candidate that FOLDED onto
+ * a watch already standing (same desk, horizon within ±3 days, the same claim)
+ * is counted as "K folded"; the tooltip names the watch it folded onto and the
+ * claim-core cosine when the server measured one.
+ */
+function foldNote(m: ConsultWatchMint): string {
+  if (!m.folded) {
+    return m.fold_check === 'unavailable' ? ' (fold check unavailable)' : ''
+  }
+  const onto = m.folded_onto ? ` — folded onto ${m.folded_onto.slice(0, 8)}` : ''
+  const sim =
+    typeof m.similarity === 'number' ? `, claim-core cosine ${m.similarity.toFixed(2)}` : ''
+  return ` (already standing${onto}${sim})`
+}
+
+function WatchStandingLine({ minted }: { minted: ConsultWatchMint[] }) {
+  const standing = minted.filter((m) => !m.refused && m.hypothesis_id)
+  const refused = minted.filter((m) => m.refused)
+  const folded = standing.filter((m) => m.folded)
+  const title = [
+    ...standing.map(
+      (m) =>
+        `watching: ${m.candidate}` +
+        (m.resolves_by ? ` — until ${m.resolves_by.slice(0, 10)}` : '') +
+        foldNote(m),
+    ),
+    ...refused.map((m) => `not watched: ${m.candidate} — ${m.reason ?? 'refused'}`),
+  ].join('\n')
+  return (
+    <span
+      className="font-mono text-label text-slate-500"
+      data-testid="consult-watch-standing"
+      title={title}
+    >
+      {standing.length} {standing.length === 1 ? 'watch' : 'watches'} standing
+      {refused.length > 0 && ` · ${refused.length} not watched`}
+      {folded.length > 0 && ` · ${folded.length} folded`}
+    </span>
+  )
 }
 
 /**
@@ -148,18 +203,59 @@ function ProvenanceCensusLine({ census }: { census: ProvenanceCensus }) {
     ['seed', census.seed],
   ]
   const shown = classes.filter(([, n]) => typeof n === 'number')
+  // 2026-09-28 §B.3 — the three counts that used to be one silence. Each is
+  // APPENDED and only when the server measured it: `unresolved` (matched a
+  // record whose origin class this census does not read), `fabricated` (a
+  // well-formed uuid matching no record at all) and `malformed` (a citation
+  // token that was never an id). An unmeasured one is `null` and prints
+  // nothing — a `0 fabricated` nobody measured reads as "nothing was
+  // invented", which is a claim.
+  const unresolved = census.unresolved
+  const fabricated = census.fabricated
+  const malformed = census.malformed
+  const tail: string[] = []
+  if (typeof unresolved === 'number' && unresolved > 0) {
+    tail.push(`${unresolved} unresolved`)
+  }
+  if (typeof fabricated === 'number' && fabricated > 0) {
+    tail.push(`${fabricated} fabricated`)
+  }
+  if (Array.isArray(malformed) && malformed.length > 0) {
+    tail.push(`${malformed.length} malformed`)
+  }
   const mk = census.model_knowledge
-  if (!shown.length && typeof mk !== 'number') return null
+  if (!shown.length && typeof mk !== 'number' && !tail.length) return null
+  // The by-kind breakdown rides the TOOLTIP rather than the line: the 29 refs
+  // the old census filed as unresolved were real findings, situations,
+  // hypotheses and events, and naming them is the difference between a number
+  // and an explanation. The line stays one line.
+  const kinds = census.by_kind
+  const kindNote =
+    kinds && Object.keys(kinds).length > 0
+      ? `resolved by kind: ${Object.entries(kinds)
+          .map(([k, n]) => `${n} ${k}`)
+          .join(', ')}`
+      : null
+  const malformedNote =
+    Array.isArray(malformed) && malformed.length > 0
+      ? `not ids: ${malformed.join(', ')}`
+      : null
+  const title = [census.basis, kindNote, malformedNote]
+    .filter(Boolean)
+    .join(' · ')
   return (
     <span
-      className="font-mono text-[10px] text-slate-500"
+      className="font-mono text-label text-slate-500"
       data-testid="consult-provenance-census"
-      title={census.basis ?? undefined}
+      title={title || undefined}
     >
       {shown.length > 0 ? (
         <>cited: {shown.map(([label, n]) => `${n} ${label}`).join(' · ')}</>
       ) : (
         <>cited: not measured</>
+      )}
+      {tail.length > 0 && (
+        <span className="text-amber-400/80"> · {tail.join(' · ')}</span>
       )}
       {typeof mk === 'number' && (
         <>
@@ -171,79 +267,7 @@ function ProvenanceCensusLine({ census }: { census: ProvenanceCensus }) {
   )
 }
 
-/**
- * The synthesize endpoint's body, widened to the shape the settle path takes.
- *
- * The fields the settle path treats as required are optional on the wire, and
- * defaulting them HERE (once) keeps every downstream reader from having to
- * decide what an absent `cited_refs` means.
- */
-function asConsultResponse(body: ConsultSynthesisBody): ConsultResponse {
-  return {
-    ...body,
-    answer: body.answer ?? '',
-    finding_id: body.finding_id ?? null,
-    derived_from: body.derived_from ?? [],
-    tool_calls: (body.tool_calls as ConsultToolCall[]) ?? [],
-    cited_refs: (body.cited_refs as ConsultCitedRef[]) ?? [],
-  }
-}
-
-const CONSULT_PATH = '/consult'
 const MAX_ROUNDS = 30
-
-/**
- * The registry's terminal frame — the one that carries the ANSWER.
- *
- * The actor publishes its own `final` frame before its method returns, but it
- * carries only `output_id`/`mode`; the answer used to come back on the POST
- * response, which is precisely what the 2026-09-16 504 destroyed. The registry
- * now publishes a second terminal frame once it has persisted the turn, tagged
- * `final_source: 'registry'`, and that is what settles a turn here.
- *
- * On a failure it carries `partial_answer` + `steps` instead of a response:
- * the panel renders those, because a turn that says what broke and what it had
- * gathered is worth more than an error code.
- */
-interface TerminalFrame {
-  type: 'final'
-  final_source?: string
-  status?: 'complete' | 'error'
-  session_id?: string | null
-  response?: ConsultResponse
-  error_status?: number
-  error_detail?: unknown
-  partial_answer?: string
-  steps?: StepFrame[]
-}
-
-/**
- * How often a turn with no live stream re-reads the server, and how long it
- * keeps looking.
- *
- * The deadline is the analyst's total wall-clock budget
- * (`LEGBA_CONSULT_BUDGET_SECONDS`, 480s) plus slack for the detached run's own
- * delivery — past that the loop has itself emitted a degraded final, so an
- * answer is no longer coming and continuing to poll would misrepresent the
- * turn as live.
- */
-const REATTACH_POLL_MS = 3000
-const REATTACH_DEADLINE_MS = 540_000
-
-function formatApiError(err: unknown): string {
-  if (err instanceof ApiError) {
-    const body = err.body
-    if (typeof body === 'string') return `consult ${err.status}: ${body}`
-    if (body && typeof body === 'object' && 'detail' in body) {
-      const detail = (body as { detail: unknown }).detail
-      if (typeof detail === 'string') return `consult ${err.status}: ${detail}`
-      return `consult ${err.status}: ${JSON.stringify(detail)}`
-    }
-    return `consult ${err.status}: ${err.message}`
-  }
-  if (err instanceof Error) return err.message
-  return String(err)
-}
 
 /**
  * Why a step that isn't a plain tool call happened, in the operator's words.
@@ -416,20 +440,41 @@ export default function ConsultPanel({ registration }: PanelProps) {
   const [sessions, setSessions] = useState<ConsultSessionSummary[]>([])
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyError, setHistoryError] = useState<string | null>(null)
-  // The two salvage operations, each with its own in-flight state so the button
-  // that is working says so and nothing else in the panel locks up.
-  const [stopPhase, setStopPhase] = useState<'stopping' | 'synthesizing' | null>(null)
-  const [resynthIndex, setResynthIndex] = useState<number | null>(null)
+  // U-2 — "Drive the view" is a MODE of Consult (the owner: "made modes in the
+  // Consult"), replacing the per-turn "Present as a case": while it is on,
+  // every chat turn is sent as a case and its view actions run at once with
+  // one Undo; while it is off, a turn is a plain turn and moves nothing
+  // (`state/driveMode.ts`). A per-viewer preference, off until chosen.
+  const presentCase = useDriveMode((s) => s.on)
+  const setPresentCase = useDriveMode((s) => s.setOn)
+  // C-2b-1 / D2 — "Allow changes this turn", the same per-turn rule: off by
+  // default, reset after every send. Only an armed turn is offered the write
+  // tools; destructive changes still wait for the operator's Confirm.
+  const [allowWrites, setAllowWrites] = useState(false)
+  // U-8 / Q-1 — the window and the grounding mode the turn is asked under,
+  // sent on every turn (the server's `window` / `grounding_mode`). A window the
+  // question itself states ("last 48 hours") still wins on the server.
+  const [windowChoice, setWindowChoice] = useState<WindowChoiceId>(() => loadWindowChoice())
+  const [grounding, setGrounding] = useState<GroundingMode>(() => loadGroundingMode())
+  const bandSpanMs = useWorldState((s) => s.spanMs)
+  const bandSpanText = spanPresetFor(bandSpanMs)?.label ?? `${Math.round(bandSpanMs / 3_600_000)}h`
+  // The case player is module state (it must outlive this tile); the tile only
+  // reads whether a case of ITS slice is playing.
+  const casePlaying = useCasePlayer(
+    (s) => s.panelId === panelId && isCasePlaying(s.player),
+  )
+  const caseRequestId = useCasePlayer((s) =>
+    s.panelId === panelId ? (s.player?.requestId ?? null) : null,
+  )
+  const [tileRef, tileWidth] = useElementWidth<HTMLDivElement>()
+  // U-6 — the frame holding this panel: `compact` is the ask bar alone (the
+  // conversation and the options fold away; the point, the box, the switch
+  // and Send stay). Null when Consult is a plain panel.
+  const frame = useConsultFrame()
+  const compact = !!frame?.compact
 
-  const esRef = useRef<EventSource | null>(null)
   // Auto-scroll the conversation to the newest turn / live step.
   const scrollRef = useRef<HTMLDivElement | null>(null)
-
-  // A turn whose POST this page load no longer owns (the reload case) — it can
-  // only be recovered from the server, so it is polled rather than awaited.
-  const detached = isDetached(pendingTurn)
-  // A stalled turn must not lock the composer: the operator gets the panel back.
-  const busy = !!pendingTurn && !pendingTurn.stalled
 
   // Pin-to-context (#90): the operator pins records from the shared selection
   // into a sticky set; every pin is injected into each turn's context (see
@@ -449,216 +494,37 @@ export default function ConsultPanel({ registration }: PanelProps) {
   // `origin:'scope'`, REPLACED on every scope change — never appended, or a
   // morning's navigation would leave a stack of stale scopes poisoning every
   // later turn. Clearing the scope removes it and pins nothing in its place.
-  const wallScope = useScope((s) => s.scope)
+  //
+  // UI-B6 — the ambient pin follows the READER, not only the wall scope: every
+  // object surface claims it through `usePinScope` (`lib/consultContext.ts`),
+  // the wall scope is one more claimant, and the newest live claim is the pin.
+  const ambient = useAmbientPin()
+  const ambientPin = ambient?.pin ?? null
   useEffect(() => {
     const store = consultActions()
     const current = store.panel(panelId).pins
     const existing = current.find(isScopePin)
-    if (existing && (!wallScope || existing.id !== wallScope.id)) {
+    const same = (p: { kind: string; id: string }) =>
+      !!ambientPin && p.kind === ambientPin.kind && p.id === ambientPin.id
+    if (existing && !same(existing)) {
       store.removePin(panelId, existing.kind, existing.id)
     }
-    if (wallScope && (!existing || existing.id !== wallScope.id)) {
-      store.addPin(panelId, scopePin(wallScope))
+    if (ambientPin && (!existing || !same(existing))) {
+      store.addPin(panelId, ambientPin)
     }
-  }, [panelId, wallScope])
+    // Keyed on the pin's identity: a re-projection of the same object (the
+    // Navigator re-affirming its scope) must not churn the pin list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panelId, ambientPin?.kind, ambientPin?.id])
 
-  const closeStream = useCallback(() => {
-    if (esRef.current) {
-      esRef.current.close()
-      esRef.current = null
-    }
-  }, [])
-
-  // The EventSource is the one piece of this panel that CANNOT outlive the
-  // component — an unmounted panel has nothing to render steps into, and a
-  // leaked SSE connection would hold a registry worker and keep relaying into
-  // the void. Closing it does not touch the turn: the POST is still running and
-  // the steps gathered so far stay on the pending turn in the store.
-  useEffect(() => closeStream, [closeStream])
-
-  /**
-   * Land a turn from whatever the server finally said about it.
-   *
-   * ONE settlement path for four arrivals — the POST's 200, the stream's
-   * terminal frame, the run-status poll, and a reconnect — because they carry
-   * the same body and a turn that settled differently depending on which got
-   * there first is a turn nobody can reason about.
-   *
-   * A failed run settles too, with its PARTIAL: what it gathered, which round
-   * it died on, and why. The panel must never go blank and must never show a
-   * bare status code, so the error also lands in the banner *next to* a
-   * readable turn rather than in place of one.
-   */
-  const settleTurn = useCallback(
-    (
-      requestId: string,
-      mode: 'chat' | 'deep',
-      outcome: {
-        response?: ConsultResponse | null
-        partialAnswer?: string | null
-        steps?: StepFrame[]
-        error?: string | null
-      },
-    ) => {
-      const store = consultActions()
-      const live = store.panel(panelId).pendingTurn
-      if (!live || live.requestId !== requestId) return
-      const steps = outcome.steps?.length ? outcome.steps : live.steps
-      const resp = outcome.response
-      if (resp) {
-        if (resp.session_id) store.setSessionId(panelId, resp.session_id)
-        store.completeTurn(panelId, requestId, {
-          role: 'assistant',
-          content: resp.answer,
-          steps,
-          toolCalls: resp.tool_calls,
-          citedRefs: resp.cited_refs,
-          uncertainty: resp.uncertainty,
-          unansweredAspects: resp.unanswered_aspects,
-          findingId: resp.finding_id,
-          deep: mode === 'deep',
-          model: resp.model ?? model,
-          // Everything the recovery path needs, kept ON the settled turn: the
-          // run to address, whether its synthesis actually finished, and (for a
-          // salvaged answer) how faithful the transcript behind it was.
-          requestId,
-          synthesisStatus: resp.synthesis_status ?? null,
-          resynthesizable: resp.resynthesizable,
-          replayFidelity: resp.replay_fidelity ?? null,
-          replayNote: resp.replay_note ?? null,
-          // 7g-2 — the census rides the SETTLED turn, because it describes
-          // the answer and is read long after the run's spend line is gone.
-          provenanceCensus: resp.provenance_census ?? null,
-        })
-        return
-      }
-      // No answer — render the partial rather than dropping the turn.
-      store.completeTurn(panelId, requestId, {
-        role: 'assistant',
-        content:
-          outcome.partialAnswer ||
-          '_This consult did not finish, and the server recorded no partial._',
-        steps,
-        deep: mode === 'deep',
-        model,
-        requestId,
-        // Nothing was synthesised at all — which is precisely the turn that
-        // "Synthesize from evidence" exists to rescue.
-        synthesisStatus: 'none',
-      })
-      if (outcome.error) store.setError(panelId, outcome.error)
-    },
-    [model, panelId],
-  )
-
-  /** Settle from the registry's terminal SSE frame. */
-  const settleFromTerminal = useCallback(
-    (requestId: string, mode: 'chat' | 'deep', frame: TerminalFrame) => {
-      if (frame.status === 'error') {
-        const detail =
-          typeof frame.error_detail === 'string'
-            ? frame.error_detail
-            : JSON.stringify(frame.error_detail ?? 'the run failed')
-        settleTurn(requestId, mode, {
-          partialAnswer: frame.partial_answer,
-          steps: frame.steps,
-          error: `consult ${frame.error_status ?? 502}: ${detail}`,
-        })
-        return
-      }
-      settleTurn(requestId, mode, { response: frame.response })
-    },
-    [settleTurn],
-  )
-
-  /** Settle from a run-status read (reconnect, or a dead stream). */
-  const settleFromRunStatus = useCallback(
-    (requestId: string, mode: 'chat' | 'deep', run: ConsultRunStatus) => {
-      const steps = (run.steps ?? []) as StepFrame[]
-      if (run.status === 'complete') {
-        settleTurn(requestId, mode, {
-          response: run.response as ConsultResponse | null,
-          steps,
-        })
-        return
-      }
-      const detail =
-        typeof run.error_detail === 'string'
-          ? run.error_detail
-          : JSON.stringify(run.error_detail ?? 'the run failed')
-      settleTurn(requestId, mode, {
-        steps,
-        partialAnswer: null,
-        error: `consult ${run.error_status ?? 502}: ${detail}`,
-      })
-    },
-    [settleTurn],
-  )
-
-  /**
-   * Open the step stream for `requestId` and render everything it sends.
-   *
-   * Extracted from `send` because a turn can need a stream twice: once when it
-   * starts, and again after a reload that left the run going. Both want
-   * identical behaviour, and a second copy of this would be a second place for
-   * the terminal-frame handling to drift.
-   */
-  const openStream = useCallback(
-    (requestId: string, mode: 'chat' | 'deep') => {
-      closeStream()
-      try {
-        const token = localStorage.getItem('legba_token') ?? ''
-        const es = new EventSource(
-          `/api/v1${CONSULT_PATH}/stream/${requestId}?token=${encodeURIComponent(token)}`,
-        )
-        esRef.current = es
-        es.onmessage = (e: MessageEvent) => {
-          let frame: (StepFrame & TerminalFrame) | null = null
-          try {
-            frame = JSON.parse(e.data) as StepFrame & TerminalFrame
-          } catch {
-            return
-          }
-          if (!frame) return
-          if (frame.type === 'final') {
-            if (frame.final_source === 'registry') {
-              // The answer-bearing frame: this settles the turn and ends the
-              // stream.
-              settleFromTerminal(requestId, mode, frame)
-              closeStream()
-              return
-            }
-            // The ACTOR's bare final: the loop is done and the registry is
-            // persisting. Keep the stream open and keep the operator informed
-            // — this is the gap where the panel used to look frozen.
-            consultActions().pushStep(panelId, requestId, {
-              type: 'step',
-              phase: 'reflect',
-              kind: 'awaiting_answer',
-            })
-            return
-          }
-          if (frame.type === 'step') {
-            // Addressed by request id, so a frame arriving after the turn
-            // settled (or belonging to a superseded turn) is dropped, not
-            // misfiled.
-            consultActions().pushStep(panelId, requestId, frame)
-          }
-        }
-        es.onerror = () => {
-          // The live ticker is best-effort, but the ANSWER is not: a dead
-          // stream falls back to the run-status poll below rather than
-          // stranding the turn.
-          closeStream()
-        }
-      } catch {
-        // EventSource unsupported / blocked — degrade to no live steps. The
-        // poll still lands the answer.
-        esRef.current = null
-      }
-    },
-    [closeStream, panelId, settleFromTerminal],
-  )
+  // M-1 — the turn itself (send, stream, 202 and reload recovery, STOP and
+  // synthesise, the contract) is `state/useConsultTurn`, shared with the
+  // phone. This panel supplies what differs: its model, the pins, the frame's
+  // on-screen report, the window, grounding, drive mode and write-arming.
+  // Called AFTER the ambient-pin effect so its mount reconcile reads the slice
+  // the pin effect left, as it always has.
+  const consultTurn = useConsultTurn(panelId, { model })
+  const { busy, detached, stopPhase, resynthIndex, quiet, closeStream } = consultTurn
 
   // Keep the conversation pinned to the bottom as turns / steps arrive.
   useEffect(() => {
@@ -666,343 +532,39 @@ export default function ConsultPanel({ registration }: PanelProps) {
     if (el) el.scrollTop = el.scrollHeight
   }, [transcript, pendingTurn])
 
-  // ---------------------------------------------------------------------
-  // Reconcile on mount — server truth for completed turns, local pending turn
-  // only while the server has no answer for it.
-  // ---------------------------------------------------------------------
-  useEffect(() => {
-    const store = consultActions()
-    const slice = store.panel(panelId)
-    if (!slice.sessionId) return
-    const rev = slice.rev
-    let cancelled = false
-    void loadConsultSession(slice.sessionId)
-      .then((detail) => {
-        if (!cancelled) consultActions().reconcile(panelId, detail, rev)
-      })
-      .catch(() => {
-        // Best-effort: an unreachable registry leaves the local slice exactly
-        // as it was. Nothing is dropped on a failed reconcile.
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [panelId])
-
-  // ---------------------------------------------------------------------
-  // Reattach poll — a turn orphaned by a reload has no promise to resolve it.
-  // ---------------------------------------------------------------------
-  // Identify the pending turn by VALUE, not by object identity. The effect
-  // below writes to the store (it seeds the steps a reload missed), which
-  // replaces `pendingTurn` — so depending on the object itself would re-run the
-  // effect on its own write and spin. These are stable across that write.
-  const pendingRequestId = pendingTurn?.requestId ?? null
-  const pendingStartedAt = pendingTurn?.startedAt ?? 0
-  const pendingMode = pendingTurn?.mode ?? 'chat'
-  const pendingStalled = pendingTurn?.stalled ?? false
-
-  useEffect(() => {
-    if (!pendingRequestId || pendingStalled || !detached) return
-    const requestId = pendingRequestId
-    const startedAt = pendingStartedAt
-    const mode = pendingMode
-
-    if (Date.now() - startedAt > REATTACH_DEADLINE_MS) {
-      consultActions().markStalled(panelId, requestId)
-      return
-    }
-
-    let cancelled = false
-    let streamOpened = false
-    // The run replays its whole accumulated trace on every read, so seeding is
-    // a one-shot: after this the live stream is the source of new steps.
-    let seeded = false
-
-    /**
-     * One poll tick: ask the RUN first, then the session.
-     *
-     * The run knows three things the session does not — whether it is still
-     * alive, the steps it has taken so far, and (on a failure) why it stopped.
-     * So a reload mid-run does not just wait: it re-attaches to the live
-     * stream and seeds the steps it missed, and the operator sees the run
-     * continue rather than a frozen "Consulting…".
-     *
-     * Falling back to the session matters just as much: once the run ages out
-     * of the registry's memory, the persisted turn is the record, and it is
-     * the only thing that survives a registry restart.
-     */
-    const tick = async () => {
-      if (cancelled) return
-      if (Date.now() - startedAt > REATTACH_DEADLINE_MS) {
-        consultActions().markStalled(panelId, requestId)
-        return
-      }
-      try {
-        const run = await getConsultRun(requestId)
-        if (cancelled) return
-        if (run.status === 'running') {
-          // Live. Seed whatever steps we missed ONCE, then re-attach so the
-          // rest arrive as they happen.
-          if (!seeded) {
-            seeded = true
-            for (const step of (run.steps ?? []) as StepFrame[]) {
-              consultActions().pushStep(panelId, requestId, {
-                ...step,
-                type: 'step',
-              })
-            }
-          }
-          if (!streamOpened) {
-            streamOpened = true
-            openStream(requestId, mode)
-          }
-          return
-        }
-        if (run.status === 'complete' || run.status === 'error') {
-          settleFromRunStatus(requestId, mode, run)
-          return
-        }
-        // A 200 carrying something that is not a run (a proxy's error page, a
-        // stub, a future shape we don't know) tells us NOTHING — and settling a
-        // turn on it would invent an outcome. Fall through to the durable
-        // record instead.
-      } catch {
-        // 404 (aged out / another registry worker) or unreachable — the
-        // durable record is the session's turns.
-      }
-      if (!sessionId) {
-        // The reload beat the FIRST response back: the server minted the
-        // session, we never learned its id, and `consult_sessions` carries no
-        // `request_id` to find it by. Not automatically recoverable — say so
-        // instead of spinning. The run is not lost: it is in the History
-        // sidebar under its own question.
-        consultActions().markStalled(panelId, requestId)
-        return
-      }
-      const rev = consultActions().panel(panelId).rev
-      try {
-        const detail = await loadConsultSession(sessionId)
-        if (!cancelled) consultActions().reconcile(panelId, detail, rev)
-      } catch {
-        // A poll that can't reach the registry just tries again next tick.
-      }
-    }
-
-    void tick()
-    const timer = window.setInterval(() => void tick(), REATTACH_POLL_MS)
-
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [
-    panelId,
-    pendingRequestId,
-    pendingStartedAt,
-    pendingMode,
-    pendingStalled,
-    detached,
-    sessionId,
-    openStream,
-    settleFromRunStatus,
-  ])
-
-
-  /**
-   * Last resort for a turn whose stream and POST both failed us.
-   *
-   * Asks the run-status endpoint first (it has the accumulated steps), then
-   * the session's persisted turns. Returns whether the turn was settled —
-   * `false` means there is genuinely nothing on the server yet and the caller
-   * should show the error it has.
-   */
-  const recoverTurn = useCallback(
-    async (requestId: string, mode: 'chat' | 'deep'): Promise<boolean> => {
-      try {
-        const run = await getConsultRun(requestId)
-        if (run.status !== 'running') {
-          settleFromRunStatus(requestId, mode, run)
-          return true
-        }
-        return false
-      } catch {
-        // 404 or unreachable — fall through to the durable record.
-      }
-      const slice = consultActions().panel(panelId)
-      if (!slice.sessionId) return false
-      try {
-        const detail = await loadConsultSession(slice.sessionId)
-        consultActions().reconcile(panelId, detail, slice.rev)
-        return !consultActions().panel(panelId).pendingTurn
-      } catch {
-        return false
-      }
-    },
-    [panelId, settleFromRunStatus],
-  )
-
   const send = async (mode: 'chat' | 'deep') => {
     const trimmed = draft.trim()
     if (!trimmed || busy) return
-
-    const store = consultActions()
-    // Snapshot the transcript-so-far for the server (prior turns) BEFORE the
-    // store optimistically appends the new user turn.
-    const priorMessages = transcript.map((t) => ({ role: t.role, content: t.content }))
-    const requestId = crypto.randomUUID()
-
-    // Stamp the turn with THIS page load: while the stamp matches, the reattach
-    // poll leaves the turn alone, because the promise below will answer it.
-    store.startTurn(panelId, {
-      requestId,
-      question: trimmed,
-      mode,
-      startedAt: Date.now(),
-      pageLoadId: CONSULT_PAGE_LOAD_ID,
-      steps: [],
-    })
-
-    // Subscribe to the step stream BEFORE POSTing (subscribe-before-publish).
-    openStream(requestId, mode)
-
     // Inject pinned records two ways: a `[Pinned …]` context prefix on the
     // question (works against today's text-only backend) AND a structured
     // `pinned_context` field a backend can hydrate full record bodies from.
     // Both are built in `lib/consultContext` so Chat and Deep Consult cannot
-    // drift apart on what the model is told.
-    const question = questionWithPins(trimmed, pins)
-
-    try {
-      const { status, body: resp } = await apiPostWithStatus<ConsultResponse>(
-        CONSULT_PATH,
-        {
-          question,
-          scope_predicate: scope.trim() || null,
-          max_tool_rounds: maxRounds,
-          mode,
-          model,
-          request_id: requestId,
-          messages: priorMessages,
-          session_id: sessionId,
-          pinned_context: pinnedContext(pins),
+    // drift apart on what the model is told. The on-screen report is sent only
+    // inside the frame.
+    const sending = consultTurn.send({
+      question: trimmed,
+      mode,
+      // UI-B6 — what the answer is asked under; its census line prints it.
+      pinnedTo: turnPinOf(ambient),
+      request: {
+        question: questionWithPins(trimmed, pins),
+        scopePredicate: scope,
+        maxToolRounds: maxRounds,
+        pinnedContext: pinnedContext(pins),
+        onScreen: frame ? describeOnScreen() : null,
+        presentCase,
+        allowWrites,
+        window: windowChoice,
+        band: {
+          startMs: useWorldState.getState().windowStartMs,
+          endMs: useWorldState.getState().windowEndMs,
         },
-      )
-      // Thread the audit-trail session — the server opens one on the first turn
-      // and echoes its id; pass it back on the next turn so the conversation
-      // stays under one session.
-      if (resp.session_id) consultActions().setSessionId(panelId, resp.session_id)
-
-      // 202 — the run outlived the request. This is INVISIBLE to the operator:
-      // the stream opened before the POST and is still rendering rounds, and
-      // the answer arrives on its terminal frame. Leaving the stream open and
-      // the turn pending is the whole behaviour.
-      if (status === 202 || resp.status === 'accepted') {
-        return
-      }
-
-      // 200 — the fast path, unchanged. Settle straight from the body.
-      settleTurn(requestId, mode, { response: resp })
-      closeStream()
-    } catch (err) {
-      // The POST failed outright (the request never became a run, or the run
-      // failed inside the sync window). The server has still persisted a
-      // partial turn, so pull it back rather than showing only a status line.
-      consultActions().setError(panelId, formatApiError(err))
-      const recovered = await recoverTurn(requestId, mode)
-      if (!recovered) {
-        consultActions().failTurn(panelId, requestId, formatApiError(err))
-      }
-      closeStream()
-    }
-  }
-
-
-  /**
-   * STOP — the escape hatch the 2026-09-16 run did not have.
-   *
-   * Two POSTs, in this order and for different reasons: `stop` ends the
-   * spending, `synthesize` turns what has already been bought into an answer.
-   * A failed stop does NOT abort the salvage — a run that finished on its own
-   * (404) has the same persisted evidence as one we cancelled, and the operator
-   * pressed this button to get an answer, not to get a status code.
-   *
-   * Deliberately NOT gated on `busy`: every other control locks while a turn is
-   * in flight, and a brake that only works when the car is stopped is not a
-   * brake.
-   */
-  const stopAndSynthesize = async () => {
-    const pending = consultActions().panel(panelId).pendingTurn
-    if (!pending || stopPhase) return
-    const { requestId, mode } = pending
-    let stopNote: string | null = null
-    setStopPhase('stopping')
-    try {
-      try {
-        await stopConsultRun(requestId)
-      } catch (err) {
-        stopNote = formatApiError(err)
-      }
-      setStopPhase('synthesizing')
-      const body = await synthesizeConsultRun({ requestId }, model)
-      closeStream()
-      // The ordinary settle path — a salvaged answer is an answer, and a turn
-      // that landed differently depending on how it ended would be a turn
-      // nobody can reason about.
-      settleTurn(requestId, mode, { response: asConsultResponse(body) })
-    } catch (err) {
-      // The turn stays PENDING on purpose: the run may yet deliver on its own,
-      // and failing it here would discard evidence the operator just paid for.
-      const detail = formatApiError(err)
-      consultActions().setError(
-        panelId,
-        stopNote ? `${detail} (stop also failed: ${stopNote})` : detail,
-      )
-    } finally {
-      setStopPhase(null)
-    }
-  }
-
-  /**
-   * Re-synthesise a SETTLED turn whose answer was cut short.
-   *
-   * Replaces the turn in place rather than appending: the stump and its repair
-   * are one answer, and appending would also feed the truncated text back to
-   * the model as conversation history on the next turn.
-   */
-  const resynthesizeTurn = async (index: number, turn: ChatTurn) => {
-    if ((!turn.requestId && !turn.turnId) || resynthIndex !== null) return
-    setResynthIndex(index)
-    try {
-      const body = await synthesizeConsultRun(
-        { requestId: turn.requestId, turnId: turn.turnId },
-        model,
-      )
-      const toolCalls = (body.tool_calls as ConsultToolCall[] | undefined) ?? []
-      const citedRefs = (body.cited_refs as ConsultCitedRef[] | undefined) ?? []
-      consultActions().replaceTurn(panelId, index, {
-        ...turn,
-        content: body.answer || turn.content,
-        // The synthesis re-read the evidence; it did not re-drill. The original
-        // trace is the record of how that evidence was gathered, so it stays.
-        steps: turn.steps,
-        toolCalls: toolCalls.length ? toolCalls : turn.toolCalls,
-        citedRefs: citedRefs.length ? citedRefs : turn.citedRefs,
-        uncertainty: body.uncertainty ?? turn.uncertainty,
-        unansweredAspects: body.unanswered_aspects ?? turn.unansweredAspects,
-        model: body.model ?? turn.model,
-        // The recovery answer is written into its OWN turn server-side; keep
-        // its id so a second recovery addresses the answer now on screen.
-        turnId: body.turn_id ?? turn.turnId,
-        synthesisStatus: body.synthesis_status ?? 'complete',
-        resynthesizable: body.resynthesizable,
-        replayFidelity: body.replay_fidelity ?? null,
-        replayNote: body.replay_note ?? null,
-      })
-    } catch (err) {
-      consultActions().setError(panelId, formatApiError(err))
-    } finally {
-      setResynthIndex(null)
-    }
+        groundingMode: grounding,
+      },
+    })
+    // D1 — "Allow changes" applies to THIS turn only, and resets on send.
+    setAllowWrites(false)
+    await sending
   }
 
   const resetChat = () => {
@@ -1064,22 +626,22 @@ export default function ConsultPanel({ registration }: PanelProps) {
     <PanelChrome
       registration={registration}
       subtitle="consult_on_demand (chat · on-demand via dapr actor)"
-      onRefresh={resetChat}
+      onRefresh={frame ? undefined : resetChat}
     >
-      <div className="flex h-full min-h-0">
+      <div className="flex h-full min-h-0 min-w-0" ref={tileRef}>
         {/* History sidebar — prior chat sessions (0038 audit trail). */}
-        {historyOpen && (
+        {historyOpen && !compact && (
           <div
             className="w-56 shrink-0 border-r border-slate-700 pr-2 mr-2 overflow-y-auto min-h-0"
             data-testid="consult-history"
           >
             <div className="flex items-center justify-between mb-2">
-              <span className="text-[11px] uppercase tracking-wide text-slate-400">
+              <span className="text-label uppercase tracking-wide text-slate-400">
                 Prior chats
               </span>
               <button
                 onClick={() => void loadHistory()}
-                className="text-[10px] text-slate-400 hover:text-slate-200"
+                className="text-label text-slate-400 hover:text-slate-200"
                 title="refresh history"
                 data-testid="consult-history-refresh"
               >
@@ -1087,10 +649,10 @@ export default function ConsultPanel({ registration }: PanelProps) {
               </button>
             </div>
             {historyError && (
-              <div className="text-[10px] text-accent-critical mb-2">{historyError}</div>
+              <div className="text-label text-accent-critical mb-2">{historyError}</div>
             )}
             {sessions.length === 0 && !historyError && (
-              <div className="text-[11px] text-slate-500 py-2">No prior chats yet.</div>
+              <div className="text-label text-slate-500 py-2">No prior chats yet.</div>
             )}
             <ul className="space-y-1" data-testid="consult-history-list">
               {sessions.map((s) => (
@@ -1106,7 +668,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
                     data-testid="consult-history-item"
                   >
                     <div className="truncate">{s.title || '(untitled)'}</div>
-                    <div className="text-[10px] text-slate-500">
+                    <div className="text-label text-slate-500">
                       {s.turn_count} turn{s.turn_count === 1 ? '' : 's'}
                     </div>
                   </button>
@@ -1116,12 +678,13 @@ export default function ConsultPanel({ registration }: PanelProps) {
           </div>
         )}
 
-        <div className="flex flex-col h-full min-h-0 flex-1">
+        <div className="flex flex-col h-full min-h-0 min-w-0 flex-1">
         {/* History toggle + new-chat bar */}
+        {!compact && (
         <div className="flex items-center gap-2 mb-2 shrink-0">
           <button
             onClick={() => setHistoryOpen((v) => !v)}
-            className="text-[11px] text-slate-400 hover:text-slate-200 rounded px-2 py-0.5 border border-slate-700"
+            className="text-label text-ink-3 hover:text-ink-1 rounded px-2 py-0.5 border border-line"
             data-testid="consult-history-toggle"
           >
             {historyOpen ? '◀ Hide history' : '☰ History'}
@@ -1129,7 +692,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
           <button
             onClick={resetChat}
             disabled={busy}
-            className="text-[11px] text-slate-400 hover:text-slate-200 rounded px-2 py-0.5 border border-slate-700 disabled:opacity-50"
+            className="text-label text-ink-3 hover:text-ink-1 rounded px-2 py-0.5 border border-line disabled:opacity-50"
             data-testid="consult-new-chat"
           >
             + New chat
@@ -1137,7 +700,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
           <button
             onClick={pinSelection}
             disabled={!selection || selectionPinned}
-            className="ml-auto flex items-center gap-1 text-[11px] text-slate-400 hover:text-slate-200 rounded px-2 py-0.5 border border-slate-700 disabled:opacity-50"
+            className="ml-auto flex items-center gap-1 text-label text-ink-3 hover:text-ink-1 rounded px-2 py-0.5 border border-line disabled:opacity-50"
             title={
               selection
                 ? selectionPinned
@@ -1151,15 +714,16 @@ export default function ConsultPanel({ registration }: PanelProps) {
             {selectionPinned ? 'Pinned' : 'Pin selection'}
           </button>
         </div>
+        )}
         {/* Conversation — scrolls; the composer below stays pinned. */}
         <div
           ref={scrollRef}
-          className="flex-1 overflow-y-auto min-h-0 space-y-3 pr-1"
+          className={compact ? 'hidden' : 'flex-1 overflow-y-auto min-h-0 space-y-3 pr-1'}
           data-testid="consult-scroll"
         >
           {transcript.length === 0 && !pendingTurn && (
             <div className="text-label text-ink-3 py-6 text-center">
-              Ask the substrate anything — answers cite the records they used.
+              Ask anything — answers cite the records they used.
             </div>
           )}
 
@@ -1174,7 +738,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
                   </div>
                 ) : (
                   <div key={i} className="space-y-2" data-testid="consult-turn-assistant">
-                    <div className="text-[11px] text-slate-400 flex items-center gap-2">
+                    <div className="text-label text-slate-400 flex items-center gap-2">
                       <span>Answer</span>
                       {turn.model && (
                         <span
@@ -1190,9 +754,37 @@ export default function ConsultPanel({ registration }: PanelProps) {
                           uncertainty={turn.uncertainty.toFixed(2)}
                         </span>
                       )}
-                      {turn.provenanceCensus && (
-                        <ProvenanceCensusLine census={turn.provenanceCensus} />
+                      <ConsultTurnStamp usage={turn.usageReceipt} verification={turn.verification} />
+                      {turn.uncertaintyFloor && (
+                        <UncertaintyFloorStamp floor={turn.uncertaintyFloor} />
                       )}
+                      {turn.provenanceCensus ? (
+                        <ProvenanceCensusLine census={turn.provenanceCensus} />
+                      ) : (
+                        turn.responseRecorded === false && (
+                          <span
+                            className="font-mono text-label text-slate-500"
+                            data-testid="consult-provenance-census"
+                            title="this turn was recorded before its census, hold and floor were kept with it (migration 0223)"
+                          >
+                            cited: not measured
+                          </span>
+                        )
+                      )}
+                      {/* UI-B6 — the census reports the PIN the question was
+                          asked under (the object the reader was on), beside
+                          what the answer rested on. Only for a turn asked in
+                          this page: the server does not record the pin. */}
+                      {i > 0 && transcript[i - 1].role === 'user' && transcript[i - 1].pinnedTo !== undefined && (
+                        <span
+                          className="font-mono text-label text-ink-3"
+                          data-testid="consult-turn-pin"
+                          title="the ambient pin this question was asked under — the object the reader was on"
+                        >
+                          {turnPinLine(transcript[i - 1].pinnedTo ?? null)}
+                        </span>
+                      )}
+                      {turn.watchMinted && <WatchStandingLine minted={turn.watchMinted} />}
                       {turn.deep && turn.findingId && (
                         <>
                           <span className="font-mono text-emerald-400">durable finding written</span>
@@ -1209,18 +801,41 @@ export default function ConsultPanel({ registration }: PanelProps) {
                         </>
                       )}
                     </div>
+                    {/* 2026-09-28 §B.3 — THE PROVENANCE HOLD. Not one cited
+                        reference resolved to live or held reporting, and the
+                        prose still asserts. The server already prepended its
+                        own banner to the answer (it names the counts, and it
+                        travels wherever the answer travels); this frame is so
+                        a reader scanning the transcript sees it before they
+                        read a word of the answer, not after. */}
+                    {turn.holdReason && (
+                      <div
+                        className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-label text-amber-300"
+                        data-testid="consult-provenance-hold"
+                      >
+                        held — nothing this answer cites resolved to live or held
+                        reporting; read it as model knowledge until it is grounded
+                      </div>
+                    )}
                     <div
-                      className="bg-surface-200 rounded p-2 text-sm prose prose-invert prose-sm max-w-none"
+                      className={`rounded p-2 text-sm prose prose-invert prose-sm max-w-none ${
+                        turn.holdReason
+                          ? 'bg-surface-200 border border-amber-500/40'
+                          : 'bg-surface-200'
+                      }`}
                       data-testid="consult-answer"
                     >
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>{turn.content}</ReactMarkdown>
                     </div>
+                    {/* U-8 / Q-1 — the turn contract as data: window, coverage,
+                        explanations, grounding, cost. Absent parts draw nothing. */}
+                    {turn.contract && <ConsultContractBlock contract={turn.contract} usage={turn.usageReceipt} />}
                     {/* A rebuilt transcript is NOT the run the operator paid
                         for. Saying so is the whole point — a recovery that
                         passes itself off as a clean re-run is a lie. */}
                     {turn.replayFidelity && turn.replayFidelity !== 'exact' && (
                       <div
-                        className="rounded border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] text-amber-300"
+                        className="rounded border border-amber-500/40 bg-amber-500/10 p-2 text-label text-amber-300"
                         data-testid="consult-replay-note"
                       >
                         {turn.replayNote ||
@@ -1229,18 +844,55 @@ export default function ConsultPanel({ registration }: PanelProps) {
                             : 'the transcript this synthesis read was rebuilt, not the original')}
                       </div>
                     )}
+                    {/* C-2b-1 — what an armed turn changed, from the ledger. */}
+                    {Array.isArray(turn.writes) && (
+                      <ConsultWritesBlock
+                        sessionId={sessionId}
+                        requestId={turn.requestId ?? null}
+                        entries={turn.writes}
+                      />
+                    )}
+                    {/* C-1b — a turn that presented a case can replay it: the
+                        same executor over the persisted record, with no consult
+                        POST and no tool call. */}
+                    {turn.caseRecord && (
+                      <div
+                        className="flex flex-wrap items-center gap-2 text-label text-ink-3"
+                        data-testid="consult-case-line"
+                      >
+                        <span className="font-mono">
+                          case · {turn.caseRecord.status} · {turn.caseRecord.actions.length} step
+                          {turn.caseRecord.actions.length === 1 ? '' : 's'}
+                          {turn.caseRecord.as_of
+                            ? ` · recorded ${turn.caseRecord.as_of}`
+                            : ' · as-of not recorded'}
+                          {!turn.caseRecord.complete && turn.caseRecord.gap_at_seq !== null
+                            ? ` · hole at step ${turn.caseRecord.gap_at_seq}`
+                            : ''}
+                        </span>
+                        <button
+                          onClick={() => casePlayer().replay(turn.caseRecord!, panelId)}
+                          disabled={casePlaying || turn.caseRecord.actions.length === 0}
+                          className="rounded border border-line px-2 py-0.5 text-ink-2 hover:text-ink-1 disabled:opacity-50"
+                          data-testid="consult-case-replay"
+                          title="replay this case without the model — panels show the records as they stand now"
+                        >
+                          Replay
+                        </button>
+                      </div>
+                    )}
                     {needsResynthesis(turn) && (
                       <div className="flex items-center gap-2 flex-wrap">
                         <button
-                          onClick={() => void resynthesizeTurn(i, turn)}
+                          onClick={() => void consultTurn.resynthesize(i, turn)}
                           disabled={resynthIndex !== null}
-                          className="text-[11px] rounded px-2 py-0.5 border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 disabled:opacity-50"
+                          className="text-label rounded px-2 py-0.5 border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 disabled:opacity-50"
                           data-testid="consult-resynthesize"
                           title="re-run ONLY the final synthesis over the evidence this run already gathered — no new drilling, no new tool calls"
                         >
                           {resynthIndex === i ? 'Synthesizing…' : 'Synthesize from evidence'}
                         </button>
-                        <span className="text-[10px] text-slate-500">
+                        <span className="text-label text-slate-500">
                           this answer was cut short — the evidence behind it is still on the
                           server
                         </span>
@@ -1248,7 +900,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
                     )}
                     {turn.unansweredAspects && turn.unansweredAspects.length > 0 && (
                       <div>
-                        <div className="text-[11px] text-slate-400 mb-1">Unanswered aspects</div>
+                        <div className="text-label text-slate-400 mb-1">Unanswered aspects</div>
                         <ul className="text-xs space-y-1 list-disc list-inside text-amber-300">
                           {turn.unansweredAspects.map((u, j) => (
                             <li key={j}>{u}</li>
@@ -1258,10 +910,10 @@ export default function ConsultPanel({ registration }: PanelProps) {
                     )}
                     {turn.steps && turn.steps.length > 0 && (
                       <details className="bg-surface-200 rounded p-2">
-                        <summary className="text-[11px] text-slate-400 cursor-pointer">
+                        <summary className="text-label text-slate-400 cursor-pointer">
                           Thinking ({turn.steps.length} steps)
                         </summary>
-                        <ul className="text-[10px] font-mono mt-2 space-y-0.5 text-slate-400">
+                        <ul className="text-label font-mono mt-2 space-y-0.5 text-slate-400">
                           {turn.steps.map((s, j) => (
                             <li key={j}>{stepLabel(s)}</li>
                           ))}
@@ -1270,39 +922,16 @@ export default function ConsultPanel({ registration }: PanelProps) {
                     )}
                     {turn.toolCalls && turn.toolCalls.length > 0 && (
                       <details className="bg-surface-200 rounded p-2">
-                        <summary className="text-[11px] text-slate-400 cursor-pointer">
+                        <summary className="text-label text-slate-400 cursor-pointer">
                           Tool calls ({turn.toolCalls.length})
                         </summary>
-                        <pre className="text-[10px] font-mono mt-2 overflow-x-auto">
+                        <pre className="text-label font-mono mt-2 overflow-x-auto">
                           {JSON.stringify(turn.toolCalls, null, 2)}
                         </pre>
                       </details>
                     )}
                     {turn.citedRefs && turn.citedRefs.length > 0 && (
-                      <div>
-                        <div className="text-[11px] text-slate-400 mb-1">
-                          Cited substrate ({turn.citedRefs.length})
-                        </div>
-                        <ul className="text-xs space-y-1" data-testid="consult-cited">
-                          {turn.citedRefs.map((ref, j) => (
-                            <li key={j} className="font-mono">
-                              <span className="text-slate-500">{ref.kind}:</span>{' '}
-                              <span data-testid={`consult-cited-link-${j}`}>
-                                <RecordLink
-                                  kind={selectionKindOf(ref.kind)}
-                                  id={ref.id}
-                                  origin="consult"
-                                  mono
-                                  title={`inspect this ${ref.kind}`}
-                                />
-                              </span>
-                              {ref.description && (
-                                <span className="text-slate-400"> — {ref.description}</span>
-                              )}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
+                      <CitedRecords refs={turn.citedRefs} toolCalls={turn.toolCalls} />
                     )}
                   </div>
                 ),
@@ -1320,7 +949,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
               <div className="flex items-center gap-2 mb-1 flex-wrap">
                 <div
                   className={
-                    'text-[11px] ' +
+                    'text-label ' +
                     (pendingTurn.stalled ? 'text-amber-300' : 'text-slate-400')
                   }
                   data-testid="consult-pending-label"
@@ -1332,7 +961,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
                 {typeof pendingTurn.roundCap === 'number' && (
                   <span
                     className={
-                      'font-mono text-[10px] ' + roundCapTone(pendingTurn.roundsSource)
+                      'font-mono text-label ' + roundCapTone(pendingTurn.roundsSource)
                     }
                     data-testid="consult-round-cap"
                     title={roundCapTitle(pendingTurn.roundCap, pendingTurn.roundsSource)}
@@ -1343,7 +972,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
                 {/* Live spend, against its ceilings, escalating as it closes. */}
                 {pendingTurn.usage && (
                   <span
-                    className={'font-mono text-[10px] ' + usageTone(pendingTurn.usage)}
+                    className={'font-mono text-label ' + usageTone(pendingTurn.usage)}
                     data-testid="consult-usage"
                     title={`${pendingTurn.usage.calls} model call(s) · ${pendingTurn.usage.input_tokens.toLocaleString()} in / ${pendingTurn.usage.output_tokens.toLocaleString()} out tokens · estimated $${pendingTurn.usage.est_cost_usd.toFixed(
                       2,
@@ -1355,18 +984,28 @@ export default function ConsultPanel({ registration }: PanelProps) {
                 {pendingTurn.stalled && (
                   <button
                     onClick={() => consultActions().dismissPending(panelId)}
-                    className="ml-auto text-[10px] text-slate-400 hover:text-slate-200 underline underline-offset-2"
+                    className="ml-auto text-label text-slate-400 hover:text-slate-200 underline underline-offset-2"
                     data-testid="consult-pending-dismiss"
                   >
                     Dismiss
                   </button>
                 )}
               </div>
-              {pendingTurn.steps.length > 0 && (
-                <ul className="text-[10px] font-mono space-y-0.5 text-slate-400 max-h-40 overflow-y-auto">
+              {(pendingTurn.steps.length > 0 || quiet) && (
+                <ul className="text-label font-mono space-y-0.5 text-slate-400 max-h-40 overflow-y-auto">
                   {pendingTurn.steps.map((s, i) => (
                     <li key={i}>{stepLabel(s)}</li>
                   ))}
+                  {quiet && (
+                    <li
+                      className="text-sky-300"
+                      data-testid="consult-quiet-round"
+                      data-synthesising={quiet.synthesising ? 'true' : 'false'}
+                      title="No step for this long, but the stream's keepalive says the run is still going — the counter is the silence since the last frame."
+                    >
+                      {quiet.text}
+                    </li>
+                  )}
                 </ul>
               )}
               {/* The answer as it is written. This text used to be thrown away
@@ -1375,7 +1014,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
                   is replaced by the settled answer the moment the turn lands. */}
               {pendingTurn.answerPreview && (
                 <div className="mt-2">
-                  <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">
+                  <div className="text-label uppercase tracking-wide text-slate-500 mb-1">
                     Answer forming
                   </div>
                   <div
@@ -1383,7 +1022,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
                     data-testid="consult-answer-live"
                   >
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {pendingTurn.answerPreview}
+                      {stripFinalFrame(pendingTurn.answerPreview)}
                     </ReactMarkdown>
                   </div>
                 </div>
@@ -1393,25 +1032,36 @@ export default function ConsultPanel({ registration }: PanelProps) {
         </div>
 
         {/* Composer — pinned chat bar at the bottom */}
-        <div className="shrink-0 border-t border-slate-700 pt-2 mt-2 space-y-2">
+        <div className={compact ? 'shrink-0 space-y-1.5' : 'shrink-0 border-t border-line pt-2 mt-2 space-y-2'}>
+          {/* C-1b — the case rail. In the pinned composer region, never in the
+              scrolling transcript, so its STOP cannot scroll out of view. */}
+          {caseRequestId && (
+            <CaseRail
+              panelId={panelId}
+              compact={tileWidth > 0 && tileWidth < CASE_RAIL_COMPACT_PX}
+              held={transcript.some(
+                (t) => t.caseRecord?.request_id === caseRequestId && !!t.holdReason,
+              )}
+            />
+          )}
           {/* Pinned context — injected into every turn until cleared (#90). */}
-          {pins.length > 0 && (
+          {pins.length > 0 && !compact && (
             <div className="flex flex-wrap items-center gap-1" data-testid="consult-pins">
-              <span className="text-[10px] uppercase tracking-wide text-slate-500 mr-1">
+              <span className="text-label uppercase tracking-wide text-ink-3 mr-1">
                 Context
               </span>
               {pins.map((p) => (
                 <span
                   key={`${p.kind}:${p.id}`}
-                  className="flex items-center gap-1 rounded bg-accent-info/15 border border-accent-info/30 px-1.5 py-0.5 text-[10px] text-slate-200"
-                  title={`${p.kind} ${p.id}`}
+                  className="flex items-center gap-1 rounded bg-accent-info/15 border border-accent-info/30 px-1.5 py-0.5 text-label text-ink-1"
+                  title={`${selectionKindLabel(p.kind)} ${p.id}`}
                   data-testid="consult-pin-chip"
                 >
-                  <span className="text-slate-400">{p.kind}:</span>
+                  <span className="text-ink-3">{selectionKindLabel(p.kind)}:</span>
                   <span className="truncate max-w-[140px]">{p.label ?? p.id}</span>
                   <button
                     onClick={() => consultActions().removePin(panelId, p.kind, p.id)}
-                    className="text-slate-400 hover:text-slate-100"
+                    className="text-ink-3 hover:text-ink-1"
                     title="unpin"
                     aria-label="unpin"
                   >
@@ -1421,7 +1071,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
               ))}
               <button
                 onClick={() => consultActions().clearPins(panelId)}
-                className="text-[10px] text-slate-400 hover:text-slate-200 underline underline-offset-2 ml-1"
+                className="text-label text-ink-3 hover:text-ink-1 underline underline-offset-2 ml-1"
                 data-testid="consult-pins-clear"
               >
                 Clear
@@ -1437,7 +1087,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
             </div>
           )}
           {/* F1 model picker — which LLM plane answers this chat. */}
-          <div className="flex items-center gap-2 text-[11px] text-slate-400">
+          <div className={compact ? 'hidden' : 'flex items-center gap-2 text-label text-ink-3'}>
             <label htmlFor="consult-model" className="shrink-0">
               Model
             </label>
@@ -1449,7 +1099,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
                 setModel(m)
                 saveConsultModel(m)
               }}
-              className="bg-surface-200 border border-slate-700 rounded px-1.5 py-0.5 text-[11px]"
+              className="bg-surface-200 border border-line rounded px-1.5 py-0.5 text-label"
               data-testid="consult-model"
             >
               {CONSULT_MODEL_OPTIONS.map((o) => (
@@ -1459,10 +1109,17 @@ export default function ConsultPanel({ registration }: PanelProps) {
               ))}
             </select>
           </div>
-          <div className="flex items-end gap-2">
+          {/* X1/D1 — the question box owns its row. It used to share one
+              flex row with three buttons that never shrink, so in a 26 %
+              dock the textarea came out ~34 px wide. Now it is the ONLY
+              child of its row at every dock width, and the per-turn toggles
+              and Send sit under it in a row that wraps instead of squeezing. */}
+          {/* U-2 — what the next question is asked ABOUT, above the box. */}
+          <ConsultPointLine pinned={pins.length} windowWords={windowChoiceWords(windowChoice, bandSpanText)} />
+          <div className="w-full" data-testid="consult-question-row">
             <textarea
-              className="flex-1 bg-surface-200 border border-slate-700 rounded p-2 text-sm resize-none"
-              rows={2}
+              className="block w-full min-w-0 bg-surface-200 border border-line rounded p-2 text-sm resize-none"
+              rows={compact ? 1 : 2}
               value={draft}
               onChange={(e) => consultActions().setDraft(panelId, e.target.value)}
               onKeyDown={(e) => {
@@ -1471,13 +1128,115 @@ export default function ConsultPanel({ registration }: PanelProps) {
                   void send('chat')
                 }
               }}
-              placeholder="Ask the substrate…  (Enter to send · Shift+Enter for newline)"
+              placeholder="Ask a question…  (Enter to send · Shift+Enter for a new line)"
               data-testid="consult-question"
             />
+          </div>
+          <div
+            className="flex flex-wrap items-center gap-2"
+            data-testid="consult-composer-controls"
+          >
+            {/* U-2 — the DRIVE MODE, a switch that stays where it is set. On:
+                what an answer pulls up (open, focus, window, map) runs at once,
+                listed in the case rail with STOP and one Undo. Off: a plain
+                turn that moves nothing. A change to the system is never a view
+                action and always waits for your Confirm. */}
+            <button
+              type="button"
+              role="switch"
+              onClick={() => setPresentCase(!presentCase)}
+              disabled={busy || casePlaying}
+              aria-checked={presentCase}
+              className={
+                'flex items-center gap-1.5 px-2 py-1.5 text-label rounded-control border shrink-0 disabled:opacity-50 ' +
+                (presentCase ? 'border-point/60 text-ink-1' : 'border-line text-ink-3 hover:text-ink-1')
+              }
+              data-testid="consult-drive-toggle"
+              aria-describedby="consult-drive-hint"
+              title={
+                presentCase
+                  ? 'Drive the view is ON — what an answer pulls up runs at once; Undo in the case strip puts the view back'
+                  : 'Drive the view is OFF — answers move nothing; turn it on to let an answer open, focus and set the window, with one Undo'
+              }
+            >
+              <span
+                aria-hidden
+                className={
+                  'inline-block h-2 w-2 rounded-full ' + (presentCase ? 'bg-point' : 'border border-ink-3')
+                }
+              />
+              Drive the view: {presentCase ? 'on' : 'off'}
+            </button>
+            {/* C-2b-1 / D2 — opt-in per turn, beside Send; off by default,
+                reset on every send. While on, this turn may change the
+                platform through consult — destructive changes still wait for
+                your Confirm, and every change gets a receipt with Revert. */}
+            <button
+              type="button"
+              onClick={() => setAllowWrites((v) => !v)}
+              disabled={busy}
+              aria-pressed={allowWrites}
+              className={
+                'px-2 py-1.5 text-label rounded-control border shrink-0 disabled:opacity-50 ' +
+                (allowWrites
+                  ? 'border-amber-500/60 bg-amber-500/20 text-ink-1'
+                  : 'border-line text-ink-3 hover:text-ink-1')
+              }
+              data-testid="consult-allow-writes"
+              title={
+                allowWrites
+                  ? 'this turn may change the platform — pause, retire and activate wait for your Confirm; every change gets a receipt with Revert'
+                  : 'allow consult to carry out a change you ask for, on this turn only'
+              }
+            >
+              Allow changes this turn
+            </button>
+            {/* U-8 / Q-1 — the window this turn is asked over (default: the
+                server's declared 7 days) and how strictly it must rest on rows. */}
+            <label className="flex items-center gap-1 text-label text-ink-3 shrink-0">
+              <span>Window</span>
+              <select
+                value={windowChoice}
+                onChange={(e) => {
+                  const v = e.target.value as WindowChoiceId
+                  setWindowChoice(v)
+                  saveWindowChoice(v)
+                }}
+                disabled={busy}
+                className="bg-surface-200 border border-line rounded px-1 py-0.5 text-label"
+                data-testid="consult-window"
+                title="the window the answer is held to; a window your question states (last 48 hours, say) wins"
+              >
+                {WINDOW_CHOICES.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.id === 'band' ? `${c.label} (${bandSpanText})` : c.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={grounding === 'record_only'}
+              onClick={() => {
+                const v: GroundingMode = grounding === 'record_only' ? 'default' : 'record_only'
+                setGrounding(v)
+                saveGroundingMode(v)
+              }}
+              disabled={busy}
+              className={
+                'px-2 py-1.5 text-label rounded-control border shrink-0 disabled:opacity-50 ' +
+                (grounding === 'record_only' ? 'border-point/60 text-ink-1' : 'border-line text-ink-3 hover:text-ink-1')
+              }
+              data-testid="consult-grounding"
+              title={GROUNDING_CHOICES.find((g) => g.id === grounding)?.hint}
+            >
+              Record only: {grounding === 'record_only' ? 'on' : 'off'}
+            </button>
             <button
               onClick={() => send('chat')}
               disabled={busy || !draft.trim()}
-              className="px-4 py-2 text-sm bg-accent-info/30 hover:bg-accent-info/50 disabled:opacity-50 rounded shrink-0"
+              className="ml-auto px-4 py-1.5 text-body border border-point/60 text-ink-1 hover:bg-point/15 disabled:opacity-50 rounded-control shrink-0"
               data-testid="consult-submit"
             >
               {busy ? 'Consulting…' : 'Send'}
@@ -1487,7 +1246,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
                 exactly when everything else is locked. */}
             {pendingTurn && (
               <button
-                onClick={() => void stopAndSynthesize()}
+                onClick={() => void consultTurn.stop()}
                 disabled={stopPhase !== null}
                 className="px-3 py-2 text-sm bg-accent-critical/20 hover:bg-accent-critical/40 border border-accent-critical/40 text-accent-critical disabled:opacity-50 rounded shrink-0"
                 data-testid="consult-stop"
@@ -1501,11 +1260,18 @@ export default function ConsultPanel({ registration }: PanelProps) {
               </button>
             )}
           </div>
-          <details className="text-xs text-slate-400">
+          {/* U-3 — what the switch does, in one plain line (the owner: "if
+              toggled on, do it with an undo; if not, not"). Off is the default. */}
+          <p id="consult-drive-hint" className={compact ? 'sr-only' : 'text-label text-ink-3'} data-testid="consult-drive-hint">
+            {presentCase
+              ? 'On: an answer may open panels, focus a record and set the window for you — Undo puts the view back.'
+              : 'Off: answers only reply; nothing on screen moves. Turn on to let an answer move the view, with Undo.'}
+          </p>
+          <details className={compact ? 'hidden' : 'text-xs text-ink-3'}>
             <summary className="cursor-pointer select-none">Options</summary>
             <div className="mt-2 space-y-2">
               <input
-                className="w-full bg-surface-200 border border-slate-700 rounded p-2 text-xs font-mono"
+                className="w-full bg-surface-200 border border-line rounded p-2 text-xs font-mono"
                 value={scope}
                 onChange={(e) => consultActions().setScope(panelId, e.target.value)}
                 placeholder='scope predicate (optional) — target.id == "brazil"'
@@ -1524,13 +1290,13 @@ export default function ConsultPanel({ registration }: PanelProps) {
                       Math.max(1, Math.min(MAX_ROUNDS, Number(e.target.value) || 1)),
                     )
                   }
-                  className="w-16 bg-surface-200 border border-slate-700 rounded px-1 py-0.5 text-xs font-mono"
+                  className="w-16 bg-surface-200 border border-line rounded px-1 py-0.5 text-xs font-mono"
                   data-testid="consult-max-rounds"
                 />
               </label>
-              <p className="text-[11px] text-slate-500">
+              <p className="text-label text-ink-3">
                 Deep, durable analysis (a long-running task that writes a finding) lives in its own{' '}
-                <span className="text-slate-400 font-medium">Deep Consult</span> panel.
+                <span className="text-ink-3 font-medium">Deep Consult</span> panel.
               </p>
             </div>
           </details>

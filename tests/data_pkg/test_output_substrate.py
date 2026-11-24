@@ -292,12 +292,17 @@ async def test_write_situation_happy_path(pg_conn):
     assert isinstance(new_id, UUID)
     fetched = await pg_conn.fetchrow(
         "SELECT name, category, intensity_score, event_count, "
-        "analyst_id, target_id, derived_from, schema_uri "
+        "analyst_id, target_id, derived_from, schema_uri, "
+        "data->>'category_raw' AS category_raw "
         "FROM situations WHERE id = $1",
         new_id,
     )
     assert fetched["name"] == "Brazil energy spike"
-    assert fetched["category"] == "energy"
+    # W9 TAX-4: the column holds a REGISTERED classification or ``unclassified``;
+    # "energy" is no registered class, so the column reads unclassified and the
+    # producer's word is kept byte for byte as data.category_raw (the topic key).
+    assert fetched["category"] == "unclassified"
+    assert fetched["category_raw"] == "energy"
     assert fetched["intensity_score"] == pytest.approx(0.75)
     assert fetched["event_count"] == 3
     assert fetched["analyst_id"] == "analyst.sit"

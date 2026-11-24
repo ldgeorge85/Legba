@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.rsshub.aljazeera.drcongo": {
+      "source": "source_rsshub_aljazeera_drcongo.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -54,7 +54,10 @@ PYTHON_IMAGES = [
         # explicit pip list, so `/typed` 500'd for every options-bearing
         # deterministic analyst for 14h. The registry installs from that list,
         # NOT from pyproject, so pyproject agreeing proves nothing.
-        ["fastapi", "uvicorn", "asyncpg", "pynacl", "nats-py", "pycountry"],
+        # feedparser + networkx (W9-F11): the descriptor reference check's
+        # palettes import the rss kind and the graph handlers; without them
+        # every registry write registered unchecked.
+        ["fastapi", "uvicorn", "asyncpg", "pynacl", "nats-py", "pycountry", "feedparser", "networkx"],
     ),
     (
         "legba-runtime-dapr",

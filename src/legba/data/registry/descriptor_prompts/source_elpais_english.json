@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.elpais.english": {
+      "source": "source_elpais_english.yaml",
+      "state": "draft"
+    }
+  }
+}

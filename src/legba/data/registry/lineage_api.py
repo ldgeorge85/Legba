@@ -72,8 +72,8 @@ so the UI can render "show more" affordances.
 Supported ``row_kind`` set
 ==========================
 
-``signal``, ``finding``, ``situation``, ``prediction``, ``hypothesis``,
-``critique``, ``alert``, ``meta_finding``, ``prompt_module_candidate``.
+``signal``, ``event``, ``finding``, ``situation``, ``hypothesis``, ``fact``
+(U-10), ``critique``, ``alert``, ``meta_finding``, ``prompt_module_candidate``.
 The user-supplied root must be one of these (else 400). But the walk
 itself looks across *every* substrate table that carries the universal
 provenance columns — e.g. ``facts`` and ``situations`` — because a
@@ -234,6 +234,9 @@ _TABLES_BY_KIND: dict[str, tuple[str, str | None]] = {
     "event":       ("events",         None),
     "situation":   ("situations",     None),
     "hypothesis":  ("hypotheses",     None),
+    # U-10 — a fact is a row a statement can rest on; the Record sheet opens
+    # on one (the table already sits in the walk's catalogue above).
+    "fact":        ("facts",          None),
     # Polymorphic — analyst_outputs.kind discriminates.
     "finding":                 ("analyst_outputs", "finding"),
     "meta_finding":            ("analyst_outputs", "meta_finding"),
@@ -428,21 +431,93 @@ def _receipt_node_from_trace(
     )
 
 
-async def _covering_checkpoint(
+# P-4 (2026-11-14) — READ COST. The live console walk saw
+# ``/lineage/finding/<id>`` take 20-25 s. Profiled on live, ~90 % of it was the
+# per-node producing-trace lookup ``WHERE $1 = ANY(output_row_refs)``: ``=
+# ANY(array_column)`` cannot use the GIN index on ``output_row_refs``, so every
+# walk node paid a parallel seq scan of ``analyst_traces`` (~0.13 s warm each;
+# 171 nodes = 23 s, 230 nodes = 30 s). The lookup is now ONE query per walk
+# using the GIN-indexable overlap ``output_row_refs && $1::uuid[]``, and the
+# covering checkpoints are ONE query too. Each node still gets exactly the row
+# the per-node read returned: the most recent ``run_started_at`` among the
+# traces whose ``output_row_refs`` contain it (DISTINCT ON ... ORDER BY
+# run_started_at DESC is that per-node ``ORDER BY ... LIMIT 1``), and the most
+# recent checkpoint per (analyst_id, chain_head_hash).
+#
+# Only the columns the re-hash and the checkpoint match read are selected:
+# ``SELECT *`` also detoasted ``llm_calls`` / ``intermediate_steps`` /
+# ``input_payload`` (the bulk of the 1.8 GB ``analyst_traces`` TOAST) for
+# every receipt it built and threw them away.
+_TRACE_COLUMNS = (
+    "run_id, analyst_id, analyst_version, input_row_refs, prompt_module_hash, "
+    "prompt_rendered, output_row_refs, output_payload, run_ended_at, "
+    "receipt_hash, prev_receipt_hash"
+)
+
+#: node id → its producing trace, for a whole walk at once (GIN overlap).
+_TRACES_BY_OUTPUT_REF_SQL = f"""
+SELECT DISTINCT ON (r.ref) r.ref AS node_id,
+       {', '.join('t.' + c.strip() for c in _TRACE_COLUMNS.split(','))}
+  FROM analyst_traces t
+  CROSS JOIN LATERAL unnest(t.output_row_refs) AS r(ref)
+ WHERE t.output_row_refs && $1::uuid[]
+   AND r.ref = ANY($1::uuid[])
+ ORDER BY r.ref, t.run_started_at DESC
+"""
+
+#: The same answer for a WIDE walk. ``&&`` against a very long array is
+#: checked element by element on every row the planner cannot rule out, and
+#: past a few thousand ids it gives up the GIN index for a seq scan doing that
+#: per row: 4.3 s for a 16,385-node walk on live. Unnesting each trace's (0-1
+#: element) refs and hash-joining them to the id set reads the same rows in
+#: 0.17 s there. Small walks keep the GIN read (8 ms for 171 nodes, where this
+#: form would seq-scan the table).
+_TRACES_BY_OUTPUT_REF_WIDE_SQL = f"""
+SELECT DISTINCT ON (r.ref) r.ref AS node_id,
+       {', '.join('t.' + c.strip() for c in _TRACE_COLUMNS.split(','))}
+  FROM analyst_traces t
+  CROSS JOIN LATERAL unnest(t.output_row_refs) AS r(ref)
+  JOIN (SELECT DISTINCT q FROM unnest($1::uuid[]) AS q) w ON w.q = r.ref
+ ORDER BY r.ref, t.run_started_at DESC
+"""
+
+#: Walk size from which the hash-join form is used.
+_TRACES_WIDE_FROM = 2000
+
+#: (analyst_id, receipt_hash) pairs → the newest checkpoint that signed that
+#: exact head, for a whole walk at once.
+_COVERING_CHECKPOINTS_SQL = """
+SELECT DISTINCT ON (c.analyst_id, c.chain_head_hash)
+       c.analyst_id, c.chain_head_hash, c.signer_did
+  FROM audit_checkpoints c
+  JOIN unnest($1::text[], $2::text[]) AS k(analyst_id, head)
+    ON c.analyst_id = k.analyst_id AND c.chain_head_hash = k.head
+ ORDER BY c.analyst_id, c.chain_head_hash, c.checkpointed_at DESC
+"""
+
+
+async def _covering_checkpoints(
     conn: asyncpg.Connection,
-    trace: asyncpg.Record | Mapping[str, Any],
-) -> asyncpg.Record | None:
-    """Look up the ``audit_checkpoints`` row (if any) that COVERS this trace.
+    traces: Iterable[asyncpg.Record | Mapping[str, Any]],
+) -> dict[tuple[str, str], asyncpg.Record]:
+    """Look up the ``audit_checkpoints`` row (if any) that COVERS each trace,
+    keyed by ``(analyst_id, receipt_hash)``.
 
     A checkpoint covers the trace only when it signed this exact ``receipt_hash``
     as the chain head it checkpointed (the checkpointer signs heads, so non-head
-    rows stay uncovered → ``signer_did`` honestly None)."""
-    return await conn.fetchrow(
-        "SELECT signer_did, chain_head_hash FROM audit_checkpoints "
-        "WHERE analyst_id = $1 AND chain_head_hash = $2 "
-        "ORDER BY checkpointed_at DESC LIMIT 1",
-        trace["analyst_id"], trace["receipt_hash"],
+    rows stay uncovered → ``signer_did`` honestly None). One query for all."""
+    keys = sorted({
+        (t["analyst_id"], t["receipt_hash"])
+        for t in traces
+        if t["analyst_id"] is not None and t["receipt_hash"] is not None
+    })
+    if not keys:
+        return {}
+    rows = await conn.fetch(
+        _COVERING_CHECKPOINTS_SQL,
+        [k[0] for k in keys], [k[1] for k in keys],
     )
+    return {(r["analyst_id"], r["chain_head_hash"]): r for r in rows}
 
 
 async def _receipt_for_trace(
@@ -454,8 +529,34 @@ async def _receipt_for_trace(
     (a node with no producing analyst run — e.g. a raw signal)."""
     if trace is None:
         return None
-    checkpoint = await _covering_checkpoint(conn, trace)
-    return _receipt_node_from_trace(trace, covering_checkpoint=checkpoint)
+    covering = await _covering_checkpoints(conn, [trace])
+    return _receipt_node_from_trace(
+        trace,
+        covering_checkpoint=covering.get(
+            (trace["analyst_id"], trace["receipt_hash"]),
+        ),
+    )
+
+
+async def _fetch_traces_for_nodes(
+    conn: asyncpg.Connection,
+    node_ids: Iterable[UUID],
+) -> dict[UUID, asyncpg.Record]:
+    """Map substrate rows → their producing ``analyst_traces`` rows, if any,
+    in ONE query (``node_id ∈ analyst_traces.output_row_refs``: the L-107 §7
+    lineage-into-chain — the trace records the rows it produced). A node with
+    several producing traces maps to the one with the newest
+    ``run_started_at``. Nodes with no producing trace are simply absent."""
+    ids = list(dict.fromkeys(node_ids))
+    if not ids:
+        return {}
+    sql = (
+        _TRACES_BY_OUTPUT_REF_WIDE_SQL
+        if len(ids) >= _TRACES_WIDE_FROM
+        else _TRACES_BY_OUTPUT_REF_SQL
+    )
+    rows = await conn.fetch(sql, ids)
+    return {r["node_id"]: r for r in rows}
 
 
 async def _fetch_trace_for_node(
@@ -471,7 +572,7 @@ async def _fetch_trace_for_node(
       1. ``analyst_traces.run_id = run_id`` (the direct producer link, when the
          node projection carried a ``run_id`` — only the root does today, but
          the helper stays general).
-      2. ``node_id = ANY(analyst_traces.output_row_refs)`` (the L-107 §7
+      2. ``node_id ∈ analyst_traces.output_row_refs`` (the L-107 §7
          lineage-into-chain: the trace records the rows it produced) — the path
          every WALK child uses, since walk projections don't carry ``run_id``.
 
@@ -482,15 +583,11 @@ async def _fetch_trace_for_node(
     trace: asyncpg.Record | None = None
     if run_id is not None:
         trace = await conn.fetchrow(
-            "SELECT * FROM analyst_traces WHERE run_id = $1",
+            f"SELECT {_TRACE_COLUMNS} FROM analyst_traces WHERE run_id = $1",
             run_id,
         )
     if trace is None:
-        trace = await conn.fetchrow(
-            "SELECT * FROM analyst_traces WHERE $1 = ANY(output_row_refs) "
-            "ORDER BY run_started_at DESC LIMIT 1",
-            node_id,
-        )
+        trace = (await _fetch_traces_for_nodes(conn, [node_id])).get(node_id)
     return trace
 
 
@@ -545,12 +642,28 @@ async def _attach_receipts_to_walk(
     field's default) honestly: there is no trace to re-hash, so we fabricate
     nothing. ``chain_consistent`` is RE-COMPUTED per node (never a stored flag)
     inside :func:`_receipt_node_from_trace`.
+
+    P-4: two queries for the whole walk (traces, then covering checkpoints),
+    not two per node — see ``_TRACES_BY_OUTPUT_REF_SQL``.
     """
+    if not nodes:
+        return
+    traces = await _fetch_traces_for_nodes(
+        conn, (UUID(node.id) for node in nodes),
+    )
+    covering = await _covering_checkpoints(conn, traces.values())
     for node in nodes:
-        trace = await _fetch_trace_for_node(
-            conn, node_id=UUID(node.id), run_id=None,
+        trace = traces.get(UUID(node.id))
+        node.receipt = (
+            None
+            if trace is None
+            else _receipt_node_from_trace(
+                trace,
+                covering_checkpoint=covering.get(
+                    (trace["analyst_id"], trace["receipt_hash"]),
+                ),
+            )
         )
-        node.receipt = await _receipt_for_trace(conn, trace)
 
 
 def _row_to_node(row: asyncpg.Record, *, depth: int) -> LineageNode:

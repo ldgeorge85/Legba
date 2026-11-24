@@ -28,7 +28,7 @@
 set -u
 RUNTIME_CONTAINER="${RUNTIME_CONTAINER:-legba-legba-runtime-dapr-1}"
 SEARCH_COMPONENT_ID="${SEARCH_COMPONENT_ID:-search.searxng.local}"
-NTFY_URL="${NTFY_URL:-http://127.0.0.1:8093/legba-alerts}"
+NTFY_URL="${NTFY_URL:-http://127.0.0.1:8093/engine}"   # X4: the engine topic (engine health), never the world's
 NTFY_TOKEN="${LEGBA_ALERT_NTFY_TOKEN:-}"   # optional bearer token; NEVER logged/printed
 STATE_FILE="/tmp/legba-search-canary.streak"
 COOLDOWN_STAMP="/tmp/legba-search-canary.cooldown"
@@ -113,9 +113,15 @@ if [ -f "$COOLDOWN_STAMP" ]; then
 fi
 
 log "FIRE search plane dead: ${streak} consecutive failed probes (verdict=${verdict:-<none>})"
-headers=(-H "X-Title: Legba: search plane dead" -H "X-Priority: 5" -H "X-Tags: rotating_light")
-[ -n "$NTFY_TOKEN" ] && headers+=(-H "Authorization: Bearer $NTFY_TOKEN")
-curl -s -m 10 "${headers[@]}" \
-  -d "The search-plane control probe has failed ${streak} consecutive times (verdict=${verdict:-<none>}) — web_search is DEAD or unverifiable, not merely empty. Check the search_provider stack component ($SEARCH_COMPONENT_ID) and the SearXNG service." \
-  "$NTFY_URL" >/dev/null 2>&1 || log "ntfy send failed"
+# L-1 (single alert path): raise through scripts/lib/legba_alert.sh first; the
+# direct push below is the fallback (and the only path unless LEGBA_ALERT_RAISE=1).
+_legba_alert_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/legba_alert.sh"
+if [ -r "$_legba_alert_lib" ]; then . "$_legba_alert_lib"; else legba_raise() { return 1; }; fi
+canary_body="The search-plane control probe has failed ${streak} consecutive times (verdict=${verdict:-<none>}) — web_search is DEAD or unverifiable, not merely empty. Check the search_provider stack component ($SEARCH_COMPONENT_ID) and the SearXNG service."
+if ! legba_raise host_search_canary critical search_plane "Legba: search plane dead" "$canary_body"; then
+  headers=(-H "X-Title: Legba: search plane dead" -H "X-Priority: 5" -H "X-Tags: rotating_light")
+  [ -n "$NTFY_TOKEN" ] && headers+=(-H "Authorization: Bearer $NTFY_TOKEN")
+  curl -s -m 10 "${headers[@]}" -d "$canary_body" \
+    "$NTFY_URL" >/dev/null 2>&1 || log "ntfy send failed"
+fi
 touch "$COOLDOWN_STAMP"

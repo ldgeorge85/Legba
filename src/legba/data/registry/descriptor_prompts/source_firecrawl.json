@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.firecrawl.default": {
+      "source": "source_firecrawl.yaml",
+      "state": "draft"
+    }
+  }
+}

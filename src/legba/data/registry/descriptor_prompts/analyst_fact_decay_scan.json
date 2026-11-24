@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:fact_decay_scan": {
+      "source": "analyst_fact_decay_scan.yaml",
+      "state": "draft"
+    }
+  }
+}

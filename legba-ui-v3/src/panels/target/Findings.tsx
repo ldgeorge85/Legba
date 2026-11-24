@@ -85,7 +85,7 @@ export default function TargetFindingsPanel({ registration, scope }: PanelProps)
     enabled: !!target_id,
     queryKey: ['target-findings', target_id],
     queryFn: async () => {
-      const qs = new URLSearchParams({ target_id, limit: '200' })
+      const qs = new URLSearchParams({ target_id, limit: '200', fields: 'full' })
       try {
         return await apiGet<Page<FindingRow>>(`/findings?${qs.toString()}`)
       } catch (e) {
@@ -116,7 +116,7 @@ export default function TargetFindingsPanel({ registration, scope }: PanelProps)
       <button
         onClick={() => setLive((v) => !v)}
         className={cn(
-          'text-[10px] px-2 py-0.5 rounded border',
+          'text-label px-2 py-0.5 rounded border',
           live
             ? connected
               ? 'border-accent-ok text-accent-ok'
@@ -204,7 +204,7 @@ function FindingItem({
       >
         <SeverityBadge severity={f.severity} />
         <span className="flex-1 truncate">{f.title}</span>
-        <span className="font-mono text-[11px] text-slate-300 shrink-0" title="confidence">
+        <span className="font-mono text-label text-slate-300 shrink-0" title="confidence">
           {(f.confidence * 100).toFixed(0)}%
         </span>
       </button>
@@ -221,7 +221,7 @@ function FindingItem({
               {tags.map((t) => (
                 <span
                   key={t}
-                  className="px-1.5 py-0.5 rounded bg-surface-200 text-[10px] text-slate-300"
+                  className="px-1.5 py-0.5 rounded bg-surface-200 text-label text-slate-300"
                 >
                   {t}
                 </span>
@@ -229,12 +229,12 @@ function FindingItem({
             </div>
           )}
 
-          <div className="text-[10px] text-slate-500" title={f.analyst_id ?? undefined}>
+          <div className="text-label text-slate-500" title={f.analyst_id ?? undefined}>
             {humanizeAnalystId(f.analyst_id)} · {new Date(f.produced_at).toLocaleString()}
           </div>
 
           <div>
-            <span className="text-[10px] uppercase tracking-wide text-slate-400">
+            <span className="text-label uppercase tracking-wide text-slate-400">
               evidence chain ({f.derived_from.length})
             </span>
             {f.derived_from.length > 0 && (
@@ -247,7 +247,7 @@ function FindingItem({
                       e.stopPropagation()
                       openLineage('signal', id)
                     }}
-                    className="font-mono text-[10px] underline text-accent-info"
+                    className="font-mono text-label underline text-accent-info"
                   >
                     {id.slice(0, 8)}…
                   </button>
@@ -261,7 +261,7 @@ function FindingItem({
               e.stopPropagation()
               openLineage('finding', f.id)
             }}
-            className="text-[10px] underline text-accent-info"
+            className="text-label underline text-accent-info"
           >
             trace this finding →
           </button>
@@ -286,7 +286,7 @@ function SeverityBadge({ severity }: { severity: string | null }) {
   return (
     <span
       className={cn(
-        'px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider shrink-0',
+        'px-1.5 py-0.5 rounded text-label uppercase tracking-wider shrink-0',
         color,
       )}
     >

@@ -62,7 +62,7 @@ export default function AssessmentBanner({ onOpen }: AssessmentBannerProps) {
     refetchInterval: 5 * 60_000,
     // Server-side analyst_id filter — the world_assessor's 1-per-6h finding is
     // never in the recent global feed window (see WorldAssessment.tsx).
-    queryFn: () => apiGet<FindingsResponse>('/findings?analyst_id=world_assessor&limit=5'),
+    queryFn: () => apiGet<FindingsResponse>('/findings?analyst_id=world_assessor&limit=5&fields=full'),
   })
 
   const latest = useMemo<FindingRow | null>(() => {

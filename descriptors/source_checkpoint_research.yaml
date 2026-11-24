@@ -1,0 +1,77 @@
+# C-3 claims sources (2026-11-15) — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# Check Point Research — the vendor's threat-intelligence blog: named actor
+# tracking (including state-linked hack-and-leak personas and hacktivist
+# fronts), with the vendor's own accuracy calls on groups' claims. It is
+# ANALYST REPORTING, not a list of claims: ordinary `reporting` class. It is
+# how the hacktivist groups are covered without collecting any raw channel.
+#
+# Probed 2026-11-15 (one GET, generic client identity):
+# https://research.checkpoint.com/feed/ -> HTTP 200, application/rss+xml,
+# 15 items, FULL TEXT in content:encoded.
+# robots.txt (read 2026-11-15) allows `User-agent: *` / (disallows only
+# admin, tag, author and search paths) and sets Crawl-delay 10.
+# One feed fetch every six hours respects the crawl delay many times over.
+
+identity:
+  id: source.checkpoint_research.news
+  name: Check Point Research
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: claims_c3
+  created: "2026-11-15T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  # `cyber_desk` = on the cyber desk's feed roster (analyst_cyber_watch
+  # method.options.feed_roster, kind vendor_research); the owner put it there 2026-11-16.
+  tags: [cyber, news, vendor, hacktivism, cyber_desk]
+  classifications: ["geopolitics.topic:cyber"]
+  source_class: reporting
+  license_class: permissive_feed_unreviewed
+  access_class: public          # free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "41 */6 * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 60
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://research.checkpoint.com/feed/"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor (the conservative default of the official-feed drafts).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

@@ -1,0 +1,94 @@
+# Series Change analyst descriptor (N-L — the first detector over LIVE series).
+#
+# A `deterministic`-kind META analyst, NO LLM. For every (series, subject) a
+# live source writes into `observations` (sink.family: observation, migration
+# 0246 — the first is source.imf.portwatch_chokepoints) it compares the latest
+# window against a baseline window under one declared rule and writes a
+# finding that cites the observation ids it rests on, each with the
+# fetch_sha256 of the stored response the value was parsed from.
+#
+# The rule (series_change/2026-11.1, stamped in every finding):
+#   * values read AS OF the run (latest vintage per day, record_time <= now);
+#   * windows anchored on the NEWEST day held for the pair, not on today (the
+#     provider lags ~4-5 days; a today-anchored window would read the lag as
+#     a collapse);
+#   * current = mean of the newest `current_days` (7) daily values; baseline =
+#     the `baseline_days` (28) values before them; missing days are absent,
+#     never zero;
+#   * desk_baseline's estimator verbatim: trailing mean, Poisson-floored
+#     robust sigma max(stddev, sqrt(mean)), band mean +/- n_sigma*sigma
+#     (n_sigma 2.0), `above` only past the absolute floor `min_current` (5),
+#     `below` only when the baseline itself clears it;
+#   * fewer than 14 baseline points or 7 current points = insufficient, never
+#     cited.
+# The finding is always written (static FINDING dispatch); with no crossing it
+# says so and cites nothing.
+#
+# S-1 (2026-11-13) — rule-judged series (series_change/2026-11.2). A price or
+# a policy rate is not a count: the band's Poisson floor is meaningless on it.
+# A series named by `level_rules` or `step_series` is judged ONLY by them:
+#   * level_rules "eia.pet_spot.rbrte>=100": an event when Brent spot enters
+#     or leaves >= $100/bbl (forecast F6's level) — holding above is not one;
+#   * step_series "bis.cbpol.*": every policy-rate change is an event (a rate
+#     decision is an event, not noise); step_min 0 = any change.
+# Each event cites the two observations it rests on. PortWatch keeps the band.
+#
+# I-5 (roll 84) — named rules by series family (series_change/2026-11.3).
+# `series_rules` gives a rate or exchange-rate family a rule by NAME from the
+# handler's closed table: `policy_rate` (every change is an event, step_min 0)
+# and `fx_move` (a move of 2% or more between the last value before the
+# current window and the newest). A series named here is judged ONLY by its
+# named rule; `level_rules` and `step_series` read exactly as 2026-11.2 did.
+#
+# State: draft in-tree. It reads nothing until a live series source is active
+# and has ~5 weeks of rows (or its 45-day first-poll backfill has landed).
+# Registration and the operator's activate flip are DEPLOY steps.
+
+identity:
+  id: series_change
+  name: Series Change
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: n_l_ingestion_sinks
+
+subscription:
+  # No `targets` block -> META analyst: one global run per cadence tick over
+  # every live series source. The handler reads directly via deps.pg_pool.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: series_change
+  # Deterministic kind: no LLM block and no per-day token budget.
+  # Options validated against handler_options_catalog['series_change'].
+  options:
+    level_rules: ["eia.pet_spot.rbrte>=100"]
+    step_series: ["bis.cbpol.*"]
+    series_rules:
+      - "ecb.fm.*=policy_rate"
+      - "ecb.exr.*=fx_move"
+      - "boe.iadb.*=policy_rate"
+      - "bcb.sgs.*=policy_rate"
+      - "nbu.exchange.*=fx_move"
+      - "nbu.key.*=policy_rate"
+
+cadence:
+  # Daily at 17:11 UTC — after the BIS (07:13), PortWatch (11:01) and EIA
+  # (16:37) polls.
+  fallback_schedule: "11 17 * * *"
+  cooldown_seconds: 43200
+
+outputs: []

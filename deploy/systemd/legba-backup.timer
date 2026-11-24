@@ -1,4 +1,4 @@
-# Legba scheduled-backup timer (resilience-observability W-1b §5).
+# Legba scheduled-backup timer (resilience-observability W-1b §5; X1-A2 sets).
 #
 # Triggers legba-backup.service nightly at 03:30 (plus a small randomized
 # delay so co-located stacks don't all dump at once). Persistent=true catches

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.reliefweb.reports": {
+      "source": "source_reliefweb_api.yaml",
+      "state": "active"
+    }
+  }
+}

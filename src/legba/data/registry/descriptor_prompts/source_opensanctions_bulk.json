@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.opensanctions.bulk": {
+      "source": "source_opensanctions_bulk.yaml",
+      "state": "active"
+    }
+  }
+}

@@ -31,6 +31,7 @@ import { __pendingReadEvents, __resetReadTelemetry } from '@/lib/readTelemetry'
 import { selectRow, useSelection } from '@/state/selection'
 import CitedProse from '@/components/CitedProse'
 import ProvenanceMerged from '@/panels/merged/Provenance'
+import RegistryMerged from '@/panels/merged/Registry'
 import type { PanelRegistration } from '@/types'
 
 function kindsEmitted(): string[] {
@@ -136,11 +137,13 @@ describe('panel_open (real Dockview × App.tsx COMPONENTS)', () => {
     expect(subjectsFor('panel_open')).toEqual(['system.provenance'])
   })
 
-  it('emits consult_open alongside panel_open for the consult surface', async () => {
+  it('a consult TILE is an ordinary panel_open; consult_open belongs to the Consult column (U-2)', async () => {
+    // Consult is a fixed column since U-2, never a tile: the shell emits
+    // \`consult_open\` once, with the landing (App.readTelemetry.test.tsx).
     const api = await mountDock()
     addSingleton(api, 'system.consult')
-    await waitFor(() => expect(kindsEmitted()).toContain('consult_open'))
-    expect(kindsEmitted()).toContain('panel_open')
+    await waitFor(() => expect(kindsEmitted()).toContain('panel_open'))
+    expect(kindsEmitted()).not.toContain('consult_open')
   })
 })
 
@@ -262,11 +265,10 @@ describe('lineage_walk (real Provenance panel)', () => {
     expect(subjectsFor('lineage_walk')).toEqual(['why', 'lineage'])
   })
 
-  it('does NOT count Trajectory or Narratives — they answer a different question', async () => {
+  it('does NOT count Fan-out — joining the wrapper did not widen the event (UI-B1/merges)', async () => {
     render(wrap(<ProvenanceMerged registration={reg()} scope={{}} mode="personal" />))
-    fireEvent.click(screen.getByTestId('provenance-tab-trajectory'))
-    fireEvent.click(screen.getByTestId('provenance-tab-narratives'))
-    await waitFor(() => expect(screen.getByTestId('provenance-tab-narratives')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('provenance-tab-fanout'))
+    await waitFor(() => expect(screen.getByTestId('provenance-tab-fanout')).toHaveAttribute('aria-selected', 'true'))
     // Only the opening `why` walk was ever counted.
     expect(subjectsFor('lineage_walk')).toEqual(['why'])
   })
@@ -278,10 +280,17 @@ describe('lineage_walk (real Provenance panel)', () => {
           registration={reg()}
           scope={{}}
           mode="personal"
-          initialTab="flow"
+          initialTab="lineage"
         />,
       ),
     )
-    expect(subjectsFor('lineage_walk')).toEqual(['flow'])
+    expect(subjectsFor('lineage_walk')).toEqual(['lineage'])
+  })
+
+  it('the production-path canvas keeps counting from its new home (the Registry\'s Canvas tab)', () => {
+    render(
+      wrap(<RegistryMerged registration={reg()} scope={{}} mode="personal" initialTab="canvas" />),
+    )
+    expect(subjectsFor('lineage_walk')).toEqual(['canvas'])
   })
 })

@@ -1,0 +1,152 @@
+# S-1 — BIS central bank policy rates, daily, as SERIES. Ships DRAFT.
+# Kind: series_api (the generic series kind, no provider code).
+#
+# WHY: the blind test's lost facts named central-bank policy rates as the
+# second numeric family the platform cannot answer from its own record. The
+# Bank for International Settlements compiles the policy rates of ~40 central
+# banks into one dataset (WS_CBPOL), keyless, as a time series.
+#
+# THE ENDPOINT. BIS SDMX REST v1, dataflow WS_CBPOL, key "D." (daily, every
+# reference area), `startPeriod=YYYY-MM-DD`, `format=csv`. Confirmed
+# 2026-11-13 by two GETs: no key; text/csv with an ETag; columns FREQ,
+# REF_AREA (ISO 3166 alpha-2; XM = the euro area), UNIT_MEASURE (368 = per
+# cent per year), TIME_PERIOD (YYYY-MM-DD), OBS_VALUE, OBS_STATUS (A normal,
+# M missing with OBS_VALUE "NaN"), plus long text attributes (COMPILATION,
+# SOURCE_REF = the national central bank, TITLE). 33 economies carried daily
+# rows for November 2026; the newest day was 2026-11-10 (a 3-day lag) and some
+# economies lag further (KR had one row in ten days). Some economies are
+# daily on calendar days (US), others on business days.
+#
+# SUBJECTS. A country's rate is subject_kind `country` (subject = REF_AREA,
+# the alpha-2 code the archive's country series already use). The euro area
+# (XM) is not a country: it is its own series with subject_kind `entity`.
+# A NaN (OBS_STATUS M) row is absent, never zero.
+#
+# REVISIONS AND LAG. Every poll re-reads lag_days + revision_days (3 + 45)
+# days — a late-reporting central bank's days arrive as new rows, a corrected
+# day is a new vintage, an unchanged re-read writes nothing. The first poll
+# reads 400 days (~10k rows, one ~4 MB response; under the actor's 20,000
+# records-per-poll ceiling). A rate CHANGE is an event: series_change's step
+# rule reads these series (descriptors/analyst_series_change.yaml).
+#
+# The underlying figures are communicated to the BIS by the national central
+# banks (SOURCE_REF).
+#
+# Register / activate: see the S-1 lane report (orchestrator steps). Keyless.
+
+identity:
+  id: source.bis.policy_rates_daily
+  name: BIS — central bank policy rates, daily (series)
+  kind: series_api
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: s_1_series_sources
+  created: "2026-11-13T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [central_banks, monetary_policy, interest_rates, markets, series, global]
+  source_class: official
+  license_class: open_gov_attribution   # IGO statistics: unrestricted use, BIS cited as the source
+  attribution: "Source: BIS, central bank policy rates (data.bis.org, WS_CBPOL)"
+  access_class: public
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "13 7 * * *"             # daily; rows land a few days behind
+  cooldown_seconds: 3600
+  jitter_seconds: 120
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://stats.bis.org/api/v1/data/WS_CBPOL/D./all"
+  params:
+    factory_kind: list
+    raw:
+      - ["format", "csv"]
+  since_param:
+    factory_kind: dict
+    value_kind: text
+    raw:
+      name: startPeriod
+      format: iso_date
+  format:
+    factory_kind: text
+    raw: csv
+  date_field:
+    factory_kind: text
+    raw: TIME_PERIOD
+  date_format:
+    factory_kind: text
+    raw: iso_date
+  provenance_fields:
+    factory_kind: list
+    raw: [OBS_STATUS, UNIT_MEASURE]
+  outputs:
+    factory_kind: list
+    raw:
+      - series: bis.cbpol.policy_rate
+        value_field: OBS_VALUE
+        subject_field: REF_AREA
+        where:
+          - {field: FREQ, values: [D]}
+          - {field: REF_AREA, values: [XM], negate: true}
+        unit: percent
+        period: day
+        subject_kind: country
+        methodology_version: bis-ws-cbpol-daily/1
+      - series: bis.cbpol.policy_rate_area
+        value_field: OBS_VALUE
+        subject_field: REF_AREA
+        where:
+          - {field: FREQ, values: [D]}
+          - {field: REF_AREA, values: [XM]}
+        unit: percent
+        period: day
+        subject_kind: entity
+        methodology_version: bis-ws-cbpol-daily/1
+  lag_days:
+    factory_kind: number
+    raw: 3
+  revision_days:
+    factory_kind: number
+    raw: 45
+  backfill_days:
+    factory_kind: number
+    raw: 400
+
+sink:
+  family: observation
+  config:
+    series:
+      - id: bis.cbpol.policy_rate
+        field: OBS_VALUE
+        unit: percent
+        period: day
+        subject_kind: country
+        methodology_version: bis-ws-cbpol-daily/1
+        description: "Central bank policy rate, per cent per year, end of day, per country (REF_AREA alpha-2)"
+      - id: bis.cbpol.policy_rate_area
+        field: OBS_VALUE
+        unit: percent
+        period: day
+        subject_kind: entity
+        methodology_version: bis-ws-cbpol-daily/1
+        description: "Central bank policy rate of a currency area (XM = the euro area, ECB), per cent per year, end of day"
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  media: reference
+
+deps: {}
+
+subscription_policy: open

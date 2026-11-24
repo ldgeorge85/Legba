@@ -1,0 +1,78 @@
+# K-1 cyber desk (2026-11-14) — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# CERT-FR's threat-intelligence reports (CERTFR-YYYY-CTI-NNN): threat
+# assessments, actor profiles, the monthly "point de situation" of national
+# operations, takedown notes. Low volume (about one a month). Probed
+# 2026-11-13: HTTP 200, application/xml, 40 items back to 2023, NOT
+# newest-first, each dated by its publication (see source_certfr_alerts.yaml
+# for the redirect to cert.cyber.gouv.fr and the dating behaviour).
+#
+# Geography: declared FR as the publisher-origin FALLBACK: these reports are
+# ANSSI's assessments of the threat to France and are filed under France when
+# the body names no other country. Robots and credibility as for
+# source_certfr_alerts.yaml. Every six hours.
+#
+# Desk routing: scope.classifications `geopolitics.topic:cyber` is stamped on
+# every signal (W10 TAX-2) — the cyber desk's tag arm (target_cyber.yaml).
+
+identity:
+  id: source.certfr.cti
+  name: CERT-FR (ANSSI) — rapports de menace (CTI)
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: cyber_desk_k1
+  created: "2026-11-14T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [FR]
+  languages: [fr]
+  tags: [cyber, threat_intel, gov, fr, cyber_desk]
+  classifications: ["geopolitics.topic:cyber"]
+  source_class: official
+  license_class: open_gov_attribution
+  attribution: "Source : CERT-FR / ANSSI (cert.cyber.gouv.fr)"
+  access_class: public          # free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "39 */6 * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.cert.cyber.gouv.fr/cti/feed/"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor (the conservative default of the official-feed drafts).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

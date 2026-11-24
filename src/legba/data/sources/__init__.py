@@ -12,6 +12,7 @@ Public surface (populated incrementally as each Phase 3 task lands):
   * ``rss``        — :class:`RSSSourceHandler`,        kind ``"rss"``         (L-130).
   * ``geojson``    — :class:`GeoJSONSourceHandler`,    kind ``"geojson"``     — model-free structured/GIS modality. Emits ``modality="structured"`` + ``mime_type="application/geo+json"`` Signals from a configurable GeoJSON (RFC 7946) document URL; the UI renders them via the ``application/geo+json`` modality renderer (no ML model in the loop).
   * ``json_api``   — :class:`JsonApiSourceHandler`,    kind ``"json_api"``    (S-3) — generic polled JSON/CSV HTTP API. Cursor-driven URL-template windows, JSONPath-lite item extraction, configurable field mappings, optional vault-backed header/query auth (fail-loud when unresolvable).
+  * ``email_imap`` — :class:`EmailImapSourceHandler`, kind ``"email_imap"``  (W5 SRC-8) — one IMAP mailbox folder, one signal per message from an allowed sender (stdlib ``imaplib`` / ``email``). The password is a vault ref; with no resolvable credential the kind refuses activation and every pull with ``email_mailbox_not_configured`` (SEAMS #63).
   * ``gdelt``      — :class:`GDELTBigQuerySourceHandler`, kind ``"gdelt_query"`` (L-131). Highest-leverage source — free, 100+ languages, 15-min refresh, CAMEO/FIPS coding via BigQuery.
   * ``acled``      — :class:`ACLEDSourceHandler`,      kind ``"acled"``       (L-132).
   * ``mediacloud`` — :class:`MediaCloudSourceHandler`, kind ``"mediacloud"``  (L-133).
@@ -125,6 +126,23 @@ __all__ = [
     "MediaCloudRateLimited",
     "MediaCloudSourceHandler",
 ]
+
+# Email (IMAP) handler (W5 SRC-8). Stdlib-only transport; defensive import
+# per the pattern so a parallel-wave merge can't break the package import.
+try:                                                        # pragma: no cover
+    from .email_imap import (                               # noqa: F401
+        EmailConfig,
+        EmailImapSourceHandler,
+        EmailMailboxNotConfigured,
+    )
+except Exception:                                           # pragma: no cover
+    pass
+else:
+    __all__.extend([
+        "EmailConfig",
+        "EmailImapSourceHandler",
+        "EmailMailboxNotConfigured",
+    ])
 
 # ACLED handler (L-132) lands in parallel. Re-export when present so callers
 # can `from legba.data.sources import ACLEDSourceHandler` without caring

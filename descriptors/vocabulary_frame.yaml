@@ -1,0 +1,57 @@
+# The `frame` vocabulary family — THIS INSTANCE's subject groups (W7 FRAME-1).
+#
+# Seeded by the descriptor walker (scripts/bringup_register_descriptors.py,
+# "vocabulary seeds"): every row is upserted into `vocabulary_entries`, the
+# tree's parent / aliases / notes winning on a re-run. Read by
+# src/legba/data/frames.py when LEGBA_FRAME_FAMILY is on.
+#
+# One entry per frame:
+#   value    the frame id — for a frame bound to a target head, that head's id
+#   parent   frame:<kind> — a kind is itself an entry, with no member rule;
+#            its members are its descendants' (the parent walk)
+#   aliases  the MEMBER RULE: `tag:<t>` binds every active target head whose
+#            scope.tags carries <t>; `analyst:<id>` binds an analyst lane
+#   notes    the human label (first line)
+#
+# Seeded from the live topology on 2026-10-04: the five region frames (each a
+# target head tagged `region`, its members the desks tagged with its own id)
+# and the world read's one declared cross-region thematic lane.
+# tests/data_pkg/test_frames.py proves member-set equality per frame against
+# the legacy convention over the committed live roster.
+identity:
+  id: frame
+  schema_uri: legba/vocabulary/1.0.0
+family: frame
+entries:
+  - value: region
+    notes: Region frames — the geographic subject groups the world read floors on
+  - value: region_africa
+    parent: frame:region
+    aliases: ["tag:region_africa"]
+    notes: Region — Africa
+  - value: region_americas
+    parent: frame:region
+    aliases: ["tag:region_americas"]
+    notes: Region — Americas
+  - value: region_europe
+    parent: frame:region
+    aliases: ["tag:region_europe"]
+    notes: Region — Europe
+  - value: region_indo_pacific
+    parent: frame:region
+    aliases: ["tag:region_indo_pacific"]
+    notes: Region — Indo-Pacific
+  - value: region_mena
+    parent: frame:region
+    aliases: ["tag:region_mena"]
+    notes: Region — Middle East & North Africa
+  - value: thematic
+    notes: Cross-region thematic lanes — a lane is an analyst, not a set of desks
+  - value: escalation_composition
+    parent: frame:thematic
+    aliases: ["analyst:escalation_composition"]
+    notes: escalation_composition (cross-region thematic)
+  - value: hybrid_threat_composition
+    parent: frame:thematic
+    aliases: ["analyst:hybrid_threat_composition"]
+    notes: hybrid_threat_composition (cross-region thematic)

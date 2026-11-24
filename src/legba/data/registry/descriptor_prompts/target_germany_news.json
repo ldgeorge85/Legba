@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:germany_news": {
+      "source": "target_germany_news.yaml",
+      "state": "active"
+    }
+  }
+}

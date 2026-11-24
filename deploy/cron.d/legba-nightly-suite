@@ -41,5 +41,8 @@
 
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# L-1: raise through the single alert path (scripts/lib/legba_alert.sh); the
+# direct push stays the fallback when the runtime or its database is down.
+LEGBA_ALERT_RAISE=1
 
 0 3 * * * root /usr/local/deployments/active/legba/scripts/host_nightly_suite.sh >> /var/log/legba_nightly_suite.log 2>&1

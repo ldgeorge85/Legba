@@ -1,0 +1,8 @@
+{
+  "states": {
+    "action_pack:consult_write": {
+      "source": "action_pack_consult_write.yaml",
+      "state": "active"
+    }
+  }
+}

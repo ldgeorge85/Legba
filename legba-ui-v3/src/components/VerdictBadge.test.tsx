@@ -69,3 +69,49 @@ describe('VerdictBadge interactiveParent passthrough', () => {
     expect(onRowClick).not.toHaveBeenCalled()
   })
 })
+
+// JUDGE-2 (W11b) — a critique whose judge was ASKED and did not answer carries
+// `verification.unverified_reason`; the badge must SAY so (time + status), and a
+// verdict a later chain rung wrote must name who judged.
+describe('VerdictBadge judge-unavailable line', () => {
+  const outageFloor = {
+    faithfulness_score: 0.8,
+    judge_status: 'deterministic',
+    unverified_reason: {
+      class: 'credit',
+      http_status: '402',
+      component_id: 'llm.judge.hosted_a',
+      at: '2026-10-03T06:12:03+00:00',
+      judge_unavailable_reason: 'judge_error',
+      rungs_tried: 3,
+    },
+  }
+
+  it('renders "unverified since T (judge unavailable: 402)" from a critique fixture', () => {
+    render(<VerdictBadge input={{ confidence: 0.7, verification: outageFloor, citationCount: 3 }} />)
+    expect(screen.getByTestId('verdict-unverified')).toHaveTextContent(
+      'unverified since 2026-10-03 06:12Z (judge unavailable: 402)',
+    )
+  })
+
+  it('a missing time renders the absence mark, never an invented time', () => {
+    const block = { ...outageFloor, unverified_reason: { class: 'timeout' } }
+    render(<VerdictBadge input={{ confidence: 0.7, verification: block }} />)
+    expect(screen.getByTestId('verdict-unverified')).toHaveTextContent(
+      'unverified since — (judge unavailable: timeout)',
+    )
+  })
+
+  it('a healthy LLM-judged row carries no unverified line', () => {
+    render(
+      <VerdictBadge
+        input={{
+          confidence: 0.9,
+          verification: { faithfulness_score: 0.9, judge_status: 'llm' },
+          citationCount: 2,
+        }}
+      />,
+    )
+    expect(screen.queryByTestId('verdict-unverified')).toBeNull()
+  })
+})

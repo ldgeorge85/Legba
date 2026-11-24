@@ -1,0 +1,38 @@
+-- SPDX-FileCopyrightText: 2026 Lewis George
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+--
+-- 0254_poll_outcome_age_skipped.sql
+--
+-- A FIRST POLL'S AGE-CAPPED ENTRIES ARE COUNTED, NOT SILENTLY DROPPED (W11-F265).
+--
+-- WHY
+-- ---
+-- A feed source's first poll (no cursor yet, or a fresh cursor after a
+-- descriptor edit mints a new actor) used to ingest every entry its feed
+-- document carried, whatever its age: on 2026-11-14 a status feed loaded
+-- entries from March and a national CERT's alert feed reached back to 2015.
+-- The source actor now skips, on a first poll only, entries whose own feed
+-- date is older than the handler's first-poll age cap (rss: the descriptor's
+-- `first_poll_max_entry_age_days`, default 30, 0 = no cap). The skip must be
+-- visible on the poll's provenance row.
+--
+-- WHAT THIS ADDS
+-- --------------
+--   * `age_skipped integer` (nullable) on `source_poll_outcomes` -- how many
+--     entries THIS poll skipped as older than the first-poll age cap. The
+--     source actor writes it only when it skipped >= 1 entry; NULL means
+--     nothing was skipped (or the cap did not apply: any poll with a cursor,
+--     or a kind that advertises no cap). The writer appends the column only
+--     when it has a value, so every other poll writes the statement it
+--     always wrote.
+--   * No outcome-vocabulary change: a first poll whose every entry was too old
+--     is 'empty' (nothing new arrived) and carries the count.
+--
+-- SAFETY
+-- ------
+-- Additive and idempotent, routed through the runner (no inline BEGIN/COMMIT).
+-- No backfill: past first polls never counted their entries, and inventing a
+-- count would be the fabrication the NULL exists to stop.
+
+ALTER TABLE public.source_poll_outcomes
+    ADD COLUMN IF NOT EXISTS age_skipped integer;

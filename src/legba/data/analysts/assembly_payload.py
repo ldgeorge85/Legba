@@ -44,6 +44,16 @@ from ..provenance.composition_integrity import (
     direction_conflict,
     has_collection_denominator_scope,
 )
+# THE TIER + THE CAP, imported ONE WAY and re-exported — split out to keep
+# this module under the size-gate threshold; see that module's banner.
+from .assembly_cap import (  # noqa: F401 — re-exported surface
+    BLOCK_CAP,
+    TIER_COUNTRY,
+    TIER_THEMATIC,
+    TIER_WORLD,
+    WORLD_BLOCK_CAP,
+    select_carried,
+)
 # THE CARRY, imported ONE WAY and re-exported. `block_is_absence` and its
 # leading-negation corpus moved to `assembly_carry` beside the carry rule that
 # is this module's second reader of them, so the country read's CROWN and the
@@ -60,13 +70,25 @@ from .assembly_carry import (  # noqa: F401 — re-exported surface
     carried_origin_record,
     carried_verdict_text,
     carry_block,
+    carry_choice,
     child_assembly,
     connective_leak,
     leading_negation,
 )
+# THE ROW STAMPS (severity / confidence / tags / as_of), imported ONE WAY and
+# re-exported — split out (W1) to keep this module under the size-gate threshold.
+from .assembly_row_stamps import (  # noqa: F401 — re-exported surface
+    _SEVERITY_ORDER,
+    _severity_rank,
+    assembly_confidence,
+    assembly_severity,
+    assembly_tags,
+    now_iso,
+)
 from .assembly_spans import (
     SpanConstructionError, build_context_span, extract_lead_span, quoted_spans,
 )
+from .assembly_span_checks import span_checks
 from .composition_window import head_age_hours
 from .signal_salience import CITED_SALIENCE_VERSION, salience_over_ids
 from .source_independence import corroboration_block, head_citations
@@ -76,6 +98,7 @@ from .unit_names import (
     published_names,
     tension_statement,
 )
+from .world_block_evidence import BALANCE_KEY, enrich_world_block, evidence_balance
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +132,7 @@ __all__ = [
     "TIER_THEMATIC",
     "TIER_WORLD",
     "WHY_CLASSES",
+    "WORLD_BLOCK_CAP",
     "AssemblyConstructionError",
     "assembly_confidence",
     "assembly_enabled",
@@ -135,6 +159,7 @@ __all__ = [
     "now_iso",
     "order_key",
     "row_signal_ids",
+    "select_carried",
 ]
 
 
@@ -173,15 +198,6 @@ REGIME_LEGACY: str = "legacy"
 #: fidelity and report them as one population. The payload lives at
 #: ``data.data.rollup`` (``region_rollup.v1``); see ``region_rollup.py``.
 REGIME_ROLLUP: str = "rollup"
-
-TIER_COUNTRY: str = "country"
-TIER_WORLD: str = "world"
-TIER_THEMATIC: str = "thematic"
-
-#: D-1 §F-10. Eight reads as a page rather than a wall; live country reads
-#: already carry 7.1 citations on average, so this changes almost nothing at the
-#: country tier and is a real cut at the world tier (~32 candidates).
-BLOCK_CAP: int = 8
 
 #: The earned-lead bars (D-1 §1.5.3, operator ruling 8). Measured over 8
 #: consecutive live days: ``top_share`` 0.086-0.311, ``ratio_12`` 1.03-2.17 —
@@ -317,15 +333,7 @@ WHY_CLASSES: tuple[str, ...] = (
     WHY_CONSTRUCTION_FAILED,
 )
 
-#: Severity ranks, high to low. The assembly is the FIRST composition row ever to
-#: carry a severity: it is NULL on 100% of composition rows today (0 of 1,108 in
-#: 14 days) while desk heads carry it on ~99%. Setting it deterministically to
-#: the max across carried blocks is what makes the dead severity dot in the
-#: history list render for the first time, at zero extra cost.
-_SEVERITY_ORDER: dict[str, int] = {
-    "critical": 5, "high": 4, "elevated": 3,
-    "moderate": 2, "medium": 2, "low": 1, "info": 0,
-}
+
 
 #: `tension_checked.scope_note` — and it is not decoration. `direction_conflict`
 #: reads the head's BLUF only, and DECLINES any pair where the desk's own
@@ -335,7 +343,7 @@ _SEVERITY_ORDER: dict[str, int] = {
 #: not say WHAT IT CHECKED is the M-11 defect in a new costume.
 TENSION_SCOPE_NOTE: str = "BLUF-grain; ambivalent pairs declined"
 TENSION_DETECTOR: str = "direction_conflict"
-TENSION_DETECTOR_VERSION: str = "composition_integrity.direction_conflict/2026-08"
+TENSION_DETECTOR_VERSION: str = "composition_integrity.direction_conflict/2026-11-w2"
 TENSION_SCOPE_SHOWN: str = "shown_only"
 TENSION_SCOPE_SHOWN_AND_DROPPED: str = "shown_and_dropped"
 
@@ -413,21 +421,6 @@ def desk_display_name(analyst_id: Any) -> str:
     return slug.replace("_", " ").capitalize()
 
 
-def _severity_rank(level: Any) -> int:
-    return _SEVERITY_ORDER.get(str(level or "").strip().lower(), -1)
-
-
-def assembly_severity(blocks: Sequence[Mapping[str, Any]]) -> str | None:
-    """The read's severity = the MAX over carried blocks. ``None`` when no
-    carried block declares one — an unstated severity is stated as unknown."""
-    best, best_rank = None, -1
-    for b in blocks:
-        r = _severity_rank(b.get("severity"))
-        if r > best_rank:
-            best_rank, best = r, str(b.get("severity") or "").strip().lower()
-    return best or None
-
-
 def _iso(value: Any) -> str | None:
     if value is None:
         return None
@@ -488,8 +481,9 @@ def order_key(row: Mapping[str, Any]) -> tuple[int, float, str, str]:
     coin flip wearing a number. REPRODUCIBLE: the same candidate set yields the
     same order on replay, which is what makes the A/B arm meaningful at all.
 
-    Returned as an ascending key with the descending fields negated, so callers
-    use a plain ``sorted(...)`` and the ``finding_id ASC`` tiebreak stays ASC.
+    THE WORLD READ IS THE EXCEPTION (W1, 2026-11-07): it ranks one assembled
+    head per unit, whose severity saturates, so it is mass-first —
+    ``assembly_world.world_order_key``. Ascending key, descending fields negated.
     """
     return (
         -_severity_rank(row.get("severity")),
@@ -861,6 +855,12 @@ def _tensions(
          carried reads" — a sentence the evidence map can actually support.
          Carried-pair statements are BYTE-IDENTICAL; only the cross-tier arm
          moves.
+      5. ONE ENTITY, ONE VARIABLE (N-C, 2026-11-11). ``pair_scope_blocker``
+         blocks every pair whose targets differ AND every pair of two desks
+         (every tier). A declared
+         tension carries a deterministic ``evidence_balance`` (distinct cited
+         sources per side, newest date, which side the count favours) —
+         declared AND weighed, still never explained.
     """
     found: list[dict[str, Any]] = []
     examined = 0
@@ -871,7 +871,13 @@ def _tensions(
             a, b = blocks[i], blocks[j]
             ta = a["spans"][0]["text"] if a.get("spans") else ""
             tb = b["spans"][0]["text"] if b.get("spans") else ""
-            detail = direction_conflict(ta, tb, target_id=a.get("target_id"))
+            detail = direction_conflict(
+                ta, tb, target_id=a.get("target_id"),
+                other_target_id=b.get("target_id"),
+                desk_a=a.get("desk"), desk_b=b.get("desk"),
+                indicators_a=a.get("indicator_ids"),
+                indicators_b=b.get("indicator_ids"),
+            )
             if not detail:
                 continue
             found.append({
@@ -888,6 +894,7 @@ def _tensions(
                 "same_target": a.get("target_id") == b.get("target_id"),
                 "same_window_h": 72,
                 "detail": detail,
+                BALANCE_KEY: evidence_balance(ta, a.get("signals"), tb, b.get("signals")),
             })
     for a in blocks:
         ta = a["spans"][0]["text"] if a.get("spans") else ""
@@ -901,7 +908,20 @@ def _tensions(
             tb = carried_verdict_text(d)
             if not tb:
                 continue
-            detail = direction_conflict(ta, tb, target_id=a.get("target_id"))
+            # The dropped candidate's DESK is the desk of the lead block it would
+            # have carried (a country composition's own analyst id is never the
+            # dimension), else its analyst id — and the STATEMENT below names
+            # that same desk (N-C: it named the composition's analyst id while
+            # the gate compared the lead desk, and printed "different desks").
+            _child = child_assembly(d)
+            _lead = carried_lead_block(_child)[0] if _child is not None else None
+            desk_b = str((_lead or {}).get("desk") or d.get("analyst_id") or "")
+            detail = direction_conflict(
+                ta, tb, target_id=a.get("target_id"),
+                other_target_id=d.get("target_id"),
+                desk_a=a.get("desk"),
+                desk_b=desk_b,
+            )
             if not detail:
                 continue
             found.append({
@@ -911,6 +931,7 @@ def _tensions(
                 "b_ref": {
                     "finding_id": str(d.get("id") or ""),
                     "desk": str(d.get("analyst_id") or ""),
+                    "block_desk": desk_b,
                     "target_id": str(d.get("target_id") or "") or None,
                     # Amendment 7f — the uncarried side is the one the voice
                     # mistranslated ("Pakistan" for ``country_watch_kp``, 3 of
@@ -932,7 +953,7 @@ def _tensions(
                 "statement": tension_statement(
                     a,
                     {
-                        "desk": str(d.get("analyst_id") or ""),
+                        "desk": desk_b,
                         "target_id": str(d.get("target_id") or ""),
                         "target_name": name_of(names, d.get("target_id")),
                     },
@@ -945,6 +966,10 @@ def _tensions(
                 "same_target": a.get("target_id") == d.get("target_id"),
                 "same_window_h": 72,
                 "detail": detail,
+                BALANCE_KEY: evidence_balance(
+                    ta, a.get("signals"), tb,
+                    (_lead or {}).get("signals") if _lead else _head_citations(d),
+                ),
             })
     checked = {
         "pairs_examined": examined,
@@ -1032,11 +1057,11 @@ def build_assembly(
         # P3-B — A CANDIDATE THAT ALREADY CARRIES WORDS IS CARRIED, NOT RE-CUT,
         # and the WHY lives once, in the module holding the rule: see
         # ``assembly_carry``'s banner (the connective defect it closes, measured
-        # live over seven days) and ``carry_block``. A desk head, a LEGACY row
-        # and a rollup all resolve to ``None`` and take the path below.
+        # live over seven days) and ``carry_block``; a world plan's choice wins
+        # (``carry_choice``). Desk heads, LEGACY rows and rollups take the path below.
         child = child_assembly(row)
         if child is not None:
-            source_block, via_ordinal, carry_reason = carried_lead_block(child)
+            source_block, via_ordinal, carry_reason = carry_choice(row, child)
             if source_block is None:
                 raise AssemblyConstructionError(
                     f"assembly block {ordinal} ({desk} / {target_key}) declares "
@@ -1049,6 +1074,13 @@ def build_assembly(
                 via_ordinal=via_ordinal,
                 carry_reason=carry_reason,
             )
+            origin_record = carried_origin_record(row, block)
+            if str(tier) == TIER_WORLD:  # N-C — new-material quote, contested facts
+                enrich_world_block(
+                    block, source_block, child,
+                    captured=(origin_record or {}).get("evidence_text"),
+                    unit_name=names.get(target_key or ""), unit_head=target_key is not None,
+                )
             # STEP E — THE WORLD TIER'S CONTEXT IS THE COUNTRY'S VOICE; the
             # rule, the measurement and the two-origins argument live in
             # :func:`attach_country_context`.
@@ -1065,7 +1097,6 @@ def build_assembly(
             # The depth-1 bridge for THIS carry, lifted from the child's own
             # citation for the desk head. Omitted, never fabricated, when the
             # child published none — see `carried_origin_record`.
-            origin_record = carried_origin_record(row, block)
             if origin_record is not None:
                 carried_origins.append(origin_record)
             continue
@@ -1124,6 +1155,9 @@ def build_assembly(
             "spans": [span] + ([context_span] if context_span else []),
             "signals": signals,
             "corroboration": corroboration,
+            # Lane N-D: the LEAD span's numbers and actors against the signals
+            # its own markers cite (annotates only; ``assembly_span_checks``).
+            "span_checks": span_checks(span, row),
         })
 
     if not blocks:
@@ -1445,52 +1479,3 @@ def assembly_shared_signals(
             if entry not in bucket:
                 bucket.append(entry)
     return out
-
-
-def assembly_confidence(payload: Mapping[str, Any]) -> float:
-    """The row's ``confidence`` — the WEAKEST carried block's effective score.
-
-    Deterministic and conservative, and it is the house's own idiom: every
-    admission predicate in the tree folds to ``LEAST(confidence,
-    faithfulness_score)``. A composed read is no stronger than the weakest thing
-    it quotes, and under the assembly it quotes everything it carries — so the
-    minimum is not a heuristic, it is the arithmetic of what the page contains.
-    Blocks with no score do not drag it down (unscored is not weak); a payload
-    with no scored block at all returns 0.5, the model default, because that is
-    the honest "no basis to move it".
-    """
-    scores = []
-    for b in payload.get("blocks") or ():
-        v = (b.get("verify") or {}).get("effective_confidence")
-        try:
-            scores.append(float(v))
-        except (TypeError, ValueError):
-            continue
-    return round(min(scores), 4) if scores else 0.5
-
-
-def assembly_tags(payload: Mapping[str, Any]) -> list[str]:
-    """The row's ``tags``, which is how ``severity`` reaches its READ COLUMN.
-
-    Severity travels as a ``severity:<level>`` TAG that the write path lifts to
-    ``analyst_outputs.severity`` (``models.severity_from_tags``). It is NULL on
-    100% of composition rows today — 0 of 1,108 in 14 days — while desk heads
-    carry it on ~99%, which is why the severity dot in the world history list has
-    never rendered. The assembly sets it to the max across carried blocks, and
-    the dot works for the first time at zero extra cost.
-    """
-    tags = ["assembly", f"regime:{payload.get('regime')}"]
-    sev = assembly_severity(payload.get("blocks") or ())
-    if sev:
-        tags.append(f"severity:{sev}")
-    lead = (payload.get("lead") or {}).get("kind")
-    if lead:
-        tags.append(f"lead:{lead}")
-    return tags
-
-
-def now_iso() -> str:
-    """UTC now, ISO-8601 with a ``Z``-equivalent offset. One spelling."""
-    from datetime import datetime, timezone
-
-    return datetime.now(timezone.utc).isoformat()

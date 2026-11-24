@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:region_composition": {
+      "source": "analyst_region_composition.yaml",
+      "state": "active"
+    }
+  }
+}

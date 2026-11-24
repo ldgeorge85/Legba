@@ -465,7 +465,7 @@ async def test_future_published_ts_clamps_cursor_advance():
 
     now = datetime.now(tz=timezone.utc)
     poison = now + timedelta(days=365)          # the year-typo class
-    nearby = now + timedelta(hours=6)           # mislabeled-TZ class: tolerated
+    nearby = now + timedelta(hours=6)           # mislabeled-TZ class: clamped too (W11-F151)
     entries = [_entry(source_id, nearby), _entry(source_id, poison)]
     store = InMemoryStateStore()
     _wire_core(core, store, _StubHandler(entries))
@@ -474,10 +474,11 @@ async def test_future_published_ts_clamps_cursor_advance():
 
     cursor = await store.get("cursor")
     advanced = datetime.fromisoformat(cursor["last_pulled_at"])
-    # The poison ts was clamped: the cursor sits at/near NOW (within the skew
-    # tolerance), NOT a year ahead.
+    # The poison ts was clamped: the cursor sits at NOW, NOT a year ahead —
+    # and since W11-F151 not 6 h ahead either (every future feed ts clamps).
     from legba.runtime.source_actor import _MAX_FUTURE_SKEW
     assert advanced <= datetime.now(tz=timezone.utc) + _MAX_FUTURE_SKEW
+    assert advanced <= datetime.now(tz=timezone.utc)
     assert advanced < now + timedelta(days=300)  # provably not the typo date
 
 

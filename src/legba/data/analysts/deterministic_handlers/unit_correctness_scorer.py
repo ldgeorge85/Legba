@@ -136,6 +136,7 @@ from typing import Any, Mapping
 from uuid import UUID
 
 from ... import correctness_axis
+from ... import rosters as _rosters
 from .desk_reference import REFERENCE_LABELED_BY_PREFIX
 from ...provenance.judge_pipeline_version import (
     METRIC_FAITHFULNESS_SCORE,
@@ -151,16 +152,9 @@ logger = logging.getLogger(__name__)
 # individually. Overridable via options['units'] for tests / a future unit set,
 # but defaulted here so the descriptor stays a bare global sweep. internal_stability
 # (S1-T4) + military_posture (S1-T5) + economic_coercion (S1-T7) join the original
-# four; keep in sync with scorecard_banding.DIMENSIONS.
-_DEFAULT_UNITS: tuple[str, ...] = (
-    "leadership_transition",
-    "energy_security",
-    "escalation",
-    "narrative_coordination",
-    "internal_stability",
-    "military_posture",
-    "economic_coercion",
-)
+# four. ROSTER-1: the profile's ``rosters.scored_units`` — the same helper
+# scorecard_banding.DIMENSIONS reads, so the two cannot drift.
+_DEFAULT_UNITS: tuple[str, ...] = _rosters.scored_unit_roster()
 
 # Window for "recent" head findings + faithfulness critiques. The per-target read
 # always takes the LATEST head finding within the window, so this only bounds how
@@ -268,6 +262,14 @@ def _mean(values: list[float]) -> float | None:
     if not vals:
         return None
     return sum(vals) / len(vals)
+
+
+def _carried_ungraded(row: Any) -> bool:
+    """SW-9 — is this faithfulness critique a memory-only ``carried_ungraded``
+    verdict (its ``confidence`` a capped gate number, not a measurement)?
+    A row with no ``score_state`` (pre-SW-9, or a fake) is an ordinary score."""
+    getter = getattr(row, "get", None)
+    return callable(getter) and getter("score_state") == "carried_ungraded"
 
 
 # ---------------------------------------------------------------------------
@@ -455,8 +457,14 @@ _LABELS_SQL = """
 # it is at the current head — 2026-08-29/1 pools with nothing), and the
 # exclusion counter and the prior-population rollup read the SAME pool as the
 # headline, so "excluded" continues to mean exactly "not in the population above".
+#
+# SW-9 (2026-10-03/1) — the row's SCORE STATE rides along so a
+# ``carried_ungraded`` critique (a memory-only finding: its confidence is the
+# capped gate number, not a measurement) is COUNTED beside the mean and never
+# averaged into it. Same rows, same plan; one more projected key.
 _FAITHFULNESS_SQL = """
-    SELECT confidence
+    SELECT confidence,
+           data->'data'->'verification'->>'score_state' AS score_state
     FROM analyst_outputs
     WHERE kind = 'critique'
       AND analyst_id = $1
@@ -580,7 +588,9 @@ async def _pull_unit(
     # ONE pool, computed once and handed to all three reads, so the headline,
     # the exclusion counter and the priors can never partition differently.
     pool = list(poolable_stamps(JUDGE_PIPELINE_VERSION, CALIBRATED_METRIC_FAMILY))
-    faith_rows = await conn.fetch(_FAITHFULNESS_SQL, unit, lookback_days, pool)
+    all_faith_rows = await conn.fetch(_FAITHFULNESS_SQL, unit, lookback_days, pool)
+    faith_rows = [r for r in all_faith_rows if not _carried_ungraded(r)]
+    n_carried = len(all_faith_rows) - len(faith_rows)
     faithfulness = _mean([row["confidence"] for row in faith_rows])
     excluded_row = await conn.fetchrow(
         _FAITHFULNESS_EXCLUDED_SQL, unit, lookback_days, pool
@@ -599,6 +609,8 @@ async def _pull_unit(
             "widened_by": len(pool) - 1,
         },
         "n_scored": len(faith_rows),
+        # SW-9 — memory-only findings: in the window, out of the mean.
+        "carried_ungraded": n_carried,
         "excluded_other_pipeline": (
             int(excluded_row["n"]) if excluded_row else 0
         ),
@@ -801,6 +813,7 @@ async def handle(
                 "widened_by": len(_failed_pull_pool) - 1,
             },
             "n_scored": 0,
+            "carried_ungraded": 0,
             "excluded_other_pipeline": 0,
             "prior_populations": [],
             "note": _POPULATION_NOTE,

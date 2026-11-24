@@ -1,0 +1,11 @@
+# Example run inputs for worldview_panel/1 (the fixture test and the harness
+# use them). The card list is the example profile's DRAFT cards; a profile
+# supplies its own list. Three views, as decision D-01 started with — whether
+# to run three or all six is the operator's question (plan P4 section 9.1).
+subject: example-subject
+question: Will the situation described by the record change within thirty days?
+as_of: "2026-01-01T00:00:00Z"
+cards:
+  - drafts/worldview_realist
+  - drafts/worldview_institutionalist
+  - drafts/worldview_global_south

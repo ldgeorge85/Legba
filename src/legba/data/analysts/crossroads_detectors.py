@@ -97,9 +97,12 @@ from __future__ import annotations
 
 import datetime
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Sequence
 
+from ..journal_evidence import MEMORY_ROW_FILTER_SQL
+from .. import rosters as _rosters
 from .crossroads_vocab import (
     cited_mass,
     normalize,
@@ -162,15 +165,18 @@ MAX_REFS_PER_ROW: int = 6
 #: Countries named in the single country-silence row before it says "and N more".
 MAX_SILENT_COUNTRIES_NAMED: int = 12
 
-#: The roster tags that define a "unit" for the SILENCES denominator — the same
-#: three ``composition_slice._DESK_ROSTER_SQL`` uses, for the same reason: it is
-#: the only roster in the tree whose job is naming ABSENCE, and a supply-chain
-#: desk carries neither ``g20`` nor ``watch``.
-ROSTER_TAGS: frozenset[str] = frozenset({"g20", "watch", "supply_chain"})
+#: The roster tags that define a "unit" for the SILENCES denominator are the
+#: profile's ``rosters.subject_tags`` (``rosters.subject_roster_tags()``) — the
+#: same tags ``composition_slice._DESK_ROSTER_SQL`` binds, for the same reason:
+#: it is the only roster in the tree whose job is naming ABSENCE (the geopolitics
+#: profile's supply-chain desks carry neither ``g20`` nor ``watch``). The
+#: COUNTRY legs are the scored subset (``rosters.scored_roster_tags()``): a
+#: supply-chain lane is a unit, not a country, so it cannot be "a country no
+#: lens named". Both read at run time (ROSTER-1) — nothing here spells a tag.
 
-#: The country legs of that roster (a supply-chain lane is a unit, not a
-#: country, so it cannot be "a country no lens named").
-COUNTRY_ROSTER_TAGS: frozenset[str] = frozenset({"g20", "watch"})
+
+def _roster_tag_set(tags: Iterable[str]) -> frozenset[str]:
+    return frozenset(str(t).lower() for t in tags)
 
 #: The GOVERNED pack-tool reads this pre-pass makes. One list, two uses: the
 #: single-binding fallback in :func:`_resolve_bindings` fans out over it, and
@@ -196,7 +202,7 @@ _LENS_ROWS_SQL = (
     "SELECT id, analyst_id, title, body, produced_at "
     "FROM journal_entries "
     "WHERE entry_kind = 'lens' AND analyst_id = ANY($1::text[]) "
-    "  AND valid_until IS NULL "
+    f"  AND {MEMORY_ROW_FILTER_SQL} "
     "  AND produced_at >= $2 "
     "ORDER BY produced_at DESC "
     "LIMIT $3"
@@ -779,10 +785,11 @@ def _country_silence_row(
     side). A roster row with no usable name is EXCLUDED from the denominator
     rather than counted as silent.
     """
+    country_tags = _roster_tag_set(_rosters.scored_roster_tags())
     countries = [
         (str(t.get("target_id") or ""), str(t.get("name") or "").strip())
         for t in roster
-        if COUNTRY_ROSTER_TAGS & {str(tag).lower() for tag in (t.get("tags") or [])}
+        if country_tags & {str(tag).lower() for tag in (t.get("tags") or [])}
     ]
     named_countries = [(tid, name) for tid, name in countries if len(name) >= 3]
     if not named_countries or not lens_rows:
@@ -932,6 +939,73 @@ def render_crossroads_block(
     return "\n".join(lines)
 
 
+#: N-T (2026-11-13) — the numbers this block COMPUTED, by row, so the verify
+#: pass can check a number in the entry against the detector row it came from
+#: instead of against the cited signal text (where "7 distinct desks" can never
+#: appear: crossroads b7a5b41d had 11 of 16 marks on the detectors' own counts).
+_ROW_HEAD_RE = re.compile(r"^\s*\[(\d{1,3})\] (\S+) — (.*)$")
+_NUMBER_RE = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?![\w])")
+_UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+
+
+def _numbers_in(text: str) -> list[float]:
+    """Every numeric literal in ``text`` once, uuids and ISO dates excluded."""
+    clean = _UUID_RE.sub(" ", text)
+    clean = re.sub(r"\d{4}-\d{2}-\d{2}(?:T[\d:.]+(?:[+-]\d{2}:\d{2}|Z)?)?", " ", clean)
+    return sorted({float(m.group(0)) for m in _NUMBER_RE.finditer(clean)})
+
+
+def instrument_provenance(block: str | None) -> list[dict[str, Any]]:
+    """The block's computed numbers, one entry per row, parsed back from the
+    rendered text this module produced (:func:`render_crossroads_block`).
+
+    Each entry is ``{"ordinal", "kind", "subject", "arithmetic", "refs",
+    "numbers"}``; the SCOPE line is ordinal ``0`` with no refs. The inquiry kind
+    stamps the list on the entry's ``data.instrument_numbers`` (a declared,
+    persisted provenance), and ``journal_prepublish`` accepts a number as
+    instrument arithmetic only when the sentence cites the row — by ordinal or
+    by one of its refs — and the row computed exactly that number.
+    """
+    out: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for line in str(block or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("SCOPE:"):
+            body = stripped[len("SCOPE:"):].strip()
+            out.append({
+                "ordinal": 0, "kind": "scope", "subject": "", "arithmetic": body,
+                "refs": [], "numbers": _numbers_in(body),
+            })
+            continue
+        head = _ROW_HEAD_RE.match(line)
+        if head:
+            current = {
+                "ordinal": int(head.group(1)), "kind": head.group(2).lower(),
+                "subject": head.group(3).strip(), "arithmetic": "", "refs": [],
+                "numbers": [],
+            }
+            out.append(current)
+            continue
+        if current is None:
+            continue
+        if stripped.startswith("arithmetic:"):
+            current["arithmetic"] = stripped[len("arithmetic:"):].strip()
+            current["numbers"] = _numbers_in(
+                current["subject"] + " " + current["arithmetic"]
+            )
+        elif stripped.startswith(("LEDGER", "RESOLUTION TEST:")):
+            # The ledger line and the frozen test are computed too ("the next
+            # 3 cadences"), so their numbers are the row's as well.
+            current["numbers"] = sorted(
+                set(current["numbers"]) | set(_numbers_in(stripped.partition(":")[2]))
+            )
+        elif stripped.startswith("refs:"):
+            current["refs"] = [u.lower() for u in _UUID_RE.findall(stripped)]
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Fetching — the governed binding first, two declared leaf reads second
 # ---------------------------------------------------------------------------
@@ -1024,9 +1098,10 @@ async def fetch_crossroads_substrate(
     # Names over EVERY active target (the contradictions leg), the tagged subset
     # for the silences denominator — two different questions, two scopes.
     target_names = target_name_pairs(all_targets)
+    roster_tags = _roster_tag_set(_rosters.subject_roster_tags())
     roster = tuple(
         t for t in all_targets
-        if ROSTER_TAGS & {str(tag).lower() for tag in (t.get("tags") or [])}
+        if roster_tags & {str(tag).lower() for tag in (t.get("tags") or [])}
     )
 
     lens_rows = _record(
@@ -1185,9 +1260,19 @@ async def pre_pass_block(options: Mapping[str, Any], deps: Any) -> str | None:
         now = _parse_ts(opts.get("now")) or datetime.datetime.now(
             datetime.timezone.utc
         )
+        pg = getattr(deps, "pg_pool", None)
+        if pg is None:
+            # N-T — this branch was silent, and for seven weeks it was the only
+            # branch: the deps never carried a pool, so both leaf reads were
+            # reported failed every day with nothing in the log to say why.
+            logger.warning(
+                "crossroads.pre_pass.no_pool — deps.pg_pool is unset; the leaf "
+                "reads journal_entries.lens and fact_contention cannot run and "
+                "are reported failed",
+            )
         substrate = await fetch_crossroads_substrate(
             tool_bindings=_resolve_bindings(opts, deps),
-            pg=getattr(deps, "pg_pool", None),
+            pg=pg,
             lens_analyst_ids=_lens_roster(),
             now=now,
             window_hours=max(1, window_hours),
@@ -1232,6 +1317,7 @@ __all__ = [
     "detect_patterns",
     "detect_silences",
     "fetch_crossroads_substrate",
+    "instrument_provenance",
     "is_verified",
     "pre_pass_block",
     "render_crossroads_block",

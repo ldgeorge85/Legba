@@ -1,0 +1,80 @@
+# X3/G0 — consult_bakeoff_verified: the bake-off's ARM C (DRAFT).
+#
+# planning/reviews/BAKEOFF_DESIGN.md v1.1 §2, arm C — frontier consult over
+# VERIFIED findings and their receipts (no raw search). A consult_on_demand
+# analyst that grants exactly ONE read pack, substrate_read_verified, and
+# nothing else: the runtime binds the consult kind's governed read binding over
+# that pack (dapr_host, via data/analysts/consult_bakeoff.consult_read_pack_for),
+# the loop offers only that pack's four tools, and the system prompt is the
+# arm's own variant (data/analysts/consult_bakeoff_prompts.VERIFIED_SYSTEM_PROMPT).
+# The verified-only and receipt-only scopes are set in the PACK's tool config,
+# never by the planner.
+#
+# NOT the stock consult: a run of consult_default is labelled C* by the harness
+# and excluded from the primary analysis (design §2).
+#
+# Invoked ONLY by scripts/bakeoff/run_arm.py, directly on the actor
+# (analyst::consult_bakeoff_verified::<version[:16]>), with the frontier plane as
+# the per-request llm_component_override and the bakeoff_meter that arms the
+# per-question hard stop. The primary below is the free core plane, so an invoke
+# without the override never bills.
+#
+# method.options: watch candidates are NOT minted; the context ceiling is the
+# 160,000-token figure the option catalogue names for the Anthropic planes.
+#
+# No outputs block; budget_tokens_per_day 0 (house rule).
+#
+# DRAFT. NOT in scripts/bringup_register_analysts.py. The operator registers and
+# activates it for the bake-off window through the audited lifecycle (G1) and
+# retires it after.
+
+identity:
+  id: consult_bakeoff_verified
+  name: Bake-off arm C — consult over verified findings and their receipts
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: consult_on_demand
+  type_signature:
+    input_type: legba.runtime.ConsultQuestion
+    output_type: legba.runtime.ConsultResponse
+  state: draft
+  owner: x3_g0_bakeoff
+
+subscription:
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: react_loop
+  prompt_module: legba.prompts.consult_on_demand.v1
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 32768
+  # W11-F133 — consult 6cd91190 (2026-10-29): the forced final died on a
+  # transient network error after 19 minutes and the actor's default transient
+  # retry (3 attempts) re-ran the WHOLE consult from scratch on the same
+  # request id — 19 more rounds, 162 tool calls, re-spent unasked, and that run
+  # failed too. A consult runs ONCE: its failure (or its partial answer) goes to
+  # the operator, who decides whether to ask again. Lane W11-G1 (bake-off
+  # readiness, 2026-11-05): a paid bake-off question runs once too — a re-run
+  # would bill the question twice under one hard stop the harness cannot see.
+  retry:
+    transient:
+      max_attempts: 1
+  budget_tokens_per_day: 0
+  options:
+    mint_watch_candidates: false
+    context_ceiling_tokens: 160000
+
+cadence:
+  cooldown_seconds: 0
+
+action_packs:
+  - pack_id: substrate_read_verified

@@ -44,12 +44,9 @@
 # editorial-integrity grounds, consistent with Studio Kalangou's seeded
 # rationale.
 #
-# LICENCE/ROBOTS POSTURE: `robots.txt` present (Yoast SEO default block, at
+# ROBOTS: `robots.txt` present (Yoast SEO default block, at
 # `www.studioyafa.bf/robots.txt` — the bare host redirects there),
-# `User-agent: * / Disallow:` (nothing disallowed) — no restriction observed.
-# No machine-readable licence declaration found on-site. `scope.license_class`
-# left UNSET (honest absence, the LIC-2 default), which lands ingested
-# signals at teaser depth until an operator reviews it.
+# `User-agent: * / Disallow:` (nothing disallowed).
 #
 # state: draft — bulk registration creates NO live actor; activation
 # (draft -> configured -> active) is the operator's after the route is

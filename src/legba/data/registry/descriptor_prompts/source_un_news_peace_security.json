@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.un_news.peace_security": {
+      "source": "source_un_news_peace_security.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:research_measurement": {
+      "source": "analyst_research_measurement.yaml",
+      "state": "draft"
+    }
+  }
+}

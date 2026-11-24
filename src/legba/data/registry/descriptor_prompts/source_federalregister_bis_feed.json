@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.federalregister.bis_feed": {
+      "source": "source_federalregister_bis_feed.yaml",
+      "state": "draft"
+    }
+  }
+}

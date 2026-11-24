@@ -387,3 +387,46 @@ async def test_invalid_source_body_routes_to_dlq(api_app, client: AsyncClient):
     r = await client.post("/api/v1/registry/descriptors/source", json=body)
     # pydantic model-validator failure surfaces at parse time -> 422.
     assert r.status_code == 422, r.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_claim_source_cannot_go_active_without_a_sign_off(client: AsyncClient):
+    """C-1: a `source_class: claim` source goes active only once a sign-off
+    {by, at, note} is recorded on the descriptor; the route answers 409
+    `claim_sign_off_required` before that, and a PUT of an `active` claim
+    body without one is refused by the model (422)."""
+    desc_id = f"source.claims.{uuid4().hex[:8]}"
+    body = _source_body(desc_id)
+    body["scope"] = {**body["scope"], "source_class": "claim",
+                     "claim": {"claimant": "Example tracker", "verb": "listed"}}
+    r = await client.post("/api/v1/registry/descriptors/source", json=body)
+    assert r.status_code == 201, r.text
+    r = await client.post(f"/api/v1/registry/descriptors/source/{desc_id}/transition",
+                          json={"to_state": "configured"})
+    assert r.status_code == 200, r.text
+
+    r = await client.post(f"/api/v1/registry/descriptors/source/{desc_id}/transition",
+                          json={"to_state": "active"})
+    assert r.status_code == 409, r.text
+    detail = r.json()["detail"]
+    assert detail["error"] == "claim_sign_off_required"
+    assert "no recorded sign-off" in detail["message"]
+
+    # A PUT that tries to land `active` directly is refused by the model.
+    sneaky = {**body, "identity": {**body["identity"], "state": "active"}}
+    r = await client.put(f"/api/v1/registry/descriptors/source/{desc_id}", json=sneaky)
+    assert r.status_code in (409, 422), r.text
+
+    # Record the sign-off (still configured), then the flip goes through.
+    signed = {**body, "identity": {**body["identity"], "state": "configured"}}
+    signed["scope"] = {**body["scope"], "claim": {
+        **body["scope"]["claim"],
+        "sign_off": {"by": "owner:test", "at": "2026-11-14T10:00:00Z",
+                     "note": "terms read; claim metadata only"}}}
+    r = await client.put(f"/api/v1/registry/descriptors/source/{desc_id}", json=signed)
+    assert r.status_code == 200, r.text
+    r = await client.post(f"/api/v1/registry/descriptors/source/{desc_id}/transition",
+                          json={"to_state": "active"})
+    assert r.status_code == 200, r.text
+    assert r.json()["state"] == "active"

@@ -42,6 +42,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 from ..data.sources.webhook_router import (
@@ -49,6 +50,7 @@ from ..data.sources.webhook_router import (
     INBOUND_SUBJECT_ROOT,
     decode_inbound_envelope,
 )
+from .fetch_receipts import InboundEnvelope, inbound_scope
 
 logger = logging.getLogger(__name__)
 
@@ -298,7 +300,14 @@ class InboundWebhookDrain:
 
         # Ingest + write OFF the request path. ACK ONLY after a successful write.
         try:
-            count = await handler.ingest_and_emit(body, headers)
+            # N-L: the envelope as received is the push receipt; the emit
+            # path links every record it writes to it (best-effort — a
+            # receipt failure never changes the ack decision).
+            with inbound_scope(InboundEnvelope(
+                source_id=source_id, body=body, headers=dict(headers or {}),
+                received_at=datetime.now(tz=timezone.utc),
+            )):
+                count = await handler.ingest_and_emit(body, headers)
         except (ValueError, PermissionError) as exc:
             # Terminal — the payload is unparseable or the token re-verify
             # failed. Dead-letter; replay will not help.

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.studiokalangou.news": {
+      "source": "source_studiokalangou.yaml",
+      "state": "draft"
+    }
+  }
+}

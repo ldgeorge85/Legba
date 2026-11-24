@@ -1,0 +1,1741 @@
+{
+  "contract": {
+    "canonical_args": {
+      "arrange": {
+        "additionalProperties": false,
+        "properties": {
+          "layout": {
+            "enum": [
+              "morning_read",
+              "desk",
+              "investigate",
+              "wall",
+              "workspace",
+              "investigation",
+              "focus"
+            ],
+            "type": "string"
+          },
+          "layout_type": {
+            "enum": [
+              "stance",
+              "preset"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "layout",
+          "layout_type"
+        ],
+        "type": "object"
+      },
+      "done": {
+        "additionalProperties": false,
+        "properties": {
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "summary"
+        ],
+        "type": "object"
+      },
+      "focus": {
+        "additionalProperties": false,
+        "properties": {
+          "ref": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "target",
+                  "entity",
+                  "source",
+                  "analyst",
+                  "finding",
+                  "report",
+                  "situation",
+                  "signal",
+                  "event",
+                  "journal_entry"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "type": "object"
+      },
+      "map": {
+        "additionalProperties": false,
+        "properties": {
+          "layers": {
+            "oneOf": [
+              {
+                "items": {
+                  "enum": [
+                    "signals",
+                    "findings",
+                    "situations",
+                    "entities",
+                    "events"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ref": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "target",
+                      "entity",
+                      "source",
+                      "analyst",
+                      "finding",
+                      "report",
+                      "situation",
+                      "signal",
+                      "event",
+                      "journal_entry"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "view": {
+            "enum": [
+              "fit_ref",
+              "reset"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "ref",
+          "layers"
+        ],
+        "type": "object"
+      },
+      "narrate": {
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "open_panel": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "system.wall",
+              "system.findings",
+              "system.inspector",
+              "v4.map",
+              "system.timeline",
+              "system.alerts_watches",
+              "system.entities",
+              "system.search",
+              "system.graph_walk",
+              "system.provenance",
+              "system.register",
+              "v4.morning_read",
+              "v4.assessment",
+              "system.journal",
+              "system.report_export",
+              "subject.page",
+              "target.map",
+              "target.timeline",
+              "analyst.runs",
+              "analyst.outputs",
+              "analyst.cross_target",
+              "analyst.critiques",
+              "analysis.cross_framing"
+            ],
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": false,
+            "properties": {
+              "subject": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "target",
+                      "entity",
+                      "source",
+                      "analyst",
+                      "finding",
+                      "report",
+                      "situation",
+                      "signal",
+                      "event",
+                      "journal_entry"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "type": "object"
+              },
+              "tab": {
+                "enum": [
+                  "brief",
+                  "claims",
+                  "deliveries",
+                  "events",
+                  "evidence",
+                  "fanout",
+                  "graph",
+                  "lineage",
+                  "movers",
+                  "narratives",
+                  "overview",
+                  "runtime",
+                  "signals",
+                  "situations",
+                  "sources",
+                  "triggers",
+                  "validity",
+                  "watches",
+                  "why"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "kind",
+          "params"
+        ],
+        "type": "object"
+      },
+      "run_mission": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "enum": [
+              "morning_read",
+              "desk_watch",
+              "crisis"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "set_scope": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "report",
+              "target",
+              "entity",
+              "situation",
+              "journal_entry",
+              "none"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id"
+        ],
+        "type": "object"
+      },
+      "timeline": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "oneOf": [
+              {
+                "format": "date-time",
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "end": {
+            "format": "date-time",
+            "maxLength": 40,
+            "type": "string"
+          },
+          "span": {
+            "oneOf": [
+              {
+                "enum": [
+                  "6h",
+                  "24h",
+                  "7d",
+                  "30d"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "start": {
+            "format": "date-time",
+            "maxLength": 40,
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "span",
+          "at"
+        ],
+        "type": "object"
+      }
+    },
+    "frames": {
+      "case_action": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "open_panel",
+              "arrange",
+              "set_scope",
+              "focus",
+              "map",
+              "timeline",
+              "run_mission",
+              "narrate",
+              "done"
+            ],
+            "type": "string"
+          },
+          "args": {
+            "description": "CANONICAL_ARGS[action]",
+            "type": "object"
+          },
+          "at": {
+            "format": "date-time",
+            "maxLength": 40,
+            "type": "string"
+          },
+          "cites": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "target",
+                    "entity",
+                    "source",
+                    "analyst",
+                    "finding",
+                    "report",
+                    "situation",
+                    "signal",
+                    "event",
+                    "journal_entry"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "type": "object"
+            },
+            "maxItems": 8,
+            "type": "array"
+          },
+          "kind": {
+            "const": "case_action"
+          },
+          "phase": {
+            "const": "case"
+          },
+          "rests_on": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "round": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "round",
+                "tool"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "round": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "seq": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "phase",
+          "kind",
+          "seq",
+          "action",
+          "args",
+          "cites",
+          "rests_on",
+          "at",
+          "round"
+        ],
+        "type": "object"
+      },
+      "case_refused": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "args": {
+            "type": "object"
+          },
+          "cause": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "kind": {
+            "const": "case_refused"
+          },
+          "phase": {
+            "const": "case"
+          },
+          "round": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "phase",
+          "kind",
+          "action",
+          "cause",
+          "detail",
+          "args",
+          "round"
+        ],
+        "type": "object"
+      },
+      "case_sealed": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "maxLength": 40,
+            "type": "string"
+          },
+          "kind": {
+            "const": "case_sealed"
+          },
+          "phase": {
+            "const": "case"
+          },
+          "round": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "seq_through": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "phase",
+          "kind",
+          "seq_through",
+          "summary",
+          "at",
+          "round"
+        ],
+        "type": "object"
+      },
+      "case_stopped": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "maxLength": 40,
+            "type": "string"
+          },
+          "kind": {
+            "const": "case_stopped"
+          },
+          "phase": {
+            "const": "case"
+          },
+          "stopped_after_seq": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "phase",
+          "kind",
+          "stopped_after_seq",
+          "at"
+        ],
+        "type": "object"
+      }
+    },
+    "record": {
+      "additionalProperties": false,
+      "properties": {
+        "actions": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "enum": [
+                  "open_panel",
+                  "arrange",
+                  "set_scope",
+                  "focus",
+                  "map",
+                  "timeline",
+                  "run_mission",
+                  "narrate",
+                  "done"
+                ],
+                "type": "string"
+              },
+              "args": {
+                "description": "CANONICAL_ARGS[action]",
+                "type": "object"
+              },
+              "at": {
+                "format": "date-time",
+                "maxLength": 40,
+                "type": "string"
+              },
+              "cites": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "target",
+                        "entity",
+                        "source",
+                        "analyst",
+                        "finding",
+                        "report",
+                        "situation",
+                        "signal",
+                        "event",
+                        "journal_entry"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "rests_on": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "round": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "tool": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "round",
+                    "tool"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "seq": {
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "seq",
+              "action",
+              "args",
+              "at",
+              "cites",
+              "rests_on"
+            ],
+            "type": "object"
+          },
+          "maxItems": 30,
+          "type": "array"
+        },
+        "as_of": {
+          "format": "date-time",
+          "maxLength": 40,
+          "type": "string"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "gap_at_seq": {
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "plane": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "refused": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "enum": [
+            "sealed",
+            "unsealed",
+            "stopped"
+          ],
+          "type": "string"
+        },
+        "stopped_after_seq": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "const": "case/1"
+        },
+        "vocabulary": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "request_id",
+        "status",
+        "as_of",
+        "plane",
+        "vocabulary",
+        "refused",
+        "stopped_after_seq",
+        "complete",
+        "gap_at_seq",
+        "summary",
+        "actions"
+      ],
+      "type": "object"
+    },
+    "request_flag": {
+      "default": false,
+      "name": "present_case",
+      "type": "boolean",
+      "unavailable": "409 case_unavailable: workstation_drive not bound"
+    },
+    "stop_body": {
+      "additionalProperties": false,
+      "properties": {
+        "executed_through_seq": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "tools": {
+      "arrange": {
+        "description": "Arrange the wall: switch to a stance or seed a layout preset. The Consult tile stays open. Every id you name must have come back from a read tool in an EARLIER round (or be one of the operator's pinned records); an id from this same batch, or one you did not read, is refused.",
+        "input_schema": {
+          "additionalProperties": false,
+          "properties": {
+            "cites": {
+              "description": "The records this action rests on: 1 to 8 {kind, id} refs, each returned by a read tool in an EARLIER round (or pinned by the operator).",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "target",
+                      "entity",
+                      "source",
+                      "analyst",
+                      "finding",
+                      "report",
+                      "situation",
+                      "signal",
+                      "event",
+                      "journal_entry"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "type": "object"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "type": "array"
+            },
+            "layout": {
+              "enum": [
+                "morning_read",
+                "desk",
+                "investigate",
+                "wall",
+                "workspace",
+                "investigation",
+                "focus"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "layout",
+            "cites"
+          ],
+          "type": "object"
+        }
+      },
+      "done": {
+        "description": "Seal the case: no action after this one is admitted. Then write your final answer as usual. summary (optional, at most 300 characters) is the case's one-line caption.",
+        "input_schema": {
+          "additionalProperties": false,
+          "properties": {
+            "summary": {
+              "maxLength": 300,
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "focus": {
+        "description": "Select one record so the Inspector opens it and linked panels highlight it. Every id you name must have come back from a read tool in an EARLIER round (or be one of the operator's pinned records); an id from this same batch, or one you did not read, is refused.",
+        "input_schema": {
+          "additionalProperties": false,
+          "properties": {
+            "cites": {
+              "description": "The records this action rests on: 1 to 8 {kind, id} refs, each returned by a read tool in an EARLIER round (or pinned by the operator).",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "target",
+                      "entity",
+                      "source",
+                      "analyst",
+                      "finding",
+                      "report",
+                      "situation",
+                      "signal",
+                      "event",
+                      "journal_entry"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "type": "object"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "type": "array"
+            },
+            "ref": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "target",
+                    "entity",
+                    "source",
+                    "analyst",
+                    "finding",
+                    "report",
+                    "situation",
+                    "signal",
+                    "event",
+                    "journal_entry"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "ref",
+            "cites"
+          ],
+          "type": "object"
+        }
+      },
+      "map": {
+        "description": "Point the map: view 'fit_ref' fits the camera to one record's own geometry (ref required), 'reset' returns it home. layers, when given, is the full set of layers to draw. The map's time is the shared window \u2014 set it with timeline, never here. Every id you name must have come back from a read tool in an EARLIER round (or be one of the operator's pinned records); an id from this same batch, or one you did not read, is refused.",
+        "input_schema": {
+          "additionalProperties": false,
+          "properties": {
+            "cites": {
+              "description": "The records this action rests on: 1 to 8 {kind, id} refs, each returned by a read tool in an EARLIER round (or pinned by the operator).",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "target",
+                      "entity",
+                      "source",
+                      "analyst",
+                      "finding",
+                      "report",
+                      "situation",
+                      "signal",
+                      "event",
+                      "journal_entry"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "type": "object"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "type": "array"
+            },
+            "layers": {
+              "items": {
+                "enum": [
+                  "signals",
+                  "findings",
+                  "situations",
+                  "entities",
+                  "events"
+                ],
+                "type": "string"
+              },
+              "maxItems": 5,
+              "minItems": 1,
+              "type": "array"
+            },
+            "ref": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "target",
+                    "entity",
+                    "source",
+                    "analyst",
+                    "finding",
+                    "report",
+                    "situation",
+                    "signal",
+                    "event",
+                    "journal_entry"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "type": "object"
+            },
+            "view": {
+              "enum": [
+                "fit_ref",
+                "reset"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "view",
+            "cites"
+          ],
+          "type": "object"
+        }
+      },
+      "narrate": {
+        "description": "One plain-text line of the case (at most 600 characters) shown in the case strip with its cites as record links. Say what the operator is looking at and why. Every id you name must have come back from a read tool in an EARLIER round (or be one of the operator's pinned records); an id from this same batch, or one you did not read, is refused.",
+        "input_schema": {
+          "additionalProperties": false,
+          "properties": {
+            "cites": {
+              "description": "The records this action rests on: 1 to 8 {kind, id} refs, each returned by a read tool in an EARLIER round (or pinned by the operator).",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "target",
+                      "entity",
+                      "source",
+                      "analyst",
+                      "finding",
+                      "report",
+                      "situation",
+                      "signal",
+                      "event",
+                      "journal_entry"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "type": "object"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "type": "array"
+            },
+            "text": {
+              "maxLength": 600,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "cites"
+          ],
+          "type": "object"
+        }
+      },
+      "open_panel": {
+        "description": "Open one workstation panel for the operator. kind is a drivable panel kind; a per-subject (target.*) or per-analyst (analyst.*) kind, or analysis.cross_framing, needs params.subject. params.tab opens a tabbed panel on one tab. Every id you name must have come back from a read tool in an EARLIER round (or be one of the operator's pinned records); an id from this same batch, or one you did not read, is refused.",
+        "input_schema": {
+          "additionalProperties": false,
+          "properties": {
+            "cites": {
+              "description": "The records this action rests on: 1 to 8 {kind, id} refs, each returned by a read tool in an EARLIER round (or pinned by the operator).",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "target",
+                      "entity",
+                      "source",
+                      "analyst",
+                      "finding",
+                      "report",
+                      "situation",
+                      "signal",
+                      "event",
+                      "journal_entry"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "type": "object"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "type": "array"
+            },
+            "kind": {
+              "enum": [
+                "system.wall",
+                "system.findings",
+                "system.inspector",
+                "v4.map",
+                "system.timeline",
+                "system.alerts_watches",
+                "system.entities",
+                "system.search",
+                "system.graph_walk",
+                "system.provenance",
+                "system.register",
+                "v4.morning_read",
+                "v4.assessment",
+                "system.journal",
+                "system.report_export",
+                "subject.page",
+                "target.map",
+                "target.timeline",
+                "analyst.runs",
+                "analyst.outputs",
+                "analyst.cross_target",
+                "analyst.critiques",
+                "analysis.cross_framing"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "subject": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "target",
+                        "entity",
+                        "source",
+                        "analyst",
+                        "finding",
+                        "report",
+                        "situation",
+                        "signal",
+                        "event",
+                        "journal_entry"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "type": "object"
+                },
+                "tab": {
+                  "enum": [
+                    "brief",
+                    "claims",
+                    "deliveries",
+                    "events",
+                    "evidence",
+                    "fanout",
+                    "graph",
+                    "lineage",
+                    "movers",
+                    "narratives",
+                    "overview",
+                    "runtime",
+                    "signals",
+                    "situations",
+                    "sources",
+                    "triggers",
+                    "validity",
+                    "watches",
+                    "why"
+                  ],
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "cites"
+          ],
+          "type": "object"
+        }
+      },
+      "run_mission": {
+        "description": "Run a named mission: its stance, its scope rule, its window and its layers in one step. Every id you name must have come back from a read tool in an EARLIER round (or be one of the operator's pinned records); an id from this same batch, or one you did not read, is refused.",
+        "input_schema": {
+          "additionalProperties": false,
+          "properties": {
+            "cites": {
+              "description": "The records this action rests on: 1 to 8 {kind, id} refs, each returned by a read tool in an EARLIER round (or pinned by the operator).",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "target",
+                      "entity",
+                      "source",
+                      "analyst",
+                      "finding",
+                      "report",
+                      "situation",
+                      "signal",
+                      "event",
+                      "journal_entry"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "type": "object"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "type": "array"
+            },
+            "name": {
+              "enum": [
+                "morning_read",
+                "desk_watch",
+                "crisis"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "cites"
+          ],
+          "type": "object"
+        }
+      },
+      "set_scope": {
+        "description": "Scope the wall to one record (a report, subject, entity, situation or journal entry); every scoped panel follows it. kind 'none' clears the scope (the whole roster) and takes no id. Every id you name must have come back from a read tool in an EARLIER round (or be one of the operator's pinned records); an id from this same batch, or one you did not read, is refused.",
+        "input_schema": {
+          "additionalProperties": false,
+          "properties": {
+            "cites": {
+              "description": "The records this action rests on: 1 to 8 {kind, id} refs, each returned by a read tool in an EARLIER round (or pinned by the operator).",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "target",
+                      "entity",
+                      "source",
+                      "analyst",
+                      "finding",
+                      "report",
+                      "situation",
+                      "signal",
+                      "event",
+                      "journal_entry"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "type": "object"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "type": "array"
+            },
+            "id": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "report",
+                "target",
+                "entity",
+                "situation",
+                "journal_entry",
+                "none"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "cites"
+          ],
+          "type": "object"
+        }
+      },
+      "timeline": {
+        "description": "Set the shared clock the map and the timeline read: window is either {start, end} (ISO-8601, start < end, end no later than now) or {span} (one of 6h, 24h, 7d, 30d, ending now). at (ISO-8601, optional) centres the timeline on one instant. Every id you name must have come back from a read tool in an EARLIER round (or be one of the operator's pinned records); an id from this same batch, or one you did not read, is refused.",
+        "input_schema": {
+          "additionalProperties": false,
+          "properties": {
+            "at": {
+              "format": "date-time",
+              "maxLength": 40,
+              "type": "string"
+            },
+            "cites": {
+              "description": "The records this action rests on: 1 to 8 {kind, id} refs, each returned by a read tool in an EARLIER round (or pinned by the operator).",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "target",
+                      "entity",
+                      "source",
+                      "analyst",
+                      "finding",
+                      "report",
+                      "situation",
+                      "signal",
+                      "event",
+                      "journal_entry"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "type": "object"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "type": "array"
+            },
+            "window": {
+              "additionalProperties": false,
+              "properties": {
+                "end": {
+                  "format": "date-time",
+                  "maxLength": 40,
+                  "type": "string"
+                },
+                "span": {
+                  "enum": [
+                    "6h",
+                    "24h",
+                    "7d",
+                    "30d"
+                  ],
+                  "type": "string"
+                },
+                "start": {
+                  "format": "date-time",
+                  "maxLength": 40,
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "window",
+            "cites"
+          ],
+          "type": "object"
+        }
+      }
+    }
+  },
+  "vocabulary": {
+    "case_block_causes": [
+      "case_cap_reached",
+      "case_sealed",
+      "case_stopped",
+      "drive_not_armed",
+      "kind_not_drivable",
+      "no_citation",
+      "no_map_surface",
+      "ref_not_read"
+    ],
+    "case_frame_kinds": [
+      "case_action",
+      "case_refused",
+      "case_sealed",
+      "case_stopped"
+    ],
+    "case_phase": "case",
+    "case_record_version": "case/1",
+    "case_statuses": [
+      "sealed",
+      "unsealed",
+      "stopped"
+    ],
+    "drivable_kinds": {
+      "analysis.cross_framing": {
+        "group": "drill",
+        "subject": "target",
+        "tabs": []
+      },
+      "analyst.critiques": {
+        "group": "per_analyst",
+        "subject": "analyst",
+        "tabs": []
+      },
+      "analyst.cross_target": {
+        "group": "per_analyst",
+        "subject": "analyst",
+        "tabs": []
+      },
+      "analyst.outputs": {
+        "group": "per_analyst",
+        "subject": "analyst",
+        "tabs": []
+      },
+      "analyst.runs": {
+        "group": "per_analyst",
+        "subject": "analyst",
+        "tabs": []
+      },
+      "subject.page": {
+        "group": "per_subject",
+        "subject": "target",
+        "tabs": [
+          "brief",
+          "evidence",
+          "claims",
+          "signals",
+          "situations",
+          "sources",
+          "graph",
+          "runtime"
+        ]
+      },
+      "system.alerts_watches": {
+        "group": "awareness",
+        "subject": null,
+        "tabs": [
+          "watches",
+          "triggers",
+          "deliveries"
+        ]
+      },
+      "system.entities": {
+        "group": "investigation",
+        "subject": null,
+        "tabs": []
+      },
+      "system.findings": {
+        "group": "awareness",
+        "subject": null,
+        "tabs": []
+      },
+      "system.graph_walk": {
+        "group": "investigation",
+        "subject": null,
+        "tabs": []
+      },
+      "system.inspector": {
+        "group": "awareness",
+        "subject": null,
+        "tabs": []
+      },
+      "system.journal": {
+        "group": "products",
+        "subject": null,
+        "tabs": []
+      },
+      "system.provenance": {
+        "group": "investigation",
+        "subject": null,
+        "tabs": [
+          "why",
+          "lineage",
+          "fanout"
+        ]
+      },
+      "system.register": {
+        "group": "investigation",
+        "subject": null,
+        "tabs": [
+          "situations",
+          "narratives"
+        ]
+      },
+      "system.report_export": {
+        "group": "products",
+        "subject": null,
+        "tabs": []
+      },
+      "system.search": {
+        "group": "investigation",
+        "subject": null,
+        "tabs": []
+      },
+      "system.timeline": {
+        "group": "awareness",
+        "subject": null,
+        "tabs": [
+          "events",
+          "validity"
+        ]
+      },
+      "system.wall": {
+        "group": "awareness",
+        "subject": null,
+        "tabs": [
+          "overview",
+          "movers"
+        ]
+      },
+      "target.map": {
+        "group": "per_subject",
+        "subject": "target",
+        "tabs": []
+      },
+      "target.timeline": {
+        "group": "per_subject",
+        "subject": "target",
+        "tabs": []
+      },
+      "v4.assessment": {
+        "group": "products",
+        "subject": null,
+        "tabs": []
+      },
+      "v4.map": {
+        "group": "awareness",
+        "subject": null,
+        "tabs": []
+      },
+      "v4.morning_read": {
+        "group": "products",
+        "subject": null,
+        "tabs": []
+      }
+    },
+    "layouts": {
+      "desk": {
+        "seeds": [
+          "system.findings",
+          "system.inspector",
+          "system.consult",
+          "subject.page",
+          "system.timeline"
+        ],
+        "type": "stance"
+      },
+      "focus": {
+        "seeds": [
+          "system.inspector"
+        ],
+        "type": "preset"
+      },
+      "investigate": {
+        "seeds": [
+          "system.findings",
+          "system.inspector",
+          "system.entities",
+          "system.provenance",
+          "system.register",
+          "system.graph_walk",
+          "system.consult"
+        ],
+        "type": "stance"
+      },
+      "investigation": {
+        "seeds": [
+          "system.findings",
+          "system.inspector",
+          "system.entities",
+          "system.search"
+        ],
+        "type": "preset"
+      },
+      "morning_read": {
+        "seeds": [
+          "v4.morning_read",
+          "system.wall",
+          "system.consult",
+          "system.findings",
+          "v4.map"
+        ],
+        "type": "stance"
+      },
+      "wall": {
+        "seeds": [
+          "system.wall",
+          "system.inspector"
+        ],
+        "type": "preset"
+      },
+      "workspace": {
+        "seeds": [
+          "system.findings",
+          "system.inspector",
+          "system.consult",
+          "system.provenance"
+        ],
+        "type": "preset"
+      }
+    },
+    "limits": {
+      "case_cap_default": 30,
+      "case_rounds_default": 20,
+      "done_summary_max_chars": 300,
+      "future_skew_seconds": 300,
+      "max_cites": 8,
+      "max_window_seconds": 31536000,
+      "narrate_max_chars": 600,
+      "ref_id_max_chars": 200
+    },
+    "map_layers": [
+      "signals",
+      "findings",
+      "situations",
+      "entities",
+      "events"
+    ],
+    "map_surface_kind": "v4.map",
+    "map_views": [
+      "fit_ref",
+      "reset"
+    ],
+    "missions": {
+      "crisis": {
+        "adds": [
+          "v4.map",
+          "system.timeline",
+          "system.consult"
+        ],
+        "stance": "investigate"
+      },
+      "desk_watch": {
+        "adds": [
+          "v4.map",
+          "system.consult"
+        ],
+        "stance": "desk"
+      },
+      "morning_read": {
+        "adds": [
+          "system.consult"
+        ],
+        "stance": "morning_read"
+      }
+    },
+    "pack_id": "workstation_drive",
+    "ref_kinds": [
+      "target",
+      "entity",
+      "source",
+      "analyst",
+      "finding",
+      "report",
+      "situation",
+      "signal",
+      "event",
+      "journal_entry"
+    ],
+    "scope_kinds": [
+      "report",
+      "target",
+      "entity",
+      "situation",
+      "journal_entry",
+      "none"
+    ],
+    "span_presets": {
+      "24h": 86400,
+      "30d": 2592000,
+      "6h": 21600,
+      "7d": 604800
+    },
+    "tools": [
+      "open_panel",
+      "arrange",
+      "set_scope",
+      "focus",
+      "map",
+      "timeline",
+      "run_mission",
+      "narrate",
+      "done"
+    ],
+    "version": "workstation_vocabulary/3"
+  },
+  "vocabulary_hash": "f72bd6e2b1bb7b40dea9b76288d97194e8065898b6c2fc91b66a2fb84839a5ec"
+}

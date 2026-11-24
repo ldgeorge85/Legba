@@ -178,8 +178,12 @@ async def write_grant(
     target_id: str,
     owner: str,
     reason: str = "",
+    written_by: str | None = None,
 ) -> str:
     """Record a ``grant`` subscription grant as a wiring_descriptor head row.
+
+    ``written_by`` is the granting principal's handle (lane 9; the caller
+    knows who it is acting for), or ``None``.
 
     Idempotent on (source, target): re-granting an existing active grant is a
     no-op. Returns the wiring descriptor id. This is the control-plane action
@@ -211,12 +215,12 @@ async def write_grant(
             )
         await conn.execute(
             "INSERT INTO wiring_descriptors "
-            "(descriptor_id, version, schema_uri, is_head, state, owner, name, body) "
-            "VALUES ($1, $2, $3, true, 'active', $4, $5, $6::jsonb) "
+            "(descriptor_id, version, schema_uri, is_head, state, owner, name, body, written_by) "
+            "VALUES ($1, $2, $3, true, 'active', $4, $5, $6::jsonb, legba_principal($7)) "
             "ON CONFLICT (descriptor_id, version) DO UPDATE SET is_head = true, "
-            "state = 'active', body = EXCLUDED.body",
+            "state = 'active', body = EXCLUDED.body, written_by = EXCLUDED.written_by",
             gid, version, GRANT_SCHEMA_URI, owner,
-            f"grant {target_id} -> {source_id}", json.dumps(body),
+            f"grant {target_id} -> {source_id}", json.dumps(body), written_by,
         )
     return gid
 

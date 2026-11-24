@@ -59,6 +59,7 @@ method:
   # default — the LLM is consulted ONLY on a near-tie the scorer can't break, with
   # a per-call token cap + a per-pass call cap inside the handler.
   llm:
+    thinking: "on"   # T-2: low-volume synthesis seat thinks on every call
     primary:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat

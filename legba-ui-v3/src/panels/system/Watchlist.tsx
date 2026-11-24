@@ -154,7 +154,7 @@ export default function WatchlistPanel({ registration }: PanelProps) {
       actions={
         <button
           onClick={() => setShowInactive((v) => !v)}
-          className={`text-[10px] px-2 py-0.5 rounded border ${
+          className={`text-label px-2 py-0.5 rounded border ${
             showInactive ? 'border-accent-info text-accent-info' : 'border-slate-700 text-slate-500'
           }`}
           data-testid="watchlist-show-inactive"
@@ -215,7 +215,7 @@ export default function WatchlistPanel({ registration }: PanelProps) {
         </button>
       </div>
       {error && (
-        <div className="text-[11px] text-rose-400 mb-2" data-testid="watchlist-error">
+        <div className="text-label text-rose-400 mb-2" data-testid="watchlist-error">
           {error}
         </div>
       )}

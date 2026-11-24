@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:lane_hormuz": {
+      "source": "target_lane_hormuz.yaml",
+      "state": "draft"
+    }
+  }
+}

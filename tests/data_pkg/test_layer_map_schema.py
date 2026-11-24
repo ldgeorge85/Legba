@@ -200,7 +200,7 @@ def test_descriptor_rejects_malformed_country(bad: str):
 
 # ---------------------------------------------------------------------------
 # 7. The committed IL map (curated, Program 6 L0 curate_il lane) round-trips
-#    through the real model. IL was the pilot DRAFT (docs/LAYERS.md) and has
+#    through the real model. IL was the pilot DRAFT (docs/DATA_SOURCES.md) and has
 #    since been curated: reviewed state, real per-layer aperture
 #    declarations, and a reason on every entry that is either a confirmed
 #    "derived:" rule or a fresh "curated:" per-country judgement.

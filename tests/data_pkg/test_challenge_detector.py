@@ -263,3 +263,32 @@ def test_the_carry_has_exactly_one_name():
     """Archiver counter, tool counter, sidecar ``last_error`` prefix and the
     probe script's class column all use this string."""
     assert BLOCKED_BY_CHALLENGE == "blocked_by_challenge"
+
+
+# ---------------------------------------------------------------------------
+# W11-F259 — the Federal Register access wall (roll 79)
+# ---------------------------------------------------------------------------
+
+
+def test_the_federal_register_wall_is_a_challenge_in_text_and_in_the_raw_page():
+    from tests.data_pkg import _page_fixtures as P
+
+    assert detect_challenge_text(P.FEDERAL_REGISTER_WALL_TEXT) is not None
+    assert detect_challenge_page(P.federal_register_wall(), "text/html; charset=utf-8") is not None
+
+
+def test_the_shared_wall_gate_the_archiver_uses_catches_it_too():
+    from legba.data.analysts.deterministic_handlers.evidence_archiver import _match_wall_pattern
+    from tests.data_pkg import _page_fixtures as P
+
+    assert len(P.FEDERAL_REGISTER_WALL_TEXT) > 500   # past the legacy short-page cap
+    assert _match_wall_pattern(P.FEDERAL_REGISTER_WALL_TEXT) is not None
+
+
+def test_an_article_about_automated_scraping_and_captchas_is_not_a_wall():
+    text = (
+        "The Federal Register said on Tuesday that automated scraping had grown sharply, and that "
+        "programmatic users should move to its developer APIs. Researchers who were asked to complete "
+        "a CAPTCHA said the change slowed their work. " * 6
+    )
+    assert detect_challenge_text(text) is None

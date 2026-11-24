@@ -95,9 +95,10 @@ class _Conn:
             # Migration 0195 added five recovery columns. Unpacked explicitly
             # (not by slice) so that the NEXT column added to this INSERT fails
             # here, loudly, rather than silently binding into the wrong field.
+            # X2 C1 (0234) appended ``verification``.
             (session_id, role, content, steps, tool_calls, cited_refs,
              finding_id, request_id, parent_turn_id, synthesis_status,
-             replay_transcript, usage) = args
+             replay_transcript, usage, response, verification) = args
             tid = str(uuid4())
             self.pg.turns.append({
                 "id": tid, "session_id": session_id, "role": role,
@@ -106,6 +107,7 @@ class _Conn:
                 "request_id": request_id, "parent_turn_id": parent_turn_id,
                 "synthesis_status": synthesis_status,
                 "replay_transcript": replay_transcript, "usage": usage,
+                "response": response, "verification": verification,
                 "created_at": datetime.now(timezone.utc),
             })
             return {"id": tid}
@@ -322,3 +324,51 @@ def test_load_route_404_for_unknown():
     client = TestClient(_build_app(pg))
     r = client.get(f"/api/v1/consult/sessions/{uuid4()}")
     assert r.status_code == 404, r.text
+
+
+@pytest.mark.asyncio
+async def test_load_route_lifts_the_response_bag_and_marks_old_turns_unrecorded():
+    """0223 — an assistant turn written with a response bag reads back with its
+    census / hold / floor / watch lifted onto the turn; one written without it
+    (every pre-0223 turn) reads back ``response_recorded: false`` with every
+    lifted field null — "not measured", never zeros."""
+    pg = _FakePg()
+    sid = await consult_persistence.create_session(pg, mode="chat", question="q")
+    census = {"live": 3, "history": 1, "model_knowledge": 2}
+    floor = {"from": 0.2, "to": 0.45, "resolved": 7}
+    await consult_persistence.append_turn(
+        pg, session_id=sid, role="assistant", content="old answer",
+    )
+    await consult_persistence.append_turn(
+        pg, session_id=sid, role="assistant", content="new answer",
+        response={
+            "uncertainty": 0.45, "provenance_census": census,
+            "hold_reason": None, "uncertainty_floor_applied": floor,
+            "watch_candidates": ["x happens"], "model": "core",
+        },
+    )
+    assert pg.turns[0]["response"] is None
+
+    r = TestClient(_build_app(pg)).get(f"/api/v1/consult/sessions/{sid}")
+    assert r.status_code == 200, r.text
+    old, new = r.json()["turns"]
+    assert old["response_recorded"] is False
+    for key in consult_persistence.RESPONSE_BAG_KEYS:
+        assert old[key] is None, key
+    assert new["response_recorded"] is True
+    assert new["uncertainty"] == 0.45
+    assert new["provenance_census"] == census
+    assert new["hold_reason"] is None
+    assert new["uncertainty_floor_applied"] == floor
+    assert new["watch_candidates"] == ["x happens"]
+    assert new["model"] == "core"
+
+
+def test_response_bag_picks_exactly_the_recorded_keys():
+    assert consult_persistence.response_bag(None) is None
+    assert consult_persistence.response_bag("nope") is None
+    bag = consult_persistence.response_bag({"uncertainty": 0.5, "answer": "a"})
+    assert bag is not None
+    assert set(bag) == set(consult_persistence.RESPONSE_BAG_KEYS)
+    assert bag["uncertainty"] == 0.5 and bag["provenance_census"] is None
+    assert "answer" not in bag

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:reference_builder": {
+      "source": "analyst_reference_builder.yaml",
+      "state": "draft"
+    }
+  }
+}

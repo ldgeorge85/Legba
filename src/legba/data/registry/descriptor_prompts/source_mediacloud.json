@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.mediacloud.world": {
+      "source": "source_mediacloud.yaml",
+      "state": "draft"
+    }
+  }
+}

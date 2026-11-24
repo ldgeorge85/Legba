@@ -45,10 +45,14 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from starlette.responses import Response
 from pydantic import BaseModel, Field
 
+from ..case_columns import category_filter_sql
 from ..provenance import origin as _origin
 from .api import RegistryAPIDeps, require_bearer
+from .read_latency import fast_json_response
+from .event_list_weight import EVENTS_DEFAULT_FIELDS, EventsFields, EventsSummaryPage, summary_row
 
 logger = logging.getLogger(__name__)
 
@@ -338,10 +342,13 @@ def build_events_router(deps: RegistryAPIDeps) -> APIRouter:
             default=None,
             description="origin classes to include on the as_of read "
             "(repeatable/csv; default live/web_retrieval/seed)"),
+        # Roll 87: the map and the time band ask ``fields=summary`` by name
+        # (``event_list_weight``); omitted, the whole row as before.
+        fields: EventsFields = Query(default=EVENTS_DEFAULT_FIELDS),
         limit: int = Query(default=DEFAULT_LIMIT),
         cursor: str | None = Query(default=None),
         principal: str = Depends(require_bearer),
-    ) -> EventsPage:
+    ) -> EventsPage | Response:
         limit = _validate_limit(limit)
         if lifecycle_state is not None and (
             lifecycle_state not in EVENT_LIFECYCLE_STATES
@@ -386,7 +393,8 @@ def build_events_router(deps: RegistryAPIDeps) -> APIRouter:
             clauses.append(f"e.geo && ${len(params)}::text[]")
         if category is not None:
             params.append(category)
-            clauses.append(f"e.category = ${len(params)}")
+            # TAX-4: the registered class, or the producer's value (data.category_raw)
+            clauses.append(category_filter_sql("e", len(params)))
         if lifecycle_state is not None:
             params.append(lifecycle_state)
             clauses.append(f"e.lifecycle_state = ${len(params)}")
@@ -442,14 +450,23 @@ def build_events_router(deps: RegistryAPIDeps) -> APIRouter:
             last = records[limit - 1]
             anchor = last["time_start"] or last["produced_at"]
             next_cursor = _encode_cursor(anchor, last["id"])
+        unbounded_start = (
+            sum(1 for r in records[:limit] if r["valid_from"] is None)
+            if as_of is not None else 0
+        )
+        if fields == "summary":
+            # its own row model, past the route's response_model (as /signals)
+            return fast_json_response(EventsSummaryPage(
+                data=[summary_row(r) for r in rows],
+                next_cursor=next_cursor,
+                as_of=as_of,
+                unbounded_start=unbounded_start,
+            ))
         return EventsPage(
             data=rows,
             next_cursor=next_cursor,
             as_of=as_of,
-            unbounded_start=(
-                sum(1 for r in records[:limit] if r["valid_from"] is None)
-                if as_of is not None else 0
-            ),
+            unbounded_start=unbounded_start,
         )
 
     @router.get("/events/{event_id}", response_model=EventInspectResponse)

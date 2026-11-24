@@ -83,6 +83,14 @@ export type SelectionKind =
    * invite a reader to read a retrieval as a verdict — which it never is.
    */
   | 'contention'
+  /**
+   * A PLACE (U-7) — a named place a series is measured at (one of the
+   * chokepoints the map draws as "% of 30-day baseline"), not a record of
+   * ours. Its id is `<gazetteer>:<key>` (`portwatch:chokepoint4`), resolved
+   * locally from `v4/globe/chokepoints.ts`; the Record sheet shows the place
+   * and what is measured there, and the map rings it.
+   */
+  | 'place'
 
 /**
  * Optimistic detail the caller ALREADY HAS at click time (e.g. a feed row's
@@ -292,7 +300,7 @@ const ROW_KIND_TO_SELECTION: Record<string, SelectionKind> = {
 //: Kinds that are NOT substrate rows and must never fall through to the
 //: `finding` default: coercing one would send the Inspector to a lineage walk
 //: over a table it is not in, and the reader would get a 404 dressed as a blank.
-const SELF_KINDS: ReadonlySet<string> = new Set(['absence', 'contention'])
+const SELF_KINDS: ReadonlySet<string> = new Set(['absence', 'contention', 'place'])
 
 export function selectionKindOf(rowKind: string): SelectionKind {
   if (SELF_KINDS.has(rowKind)) return rowKind as SelectionKind

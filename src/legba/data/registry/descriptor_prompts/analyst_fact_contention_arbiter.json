@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:fact_contention_arbiter": {
+      "source": "analyst_fact_contention_arbiter.yaml",
+      "state": "active"
+    }
+  }
+}

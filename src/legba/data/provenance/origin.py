@@ -77,6 +77,16 @@ ORIGIN_CLASSES: tuple[str, ...] = (
 #: now; a seed row is operator-vetted present-tense knowledge).
 LIVE_CLASSES: frozenset[str] = frozenset({"live", "web_retrieval", "seed"})
 
+#: The class an OPERATOR's own write takes (W11 C-2b-2/facts: a fact asserted
+#: through the consult write plane): ``live``. Decision D7 (design C-2a §11)
+#: puts "operator via consult" on the AUTHOR axis — ``facts.source_type =
+#: 'operator'``, the write id in ``data.write_id``, the audit actor
+#: ``consult_write:<id>`` with role ``operator_via_consult`` — and NOT here:
+#: this axis answers *live present or imported history*, every reader gates on
+#: it, and the operator's assertion is about the present. No seventh class, no
+#: CHECK change, no ``LIVE_CLASSES`` edit.
+OPERATOR_ORIGIN_CLASS = "live"
+
 #: The live classes as one SQL literal, in canonical order — the third leg
 #: of every live-gate rendering.
 _LIVE_SQL_LIST: str = ",".join(
@@ -85,6 +95,7 @@ _LIVE_SQL_LIST: str = ",".join(
 
 __all__ = [
     "LIVE_CLASSES",
+    "OPERATOR_ORIGIN_CLASS",
     "ORIGIN_CLASSES",
     "ORIGIN_CLASS_VERSION",
     "OriginClassError",

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:profile_projector": {
+      "source": "analyst_profile_projector.yaml",
+      "state": "draft"
+    }
+  }
+}

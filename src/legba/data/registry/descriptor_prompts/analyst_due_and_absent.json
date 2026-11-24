@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:due_and_absent": {
+      "source": "analyst_due_and_absent.yaml",
+      "state": "draft"
+    }
+  }
+}

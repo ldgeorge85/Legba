@@ -7,9 +7,10 @@ CAUSED — so the change is applied HERE, through the EXISTING write/lifecycle
 paths, one idempotent handler per ``proposal_kind``:
 
   * ``correction``    → the existing supersession / lifecycle path
-                        (``supersede_prior_facts`` for a stale fact; entity-merge
-                        + situation correction recognised but routed to their
-                        existing paths).
+                        (``supersede_prior_facts`` for a stale fact); an entity
+                        merge through the write plane's entity apply layer
+                        (``consult_write_entity.journal_merge``, W11); a
+                        situation correction is refused by name (never applied).
   * ``change``        → the registry's own ``update`` path (the same one
                         ``PUT /stack/{id}`` / ``PUT /descriptors/{family}/{id}``
                         use): fetch the current head, deep-merge the diff patch,
@@ -103,6 +104,13 @@ PROTECTED_PROMPT_PHRASES: tuple[str, ...] = (
 )
 
 
+#: Why a ``correct_situation`` correction is never applied (W11).
+CORRECT_SITUATION_REFUSAL = (
+    "correct_situation is not applied: a situation is a product of the tower "
+    "(class_not_writable) — correct the unit that produced it and rerun it"
+)
+
+
 class ProposalApplyError(Exception):
     """A proposal could not be applied (bad diff op, missing target, registry
     error). The accept endpoint surfaces this as a clean 4xx/5xx and the
@@ -140,7 +148,8 @@ def validate_proposal_shape(proposal_kind: str, diff: dict[str, Any]) -> None:
     The three recognised shapes (plan §7.4 / H10):
       * ``correction`` → ``diff['op']`` is ``supersede_fact`` (REQUIRES
         ``subject`` + ``predicate`` + ``value``) or the recognised-but-generic
-        ``merge_entities`` / ``correct_situation`` sub-kinds.
+        ``merge_entities`` (REQUIRES ``from`` + ``into``). ``correct_situation``
+        is REFUSED here by name (W11: a situation is a tower product).
       * ``change`` → ``diff['op']`` is ``update_descriptor`` (REQUIRES
         ``family`` + ``descriptor_id`` + a dict ``patch``) or ``update_stack``
         (REQUIRES ``stack_id`` + a dict ``patch``).
@@ -162,8 +171,18 @@ def validate_proposal_shape(proposal_kind: str, diff: dict[str, Any]) -> None:
                     "corrected value)"
                 )
             return
-        if op in ("merge_entities", "correct_situation"):
+        if op == "merge_entities":
+            if not (str(diff.get("from") or "").strip() and str(diff.get("into") or "").strip()):
+                raise ProposalApplyError(
+                    "merge_entities requires from (the loser) and into (the keeper)"
+                )
             return
+        if op == "correct_situation":
+            # W11: never applied (situations are a product of the tower — the
+            # write plane's class_not_writable); refused by name at WRITE time
+            # so it archives unapplyable instead of waiting for an accept that
+            # could only fail.
+            raise ProposalApplyError(CORRECT_SITUATION_REFUSAL)
         raise ProposalApplyError(
             f"unknown correction op {op!r} (expected supersede_fact / "
             "merge_entities / correct_situation)"
@@ -298,7 +317,9 @@ def protected_section_violations(new_prompt_text: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-async def _apply_correction(conn: Any, *, proposal_id: UUID, diff: dict[str, Any]) -> dict[str, Any]:
+async def _apply_correction(
+    conn: Any, *, proposal_id: UUID, diff: dict[str, Any], deps: Any = None, actor: str | None = None,
+) -> dict[str, Any]:
     """Apply a correction via the EXISTING write/lifecycle path, dispatched by
     ``diff['op']``:
 
@@ -306,8 +327,12 @@ async def _apply_correction(conn: Any, *, proposal_id: UUID, diff: dict[str, Any
         value differs from the corrected value via ``supersede_prior_facts`` (the
         SAME altitude-0 supersession the ingest path uses). Idempotent: only still-
         open rows are touched, so a replay closes nothing new.
-      * ``merge_entities`` / ``correct_situation`` — recognised correction
-        sub-kinds routed to their existing lifecycle paths.
+      * ``merge_entities`` — the write plane's entity merge (W11): the loser
+        (``from``) redirects to the keeper (``into``) with its pre-image,
+        version rows, provenance and a signed audit row; refused by name
+        (``ProposalApplyError``) when it may not run. Unmergeable through
+        consult's ``unmerge_entity`` until ``entity_gc`` compacts the loser.
+      * ``correct_situation`` — refused by name in :func:`validate_proposal_shape`.
 
     The shape (which op, which required fields) is decided ONCE, by
     :func:`validate_proposal_shape` — called FIRST, so a diff this module does
@@ -337,12 +362,22 @@ async def _apply_correction(conn: Any, *, proposal_id: UUID, diff: dict[str, Any
         )
         return {"op": op, "facts_superseded": closed, "subject": subject,
                 "predicate": predicate}
-    # validate_proposal_shape guarantees op ∈ (merge_entities, correct_situation)
-    # at this point. The full entity-resolution / situation-lifecycle apply is
-    # wired to those subsystems' existing paths; we record the accepted op so
-    # the audit trail is complete and the operator-facing apply is honest about
-    # what ran.
-    return {"op": op, "applied": "routed_to_existing_lifecycle", "diff": diff}
+    # validate_proposal_shape guarantees op == "merge_entities" here (W11: a
+    # correct_situation is refused by name inside it). The merge runs through
+    # the write plane's entity apply layer — the SAME merge consult performs,
+    # with its pre-image, version rows, provenance and signed audit row — or
+    # is refused by name. Never an "applied" that wrote nothing.
+    from .consult_write_entity import journal_merge
+    from .consult_write_source import Refused
+
+    registry = getattr(deps, "descriptor_registry", None)
+    if registry is None:
+        raise ProposalApplyError("merge_entities cannot apply: no registry is wired on this accept path")
+    try:
+        return await journal_merge(conn, registry, proposal_id=str(proposal_id), diff=diff,
+                                   actor=actor or "operator")
+    except Refused as exc:
+        raise ProposalApplyError(f"merge_entities refused: {exc.cause}: {exc.detail}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -495,7 +530,7 @@ async def apply_accepted_proposal(
     applies). Returns an audit dict; raises ProposalApplyError / its subclasses on
     a bad diff or a protected-section violation."""
     if proposal_kind == "correction":
-        return await _apply_correction(conn, proposal_id=proposal_id, diff=diff)
+        return await _apply_correction(conn, proposal_id=proposal_id, diff=diff, deps=deps, actor=actor)
     if proposal_kind == "change":
         return await _apply_change(deps, actor=actor, diff=diff)
     if proposal_kind == "self_revision":

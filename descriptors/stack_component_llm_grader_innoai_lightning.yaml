@@ -1,0 +1,39 @@
+# THE THIRD-FAMILY GRADER ON THE BOX — Nemotron Lightning, thinking OFF
+# (kind: llm_provider). It takes the slot the OpenRouter Mistral grader held
+# (`llm.judge.openrouter_mistral_large.openai_compat`: correctness_grader,
+# desk_reference, standing_auditor) and the Llama-3.3 audit rater — both dead
+# since 2026-10-17 00:22Z with the OpenRouter credits (402 on every call).
+# The grader fence needs a family distinct from the WRITER (the core, MiMo)
+# and the JUDGE (Gemma): `nvidia` is that family. Deployment-wide repoint via
+# LEGBA_EXTERNAL_GRADER_STACK_REF, so the three descriptor refs need no edit.
+# Thinking OFF: grading runs at width and wants a short structured verdict.
+# Id ends `.openai_compat` → the vLLM handler. $0 lane (our box).
+id: llm.grader.innoai_lightning.openai_compat
+name: Nemotron Lightning (think off) via the innoai gateway — third-family external grader
+schema_uri: legba/stack/llm_provider/1.0.0
+version: "0000000000000000"
+state: draft
+owner: lewis@local
+config:
+  api_endpoint:
+    factory_kind: text
+    raw: https://api.innoai.net/v1
+  api_key:
+    factory_kind: secret
+    raw: llm.innoai.api_key
+  model_name:
+    factory_kind: text
+    raw: lightning
+  max_tokens:
+    factory_kind: number
+    raw: 4096
+  timeout_seconds:
+    factory_kind: number
+    raw: 120
+  tier:
+    factory_kind: dropdown_static
+    raw: cheap
+    options: [primary, fallback, cheap]
+  max_concurrent:
+    factory_kind: number
+    raw: 6

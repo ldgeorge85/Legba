@@ -60,7 +60,7 @@ import base64
 import binascii
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -227,6 +227,36 @@ class AnalystCritiqueRow(BaseModel):
     scores: dict[str, Any] = Field(default_factory=dict)
     overall_score: float | None
     revision_delta: dict[str, Any] | None
+    produced_at: datetime
+
+
+#: P-8 — the light weight of ``GET /analysts/{id}/outputs`` (its default):
+#: no ``data`` (the kind-specific payload is most of a row: ~109 KB a row for
+#: a desk's finding on live), and ``body`` cut to its first
+#: ``OUTPUT_BODY_EXCERPT`` characters (``body_truncated`` says when). The
+#: console's outputs tab shows two clamped lines of body, which the excerpt
+#: covers. ``fields=full`` is the whole row (``AnalystOutputRow``); one finding
+#: at full weight is ``GET /findings/{id}``. The switch back is
+#: ``OUTPUTS_DEFAULT_FIELDS``.
+OUTPUT_BODY_EXCERPT = 600
+OUTPUTS_DEFAULT_FIELDS = "summary"
+
+
+class AnalystOutputSummaryRow(BaseModel):
+    """One row of ``GET /analysts/{id}/outputs`` at ``fields=summary``."""
+
+    id: str
+    kind: str
+    title: str
+    body: str
+    body_truncated: bool
+    confidence: float
+    severity: str | None
+    target_id: str | None
+    target_version: str | None
+    analyst_id: str | None
+    analyst_version: str | None
+    run_id: str | None
     produced_at: datetime
 
 
@@ -665,8 +695,15 @@ def build_runtime_telemetry_router(deps: RegistryAPIDeps) -> APIRouter:
         kind: str | None = Query(default=None),
         limit: int = Query(default=50, ge=1, le=500),
         cursor: str | None = Query(default=None),
+        fields: Literal["summary", "full"] = Query(default=OUTPUTS_DEFAULT_FIELDS),
         principal: str = Depends(require_bearer),
     ) -> CursorPage:
+        full = fields == "full"
+        body_cols = (
+            "body, data" if full else
+            f"left(body, {OUTPUT_BODY_EXCERPT}) AS body, "
+            f"char_length(body) > {OUTPUT_BODY_EXCERPT} AS body_truncated"
+        )
         clauses = ["analyst_id = $1"]
         args: list[Any] = [analyst_id]
         if since is not None:
@@ -699,9 +736,9 @@ def build_runtime_telemetry_router(deps: RegistryAPIDeps) -> APIRouter:
         async with deps.descriptor_registry.pg.acquire() as conn:
             rows = await conn.fetch(
                 f"""
-                SELECT id, kind, title, body, confidence, severity,
+                SELECT id, kind, title, confidence, severity,
                        target_id, target_version, analyst_id, analyst_version,
-                       run_id, produced_at, data
+                       run_id, produced_at, {body_cols}
                   FROM analyst_outputs
                  WHERE {where}
                  ORDER BY produced_at DESC, id DESC
@@ -712,8 +749,20 @@ def build_runtime_telemetry_router(deps: RegistryAPIDeps) -> APIRouter:
 
         has_more = len(rows) > limit
         page_rows = rows[:limit]
-        items: list[AnalystOutputRow] = []
+        items: list[AnalystOutputRow | AnalystOutputSummaryRow] = []
         for r in page_rows:
+            if not full:
+                items.append(AnalystOutputSummaryRow(
+                    id=str(r["id"]), kind=r["kind"], title=r["title"],
+                    body=r["body"], body_truncated=bool(r["body_truncated"]),
+                    confidence=float(r["confidence"]), severity=r["severity"],
+                    target_id=r["target_id"], target_version=r["target_version"],
+                    analyst_id=r["analyst_id"],
+                    analyst_version=r["analyst_version"],
+                    run_id=str(r["run_id"]) if r["run_id"] is not None else None,
+                    produced_at=r["produced_at"],
+                ))
+                continue
             items.append(AnalystOutputRow(
                 id=str(r["id"]),
                 kind=r["kind"],

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.ransomlook.claims": {
+      "source": "source_ransomlook.yaml",
+      "state": "draft"
+    }
+  }
+}

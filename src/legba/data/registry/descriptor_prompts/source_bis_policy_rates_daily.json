@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.bis.policy_rates_daily": {
+      "source": "source_bis_policy_rates_daily.yaml",
+      "state": "draft"
+    }
+  }
+}

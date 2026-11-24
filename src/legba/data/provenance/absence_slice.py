@@ -15,8 +15,11 @@ WHAT LIVES HERE — everything the V-B branch needs that is PURE (no
   * the ABSENCE CLAIM GRAMMAR (:data:`_ABSENCE_MARKERS`,
     :func:`_is_absence_claim`, :data:`_COLLECTION_SCOPE_MARKERS`) — the calibrated
     lexical set the floor exemption, the V3 route and this branch all share;
-  * the COUNTRY GAZETTEER (desk-slug expansion + the slice-scope country list +
-    demonym tolerance) — the M15 cross-target guard reads the same tables;
+  * the GAZETTEER READS (desk-slug expansion + the slice-scope country list +
+    demonym tolerance) — the M15 cross-target guard reads the same tables. The
+    TABLES are the profile's (``legba.data.gazetteer``, W10 CANON-1): read at
+    call time, so a profile that declares none makes the scope filter and the
+    title-shape screen not applicable BY NAME instead of silently empty;
   * the SLICE ROW model + the retained-slice LOADER
     (``analyst_traces.input_row_refs`` -> ``signals`` / ``analyst_outputs``);
   * the deterministic CLASSIFIER: scope-qualifier extraction, the W1(e) route
@@ -36,8 +39,10 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
+from ..gazetteer import Gazetteer, applicable, gazetteer, or_empty
 from .assessment_aperture import (
     ROUTE_EXCLUSION_APERTURE,
     claim_in_aperture_section,
@@ -182,39 +187,32 @@ _COLLECTION_SCOPE_MARKERS: tuple[str, ...] = (
 )
 
 
-# A compact country gazetteer + desk-slug expansion, MIRRORING
-# legba.runtime.grounding (_KNOWN_COUNTRY_TOKENS / _TARGET_SLUG_TO_NAMES) — a
-# deliberate slim-safe local copy so verify.py imports nothing from runtime.
-_TARGET_SLUG_TO_COUNTRY: dict[str, tuple[str, ...]] = {
-    "us": ("united states", "america", "u.s.", "usa"),
-    "cn": ("china",), "ru": ("russia",), "ir": ("iran",), "il": ("israel",),
-    "in": ("india",), "id": ("indonesia",), "br": ("brazil",),
-    "ar": ("argentina",), "mx": ("mexico",), "ca": ("canada",),
-    "fr": ("france",), "de": ("germany",), "it": ("italy",),
-    "gb": ("united kingdom", "britain", "uk"), "uk": ("united kingdom", "britain"),
-    "jp": ("japan",), "kr": ("south korea", "korea"), "sa": ("saudi arabia",),
-    "tr": ("turkey", "turkiye"), "au": ("australia",), "za": ("south africa",),
-    "eu": ("european union",), "kp": ("north korea", "dprk"), "tw": ("taiwan",),
-    "ua": ("ukraine",), "pk": ("pakistan",),
-}
-_COUNTRY_TOKENS: frozenset[str] = frozenset({
-    "united states", "america", "u.s.", "usa",
-    "china", "russia", "iran", "israel", "ukraine", "india", "indonesia",
-    "brazil", "argentina", "mexico", "canada", "france", "germany", "italy",
-    "spain", "united kingdom", "britain", "japan", "south korea", "north korea",
-    "korea", "saudi arabia", "turkey", "turkiye", "australia", "south africa",
-    "egypt", "pakistan", "afghanistan", "iraq", "syria", "lebanon", "yemen",
-    "venezuela", "taiwan", "vietnam", "thailand", "philippines", "nigeria",
-    "romania", "poland", "greece", "hungary", "bulgaria", "serbia", "croatia",
-})
+# The desk-slug expansion and the M15 "other country" set are the PROFILE'S
+# (``legba.data.gazetteer`` sections ``slug_to_country`` / ``country_tokens``,
+# W10 CANON-1 — formerly _TARGET_SLUG_TO_COUNTRY / _COUNTRY_TOKENS here, a
+# slim-safe mirror of legba.runtime.grounding's tables). Read at call time.
+
+
+def _table(name: str) -> Any:
+    """One gazetteer section for this module's matchers: the declared value,
+    else the empty value of its type with the absent read recorded by name."""
+    value = gazetteer().get(name)
+    return value if value is not None else or_empty(name, consumer="absence_slice")
 
 
 def _country_desk_slug(target_id: str | None) -> str | None:
-    """The trailing ISO-2 slug of a ``country_*`` target id, else ``None``."""
+    """The trailing ISO-2 slug of a per-subject desk id, else ``None``.
+
+    The desk-id convention is the profile's (gazetteer ``desk_ids.marker`` —
+    ``country`` on the exemplar: ``country_g20_us`` -> ``us``). A profile that
+    declares no convention has no id-coded desks: ``None`` for every id."""
     if not target_id or not isinstance(target_id, str):
         return None
+    marker = gazetteer().get("desk_ids")
+    if not marker:
+        return None
     tid = target_id.strip().lower()
-    if "country" not in tid:
+    if marker not in tid:
         return None
     token = tid.rsplit("_", 1)[-1]
     return token if len(token) == 2 and token.isalpha() else None
@@ -251,17 +249,8 @@ def _mentions_country(name: str, haystack_lc: str) -> bool:
 # Scope: the G20 desks plus the two Koreas and the EU, i.e. every slug in the
 # table above that has an abbreviation a newsroom actually uses. A desk with no
 # entry is unchanged.
-_TARGET_SLUG_TO_ABBREV: dict[str, tuple[str, ...]] = {
-    "us": ("US", "U.S.", "U.S", "USA", "U.S.A."),
-    "gb": ("UK", "U.K.", "U.K", "GB"),
-    "uk": ("UK", "U.K.", "U.K", "GB"),
-    "eu": ("EU", "E.U."),
-    "cn": ("PRC",),
-    "kr": ("ROK",),
-    "kp": ("DPRK",),
-    "za": ("RSA",),
-    "ae": ("UAE",),
-}
+# The table is the gazetteer's ``slug_to_abbrev`` section (W10 CANON-1;
+# formerly _TARGET_SLUG_TO_ABBREV here).
 
 
 def _mentions_abbrev(form: str, haystack: str) -> bool:
@@ -290,7 +279,7 @@ def _mentions_own_country(slug: str, names: set[str], title: str, body: str) -> 
         return True
     return any(
         _mentions_abbrev(form, haystack)
-        for form in _TARGET_SLUG_TO_ABBREV.get(slug, ())
+        for form in _table("slug_to_abbrev").get(slug, ())
     )
 
 
@@ -383,12 +372,14 @@ _ABSENCE_SCREEN_STOPWORDS: frozenset[str] = frozenset(
     which while where when what whom whose have has had been being were was
     are is not any all both each other others some more most such only just
     also very much many few less least same still both either
-    country countries state states government governmental national international
     public private official officially available reviewed collected monitored
     analyzed analysed examined sampled ingested gathered searched corpus slice
     target targets desk desks unit units finding findings claim claims
     """.split()
-)
+    # W10 CANON-1: the subject nouns ("country countries state states government
+    # governmental national international" on the exemplar) are the profile's —
+    # the gazetteer's ``screen_stopwords`` section, united here at import.
+) | or_empty("screen_stopwords", consumer="absence_slice")
 
 
 # ---------------------------------------------------------------------------
@@ -442,68 +433,42 @@ _MACHINE_STRUCTURED_SOURCE_IDS: frozenset[str] = frozenset({"source.gdelt.files"
 #: The matching ``raw_provenance->>'kind'`` stamps, so a source-id rename does not
 #: reopen the hole on its own.
 _MACHINE_STRUCTURED_PROVENANCE_KINDS: frozenset[str] = frozenset({"gdelt_files"})
-#: The CAMEO title SHAPE backstop: an ALL-CAPS actor (optionally two, joined by
-#: ``<->``), a colon, then a LOWERCASE action verb — "COLLEGE: protest in Japan",
-#: "SAUDI <-> SANAA: protest in Saudi Arabia". The lowercase-verb requirement is
-#: what keeps a real "UN: Sudan famine declared" headline OUT of the exclusion.
-_CAMEO_TITLE_RE = re.compile(
-    r"^\s*[A-Z][A-Z0-9 .,'’()&/\-]{1,}"
-    r"(?:<->\s*[A-Z0-9 .,'’()&/\-]+)?"
-    r":\s+[a-z]"
-)
+#: The CAMEO title SHAPE backstop is a DECLARED CLASSIFIER PATTERN — the
+#: gazetteer's ``classifier_patterns.machine_structured_title`` (W10 CANON-1;
+#: formerly _CAMEO_TITLE_RE here): an ALL-CAPS actor (optionally two, joined by
+#: ``<->``), a colon, then a LOWERCASE action verb — "COLLEGE: protest in
+#: Japan", "SAUDI <-> SANAA: protest in Saudi Arabia". The lowercase-verb
+#: requirement is what keeps a real "UN: Sudan famine declared" headline OUT of
+#: the exclusion. Compiled once per gazetteer, no flags.
+_MACHINE_TITLE_CLASSIFIER = "machine_structured_title"
 
-# The V-B scope gazetteer. DELIBERATELY separate from ``_COUNTRY_TOKENS`` (the
-# M15 cross-target guard's list): widening M15 would change which findings that
-# guard flags, which is not this train's business. Keys are the ISO-2 desk slugs
-# the platform actually runs (32 country desks, verified against live
-# ``analyst_outputs.target_id``); values are the surface forms a slice row uses.
-_SLICE_DESK_COUNTRIES: dict[str, tuple[str, ...]] = {
-    "ar": ("argentina",), "au": ("australia",), "br": ("brazil",),
-    "bf": ("burkina faso",), "ca": ("canada",), "cd": ("democratic republic of the congo", "drc", "congo"),
-    "cn": ("china",), "de": ("germany",), "fr": ("france",),
-    "gb": ("united kingdom", "britain", "uk"), "ht": ("haiti",),
-    "id": ("indonesia",), "il": ("israel",), "in": ("india",),
-    "ir": ("iran",), "it": ("italy",), "jp": ("japan",),
-    "kp": ("north korea", "dprk"), "kr": ("south korea",),
-    "ml": ("mali",), "mm": ("myanmar", "burma"), "mx": ("mexico",),
-    "ne": ("niger",), "pk": ("pakistan",), "ru": ("russia",),
-    "sa": ("saudi arabia",), "sd": ("sudan",), "tr": ("turkey", "turkiye"),
-    "tw": ("taiwan",), "ua": ("ukraine",),
-    "us": ("united states", "america", "u.s.", "usa"), "za": ("south africa",),
-}
 
-# The countries a slice row can be ABOUT. Broader than the desk list on purpose:
-# the exclusion only bites when a row names a country the claim's scope does NOT
-# cover, so a country missing here simply fails OPEN (the row stays a candidate),
-# which is the cheap error. A country wrongly listed would exclude real
-# violators, so the list is plain country names only — no demonym guesswork
-# beyond the suffix tolerance in :func:`_names_country`.
-_SLICE_GEO_COUNTRIES: frozenset[str] = frozenset(
-    {name for names in _SLICE_DESK_COUNTRIES.values() for name in names}
-    | {
-        "afghanistan", "albania", "algeria", "angola", "armenia", "austria",
-        "azerbaijan", "bahrain", "bangladesh", "belarus", "belgium", "benin",
-        "bolivia", "bosnia", "botswana", "bulgaria", "burundi", "cambodia",
-        "cameroon", "chad", "chile", "colombia", "costa rica", "croatia", "cuba",
-        "cyprus", "czechia", "denmark", "djibouti", "dominican republic",
-        "ecuador", "egypt", "el salvador", "eritrea", "estonia", "ethiopia",
-        "finland", "gabon", "gambia", "georgia", "ghana", "greece", "guatemala",
-        "guinea", "guyana", "honduras", "hungary", "iceland", "iraq", "ireland",
-        "ivory coast", "jamaica", "jordan", "kazakhstan", "kenya", "kosovo",
-        "kuwait", "kyrgyzstan", "laos", "latvia", "lebanon", "liberia", "libya",
-        "lithuania", "madagascar", "malawi", "malaysia", "mauritania",
-        "moldova", "mongolia", "montenegro", "morocco", "mozambique", "namibia",
-        "nepal", "netherlands", "new zealand", "nicaragua", "nigeria",
-        "north macedonia", "norway", "oman", "panama", "papua new guinea",
-        "paraguay", "peru", "philippines", "poland", "portugal", "qatar",
-        "romania", "rwanda", "senegal", "serbia", "sierra leone", "singapore",
-        "slovakia", "slovenia", "somalia", "south sudan", "spain", "sri lanka",
-        "sweden", "switzerland", "syria", "tajikistan", "tanzania", "thailand",
-        "togo", "tunisia", "turkmenistan", "uganda", "united arab emirates",
-        "uruguay", "uzbekistan", "venezuela", "vietnam", "yemen", "zambia",
-        "zimbabwe",
-    }
-)
+@lru_cache(maxsize=8)
+def _compiled_classifier(gz: Gazetteer, name: str) -> "re.Pattern[str] | None":
+    pattern = (gz.get("classifier_patterns") or {}).get(name)
+    return None if pattern is None else re.compile(pattern)
+
+
+def _machine_title_re() -> "re.Pattern[str] | None":
+    """The declared machine-structured title classifier, or ``None`` (not
+    applicable — recorded by name, SEAMS #67)."""
+    gz = gazetteer()
+    if applicable(_MACHINE_TITLE_CLASSIFIER, gz) is not None:
+        return None
+    return _compiled_classifier(gz, _MACHINE_TITLE_CLASSIFIER)
+
+
+# The V-B scope gazetteer — the profile's ``desk_countries`` (keys: the ISO-2
+# desk slugs the platform runs; values: the surface forms a slice row uses) and
+# ``slice_geo_countries`` (the countries a slice row can be ABOUT: the desk
+# names UNION a broader plain-name list — a country missing there fails OPEN,
+# the cheap error; a country wrongly listed would exclude real violators).
+# DELIBERATELY separate from ``country_tokens`` (the M15 cross-target guard's
+# list): widening M15 would change which findings that guard flags. W10
+# CANON-1 moved both out of this module (formerly _SLICE_DESK_COUNTRIES /
+# _SLICE_GEO_COUNTRIES); the V-B scope filter reads them at call time and is
+# NOT APPLICABLE, by name, on a profile that declares neither.
+_SCOPE_GUARD = "absence_slice_scope"
 
 
 @dataclass(frozen=True)
@@ -548,27 +513,16 @@ def _is_machine_structured_row(
         return True
     if provenance_kind.strip().lower() in _MACHINE_STRUCTURED_PROVENANCE_KINDS:
         return True
-    return bool(title and _CAMEO_TITLE_RE.match(title))
+    if not title:
+        return False
+    shape = _machine_title_re()
+    return bool(shape is not None and shape.match(title))
 
 
-# The IRREGULAR demonyms the suffix rule below cannot derive ("spain" → "spanish",
-# "france" → "french"). Only the forms a news headline actually uses; a country
-# missing here simply fails OPEN, which is the cheap error.
-_IRREGULAR_DEMONYMS: dict[str, tuple[str, ...]] = {
-    "belgium": ("belgian",), "britain": ("british",), "china": ("chinese",),
-    "czechia": ("czech",), "denmark": ("danish", "danes"),
-    "democratic republic of the congo": ("congolese",), "congo": ("congolese",),
-    "egypt": ("egyptian",), "finland": ("finnish",), "france": ("french",),
-    "germany": ("german",), "greece": ("greek",), "iceland": ("icelandic",),
-    "ireland": ("irish",), "italy": ("italian",), "mexico": ("mexican",),
-    "myanmar": ("burmese",), "netherlands": ("dutch",), "norway": ("norwegian",),
-    "philippines": ("filipino", "philippine"), "poland": ("polish", "poles"),
-    "portugal": ("portuguese",), "serbia": ("serbian",), "slovakia": ("slovak",),
-    "spain": ("spanish",), "sweden": ("swedish", "swedes"),
-    "switzerland": ("swiss",), "thailand": ("thai",), "turkey": ("turkish",),
-    "turkiye": ("turkish",), "united kingdom": ("british",),
-    "venezuela": ("venezuelan",), "vietnam": ("vietnamese",),
-}
+# The IRREGULAR demonyms the suffix rule below cannot derive ("spain" →
+# "spanish", "france" → "french") are the gazetteer's ``irregular_demonyms``
+# (W10 CANON-1; formerly _IRREGULAR_DEMONYMS here). Only the forms a news
+# headline actually uses; a country missing there simply fails OPEN.
 
 
 def _names_country(name: str, haystack_lc: str) -> bool:
@@ -579,7 +533,7 @@ def _names_country(name: str, haystack_lc: str) -> bool:
     SYMMETRICALLY (to the claim's scope countries and to a row's), so the
     tolerance cannot skew the in-scope / off-scope decision in either direction.
     """
-    for form in (name, *_IRREGULAR_DEMONYMS.get(name, ())):
+    for form in (name, *_table("irregular_demonyms").get(name, ())):
         # Cheap substring reject first: this runs over the whole gazetteer for
         # every slice row, and the regex is ~50x the cost of the `in` test.
         if form not in haystack_lc:
@@ -600,14 +554,25 @@ def _slice_scope_countries(claim: str, *, target_id: str | None) -> frozenset[st
     enumerating "Canada, Brazil, Haiti, and Mexico" scopes itself). Empty →
     the filter is inert and every row stays eligible (fail OPEN: an unmapped or
     non-country desk whose claim names nobody tells us nothing about scope).
+
+    A profile whose gazetteer declares no scope tables (``desk_countries`` /
+    ``slice_geo_countries``) gets the empty scope too, recorded as NOT
+    APPLICABLE by name (``applicable("absence_slice_scope")``, SEAMS #67) — and
+    the caller (``verify._fold_absence_slice``) labels the report with it,
+    never a pass.
     """
+    gz = gazetteer()
+    if applicable(_SCOPE_GUARD, gz) is not None:
+        return frozenset()
+    desk_countries = gz.get("desk_countries")
+    geo_countries = gz.get("slice_geo_countries")
     out: set[str] = set()
     slug = _country_desk_slug(target_id)
     if slug:
-        out.update(_SLICE_DESK_COUNTRIES.get(slug, ()))
-        out.update(_TARGET_SLUG_TO_COUNTRY.get(slug, ()))
+        out.update(desk_countries.get(slug, ()))
+        out.update((gz.get("slug_to_country") or {}).get(slug, ()))
     claim_lc = claim.casefold()
-    out.update(c for c in _SLICE_GEO_COUNTRIES if _names_country(c, claim_lc))
+    out.update(c for c in geo_countries if _names_country(c, claim_lc))
     return frozenset(out)
 
 
@@ -626,7 +591,9 @@ def _row_in_claim_scope(text: str, scope: frozenset[str]) -> bool:
     if any(_names_country(c, low) for c in scope):
         return True
     return not any(
-        _names_country(c, low) for c in _SLICE_GEO_COUNTRIES if c not in scope
+        _names_country(c, low)
+        for c in (gazetteer().get("slice_geo_countries") or frozenset())
+        if c not in scope
     )
 
 
@@ -1318,7 +1285,7 @@ def _absence_content_terms(claim: str, *, target_id: str | None) -> set[str]:
     desk_tokens: set[str] = set()
     slug = _country_desk_slug(target_id)
     if slug:
-        for name in _TARGET_SLUG_TO_COUNTRY.get(slug, ()):  # type: ignore[arg-type]
+        for name in _table("slug_to_country").get(slug, ()):
             desk_tokens.update(re.findall(r"[a-z]{3,}", name.lower()))
     drop = (
         _ABSENCE_SCREEN_STOPWORDS

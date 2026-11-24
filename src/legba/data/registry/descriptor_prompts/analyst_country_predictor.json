@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:country_predictor": {
+      "source": "analyst_country_predictor.yaml",
+      "state": "retired"
+    }
+  }
+}

@@ -87,17 +87,32 @@ import {
   spineAnalystFor,
   WORLD_SPINE_ANALYST,
 } from '@/lib/assessmentChannel'
+import { unverifiedStateOf } from '@/lib/unverifiedState'
 import RecordBlock from './RecordBlock'
+import UnverifiedMark from './UnverifiedMark'
 import TensionNote, { TensionNegative } from './TensionNote'
 import EvidenceMap from './EvidenceMap'
 import DropLedger, { CoverageLine } from './DropLedger'
 import AssessmentBand, { AssessmentAbsent } from './AssessmentBand'
 import { asSeverity, longStamp, plural, score, utcStamp } from './readFormat'
 import { useScope } from '@/state/scope'
+import { PROFILE_UI, subjectTierIds } from '@/lib/profileUi'
 
 /** The spine's producer. Unchanged by the demotion (spec §1.1). */
 const SPINE_ANALYST = WORLD_SPINE_ANALYST
+/**
+ * X3/D3 — the producer of a SUBJECT's read: the profile's per-subject frame
+ * (a nested frame nothing hangs under — the exemplar's `country`, produced by
+ * `country_composition`). A subject scope renders that producer's newest read
+ * on the subject.
+ */
+const SUBJECT_SPINE_ANALYST =
+  PROFILE_UI.frames.find((f) => subjectTierIds(PROFILE_UI.frames).has(f.id) && f.producer)?.producer ??
+  COUNTRY_SPINE_ANALYST
+const SUBJECT_NOUN_LOWER = PROFILE_UI.subject.singular.toLowerCase()
 const RUN_LIMIT = 12
+/** How many of a channel's newest rows are read for the newest record (U-5). */
+const CHANNEL_HEAD_LIMIT = 3
 
 interface FindingsResponse {
   data: ReadFindingRow[]
@@ -108,22 +123,36 @@ interface FindingsResponse {
  * per-desk and the surface knows WHICH desk — `/findings` takes a single
  * `target_id`, so this narrows a country query to the country on screen and
  * leaves a world query (whose rows carry no target) alone.
+ *
+ * U-5 — the read asks for the WEIGHT it renders: the record on screen is one
+ * full row (`limit=1`), the history list is the `fields=summary` projection
+ * (a dozen rows of scalars), and the full dozen (live: ~445 KB a world row,
+ * 5.3 MB the page) is read only when a prior run is wanted — the history
+ * disclosure opened, or a scope naming a run that is not the newest.
  */
 function useRuns(
   analystId: string,
-  opts: { enabled?: boolean; targetId?: string | null } = {},
+  opts: { enabled?: boolean; targetId?: string | null; limit?: number; summary?: boolean } = {},
 ) {
-  const { enabled = true, targetId = null } = opts
+  const { enabled = true, targetId = null, limit = RUN_LIMIT, summary = false } = opts
   const query = targetId ? `&target_id=${encodeURIComponent(targetId)}` : ''
+  const fields = summary ? '&fields=summary' : '&fields=full'
   return useQuery<FindingsResponse>({
-    queryKey: ['morning-read', analystId, targetId],
+    queryKey: ['morning-read', analystId, targetId, limit, summary ? 'summary' : 'full'],
     enabled: enabled && analystId !== '',
     refetchInterval: 5 * 60_000,
     queryFn: () =>
       apiGet<FindingsResponse>(
-        `/findings?analyst_id=${encodeURIComponent(analystId)}${query}&limit=${RUN_LIMIT}`,
+        `/findings?analyst_id=${encodeURIComponent(analystId)}${query}&limit=${limit}${fields}`,
       ),
   })
+}
+
+/** Newest first, this producer's rows only (a page can carry others). */
+function newestOf(rows: ReadFindingRow[] | undefined, analystId: string): ReadFindingRow[] {
+  return [...(rows ?? [])]
+    .filter((r) => r.analyst_id === analystId)
+    .sort((a, b) => Date.parse(b.produced_at) - Date.parse(a.produced_at))
 }
 
 /** The ordering flip. Two buttons, each saying what it does. */
@@ -180,6 +209,21 @@ function standfirst(a: AssemblyPayload): string {
 function GateBanner({ assembly, row }: { assembly: AssemblyPayload; row: ReadFindingRow }) {
   const arms = projectArms(row)
   const badge = recordBadge(assembly, arms)
+  if (badge.gate === 'failed' && arms !== null && arms.failed_ordinals.length === 0) {
+    // The server stamps the arms' headline but not WHICH block failed, so there
+    // is nothing to withhold; say that rather than promise a withholding.
+    return (
+      <p
+        className="mb-4 rounded border border-line-strong bg-surf-2 px-3 py-2 text-xs leading-relaxed text-ink-1"
+        data-testid="read-gate-failed"
+      >
+        A verify arm did not read 1.0 on this record
+        {arms.score != null ? ` (arms ${score(arms.score)})` : ''}. Under the assembly contract that
+        is a construction regression, not a score. The record does not say which block, so none is
+        withheld below.
+      </p>
+    )
+  }
   if (badge.gate === 'failed') {
     return (
       <p
@@ -194,9 +238,11 @@ function GateBanner({ assembly, row }: { assembly: AssemblyPayload; row: ReadFin
   }
   return (
     <p className="mb-4 text-xs leading-relaxed text-ink-3" data-testid="read-record-badge">
-      {badge.quoteFidelity !== null
-        ? `Quote fidelity ${score(badge.quoteFidelity)} by construction`
-        : 'Quote fidelity is not yet independently audited on this row'}
+      {badge.quoteChecked
+        ? `Quote fidelity: ${badge.quoteChecked[0]} of ${badge.quoteChecked[1]} spans fully checked (the rest checked for containment only — their head ran past the capture window)`
+        : badge.quoteFidelity !== null
+          ? `Quote fidelity ${score(badge.quoteFidelity)} by construction`
+          : 'Quote fidelity is not yet independently audited on this row'}
       {badge.coverageCompleteness !== null
         ? ` · coverage completeness ${score(badge.coverageCompleteness)}`
         : ''}
@@ -212,15 +258,18 @@ function RunHistory({
   runs,
   activeId,
   onSelect,
+  onOpen,
 }: {
   runs: ReadFindingRow[]
   activeId: string
   onSelect: (id: string) => void
+  /** The disclosure was opened: the full rows are read then (U-5). */
+  onOpen?: () => void
 }) {
   if (runs.length === 0) return null
   return (
     <section className="read-col mt-10 border-t border-line pt-5" data-testid="read-history">
-      <details>
+      <details onToggle={(e) => (e.currentTarget.open ? onOpen?.() : undefined)}>
         <summary className="cursor-pointer text-label uppercase tracking-wider text-ink-3">
           Prior reads &middot; {plural(runs.length, 'superseded run')}
         </summary>
@@ -316,28 +365,56 @@ export default function MorningRead({ analystId = SPINE_ANALYST }: MorningReadPr
   // was written from", never "render the voice as the record" — so a channel
   // producer resolves to ITS spine (`country_assessment` → `country_composition`),
   // which with the desk below lands on the record the voice actually grades.
-  const effectiveAnalyst =
-    (scopedAnalyst ? (spineAnalystFor(scopedAnalyst) ?? scopedAnalyst) : null) ?? analystId
+  // X3/D3 — a SUBJECT scope (a rail click, ⌘K, a map click) puts that
+  // subject's own read on the page: the per-subject producer, narrowed to it.
+  const scopedSubject = wallScope?.kind === 'target' ? wallScope.id : null
+  const effectiveAnalyst = scopedSubject
+    ? SUBJECT_SPINE_ANALYST
+    : ((scopedAnalyst ? (spineAnalystFor(scopedAnalyst) ?? scopedAnalyst) : null) ?? analystId)
   // The desk a report scope names, when it names exactly one AND the producer on
   // screen is the per-desk one. `country_composition` publishes ~60 rows a cycle
   // and `RUN_LIMIT` is 12, so without this a country scope could ask for twelve
   // newest country reads and not get the country it was scoped to.
   const scopedTarget =
-    effectiveAnalyst === COUNTRY_SPINE_ANALYST &&
+    scopedSubject ??
+    (effectiveAnalyst === COUNTRY_SPINE_ANALYST &&
     wallScope?.kind === 'report' &&
     wallScope.members.targetIds.length === 1
       ? wallScope.members.targetIds[0]
-      : null
+      : null)
   useEffect(() => {
     setPinnedRunId(scopedReportId)
   }, [scopedReportId])
 
-  const spine = useRuns(effectiveAnalyst, { targetId: scopedTarget })
+  // U-5 — the newest record in full, the history as summaries, and the full
+  // history only once a prior run is wanted (see `useRuns`).
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const head = useRuns(effectiveAnalyst, { targetId: scopedTarget, limit: 1 })
+  const headRow = useMemo(
+    () => newestOf(head.data?.data, effectiveAnalyst)[0] ?? null,
+    [head.data, effectiveAnalyst],
+  )
+  const wantsPrior = pinnedRunId !== null && head.data !== undefined && pinnedRunId !== headRow?.id
+  const full = useRuns(effectiveAnalyst, {
+    targetId: scopedTarget,
+    enabled: historyOpen || wantsPrior,
+  })
+  const summary = useRuns(effectiveAnalyst, { targetId: scopedTarget, summary: true })
+  // A scope that names a prior run waits for the full page rather than
+  // flashing the newest record first.
+  const spine =
+    wantsPrior && full.data === undefined
+      ? { isLoading: !full.isError, error: full.error }
+      : { isLoading: head.isLoading, error: head.error }
 
   const runs = useMemo(() => {
-    const rows = (spine.data?.data ?? []).filter((r) => r.analyst_id === effectiveAnalyst)
-    return [...rows].sort((a, b) => Date.parse(b.produced_at) - Date.parse(a.produced_at))
-  }, [spine.data, effectiveAnalyst])
+    const whole = newestOf(full.data?.data, effectiveAnalyst)
+    if (whole.length > 0) return whole
+    // Until the full page is read: the head in full, the rest as summaries
+    // (their history line shows the run's title, not its block counts).
+    const rest = newestOf(summary.data?.data, effectiveAnalyst).filter((r) => r.id !== headRow?.id)
+    return headRow ? [headRow, ...rest] : rest
+  }, [full.data, summary.data, headRow, effectiveAnalyst])
 
   const latest = runs[0] ?? null
   const active = (pinnedRunId ? runs.find((r) => r.id === pinnedRunId) : null) ?? latest
@@ -355,9 +432,12 @@ export default function MorningRead({ analystId = SPINE_ANALYST }: MorningReadPr
   // thematic read has no interpretive channel, and rendering the world's here
   // would put a voice written about another record under this one.
   const channelSpec = useMemo(() => assessmentChannelFor(active, assembly), [active, assembly])
+  // U-5 — the voice written from the newest record is among the channel's
+  // newest few; an older record on screen reads the channel's full dozen.
   const channel = useRuns(channelSpec?.analystId ?? '', {
     enabled: channelSpec !== null,
     targetId: channelSpec?.targetScoped ? (active?.target_id ?? null) : null,
+    limit: active !== null && active.id === latest?.id ? CHANNEL_HEAD_LIMIT : RUN_LIMIT,
   })
 
   const assessmentRow = useMemo(
@@ -394,6 +474,16 @@ export default function MorningRead({ analystId = SPINE_ANALYST }: MorningReadPr
     )
   }
 
+  if (!active && scopedSubject) {
+    return (
+      <div className="read-col px-6 py-8 text-sm text-ink-3" data-testid="read-empty-subject">
+        No composition on record for this {SUBJECT_NOUN_LOWER}.{' '}
+        <span className="font-mono text-ink-2">{effectiveAnalyst}</span> has published no read on{' '}
+        {wallScope?.label ?? scopedSubject}.
+      </div>
+    )
+  }
+
   if (!active) {
     return (
       <div className="read-col px-6 py-8 text-sm text-ink-3" data-testid="read-empty">
@@ -404,6 +494,7 @@ export default function MorningRead({ analystId = SPINE_ANALYST }: MorningReadPr
   }
 
   const isLatest = active.id === latest?.id
+  const activeUnverified = unverifiedStateOf(active)
   const arms = projectArms(active)
   const anchored: Map<number, AssemblyTension[]> = assembly
     ? tensionsByAnchor(assembly)
@@ -438,6 +529,14 @@ export default function MorningRead({ analystId = SPINE_ANALYST }: MorningReadPr
             <LayoutToggle layout={layout} />
           </div>
         </div>
+
+        {/* X4 READPATH (W11-F53) — a read with no verify verdict says so,
+            in the registry's own state, before a word of it is read. */}
+        {activeUnverified && (
+          <div className="mt-1.5" data-testid="read-unverified">
+            <UnverifiedMark info={activeUnverified} />
+          </div>
+        )}
 
         {assembly && (
           <p className="mt-2 text-sm leading-relaxed text-ink-2" data-testid="read-standfirst">
@@ -490,6 +589,7 @@ export default function MorningRead({ analystId = SPINE_ANALYST }: MorningReadPr
                   block={block}
                   lead={leadOrdinals.has(block.ordinal)}
                   refused={blockRefused(arms, block.ordinal)}
+                  floorGrain={assembly.floor?.grain ?? null}
                 />
                 {(anchored.get(block.ordinal) ?? []).map((t, i) => (
                   <TensionNote key={i} tension={t} />
@@ -510,6 +610,31 @@ export default function MorningRead({ analystId = SPINE_ANALYST }: MorningReadPr
               />
             )}
 
+            {(assembly.empty_slots ?? []).length > 0 && (
+              <p className="mt-4 text-xs leading-relaxed text-ink-3" data-testid="read-empty-slots">
+                {plural((assembly.empty_slots ?? []).length, 'slot')} declared empty:{' '}
+                {(assembly.empty_slots ?? []).map((e) => e.unit).join(', ')} carried no block of its
+                own (ordinal fallback refused).
+              </p>
+            )}
+
+            {(assembly.threads ?? []).length > 0 && (
+              <div className="mt-4" data-testid="read-threads">
+                <p className="read-band-note">Shared threads</p>
+                <ul className="mt-1 space-y-1 text-xs leading-relaxed text-ink-2">
+                  {(assembly.threads ?? []).map((t, i) => (
+                    <li key={i} data-testid="read-thread">
+                      {t.units.join(' + ')} heads cite {plural(t.signal_ids.length, 'shared signal')}
+                      {t.titles[0] ? ` (e.g. “${t.titles[0]}”)` : ''}
+                      {t.block_ordinals.length > 0
+                        ? ` — blocks ${t.block_ordinals.join(', ')}`
+                        : ' — on no carried block'}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             <CoverageLine assembly={assembly} />
           </section>
 
@@ -527,6 +652,8 @@ export default function MorningRead({ analystId = SPINE_ANALYST }: MorningReadPr
                 channelLabel={channelSpec.label}
                 spineOrdinals={assembly.blocks.map((b) => b.ordinal)}
                 spineMismatch={assessment.spine_id !== active.id}
+                citations={extractCitations(assessmentRow.data as Record<string, unknown>)}
+                unverified={unverifiedStateOf(assessmentRow)}
               />
             ) : (
               <AssessmentAbsent
@@ -540,7 +667,12 @@ export default function MorningRead({ analystId = SPINE_ANALYST }: MorningReadPr
         </div>
       )}
 
-      <RunHistory runs={runs.slice(1)} activeId={active.id} onSelect={setPinnedRunId} />
+      <RunHistory
+        runs={runs.slice(1)}
+        activeId={active.id}
+        onSelect={setPinnedRunId}
+        onOpen={() => setHistoryOpen(true)}
+      />
     </article>
   )
 }

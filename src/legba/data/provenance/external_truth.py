@@ -58,6 +58,8 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from pydantic import BaseModel, Field
 
+from .. import profile_constants as _profile_constants
+
 from .external_span_check import (
     TIER_CLASS_1,
     TIER_CLASS_2,
@@ -131,18 +133,33 @@ SOURCE_TIER_CLASSES: tuple[str, ...] = (
 
 #: Desk tier, off ``analyst_id`` (§3.3's example spells the stratum with these
 #: values). ``voice`` is the Assessment channel, kept distinct from the record
-#: tiers it reads.
-_DESK_TIER_BY_ANALYST: Mapping[str, str] = {
-    "world_assessor": "world",
-    "country_composition": "country",
-    "region_composition": "region",
-    "escalation_composition": "thematic",
-    "world_assessment": "voice",
-    # P3 LANE A — the per-country voice. The SAME stratum as the world voice
-    # (both author; neither is a record), stratified apart from the country
-    # RECORD it reads, which is the distinction this map exists to draw.
-    "country_assessment": "voice",
-}
+#: tiers it reads. The table is the instance profile's ``constants.desk_tiers``
+#: (SPLIT-3, ``profile_constants``); the exemplar's puts the per-country voice
+#: (P3 LANE A, ``country_assessment``) in the SAME stratum as the world voice
+#: (both author; neither is a record), apart from the country RECORD it reads,
+#: which is the distinction this map exists to draw.
+_DESK_TIER_BY_ANALYST: Mapping[str, str] = _profile_constants.desk_tier_by_analyst()
+
+
+def _sql_literal(value: str) -> str:
+    """A single-quoted SQL literal (the profile validates these as slugs)."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def desk_tier_case_sql(tiers: Mapping[str, str]) -> str:
+    """The SQL twin of :func:`desk_tier_for_analyst` over ``tiers``: a ``CASE``
+    on ``g.analyst_id`` (one ``WHEN`` per producer, in order, ``ELSE 'other'``),
+    or the bare ``'other'`` for an instance that declares no tier. The
+    geopolitics table renders the text this module spelled at fcbafb2e byte
+    for byte (``tests/data_pkg/test_profile_constants.py``)."""
+    if not tiers:
+        return "'other'"
+    width = max(len(a) for a in tiers) + 4
+    whens = "".join(
+        f"                WHEN {_sql_literal(a).ljust(width)}THEN {_sql_literal(t)}\n"
+        for a, t in tiers.items()
+    )
+    return f"CASE g.analyst_id\n{whens}                ELSE 'other'\n           END"
 
 
 def desk_tier_for_analyst(analyst_id: object) -> str:
@@ -584,22 +601,14 @@ def record_standing_badge(
 #: is F-3's ``tier_unknown`` — the class that exists so the suppression is
 #: visible. ``retrieval_origin`` collapses the mix jsonb to its single key when
 #: there is one; today the column is NULL fleet-wide and the stratum ships empty.
-VERDICT_AGGREGATE_SQL = """
+VERDICT_AGGREGATE_SQL = f"""
     SELECT g.population,
            g.verdict,
            COALESCE(NULLIF(g.assembly_regime, ''), 'legacy')      AS assembly_regime,
            COALESCE(NULLIF(g.claim_severity, ''), 'unstated')     AS severity,
            CASE WHEN g.absence_shaped THEN 'absence' ELSE 'positive' END
                                                                   AS claim_shape,
-           CASE g.analyst_id
-                WHEN 'world_assessor'          THEN 'world'
-                WHEN 'country_composition'     THEN 'country'
-                WHEN 'region_composition'      THEN 'region'
-                WHEN 'escalation_composition'  THEN 'thematic'
-                WHEN 'world_assessment'        THEN 'voice'
-                WHEN 'country_assessment'      THEN 'voice'
-                ELSE 'other'
-           END                                                    AS desk_tier,
+           {desk_tier_case_sql(_DESK_TIER_BY_ANALYST)}                                                    AS desk_tier,
            CASE
                 WHEN g.verdict NOT IN ('SUPPORTED', 'CONTRADICTED') THEN NULL
                 WHEN g.decisive_source_tier = 1 THEN 'tier_1'

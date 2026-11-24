@@ -53,6 +53,7 @@ Output ``data`` keys (the cadence receipt the operator reads):
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import asyncio
 import html
@@ -260,7 +261,7 @@ async def _summarize_one(llm: Any, body: str) -> str | None:
     """Bounded, sequential CORE-plane summary of ONE article body.
 
     Returns the trimmed summary string, or ``None`` to DEGRADE (any timeout /
-    exception / empty reply). temperature=0 for reproducibility; output-capped;
+    exception / empty reply). house temperature (1.0); output-capped;
     per-call wall-clock timeout; the input body is bounded to
     :data:`MAX_BODY_INPUT_CHARS`. NEVER raises to the caller (degrade-not-break)."""
     prompt = _SUMMARY_USER_TEMPLATE.format(body=body[:MAX_BODY_INPUT_CHARS])
@@ -269,7 +270,7 @@ async def _summarize_one(llm: Any, body: str) -> str | None:
             llm.chat_complete(
                 [{"role": "user", "content": prompt}],
                 max_tokens=SUMMARY_MAX_TOKENS,
-                temperature=0.0,
+                temperature=HOUSE_TEMPERATURE,
                 system=_SUMMARY_SYSTEM_PROMPT,
             ),
             timeout=SUMMARY_TIMEOUT_SECONDS,

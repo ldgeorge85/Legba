@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.telegram.org_channels": {
+      "source": "source_telegram_monitor.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:lane_baltic_north_sea": {
+      "source": "target_lane_baltic_north_sea.yaml",
+      "state": "draft"
+    }
+  }
+}

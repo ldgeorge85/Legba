@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:signals_retention": {
+      "source": "analyst_signals_retention.yaml",
+      "state": "draft"
+    }
+  }
+}

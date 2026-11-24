@@ -60,7 +60,14 @@ export interface ReadScope {
 const DAY_MS = 24 * 60 * 60 * 1000
 
 interface WorldState {
-  /** Time window (epoch ms). Default = last 24h; the scrubber drives it. */
+  /**
+   * THE ONE CLOCK (UI-D1 D6) — the shared time window (epoch ms). Default =
+   * the last 24h. `setWindow` is the ONLY writer of the two instants: the
+   * scrubber's thumbs and its playback, a span preset (through `setSpan`
+   * below), a mission, a stance seed's `timeWindow` and a case's `timeline`
+   * step all land here. The Timeline's zoom and pan are a view lens and never
+   * call it.
+   */
   windowStartMs: number
   windowEndMs: number
   setWindow: (startMs: number, endMs: number) => void
@@ -69,7 +76,8 @@ interface WorldState {
    * The scrubber's OUTER span (ms) — the total range its two thumbs sweep.
    * `setSpan` re-anchors the window to the last `spanMs` ending at `now`
    * (a span preset click), so widening to 7d/30d actually reaches back in the
-   * data rather than staying pinned to a 24h slice.
+   * data rather than staying pinned to a 24h slice. It records the span and
+   * then writes the window THROUGH `setWindow`, so the one writer stays one.
    */
   spanMs: number
   setSpan: (spanMs: number, now?: number) => void
@@ -109,9 +117,13 @@ interface WorldState {
   decay: boolean
   toggleDecay: () => void
 
-  /** Live counts per layer (badges); set by the map/rails. */
-  counts: Partial<Record<WorldLayer, number>>
-  setCount: (l: WorldLayer, n: number) => void
+  /**
+   * Live counts per layer (badges); set by the map/rails. `null` (or never
+   * set) = the layer's read has not answered — *no read yet*, never 0; a
+   * number is a measured count in the window (UI-B4/map).
+   */
+  counts: Partial<Record<WorldLayer, number | null>>
+  setCount: (l: WorldLayer, n: number | null) => void
 
   /** Drill-down drawer — map cluster/hex click → event list. */
   drawer: DrawerState
@@ -124,14 +136,16 @@ interface WorldState {
   setReadScope: (s: ReadScope | null) => void
 }
 
-export const useWorldState = create<WorldState>((set) => ({
+export const useWorldState = create<WorldState>((set, get) => ({
   windowStartMs: Date.now() - DAY_MS,
   windowEndMs: Date.now(),
   setWindow: (windowStartMs, windowEndMs) => set({ windowStartMs, windowEndMs }),
 
   spanMs: DAY_MS,
-  setSpan: (spanMs, now = Date.now()) =>
-    set({ spanMs, windowStartMs: now - spanMs, windowEndMs: now }),
+  setSpan: (spanMs, now = Date.now()) => {
+    set({ spanMs })
+    get().setWindow(now - spanMs, now)
+  },
 
   playing: false,
   speed: 1,

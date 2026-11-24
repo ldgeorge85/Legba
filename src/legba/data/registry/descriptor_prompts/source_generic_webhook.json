@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.generic_webhook.default": {
+      "source": "source_generic_webhook.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -41,6 +41,7 @@ high-scoring trajectories and proposing instruction edits.
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import logging
 import math
@@ -1274,7 +1275,7 @@ async def _candidate_faithfulness_for_finding(
         [{"role": "user", "content": user_prompt}],
         system=candidate_text,
         max_tokens=1536,
-        temperature=0.0,
+        temperature=HOUSE_TEMPERATURE,
     )
     raw = getattr(resp, "content", "") or ""
     if not raw.strip():

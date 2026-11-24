@@ -85,8 +85,11 @@ FORBIDDEN_IDENTIFIERS: tuple[str, ...] = (
     "construction_failed", "cited_salience", "cited_magnitudes",
     "LEGBA_COMPOSITION_ASSEMBLY", "world_assessment", "world_assessor",
     "country_composition", "country_assessment",
-    "escalation_composition", "region_rollup",
+    "escalation_composition", "hybrid_threat_composition", "region_rollup",
     "EXTERNAL_AUDIT_PIPELINE_VERSION", "external_audit", "standing_auditor",
+    # W4 F-3 — the subject-group floor's payload stamps and version.
+    "carried_by_floor", "displaced_by_floor", "order_rank",
+    "subject_group_floor",
 )
 
 FORBIDDEN_PATTERNS: tuple[tuple[str, str], ...] = (
@@ -159,7 +162,9 @@ def reduce_reference(
     ``item_id`` is the reference's own development id where it carries one;
     where it does not, it is derived by R3's convention (``RD-<CC>-<lane>-<n>``)
     — the same fallback the ratified v3/v4 packets used, so an id in a packet
-    here means what it meant there.
+    here means what it meant there. ``country`` is the subject ladder's
+    resolved code as an item code (``legba.data.subject.item_code``): the
+    ISO2 on a country desk, the upper-cased id on a target with no single geo.
     """
     developments: list[dict[str, Any]] = []
     for index, dev in enumerate(reference.get("ref_developments") or []):

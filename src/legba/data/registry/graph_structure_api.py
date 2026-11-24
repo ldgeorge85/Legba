@@ -16,6 +16,9 @@ Endpoint (bearer-gated):
     (case-insensitive match against an item's ``entities``), mirroring the
     findings-follows-selection keystone.
 
+(``GET /graph/path`` was removed 2026-11-15 with the empty AGE graph it read;
+the relational path walk is the Consult ``query_paths`` tool.)
+
 Built via ``build_graph_structure_router(deps)``; wired in ``server.py``
 alongside the entities + substrate-reads routers.
 """
@@ -23,43 +26,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
 from .api import RegistryAPIDeps, require_bearer
-
-# The shortest-path + broker engine lives in the dependency-light LEAF module
-# ``legba.data.graph_paths`` (stdlib + networkx + a caller-supplied AGE pool). It
-# imports NOTHING from the deterministic-handler package, so the slim REGISTRY
-# image can import it at module level — no pycountry/geocode runtime deps — and
-# ``/graph/path`` serves directly (no lazy import / soft-fail needed).
-from ..graph_paths import (
-    GRAPH_UNAVAILABLE_WARNINGS,
-    _MAX_PATH_LEN,
-    shortest_path_with_broker,
-)
 
 # The metric rows whose payloads carry an `interesting` shortlist (#99).
 _STRUCTURE_METRIC_KINDS = ("structural_balance", "graph_mining")
 DEFAULT_LIMIT = 24
 MAX_LIMIT = 100
-
-# Operator-readable text for each way the substrate can decline to answer a
-# path question. These ride a 503, never a 200 — see the graph_path handler.
-_UNAVAILABLE_MESSAGES = {
-    "graph_unpopulated": (
-        "the world graph holds no id-keyed vertices — nothing has been "
-        "projected into it yet, so no path question can be answered"
-    ),
-    "engine_unreachable": (
-        "the graph engine could not be reached or the traversal raised; "
-        "this is an engine fault, not a statement about these two actors"
-    ),
-    "no_pool": "no substrate pool is bound to this registry process",
-}
-# Default variable-length path cap for /graph/path (callers may request a
-# tighter K; the engine clamps to _MAX_PATH_LEN regardless).
-DEFAULT_PATH_MAX_LEN = _MAX_PATH_LEN
 
 
 class StructureItem(BaseModel):
@@ -75,35 +50,6 @@ class StructurePage(BaseModel):
     data: list[StructureItem] = Field(default_factory=list)
     scoped_entity: str | None = None
     computed_at: Any | None = None
-
-
-class PathEdge(BaseModel):
-    source: str
-    target: str
-    label: str = ""
-
-
-class PathBroker(BaseModel):
-    node: str
-    betweenness: float = 0.0
-
-
-class GraphPath(BaseModel):
-    """Shortest relationship path between two actors + the broker on it."""
-
-    found: bool = False
-    source: str
-    target: str
-    path: list[str] = Field(default_factory=list)
-    edges: list[PathEdge] = Field(default_factory=list)
-    length: int | None = None
-    broker: PathBroker | None = None
-    max_len: int = DEFAULT_PATH_MAX_LEN
-    detail: str = ""
-    # The engine's own account of WHY there is no path. Empty on a hit; on a
-    # miss it carries exactly one of graph_paths.GRAPH_MISS_WARNINGS, so a
-    # client can tell "these two are not connected" from "the graph is empty".
-    warnings: list[str] = Field(default_factory=list)
 
 
 def _coerce_item(raw: Any, *, source: str) -> StructureItem | None:
@@ -192,94 +138,6 @@ def build_graph_structure_router(deps: RegistryAPIDeps) -> APIRouter:
 
         return StructurePage(
             data=items[:limit], scoped_entity=scoped, computed_at=latest_at,
-        )
-
-    @router.get("/graph/path", response_model=GraphPath)
-    async def graph_path(
-        source: str = Query(
-            ..., description="first actor identifier (matched against vertex .id)"
-        ),
-        target: str = Query(
-            ..., description="second actor identifier (matched against vertex .id)"
-        ),
-        max_len: int = Query(
-            default=DEFAULT_PATH_MAX_LEN,
-            description=(
-                "max relationship hops to search (clamped to the server cap; a "
-                "tighter bound is honoured, a larger one is not)"
-            ),
-        ),
-        principal: str = Depends(require_bearer),
-    ) -> GraphPath:
-        src = (source or "").strip()
-        dst = (target or "").strip()
-        if not src or not dst:
-            return GraphPath(
-                found=False, source=src, target=dst,
-                detail="both source and target are required",
-            )
-        if src == dst:
-            return GraphPath(
-                found=True, source=src, target=dst, path=[src], edges=[], length=0,
-                detail="source and target are the same actor",
-            )
-        # The shared substrate pool used by the structure endpoint above. The
-        # path engine is imported at module level from the graph_paths leaf
-        # (registry-safe — no handler-package deps), so call it directly.
-        pool = deps.descriptor_registry.pg
-        res = await shortest_path_with_broker(pool, src, dst, max_len=max_len)
-        edges = [
-            PathEdge(
-                source=str(e.get("source", "")),
-                target=str(e.get("target", "")),
-                label=str(e.get("label", "") or ""),
-            )
-            for e in (res.get("edges") or [])
-        ]
-        broker_raw = res.get("broker")
-        broker = (
-            PathBroker(
-                node=str(broker_raw.get("node", "")),
-                betweenness=float(broker_raw.get("betweenness", 0.0) or 0.0),
-            )
-            if isinstance(broker_raw, dict) and broker_raw.get("node")
-            else None
-        )
-        found = bool(res.get("found"))
-        warnings = [str(w) for w in (res.get("warnings") or [])]
-
-        # FAIL LOUD. "The graph holds nothing" and "the engine is unreachable"
-        # are NOT answers to a path question — until 2026-08-03 both were
-        # rendered as a confident 200 + detail="no path" over a graph that held
-        # 27 smoke-test fixtures and no production row (JUDGE_SYNTHESIS §4.3
-        # item 3 / live defect #2). A substrate that cannot answer must say so
-        # with a status code, so no caller and no analyst can read the silence
-        # as evidence of disconnection.
-        blocking = [w for w in warnings if w in GRAPH_UNAVAILABLE_WARNINGS]
-        if not found and blocking:
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "error": blocking[0],
-                    "source": src,
-                    "target": dst,
-                    "message": _UNAVAILABLE_MESSAGES.get(
-                        blocking[0], "the graph substrate could not answer"
-                    ),
-                },
-            )
-
-        return GraphPath(
-            found=found,
-            source=src,
-            target=dst,
-            path=[str(n) for n in (res.get("path") or [])],
-            edges=edges,
-            length=res.get("length"),
-            broker=broker,
-            max_len=int(res.get("max_len", DEFAULT_PATH_MAX_LEN)),
-            detail="" if found else "no path within the hop cap",
-            warnings=warnings,
         )
 
     return router

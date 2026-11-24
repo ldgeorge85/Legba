@@ -8,13 +8,15 @@
  * shareable hash/state" — with zero react-router (the app is a single Dockview
  * root; there are no routes).
  *
- * Layout is addressable separately via the sidebar Layouts menu (named
- * save/restore, localStorage). Only the selection rides the hash so a shared
- * link never clobbers the recipient's composed wall.
+ * U-2: a SAVED VIEW IS A LINK. The hash carries the surface (`#ws=`), the
+ * scope, the selection and the window (`#win=`); arrangement never rides it,
+ * so a shared link never clobbers the recipient's own arrangement.
  */
 import { useEffect } from 'react'
 import { useSelection, type SelectionKind } from '@/state/selection'
 import { emptyMembers, useScope, type Scope, type ScopeKind } from '@/state/scope'
+import { useWorldState } from '@/v4/world/worldState'
+import { spanPresetFor } from '@/lib/mapTime'
 
 const VALID_KINDS: ReadonlySet<string> = new Set<SelectionKind>([
   'target',
@@ -26,6 +28,8 @@ const VALID_KINDS: ReadonlySet<string> = new Set<SelectionKind>([
   'signal',
   'report',
   'journal_entry',
+  // U-7: a series place is shareable (`#sel=place:portwatch:chokepoint4`)
+  'place',
 ])
 
 /** The scope kinds a link may carry (`#scope=<kind>:<id>`). */
@@ -188,6 +192,28 @@ export function writeMissionHash(mission: string | null): void {
 }
 
 /**
+ * Mirror the window's span into the hash as `#win=<span>` (U-2: a saved view
+ * is a link, and a link carries its window). A span that is not one of the
+ * scrubber's presets drops the param. Replace, never push.
+ */
+export function writeWindowHash(spanMs: number | null): void {
+  try {
+    const params = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+    const preset = spanMs == null ? null : spanPresetFor(spanMs)
+    if (preset) params.set('win', preset.id)
+    else params.delete('win')
+    const q = params.toString()
+    const next = q ? `#${q}` : ''
+    if (next !== window.location.hash) {
+      const { pathname, search } = window.location
+      window.history.replaceState(null, '', `${pathname}${search}${next}`)
+    }
+  } catch {
+    // history/URL unavailable — sharing is best-effort, never fatal.
+  }
+}
+
+/**
  * Mount once (from the App root). Restores the selection from the hash on load,
  * mirrors every selection change back into the hash, and follows manual hash
  * edits / browser back-forward.
@@ -231,11 +257,18 @@ export function useShareState(): void {
     )
     // 3. Scope → hash (the second addressable axis; `#sel` + `#scope` + `#ws`).
     const unsubScope = useScope.subscribe((s) => writeScopeHash(s.scope))
+    // 3b. The window → hash (U-2: a saved view carries its window, `#win=`).
+    // Only a span the scrubber names is written; a hand-dragged window has no
+    // short form and leaves the param off rather than lying about it.
+    const unsubWindow = useWorldState.subscribe((s, prev) => {
+      if (s.spanMs !== prev.spanMs) writeWindowHash(s.spanMs)
+    })
     // 4. Hash → selection/scope (manual edit / back-forward).
     window.addEventListener('hashchange', applyHash)
     return () => {
       unsub()
       unsubScope()
+      unsubWindow()
       window.removeEventListener('hashchange', applyHash)
     }
   }, [])

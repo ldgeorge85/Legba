@@ -26,6 +26,20 @@ upstream watch at activation. The actor calls
 :func:`legba.data.sources.provision.reconcile_provision` on activate and
 :func:`~legba.data.sources.provision.deprovision_all` on retire, idempotently.
 
+Cursor policy (``pull_once``): the ``since`` cursor advances along REAL
+forward progress — to the last processed entry's logical timestamp, never a
+bare NOW; a hard error keeps the prior position; a zero-yield pull keeps it; a
+first-ever pull seeds NOW. W11-F103: an entry skipped for a TRANSIENT reason
+(enrichment timeout / NLP unavailable) is not progress — the advance holds at
+``max(since, min(last_processed, earliest_skipped - 1µs))`` so the next pull
+re-yields it, the rest of that poll bypasses the NLP chain (written unenriched,
+``payload.enrichment_pending``), and an entry skipped on 3 consecutive polls is
+written unenriched. Mechanism: :mod:`.source_enrich_hold`. W11-F151: the
+cursor is never later than now (feed timestamps clamped, a future stored
+cursor healed on read), a dated-feed handler (rss, json_api) is handed
+``since - lookback`` with a ledger of already-judged entries, and an undated
+entry of such a feed advances nothing. Mechanism: :mod:`.source_cursor`.
+
 Design note — the **mechanism** is the deliverable; the handler *library* is
 incremental. The core logic lives in :class:`SourceCore` (a plain class,
 directly testable against the dev rig without a Dapr sidecar). The thin
@@ -37,9 +51,7 @@ the tested path are the same code. This module never edits the existing
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import os
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
@@ -47,13 +59,11 @@ from typing import Any, Awaitable, Callable
 import asyncpg
 from pydantic import BaseModel, ConfigDict
 
-from ..data.nats import signal_subject
+from ..data.claim_hygiene import poll_claim_hygiene, prepare_claim_row, tally
 from ..data.schemas.source import SourceDescriptor
+from ..data.source_classification import bind_declared
+from ..data.tags import EMPTY_INDEX, tag_vocabulary_index
 from ..data.filters.ingest_dedupe import IngestDedupe, ingest_dedupe_from_stages
-from ..data.filters.source_credibility import (
-    _extract_signal_host,
-    extract_lookup_hosts,
-)
 from ..data.sources._contract import Signal, SourceContext, SourceHealth
 from ..data.jobs.media import MediaEndpointNotConfiguredError
 from ..data.sources.baseline import (
@@ -69,9 +79,32 @@ from ..data.sources.provision import (
     desired_watch_set,
     reconcile_provision,
 )
+from ..data.stack.nlp_service.client import NlpServiceUnavailable
 from .actor_turn import bounded_turn_op_or
 from .deps import StandardDeps
-from .source_factory import build_source_handler
+from .enrichment_timing import cursor_fields as enrichment_cursor_fields
+from .source_enrich_hold import EnrichHold
+from .source_cursor import (
+    CURSOR_FUTURE_TOLERANCE,
+    LookbackLedger,
+    WalkOrder,
+    advance as advance_cursor,
+    entry_logical_ts,
+    feed_ts,
+    lookback_of,
+    read_since,
+)
+from .fetch_receipts import ReceiptRecorder
+from .sinks import SinkSet
+from .sinks.signal import SignalSink
+from .source_factory import build_source_handler, discover_source_kinds
+from .source_first_poll_age import FirstPollAgeCap
+from .source_keyword_gate import SourceIngestGate
+from .source_poll_outcome import classify_poll_outcome, write_poll_outcome
+from .source_poll_records import (
+    captured, emit_record, finish_poll, link_inbound, protocol_posture, route_record,
+    sink_summary as _sink_summary,
+)
 from .state import FilterStateStore
 
 logger = logging.getLogger(__name__)
@@ -120,80 +153,29 @@ _ENRICH_TIMEOUT_S = 12.0         # per-entry baseline/enrichment timeout
 # override is a dial inside it.
 _MAX_POLL_BUDGET_S = 240.0       # ceiling on any per-source wall-time override
 _MAX_ENTRIES_CEILING = 1000      # ceiling on any per-source entry-cap override
+# N-L: typed non-document records (observations) are buffered and written in
+# one batch, with no per-entry enrichment — bounded by this ceiling and the
+# same wall-time budget, not by the document entry cap.
+_MAX_SINK_RECORDS_PER_POLL = 20_000
 _POLL_BUDGET_CONFIG_KEY = "poll_budget_seconds"
 _MAX_ENTRIES_CONFIG_KEY = "max_entries_per_poll"
 
-# S-4 intra-source exact-hash dedup. A source that re-lists an unchanged item
-# every poll (hazard feeds re-serve active events; NWS/NASA/USGS re-publish)
-# used to spawn a fresh signals row per poll — 41% of a 7-day window's rows were
-# exact content-hash duplicates, ALL intra-source (the "M 5.5 Chupaca, Peru"
-# quake was stored 194x). content_hash is a DETERMINISTIC hash of content
-# (source-set, or the baseline backstop over canonical_url + title — never the
-# fetch time), so an exact (source_id, content_hash) match is byte-identical
-# content: safe to collapse. Before inserting we look for an existing
-# same-(source_id, content_hash) row within a lookback window and, on a hit,
-# record the re-serve on that row and SKIP the insert instead of appending a
-# redundant row. This is INTRA-source only (the lookup pins source_id); a
-# cross-source same-hash dup is still KEPT and alias-linked by ingest_dedupe /
-# the periodic cross_source_dedup analyst.
-# Default ON — the collapse is provably lossless for an exact hash; set
-# LEGBA_INTRASOURCE_DEDUP=0 to disable (fall back to keep-all + alias-link).
-#
-# B-1 (2026-08-03) — WHAT THE COLLAPSE BUMPS. It used to advance the surviving
-# row's ``fetched_at``, on the reading "recency stays fresh — we still see this".
-# That reading cost us the 08-03 freshness incident (MASTER_PLAN §32.7): when the
-# 5 rsshub AP-topic feeds froze upstream and re-served the same 39-item snapshot
-# every poll for six days, 201 signals reported ``fetched_at = today`` the whole
-# time, and because the substrate slice WINDOWS + ORDERS on ``fetched_at`` a
-# 07-28 snapshot topped every 72h slice for five country desks and the journal.
-#
-# ``fetched_at`` now means exactly what every reader already assumed: the fetch
-# that first delivered THIS content. An exact content_hash match is, by
-# construction, identical content — nothing was fetched, so nothing is bumped.
-# The re-serve is recorded on ``last_seen_at`` (migration 0140) and counted per
-# poll as ``reserve_unchanged``.
-#
-# The load-bearing converse still holds WITHOUT special-casing: genuinely-updated
-# content (an EONET/GDACS event whose feature JSON changed, a re-published RSS
-# item with an edited body) hashes DIFFERENTLY, so it never reaches this path at
-# all — it inserts a new row carrying its own honest, fresh ``fetched_at``. The
-# "updates must still look fresh" semantic is a property of content-addressed
-# hashing, not of the bump.
-_INTRASOURCE_DEDUP_ENV = "LEGBA_INTRASOURCE_DEDUP"
-_INTRASOURCE_DEDUP_WINDOW_ENV = "LEGBA_INTRASOURCE_DEDUP_WINDOW_HOURS"
-_DEFAULT_INTRASOURCE_DEDUP_WINDOW_HOURS = 168  # 7 days
-
-
-def _intrasource_dedup_enabled() -> bool:
-    """Whether S-4 intra-source exact-hash collapse is active (default ON)."""
-    return os.getenv(_INTRASOURCE_DEDUP_ENV, "1").strip().lower() not in (
-        "0", "false", "no", "off",
-    )
-
-
-def _intrasource_dedup_window_hours() -> int:
-    """Lookback window (hours) for the (source_id, content_hash) existence check.
-
-    A re-emission WITHIN this window collapses onto the existing row; a
-    re-appearance after a longer silence lands a fresh row (treated as a new
-    occurrence). The window is measured from ``last_seen_at`` (B-1), so an item
-    that keeps re-emitting never falls out of its own window — the bound only
-    governs re-appearance after a real gap. Measuring it from ``fetched_at``
-    instead would, now that a re-serve no longer bumps ``fetched_at``, drop a
-    continuously-re-served item out of its own window after 7 days and insert a
-    duplicate carrying a fresh timestamp: the 08-03 freshness lie, on a weekly
-    period. Defaults to 168h (7d); override via
-    LEGBA_INTRASOURCE_DEDUP_WINDOW_HOURS (a non-positive/garbage value degrades
-    to the default).
-    """
-    raw = os.getenv(_INTRASOURCE_DEDUP_WINDOW_ENV, "").strip()
-    if not raw:
-        return _DEFAULT_INTRASOURCE_DEDUP_WINDOW_HOURS
-    try:
-        value = int(raw)
-    except ValueError:  # pragma: no cover — defensive
-        return _DEFAULT_INTRASOURCE_DEDUP_WINDOW_HOURS
-    return value if value > 0 else _DEFAULT_INTRASOURCE_DEDUP_WINDOW_HOURS
+# S-4 intra-source exact-hash dedup + the canonical signal write moved to the
+# document sink (runtime/sinks/signal.py, N-L step 0) — re-exported here so
+# every existing import and env-knob reference keeps working.
+from .sinks.signal import (  # noqa: E402,F401 — re-exports
+    _DEFAULT_INTRASOURCE_DEDUP_WINDOW_HOURS,
+    _INSERT_SIGNAL,
+    _INTRASOURCE_DEDUP_ENV,
+    _INTRASOURCE_DEDUP_WINDOW_ENV,
+    _bump_intrasource_duplicate,
+    _bump_intrasource_sql,
+    _intrasource_dedup_enabled,
+    _intrasource_dedup_window_hours,
+    _json_or_none,
+    lookup_source_credibility,
+    write_canonical_signal,
+)
 
 # Bulk-dataset traversal (high-water mark). A "bulk" source streams ONE large
 # snapshot whose entries all carry the same coarse logical timestamp (e.g.
@@ -405,50 +387,11 @@ def resolve_poll_bounds(
     return float(budget), max(1, int(entries))
 
 
-#: B0-11 Fix-1 (MASTER_PLAN 2026-07-10) — max tolerated FUTURE skew on a
-#: feed-provided logical timestamp before the CURSOR advance clamps it to now.
-#: ~26h tolerates mislabeled-timezone feeds (a Beijing-local date served as
-#: GMT lands up to +8h ahead; a date-only entry stamped midnight can sit up to
-#: +24h ahead of a UTC clock) while catching the real poison class: a State
-#: Dept year-typo (published 2027-07-07) advanced a cursor ONE YEAR into the
-#: future and silently stalled the source until every entry was "older than
-#: the cursor". Only the cursor is clamped — the persisted signal keeps the
-#: feed's own published_at (provenance stays honest).
-_MAX_FUTURE_SKEW = timedelta(hours=26)
-
-
-def _entry_logical_ts(sig: Signal) -> datetime:
-    """The logical timestamp of one processed entry, for cursor advance.
-
-    Prefers a handler-provided logical timestamp on the payload (RSS /
-    json_api stamp ``_published_at_dt``; OpenSanctions stamps
-    ``_last_seen_dt``) so the cursor advances along the source's OWN ordering.
-    Falls back to the Signal's ``fetched_at`` (always present) for handlers
-    that surface no logical timestamp. Always returns a tz-aware UTC datetime.
-
-    B0-11 Fix-1: a feed-provided timestamp beyond ``now + _MAX_FUTURE_SKEW``
-    is CLAMPED to now for cursor purposes — an upstream future-dated entry
-    (year-typo class) must never drag the cursor past the present, or every
-    subsequent real entry is silently filtered as already-seen.
-    """
-    now = datetime.now(timezone.utc)
-    for key in ("_published_at_dt", "_last_seen_dt", "_event_dt"):
-        val = sig.payload.get(key)
-        if isinstance(val, datetime):
-            ts = val if val.tzinfo else val.replace(tzinfo=timezone.utc)
-            if ts > now + _MAX_FUTURE_SKEW:
-                logger.warning(
-                    "source_actor.cursor.future_ts_clamped source=%s ts=%s "
-                    "(feed-provided timestamp > now+%s; cursor uses now, "
-                    "payload keeps the feed's own date)",
-                    sig.payload.get("source_id") or getattr(sig, "source_id", "?"),
-                    ts.isoformat(),
-                    _MAX_FUTURE_SKEW,
-                )
-                return now
-            return ts
-    fa = sig.fetched_at
-    return fa if fa.tzinfo else fa.replace(tzinfo=timezone.utc)
+#: B0-11 Fix-1 / W11-F151 — the cursor policy (future clamp, look-back,
+#: judged-entry ledger) lives in :mod:`.source_cursor`; these names stay
+#: importable from here for existing callers.
+_MAX_FUTURE_SKEW = CURSOR_FUTURE_TOLERANCE
+_entry_logical_ts = entry_logical_ts
 
 
 class _RawConfig(BaseModel):
@@ -550,353 +493,6 @@ async def resolve_source_deps(actor_id: str) -> SourceDeps | None:
 
 
 # ---------------------------------------------------------------------------
-# Canonical signal write (NEW source-first schema — NOT write_target_signal).
-# ---------------------------------------------------------------------------
-
-
-# B-1: ``last_seen_at`` is stamped from the SAME ``fetched_at`` this insert
-# carries — at first write the two agree ("fetched now, seen now"). They diverge
-# only when the source later re-serves this exact content: the S-4 collapse
-# advances ``last_seen_at`` and leaves ``fetched_at`` pinned to the fetch that
-# actually delivered the content (migration 0140).
-_INSERT_SIGNAL = """
-INSERT INTO signals (
-    id, source_id, source_version, produced_by_id, produced_by_kind,
-    fetched_at, owner_tenant, modality, mime_type, media_ref, embedding_ref,
-    retention_class, media_ref_expires_at, object_ref,
-    payload, canonical_url, language_hint, raw_provenance,
-    language, geo, tags, entity_classes, source_credibility,
-    content_hash, canonical_signal_id, derived_from, schema_uri,
-    access_class, last_seen_at
-)
-VALUES (
-    $1, $2, $3, $4, $5,
-    $6, $7, $8, $9, $10, $11,
-    $12, $13, $14,
-    $15::jsonb, $16, $17, $18::jsonb,
-    $19, $20::text[], $21::text[], $22::text[], $23,
-    $24, $25, $26::uuid[], $27,
-    $28, $6
-)
-ON CONFLICT (id) DO NOTHING
-RETURNING id
-"""
-
-
-# S-4: atomic find-and-record for an intra-source exact-hash duplicate. Picks the
-# MOST-RECENT existing row sharing this (source_id, content_hash, owner_tenant)
-# within the lookback window and advances its last_seen_at (never backwards — via
-# GREATEST) + updated_at. Recording on the MOST-RECENT row — deliberately NOT the
-# earliest — keeps the "earliest fetched_at = canonical" ordering that
-# ingest_dedupe and the cross_source_dedup analyst pick deterministically stable.
-# content_hash <> '' skips the schema-default "no hash" rows (empty string is
-# never a dedup key). The window bound is inlined (int-validated, no user input)
-# mirroring the coalescer's INTERVAL pattern. The equality on (source_id,
-# content_hash) rides the existing signals_content_hash_idx + signals_source_idx
-# (content_hash is a sha256 → the per-hash candidate set is tiny), so no new
-# index is needed.
-#
-# B-1: ``fetched_at`` is NOT touched. An exact content_hash match is identical
-# content — no fetch of anything new happened, so the row's fetch time must not
-# move (the 08-03 freshness lie). ``last_seen_at`` carries the re-serve, and the
-# window + the candidate ORDER BY key off it (COALESCE for pre-0140 rows, which
-# have never recorded a re-serve and so are correctly read at their fetched_at).
-def _bump_intrasource_sql(window_hours: int) -> str:
-    return f"""
-    UPDATE signals
-       SET last_seen_at = GREATEST(COALESCE(last_seen_at, fetched_at), $4),
-           updated_at = NOW()
-     WHERE id = (
-         SELECT id FROM signals
-          WHERE source_id = $1
-            AND content_hash = $2
-            AND content_hash <> ''
-            AND owner_tenant = $3
-            AND COALESCE(last_seen_at, fetched_at)
-                > NOW() - INTERVAL '{int(window_hours)} hours'
-          ORDER BY COALESCE(last_seen_at, fetched_at) DESC, id DESC
-          LIMIT 1
-     )
-    RETURNING id
-    """
-
-
-async def _bump_intrasource_duplicate(
-    conn: asyncpg.Connection,
-    signal: Signal,
-    *,
-    owner_tenant: str,
-    window_hours: int,
-) -> Any | None:
-    """Record a re-serve on the freshest existing same-(source_id, content_hash) row.
-
-    Returns the recorded row id on a hit (the caller then SKIPS the insert), or
-    None when no in-window duplicate exists (the caller inserts normally). The
-    read+write is a SINGLE atomic UPDATE ... RETURNING, so there is no
-    check-then-insert race within the connection (and a source is a single Dapr
-    actor — its polls are turn-serialized, so no cross-poll race either). The
-    caller guards ``content_hash`` non-empty before calling.
-
-    B-1: what advances is ``last_seen_at`` ("the source re-served this"), never
-    ``fetched_at`` ("we fetched this content"). See the module note above S-4.
-    """
-    return await conn.fetchval(
-        _bump_intrasource_sql(window_hours),
-        signal.source_id,
-        signal.content_hash,
-        owner_tenant,
-        signal.fetched_at,
-    )
-
-
-async def lookup_source_credibility(
-    conn: asyncpg.Connection, signal: Signal,
-) -> float | None:
-    """Resolve a signal's host credibility from the ``source_credibility`` table.
-
-    FIX P2-3: ``signals.source_credibility`` was 100% NULL because the
-    ``source_credibility`` PIPELINE FILTER only runs when a source descriptor
-    binds the ``"source_credibility"`` kind — and the live descriptors don't.
-    The credibility TABLE is scored for ~65 hosts, so we resolve the score at
-    the canonical WRITE path instead: extract the host from the signal's
-    URL/payload, probe the table (exact host + progressively-trimmed subdomains,
-    first hit wins — reusing the filter module's host helpers so producer +
-    filter agree), and return the score. Degrades to ``None`` (leaves the column
-    NULL) on no host, no table match, or any DB error — never raises.
-    """
-    host = _extract_signal_host(signal)
-    if host is None:
-        return None
-    candidates = extract_lookup_hosts(host)
-    if not candidates:
-        return None
-    try:
-        rows = await conn.fetch(
-            """
-            SELECT source_host, score
-              FROM source_credibility
-             WHERE source_host = ANY($1::text[])
-            """,
-            candidates,
-        )
-    except Exception as exc:  # pragma: no cover - best-effort lookup
-        logger.warning(
-            "source_actor.credibility.lookup_failed host=%s err=%s", host, exc,
-        )
-        return None
-    if not rows:
-        return None
-    # "First match in candidates order" — Postgres has no natural ordering for
-    # the input array, so resolve the most-specific host client-side.
-    by_host = {r["source_host"]: r for r in rows}
-    for candidate in candidates:
-        row = by_host.get(candidate)
-        if row is not None and row["score"] is not None:
-            return float(row["score"])
-    return None
-
-
-async def write_canonical_signal(
-    conn: asyncpg.Connection,
-    signal: Signal,
-    *,
-    source_version: str,
-    owner_tenant: str,
-    access_class: str = "restricted",
-    dedup_stats: dict[str, int] | None = None,
-) -> Any | None:
-    """Insert ONE canonical, target-agnostic signal into the new ``signals``
-    table. Stamps provenance (source-origin) + tenant from the descriptor.
-
-    ``access_class``: Wave-E — the source descriptor's ``scope.access_class``
-    (data/provenance/access.py's closed vocabulary), stamped onto the row's
-    ``access_class`` column (migration 0216). Defaults fail-closed to
-    ``"restricted"`` for callers that don't resolve a descriptor (e.g. the
-    seed/manual-batch path); the real source-actor ingest path always passes
-    the descriptor's own value.
-
-    Returns the inserted row id, or ``None`` if the write was a no-op — either a
-    row with that id already existed (the uuid4-id ON CONFLICT backstop) OR (S-4)
-    an intra-source exact-hash duplicate already landed within the lookback
-    window, in which case the existing row's recency (``fetched_at``) is bumped
-    and NO new row is inserted. The caller treats ``None`` as "nothing written,
-    nothing to fan out".
-
-    ``dedup_stats``: when supplied, its ``"reserve_unchanged"`` counter is
-    incremented on each S-4 collapse. The poll path passes this so it can tell
-    "wrote nothing because the source re-served content we already hold, byte for
-    byte" (source alive, content NOT moving) apart from "wrote nothing because the
-    feed was empty" (the liveness watchdog's stall signal). B-1 named the counter
-    for what it measures — an unchanged re-serve — because that is the serve-stale
-    evidence the 08-03 incident had nowhere to live. See
-    :data:`_INTRASOURCE_DEDUP_ENV`.
-    """
-    # FIX P2-3: backfill source_credibility from the registry-scored host table
-    # when the in-flight signal doesn't already carry a score (i.e. the
-    # source_credibility pipeline filter wasn't bound for this descriptor). The
-    # lookup degrades to None (column stays NULL) for unknown hosts.
-    source_credibility = signal.source_credibility
-    if source_credibility is None:
-        source_credibility = await lookup_source_credibility(conn, signal)
-
-    # S-4: intra-source exact-hash collapse (pre-insert). An empty content_hash
-    # is the schema default ("no hash") and is never a dedup key. Best-effort —
-    # any error here must NOT lose the write, so we log and fall through to the
-    # normal insert (a duplicate row is a lesser evil than a dropped signal).
-    if signal.content_hash and _intrasource_dedup_enabled():
-        resolved_tenant = owner_tenant or signal.owner_tenant
-        try:
-            bumped = await _bump_intrasource_duplicate(
-                conn, signal,
-                owner_tenant=resolved_tenant,
-                window_hours=_intrasource_dedup_window_hours(),
-            )
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning(
-                "source_actor.intrasource_dedup.failed source=%s hash=%s "
-                "err=%s (falling through to insert)",
-                signal.source_id, (signal.content_hash or "")[:16], exc,
-            )
-            bumped = None
-        if bumped is not None:
-            if dedup_stats is not None:
-                dedup_stats["reserve_unchanged"] = (
-                    dedup_stats.get("reserve_unchanged", 0) + 1
-                )
-            logger.debug(
-                "source_actor.intrasource_dedup.collapsed source=%s hash=%s "
-                "row=%s (unchanged re-serve: last_seen_at advanced, fetched_at "
-                "unchanged, insert skipped)",
-                signal.source_id, signal.content_hash[:16], bumped,
-            )
-            return None
-
-    row = await conn.fetchrow(
-        _INSERT_SIGNAL,
-        signal.signal_id,
-        signal.source_id,
-        source_version or signal.source_version,
-        signal.produced_by_id,
-        signal.produced_by_kind,
-        signal.fetched_at,
-        owner_tenant or signal.owner_tenant,
-        signal.modality,
-        signal.mime_type,
-        signal.media_ref,
-        signal.embedding_ref,
-        signal.retention_class,
-        signal.media_ref_expires_at,
-        signal.object_ref,
-        json.dumps(signal.payload, default=str),
-        signal.canonical_url,
-        signal.language_hint,
-        json.dumps(signal.raw_provenance, default=str),
-        signal.language,
-        list(signal.geo),
-        list(signal.tags),
-        list(signal.entity_classes),
-        source_credibility,
-        signal.content_hash,
-        signal.canonical_signal_id,
-        list(signal.derived_from),
-        signal.schema_uri,
-        access_class,
-    )
-    return row["id"] if row else None
-
-
-# ---------------------------------------------------------------------------
-# Poll provenance (DQ-H5b #88; success outcome — migration 0114).
-#
-# EVERY poll now writes exactly one row. Migration 0046 originally logged only
-# NON-productive polls on the premise that "a productive poll is
-# self-evidencing via its signals rows" — true for a reader inspecting ONE
-# poll, false for every reader that walks a RUN of rows, because a run cannot
-# observe an absence. With success unrecorded, a repaired source still
-# presented its historical `error` rows as the LEADING run forever, and
-# `entity_gc` operation 4 re-paused sources that were actively ingesting
-# (gdelt.files 2026-07-27; ukrinform / nasa.eonet before it). A recorded
-# success BREAKS the run at its first productive poll, for every reader, with
-# no operator intervention.
-# ---------------------------------------------------------------------------
-
-_INSERT_POLL_OUTCOME = """
-INSERT INTO public.source_poll_outcomes (
-    source_id, source_version, owner_tenant,
-    outcome, health_state, capped, signals_written, error, newest_entry_ts,
-    reserve_unchanged
-)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-"""
-
-# Cap the stored error string so a verbose traceback can't bloat the row.
-_POLL_OUTCOME_ERROR_MAX = 2000
-
-
-async def write_poll_outcome(
-    conn: asyncpg.Connection,
-    *,
-    source_id: str,
-    source_version: str | None,
-    owner_tenant: str,
-    outcome: str,                 # 'success' | 'empty' | 'error'
-    health_state: str | None,     # 'healthy' | 'degraded' | 'unhealthy' | None
-    capped: bool,
-    signals_written: int,
-    error: str | None,
-    newest_entry_ts: datetime | None = None,
-    reserve_unchanged: int = 0,
-) -> None:
-    """Append a provenance row for ONE poll (DQ-H5b; success — migration 0114).
-
-    ``outcome`` is the coarse rollup every reader keys on, in strict
-    precedence:
-
-      * ``'success'`` — the poll was PRODUCTIVE: it wrote >=1 signal, or it
-        collapsed >=1 intra-source duplicate (the source answered with real
-        content). ``signals_written`` carries the count. A partial failure
-        (some rows written, then an exception) is still a success — the source
-        produced — but keeps its ``error`` / ``health_state`` detail on the
-        row rather than discarding it.
-      * ``'error'`` — the poll failed: an escaped exception OR a
-        handler-swallowed 4xx / parse-fail / timeout surfaced via
-        ``health_state``.
-      * ``'empty'`` — a genuine HTTP-200-but-0-items feed. UNCHANGED meaning:
-        polled fine, nothing new. Deliberately NOT merged with 'success' —
-        "polled and found nothing" and "polled and ingested 28 items" are
-        different facts, and the empty-streak watchdog keys on the
-        difference.
-
-    ``newest_entry_ts`` (B0-12): the newest entry timestamp the handler
-    OBSERVED upstream this poll (pre-since-filter, future-skew-clamped —
-    recorded in the handler's health detail). The watchdog's empty-streak
-    check compares it against the source's newest ingested signal to
-    discriminate honest-quiet (no alert) from a cursor/filter fault
-    (escalate). NULL when the handler records no such observation.
-
-    ``reserve_unchanged`` (B-1, migration 0140): how many entries this poll
-    re-served byte-identically (exact ``content_hash`` match on a row we already
-    hold). ``signals_written = 0 AND reserve_unchanged > 0`` is the SERVE-STALE
-    signature — the source is answering, the content is frozen. That is the
-    state the 5 rsshub AP feeds sat in for six days while this ledger recorded
-    nothing but healthy successes.
-    """
-    await conn.execute(
-        _INSERT_POLL_OUTCOME,
-        source_id,
-        source_version,
-        owner_tenant or "default",
-        outcome,
-        health_state,
-        capped,
-        int(signals_written),
-        error[:_POLL_OUTCOME_ERROR_MAX] if error else None,
-        newest_entry_ts,
-        max(0, int(reserve_unchanged)),
-    )
-
-
-# ---------------------------------------------------------------------------
 # SourceCore — the testable mechanism
 # ---------------------------------------------------------------------------
 
@@ -949,6 +545,13 @@ class SourceCore:
             produced_by=f"ingest_dedupe:{self.descriptor.identity.id}",
             owner_tenant=self.descriptor.scope.owner_tenant,
         )
+        # W3 SRC-3: the ``keyword_gate`` ingestion stages, applied PRE-baseline.
+        self._ingest_gate = SourceIngestGate(getattr(self.descriptor.pipeline, "ingestion_filters", []) or [])
+        self._families = EMPTY_INDEX  # W10 TAX-2: refreshed per pull/emit (tags.tag_vocabulary_index)
+        # N-L: records land through the sink registry, keyed by the declared
+        # family (descriptor `sink.family`, default `document`).
+        self._sinks = SinkSet(self, getattr(getattr(self.descriptor, "sink", None), "family", "document"))
+        self._signal_sink = SignalSink(self)
 
     # -- context + state ---------------------------------------------------
 
@@ -975,6 +578,7 @@ class SourceCore:
             secrets_resolve=self.deps.secrets_resolve,
             scope_geo=list(self.descriptor.scope.geo),
             scope_languages=list(self.descriptor.scope.languages),
+            classification=bind_declared(self.descriptor.scope, families=getattr(self, "_families", EMPTY_INDEX)),
         )
 
     def _build_handler(self) -> Any:
@@ -986,6 +590,30 @@ class SourceCore:
             secrets_resolve=self.deps.secrets_resolve,
         )
 
+    async def activation_check(self) -> None:
+        """Run the handler's declared activation guard, if its kind has one.
+
+        A kind whose handler class defines ``activation_check(ctx)`` (today
+        only ``email_imap`` — SEAMS #63, no mailbox credential) refuses
+        ACTIVATION here, loud and typed, before the actor goes ACTIVE or
+        registers its poll reminder; every other kind is untouched (no handler
+        is built for them on this path)."""
+        if self.sd.handler is not None:
+            cls: Any = type(self.sd.handler)
+        else:
+            cls = discover_source_kinds().get(self.descriptor.identity.kind)
+        if getattr(cls, "activation_check", None) is None:
+            return
+        try:
+            await self._build_handler().activation_check(self._make_context())
+        except Exception as exc:
+            logger.error(
+                "source_actor.activation.refused actor_id=%s source_id=%s reason=%s err=%s",
+                self.actor_id, self.descriptor.identity.id,
+                getattr(exc, "reason", type(exc).__name__), exc,
+            )
+            raise
+
     def _upstream_client(self) -> UpstreamClient | None:
         if self.sd.upstream_client is not None:
             return self.sd.upstream_client
@@ -996,132 +624,55 @@ class SourceCore:
 
     async def _process_one(
         self, conn: asyncpg.Connection, ctx: SourceContext, raw: Signal,
-        *, dedup_stats: dict[str, int] | None = None,
+        *, dedup_stats: dict[str, int] | None = None, hold: EnrichHold | None = None,
     ) -> "Signal | None":
         """Baseline → write ONE canonical signal. Returns the written signal
         (so the caller can publish it per-signal), or None if the baseline
         dropped it or the write was a dedup/conflict no-op. ``dedup_stats``, when
         supplied, is threaded to :func:`write_canonical_signal` so the poll path
-        can count S-4 intra-source collapses (a collapse is a productive poll)."""
+        can count S-4 intra-source collapses (a collapse is a productive poll).
+        ``hold`` (poll path only, W11-F103): a transient enrichment failure is
+        recorded on it so the cursor holds before this entry, and its bypass
+        reason skips the enrichment chain (written unenriched)."""
+        if not await self._ingest_gate.admit(raw, ctx):  # keyword_gate: drop pre-enrichment
+            return None
+        # C-2: a claim row is stamped and its text cleaned BEFORE enrichment
+        # (claim_hygiene); every other row: one dict lookup, untouched.
+        tally(dedup_stats, prepare_claim_row(self.descriptor, raw))
+        bypass = hold.bypass_reason() if hold is not None else None
         try:
             enriched = await asyncio.wait_for(
                 run_baseline(
                     raw, ctx, media=self.descriptor.pipeline.media,
                     extractors=self._extractors,
-                    enrichment_stage=self.sd.enrichment_stage,
+                    enrichment_stage=None if bypass else self.sd.enrichment_stage,
                 ),
                 timeout=_ENRICH_TIMEOUT_S,
             )
-        except asyncio.TimeoutError:
+        except (asyncio.TimeoutError, NlpServiceUnavailable) as exc:
+            if hold is None and isinstance(exc, NlpServiceUnavailable):
+                raise  # push path: unchanged (no cursor to hold)
             # A single hung extractor/NLP call must not block the actor turn.
-            # Skip this entry; the next poll re-pulls it (dedup makes it cheap).
+            # Skip this entry; the poll's cursor holds before it so the next
+            # poll re-pulls it, and the rest of this poll bypasses the NLP chain.
             ctx.logger.warning(
-                "source_actor.enrich.timeout actor_id=%s after=%.0fs",
-                self.actor_id, _ENRICH_TIMEOUT_S,
+                "source_actor.enrich.timeout actor_id=%s after=%.0fs err=%s",
+                self.actor_id, _ENRICH_TIMEOUT_S, type(exc).__name__,
             )
+            if hold is not None:
+                hold.skip("timeout" if isinstance(exc, asyncio.TimeoutError) else "nlp_unavailable")
             return None
         if enriched is None:
             return None
-        # Stamp the source's tenant onto the in-memory signal BEFORE write +
-        # fan-out. write_canonical_signal pins owner_tenant on the DB row via a
-        # param, but the published envelope is this object's model_dump_json();
-        # if the object keeps its model default ("default") the published
-        # owner_tenant disagrees with the DB row, the subject token, and the
-        # subscription binding. The reactive matcher (subscription.filter.matches)
-        # re-checks signal.owner_tenant against the binding's owner_tenant and
-        # rejects on mismatch — so an unstamped envelope silently disables ALL
-        # reactive triggering (the batch/cadence path reads the DB row, so it
-        # was unaffected; only the per-signal fan-out broke). Mirror
-        # write_canonical_signal's `owner_tenant or signal.owner_tenant` fallback.
-        if self.descriptor.scope.owner_tenant:
-            enriched.owner_tenant = self.descriptor.scope.owner_tenant
-        # LIC-2 stamp (SourceScope → signal): copy the descriptor's declared
-        # license_class onto the payload so the OpenSearch corpus facet + the
-        # P2-2 evidence-archiver retention gate read a per-signal value. A
-        # payload that already carries one (manual-batch provenance, a
-        # source-handler override) WINS — the scope value is the source-level
-        # default, not a clobber. Unset scope → no key (honest absence).
-        scope_license = getattr(self.descriptor.scope, "license_class", None)
-        if scope_license and "license_class" not in enriched.payload:
-            enriched.payload["license_class"] = scope_license
-        written_id = await write_canonical_signal(
-            conn,
-            enriched,
-            source_version=self.descriptor.identity.version,
-            owner_tenant=self.descriptor.scope.owner_tenant,
-            access_class=self.descriptor.scope.access_class,
-            dedup_stats=dedup_stats,
-        )
-        if written_id is None:
-            # No row written — either the uuid4-id ON CONFLICT backstop or (S-4)
-            # an intra-source exact-hash duplicate whose recency was bumped in
-            # place. Nothing to fan out either way (a re-emission of identical
-            # content must not re-fire triggers / inflate firing counts).
-            return None
-
-        # Source-side ingest dedupe (P-02, tiers 1+2). Run AFTER the insert so
-        # the alias link references an existing row, in the SAME connection so
-        # the link lands in the same short transaction. Alias/canonical: the
-        # raw row is already written + kept; if it matches an existing signal we
-        # set its canonical_signal_id + write signal_aliases — never collapse.
-        # A canonical_only subscriber then receives only the canonical of the
-        # set. Best-effort: a dedupe-link error must not lose the (already
-        # written) signal — it stays raw and the periodic analyst links it.
-        if self._ingest_dedupe is not None:
-            try:
-                result = await self._ingest_dedupe.apply(conn, enriched)
-                if result.is_duplicate:
-                    ctx.logger.info(
-                        "source_actor.ingest_dedupe.linked actor_id=%s "
-                        "alias=%s canonical=%s tier=%d reason=%s",
-                        self.actor_id, enriched.signal_id,
-                        result.canonical_signal_id, result.tier, result.reason,
-                    )
-            except Exception as exc:
-                ctx.logger.warning(
-                    "source_actor.ingest_dedupe.failed actor_id=%s signal=%s "
-                    "err=%s (row kept raw; periodic dedup analyst will link it)",
-                    self.actor_id, enriched.signal_id, exc,
-                )
-        return enriched
+        if bypass and hold is not None:
+            hold.mark_unenriched(enriched, bypass)
+        # N-L: tenant/licence stamps, the write, the S-4 collapse and the
+        # ingest-dedupe alias link are the document sink (runtime/sinks/signal.py).
+        return await self._signal_sink.write(conn, ctx, enriched, dedup_stats=dedup_stats)
 
     async def _publish(self, signals: list[Signal]) -> None:
-        """Fan out each written signal onto the shared raw-pool stream.
-
-        L-205 / PIVOT §6.1: acquisition publishes ONE message per signal to
-        ``legba.signals.<tenant>.<source>.<modality>.<event_class>`` (the
-        coarse subject the ``legba_signals`` JetStream stream captures and the
-        per-target subscription consumers + trigger engine subject-filter on).
-        The earlier coarse ``source.<id>.signals`` subject hit no stream
-        (``no response from stream``) and never reached the fan-out plane.
-        """
-        if self.deps.nats_publish is None or not signals:
-            return
-        tenant = self.descriptor.scope.owner_tenant
-        source_id = self.descriptor.identity.id
-        published = 0
-        for sig in signals:
-            subject = signal_subject(
-                tenant=tenant,
-                source_id=source_id,
-                modality=getattr(sig, "modality", "text") or "text",
-                event_class="raw",
-            )
-            try:
-                await self.deps.nats_publish(
-                    subject, sig.model_dump_json().encode("utf-8"),
-                )
-                published += 1
-            except Exception as exc:  # publish failure must not lose the write
-                logger.warning(
-                    "source_actor.publish.failed actor_id=%s subject=%s err=%s",
-                    self.actor_id, subject, exc,
-                )
-        if published:
-            logger.info(
-                "source_actor.published actor_id=%s count=%d subject_root=legba.signals.%s.%s",
-                self.actor_id, published, tenant, source_id,
-            )
+        """Fan out written signals — the document sink's publish (sinks/signal.py)."""
+        await self._signal_sink.publish(signals)
 
     # -- discovery path ----------------------------------------------------
 
@@ -1142,32 +693,19 @@ class SourceCore:
         Idempotent on restart via the persisted cursor (``since``). Returns a
         run summary.
         """
+        self._families = await tag_vocabulary_index()
         ctx = self._make_context()
         handler = self._build_handler()
+        self._ingest_gate.observe_handler(handler)  # the RSS keyword_* sugar's gate
 
         cursor_raw = await ctx.state_store.get("cursor") or {}
-        since = None
-        since_iso = cursor_raw.get("last_pulled_at") if isinstance(cursor_raw, dict) else None
-        if isinstance(since_iso, str) and since_iso:
-            try:
-                since = datetime.fromisoformat(since_iso)
-            except ValueError:
-                since = None
-        # B0-11 Fix-1 read-side SELF-HEAL: a stored cursor in the FUTURE is
-        # poison (an upstream future-dated entry advanced it past the present
-        # — the year-typo class stalled a source for what would have been a
-        # YEAR). Treat it as absent: the pull re-scans the lookback window and
-        # dedupe absorbs the overlap; the cursor re-seeds sanely on this pull.
-        if since is not None:
-            _since_utc = since if since.tzinfo else since.replace(tzinfo=timezone.utc)
-            if _since_utc > datetime.now(timezone.utc) + _MAX_FUTURE_SKEW:
-                ctx.logger.warning(
-                    "source_actor.cursor.poisoned_future source=%s stored=%s "
-                    "— discarding cursor (self-heal; dedupe absorbs the re-scan)",
-                    self.descriptor.identity.id,
-                    since_iso,
-                )
-                since = None
+        # W11-F151 (mechanism: .source_cursor): a stored cursor later than now
+        # is poison and healed on read; a dated-feed handler is handed
+        # ``since - lookback`` and the ledger skips entries already judged.
+        ledger = LookbackLedger(cursor_raw, lookback_of(handler))
+        since = read_since(
+            cursor_raw, source=self.descriptor.identity.id, dated=ledger.dated,
+        )
 
         # B — bulk high-water-mark resume. For a dataset-streaming source the
         # ``since`` cursor can't paginate within one snapshot (all rows share a
@@ -1202,16 +740,39 @@ class SourceCore:
         # used to advance the cursor to where we STOPPED (not NOW) on a capped
         # pull, so a backlog is resumed rather than skipped (Fix A).
         last_processed_ts: datetime | None = None
+        hold = EnrichHold(cursor_raw)  # W11-F103: transient skips hold the cursor
+        age_cap = FirstPollAgeCap(handler, first_poll=since is None)  # W11-F265
+        order = WalkOrder()  # a capped newest-first walk holds the cursor
         # R5 — per-source bounds (descriptor config > handler advertisement >
         # the module defaults), each clamped to the module ceiling. Resolved
         # ONCE per poll, before the walk, so the whole pull is governed by one
         # pair of numbers that the log line below can report.
         poll_budget_s, max_entries = resolve_poll_bounds(self.descriptor, handler)
         deadline = time.monotonic() + poll_budget_s
+        # N-L: fetch receipts (what this poll received, linked to each record)
+        # and the non-document sinks — runtime/source_poll_records.py.
+        receipts = ReceiptRecorder(source_id=self.descriptor.identity.id)
+        posture = protocol_posture(self.descriptor, cursor_raw)  # fetch.http_version
+        sink_counts: dict[str, Any] = {}
+        sink_n = 0
         try:
             async with self.deps.pg_pool.acquire() as conn:
                 count = 0
-                async for raw in handler.pull(ctx, since):
+                async for raw in captured(handler.pull(ctx, ledger.handler_since(since)), receipts.log, posture):
+                    link = receipts.link_for(raw, handler)
+                    if not isinstance(raw, Signal):  # a typed record of another family
+                        if sink_n >= _MAX_SINK_RECORDS_PER_POLL or time.monotonic() > deadline:
+                            capped = True
+                            break
+                        sink_n += 1
+                        route_record(self, raw, link, receipts)
+                        continue
+                    # A dated entry the look-back re-yields and the ledger has
+                    # already judged costs nothing: not enriched, not counted.
+                    ts = feed_ts(raw) if ledger.dated else entry_logical_ts(raw)
+                    if ledger.judged(raw) or age_cap.too_old(raw):  # F265: counted, not written
+                        continue
+                    order.see(ts)
                     # Bound the poll by count AND wall time so it always finishes
                     # within Dapr's drain window and reaches the cursor-advance
                     # below — never trapped re-grinding a backlog (2026-06-08).
@@ -1222,24 +783,42 @@ class SourceCore:
                     # Track the logical timestamp of every entry we CONSUME
                     # (not just the ones that survive dedup/baseline) — a capped
                     # pull made real forward progress through the backlog even
-                    # when an entry was dropped, and must not re-grind it.
-                    ts = _entry_logical_ts(raw)
-                    if last_processed_ts is None or ts > last_processed_ts:
+                    # when an entry was dropped, and must not re-grind it. An
+                    # undated entry of a dated feed advances nothing (F151).
+                    if ts is not None and (last_processed_ts is None or ts > last_processed_ts):
                         last_processed_ts = ts
+                    hold.at(raw, ts or entry_logical_ts(raw), count - 1)
+                    skipped_before = hold.skipped
                     sig = await self._process_one(
-                        conn, ctx, raw, dedup_stats=dedup_stats,
+                        conn, ctx, raw, dedup_stats=dedup_stats, hold=hold,
                     )
+                    if hold.skipped == skipped_before:  # judged (not a transient skip)
+                        ledger.mark(raw)
                     if sig is not None:
                         written.append(sig)
                         # Publish immediately — fan-out then survives a later
                         # cap/error/drain instead of being lost at the end.
                         await self._publish([sig])
+                        await receipts.link(conn, "signal", sig.signal_id, link)
+        except asyncio.CancelledError:
+            # W11-F169 — a poll cut mid-walk (a roll's bounded drain cancels the
+            # turns still running at LEGBA_RUNTIME_DRAIN_SECONDS) did NOT reach
+            # the end of its walk: record it as capped so the cursor policy
+            # holds where a capped walk holds (a newest-first walk keeps its
+            # prior position) instead of advancing as if the walk completed.
+            # The finally below still persists the cursor and the outcome row;
+            # the cancellation then propagates.
+            capped = True
+            raise
         except Exception as exc:
             errored = str(exc)
             logger.warning(
                 "source_actor.pull.error actor_id=%s err=%s", self.actor_id, exc,
             )
         finally:
+            # P-5: items the handler itself dropped as too old (json_api's
+            # lookback window) join the F265 count — poll row, summary, log.
+            age_cap.absorb_handler_skips(handler)
             # Advance the cursor along REAL forward progress only — never to a
             # bare wall-clock NOW on a zero-yield pull. Cursor-advance policy:
             #   * hard fetch error  -> keep the prior position (retry the window).
@@ -1249,7 +828,7 @@ class SourceCore:
             #     timestamp keeps the forward-progress anti-trap WITHOUT skipping
             #     live entries (the observed skipping behaviour).
             #   * ZERO entries processed (a genuinely empty/at-head/all-filtered
-            #     pull) -> LEAVE THE CURSOR UNCHANGED (keep ``since_iso``). The
+            #     pull) -> LEAVE THE CURSOR UNCHANGED (keep ``since``). The
             #     prior policy advanced ``since`` to NOW here, but a feed that
             #     misses every item one cycle (e.g. a transient parse/date bug
             #     that drops the whole window, or a Cloudflare 304 pin) then has
@@ -1258,24 +837,35 @@ class SourceCore:
             #     next healthy pull re-see the same window; content-hash dedup
             #     downstream makes the re-emit on recovery a harmless no-op, so
             #     holding cannot cause a dup-storm.
-            # First-ever pull (no prior cursor, since_iso is None): there is no
+            # First-ever pull (no prior cursor, since is None): there is no
             # window to protect, so a zero-yield pull seeds the cursor at NOW to
             # avoid re-walking from epoch on the next cycle.
-            if errored is not None:
-                last_pulled_at = since_iso or _utcnow().isoformat()
-            elif last_processed_ts is not None:
-                last_pulled_at = last_processed_ts.isoformat()
-            elif since_iso:
-                last_pulled_at = since_iso
-            else:
-                last_pulled_at = _utcnow().isoformat()
+            # W11-F103: a TRANSIENT skip (enrichment timeout) holds the advance
+            # at max(since, min(last processed, earliest skipped - 1µs)) — see
+            # source_enrich_hold; permanent drops still count as processed.
+            # W11-F151: never later than now; a dated handler's cursor never
+            # moves backwards, and a capped walk that was not oldest-first
+            # holds it (see source_cursor.advance / WalkOrder).
+            cursor_ts = advance_cursor(
+                errored=errored is not None, since=since,
+                last_processed_ts=last_processed_ts, hold=hold, dated=ledger.dated,
+                capped=capped, walk_ascending=order.ascending,
+            )
             new_cursor = {
                 "source_id": self.descriptor.identity.id,
-                "last_pulled_at": last_pulled_at,
+                "last_pulled_at": cursor_ts.isoformat(),
                 "rows_pulled": int(cursor_raw.get("rows_pulled", 0) if isinstance(cursor_raw, dict) else 0)
                 + len(written),
                 "last_error": errored,
+                **self._ingest_gate.cursor_fields(cursor_raw),
+                **enrichment_cursor_fields(self.descriptor.identity.id, cursor_raw),  # W5 SRC-4
+                **hold.cursor_fields(errored=errored is not None),  # W11-F103
+                **ledger.cursor_fields(cursor_ts),  # W11-F151
+                **({"fetch_protocol_memory": posture.memory} if posture.memory else {}),
             }
+            sink_counts = await finish_poll(self, receipts)
+            dedup_stats["enrichment_skipped"] = hold.skipped
+            dedup_stats["enrichment_bypassed"] = hold.bypassed
             # B — persist the bulk high-water mark. The advance DELTA is the
             # actor's OWN processed-count (``count``) — boundary-safe vs. the
             # handler's per-yield position across the cap suspension point —
@@ -1290,8 +880,9 @@ class SourceCore:
                     reached_end = await self._read_bulk_reached_end(
                         ctx, capped=capped,
                     )
+                    rows, reached_end = hold.bulk_rows(count, reached_end)
                     bulk_offset = bulk_highwater_advance(
-                        prior_offset, count, reached_end=reached_end,
+                        prior_offset, rows, reached_end=reached_end,
                     )
                 new_cursor["bulk_offset"] = bulk_offset
             try:
@@ -1327,20 +918,32 @@ class SourceCore:
                 capped=capped,
                 signals_written=len(written),
                 reserve_unchanged=int(dedup_stats.get("reserve_unchanged") or 0),
+                sink_counts=sink_counts,
+                fetch_protocol=posture.outcome() if posture.eventful() else None,
+                age_skipped=age_cap.outcome_count(),
+                claim_hygiene=poll_claim_hygiene(dedup_stats),
             )
 
-        if written or capped or errored:
+        if written or capped or errored or hold.skipped or sink_counts or age_cap.skipped:  # N-R: + observation-only polls
             logger.info(
                 "source_actor.pull.done actor_id=%s written=%d capped=%s err=%s "
-                "bulk_offset=%s budget_s=%.0f max_entries=%d",
+                "bulk_offset=%s budget_s=%.0f max_entries=%d enrich_skipped=%d "
+                "enrich_bypassed=%d sinks=%s first_poll_age_skipped=%d",
                 self.actor_id, len(written), capped, errored,
                 new_cursor.get("bulk_offset"), poll_budget_s, max_entries,
+                hold.skipped, hold.bypassed, _sink_summary(sink_counts), age_cap.skipped,
             )
+        sink_written = sum(int(c.get("written", 0)) for c in sink_counts.values())
         return {
-            "outcome": "success" if written else ("hard_fail" if errored else "noop"),
+            **({"sink_counts": sink_counts} if sink_counts else {}),
+            "outcome": "success" if written or sink_written else ("hard_fail" if errored else "noop"),
             "signals_written": len(written),
             "signal_ids": [str(s.signal_id) for s in written],
             "error": errored,
+            "keyword_filtered": self._ingest_gate.last_poll_dropped,
+            "enrichment_skipped": dedup_stats.get("enrichment_skipped", 0),
+            "enrichment_bypassed": dedup_stats.get("enrichment_bypassed", 0),
+            **({"first_poll_age_skipped": age_cap.skipped} if age_cap.skipped else {}),  # W11-F265
         }
 
     async def _record_poll_outcome(
@@ -1352,6 +955,10 @@ class SourceCore:
         capped: bool,
         signals_written: int = 0,
         reserve_unchanged: int = 0,
+        sink_counts: dict[str, Any] | None = None,
+        fetch_protocol: dict[str, Any] | None = None,
+        age_skipped: int | None = None,
+        claim_hygiene: dict[str, int] | None = None,
     ) -> None:
         """Persist this poll's provenance row (DQ-H5b #88; success — mig 0114).
 
@@ -1373,6 +980,8 @@ class SourceCore:
             ``health_state``) rather than dropped, so the detail survives
             without poisoning the run every reader walks.
           * else an escaped exception / degraded / unhealthy → ``'error'``.
+          * else the keyword gate dropped >=1 entry → ``'gated'`` (0226: the
+            feed delivered, all of it off-topic).
           * else → ``'empty'`` (unchanged: polled fine, nothing new).
         """
         health_state: str | None = None
@@ -1424,13 +1033,15 @@ class SourceCore:
 
         written_n = max(0, int(signals_written))
         reserve_n = max(0, int(reserve_unchanged))
-        if written_n > 0 or reserve_n > 0:
-            # PRODUCTIVE — this poll moved real content into the substrate.
-            outcome = "success"
-        elif errored is not None or health_state in ("degraded", "unhealthy"):
-            outcome = "error"
-        else:
-            outcome = "empty"
+        gate_n = self._ingest_gate.last_poll_dropped  # None = not gated
+        # N-L: a non-document sink's writes/unchanged count as this poll's
+        # production for the rollup (the columns keep their signal meaning).
+        sink_w = sum(int(c.get("written", 0)) for c in (sink_counts or {}).values())
+        sink_u = sum(int(c.get("unchanged", 0)) for c in (sink_counts or {}).values())
+        outcome = classify_poll_outcome(
+            signals_written=written_n + sink_w, reserve_unchanged=reserve_n + sink_u,
+            errored=errored, health_state=health_state, keyword_filtered=gate_n,
+        )
 
         try:
             async with self.deps.pg_pool.acquire() as oc:
@@ -1446,6 +1057,11 @@ class SourceCore:
                     error=errored or health_error,
                     newest_entry_ts=newest_entry_ts,
                     reserve_unchanged=reserve_n,
+                    keyword_filtered=gate_n,
+                    sink_counts=sink_counts or None,
+                    fetch_protocol=fetch_protocol,
+                    age_skipped=age_skipped,
+                    claim_hygiene=claim_hygiene,
                 )
         except Exception:  # provenance write must never mask the pull result
             logger.warning(
@@ -1489,12 +1105,17 @@ class SourceCore:
         uses. Each call is its own short transaction (a webhook POST is one
         event, not a batch).
         """
-        async def _emit(raw: Signal) -> None:
+        async def _emit(raw: Any) -> None:
+            if not isinstance(raw, Signal):  # N-L: a pushed record of another family
+                await emit_record(self, raw)
+                return
+            self._families = await tag_vocabulary_index()
             ctx = self._make_context()
             async with self.deps.pg_pool.acquire() as conn:
                 sig = await self._process_one(conn, ctx, raw)
             if sig is not None:
                 await self._publish([sig])
+                await link_inbound(self, "signal", sig.signal_id)  # N-L push receipt
 
         return _emit
 
@@ -1691,6 +1312,7 @@ if _DAPR_AVAILABLE:
             core = await self._core()
             if core is None:
                 return {"outcome": "noop", "reason": "no_deps"}
+            await core.activation_check()  # SRC-8: a kind's guard refuses loud (SEAMS #63)
             sd = core.descriptor
             rec = await self._get_record() or {
                 "actor_id": self.id.id,

@@ -46,14 +46,44 @@ _SEED_PACKS = [
       # V3/P6 — the bounded-occurrence readers.
       "query_events", "inspect_event",
       "list_targets", "list_sources",
+      # W11-F141 — the scheduled-events calendar (migration 0240).
+      "list_scheduled_events",
+      # W11-F162 — the forecast ledger's due-date reader.
+      "list_due_resolvers",
+      # W11-F152 — per-source health with a staleness verdict.
+      "get_source_health",
       # 7g-2 — the COLLECTION series reads. History, not now: the only tools
       # in this pack that read `observations`.
-      "series_history", "series_compare"]),
+      "series_history", "series_compare",
+      # E2 — the LIVE series reader (origin_class 'live'), a separate tool.
+      "live_series"]),
     ("action_pack_escalate.yaml", "escalate_finding", ["escalate"]),
     # S6: external evidence + operator-gated write-back packs.
     ("action_pack_web_access.yaml", "web_access", ["web_fetch", "web_search"]),
     ("action_pack_propose_facts.yaml", "propose_facts",
      ["propose_fact", "request_source", "open_question"]),
+    # C-1b — consult presents a case: the nine read-only workstation actions.
+    ("action_pack_workstation_drive.yaml", "workstation_drive",
+     ["open_panel", "arrange", "set_scope", "focus", "map", "timeline",
+      "run_mission", "narrate", "done",
+      # Q-1 — one console view by id, through its declared contract.
+      "panel_action"]),
+    # C-2b-1 — the consult write plane: thin clients of the registry executor
+    # (W6 adds rerun_object for units and compositions; W11 the entity
+    # and fact record tools).
+    ("action_pack_consult_write.yaml", "consult_write",
+     ["inspect_object", "create_object", "update_object", "transition_object",
+      "revert_write", "rerun_object", "edit_entity", "merge_entities",
+      "unmerge_entity", "assert_fact", "close_fact"]),
+    # I-1 — the ingestion intake (an agent asks for something to be ingested).
+    ("action_pack_ingestion_intake.yaml", "ingestion_intake",
+     ["request_ingestion", "ingestion_request_status"]),
+    # D-1 — source drift (versions, diff, re-read, re-derive, flag review).
+    ("action_pack_evidence_drift.yaml", "evidence_drift",
+     ["evidence_versions", "evidence_diff", "request_evidence_reread",
+      "request_rederive", "review_drift_flag",
+      # D-2 — the assessment, the flag list (closed_by), the re-open.
+      "evidence_drift_assessment", "drift_flags", "reopen_drift_flag"]),
 ]
 
 
@@ -257,3 +287,28 @@ def test_substrate_read_covers_consult_known_tools():
         "consult _KNOWN_TOOLS entries with no substrate_read pack tool — the "
         f"governed consult path will block these as unknown_tool: {sorted(missing)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# workstation_drive (C-1b): pack tools = the vocabulary's nine = registered
+# specs = registered handlers, and none of them is a write.
+# ---------------------------------------------------------------------------
+
+
+def test_workstation_drive_pack_specs_handlers_agree_and_write_nothing():
+    from legba.data import workstation_vocabulary as V
+    from legba.data.analysts.agency.tools import ToolRegistry
+    from legba.data.analysts.agency.workstation_drive import (
+        register_workstation_drive_tools,
+    )
+    from legba.data.stack.llm.tool_rounds import TOOL_SCHEMAS, WRITE_TOOLS, is_write_tool
+
+    body = yaml.safe_load((_DESCRIPTORS / "action_pack_workstation_drive.yaml").read_text())
+    pack_tools = [t["name"] for t in body["tools"]]
+    assert pack_tools == [*V.DRIVE_TOOL_NAMES, "panel_action"]  # Q-1: view actions only
+    reg = ToolRegistry()
+    register_workstation_drive_tools(reg)
+    assert set(reg.names) == set(pack_tools)
+    assert all(name in TOOL_SCHEMAS for name in pack_tools)
+    assert not set(pack_tools) & WRITE_TOOLS
+    assert not any(is_write_tool(name) for name in pack_tools)

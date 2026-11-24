@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.irna.english": {
+      "source": "source_irna_english.yaml",
+      "state": "active"
+    }
+  }
+}

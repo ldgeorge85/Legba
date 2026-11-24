@@ -93,7 +93,8 @@ def test_chronicle_descriptor_yaml_validates() -> None:
     # the V1 chronicle gate must be declared
     assert "verify" in body["method"]["llm"]
     # weekly beat, off the 00:00/12:00 burst window
-    assert body["cadence"]["fallback_schedule"] == "0 6 * * 1"
+    # (T-2: 06:15, off disruption_status's 06:00 desk burst; still before the lenses)
+    assert body["cadence"]["fallback_schedule"] == "15 6 * * 1"
     assert int(body["cadence"]["cooldown_seconds"]) < 7 * 86400
     # read-only pack grants; no propose lane, no sinks
     packs = {p["pack_id"] for p in body["action_packs"]}

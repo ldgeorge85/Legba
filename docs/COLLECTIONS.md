@@ -3,7 +3,7 @@
 
 # Collections
 
-*Bounded, versioned, curated holdings of the past — loaded once by the operator, never scheduled, and fenced from
+*Bounded, versioned, curated holdings of the past — loaded once by the owner, never scheduled, and fenced from
 every surface that reads "now".*
 
 ## What a collection is, and what it is not
@@ -64,8 +64,12 @@ Three properties of `observations` are worth stating as rules rather than as col
   `value` / `value_text`, so a valueless row is unstorable, and the EIA's frozen crude-trade tail is simply
   missing rather than zero.
 
-`origin_class` on `observations` is `CHECK`ed to the three history classes: a collection can never write a
-live-class row.
+A collection can never write a live-class row. Since migration 0246 the same table also holds **live**
+series rows written by a source's observation sink, and a `CHECK` keeps the two apart: a history row
+(`archive` or `backfill_*`) carries no `source_id`, while a live row must carry its `source_id`, a
+`collection_id` of `live:<source_id>` (a value no collection id can match, so no history read can select
+it) and the hash of the fetched response it was parsed from. The collection readers read only rows whose
+collection head is `loaded`.
 
 ## Loading a collection
 
@@ -75,7 +79,7 @@ python3 scripts/load_collection.py collection.series_pilot_2016_2026
 python3 scripts/load_collection.py collection.series_pilot_2016_2026 --resume
 ```
 
-An operator action, run once per collection **version**. It takes a path or an `identity.id`, validates the
+An admin action, run once per collection **version**. It takes a path or an `identity.id`, validates the
 manifest through `legba/collection/1.0.0` (the fail-closed licence class, the eight-surface firewall, the
 history-only origin class), and reads the fetch plan through
 `scripts/verify_collection_manifest.py` — **one parser, two readers**: a loader that parsed a World Bank
@@ -149,7 +153,7 @@ layer went away.
 | `origin_shape` / `origin_class` | `archive_only` / `archive` |
 | `licence_class` | `public` — World Bank CC BY 4.0, EIA U.S. public domain |
 | Loader | `series_api`, priority `low` |
-| State | `draft` — nothing is loaded. The schema, `observations` and the loader have shipped, so the operator's `draft` → `reviewed` approval (the licence line) is now the only thing between it and a load |
+| State (as the file ships) | `draft` — nothing is loaded. The schema, `observations` and the loader have shipped, so the owner's `draft` → `reviewed` approval (the licence line) is now the only thing between it and a load |
 
 **World Bank** (World Development Indicators, `api.worldbank.org/v2`, keyless): GDP growth, consumer-price
 inflation, military expenditure % of GDP, external debt stocks, energy use per capita, FDI net inflows % of GDP.
@@ -193,7 +197,7 @@ the rule they share: **a historical number is never, on its own, a claim about t
 `series_compare(series_id, subjects, from, to, as_of=None)` — read-only pack tools on the
 `substrate_read` pack, available to **consult** and to the **GATHER (research)** loop, the two
 readers the firewall's `readers_opt_in` names first. They read only holdings whose descriptor
-head is in state **`loaded`**: the operator's approval is the gate, and it is enforced in the
+head is in state **`loaded`**: the owner's approval is the gate, and it is enforced in the
 reader (`runtime/_observations_read.py`) rather than trusted to a caller.
 
 `from`/`to` are **required** and bound the VALID time — the period the numbers are *about*. A
@@ -334,16 +338,16 @@ block is now a claim about the past, which is exactly what a hand-written covera
 `tests/data_pkg/test_collection_manifest_pilot.py` pins the manifest as data and drives the verifier's parsing
 half against fixtures — real captured World Bank responses and EIA bulk records. **No test in it opens a socket.**
 
-## What the operator approves
+## What the owner approves
 
 Per collection, before it moves `draft` → `reviewed`:
 
 1. **The licence line.** The `licence:` block's text, URL and attribution for each provider — what may be kept,
    what must be credited, and whether any noncommercial bar applies. A manifest without a recorded licence class
    does not load; this is the fail-closed axis.
-2. **The manifest itself** — which series, which subjects, which window. An agent drafts it; the operator's
+2. **The manifest itself** — which series, which subjects, which window. An agent drafts it; the owner's
    approval is what makes it loadable.
-3. **The load.** Collections are never scheduled. `scripts/load_collection.py <collection id>` is an operator
+3. **The load.** Collections are never scheduled. `scripts/load_collection.py <collection id>` is an admin's
    action, run once per collection version, idempotent and resumable.
 
 Then, after the load: zero trigger fires, zero freshness movement, and the era coverage map showing the spans

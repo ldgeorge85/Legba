@@ -378,8 +378,9 @@ async def test_cadence_transition_entry_recovery_reentry() -> None:
     assert rows[1]["payload"]["state"] == "recovered"
     assert rows[1]["severity"] == "info"
     assert rows[1]["target"] == "world_assessor"
-    assert len(sinks.payloads) == 2
-    assert sinks.payloads[1].severity == "info"
+    # L-1: the recovery closes the episode on the alert log; at info no
+    # page-rule entry matches, so it is logged and never handed to delivery.
+    assert len(sinks.payloads) == 1
     assert len(nats.published) == 1  # recovery does NOT publish streamless
 
     # Recovery is itself an edge — no repeat 'recovered' rows.
@@ -565,6 +566,68 @@ async def test_source_cadence_honest_quiet_counts_as_recovery() -> None:
     rows_d = _delivery_rows(pg)
     assert rows_d[-1]["payload"]["state"] == "recovered"
     assert rows_d[-1]["severity"] == "info"
+
+
+@pytest.mark.asyncio
+async def test_source_cadence_gated_last_poll_is_honest_quiet() -> None:
+    # W4b-F2: ten consecutive 'gated' polls (the feed delivered, the keyword
+    # gate dropped everything) — the freshest poll evidence is 'gated', which
+    # is alive-and-answering, so the CADENCE alert stays silent.
+    rows = [
+        _src_row_full(
+            "source.gated.feed", "18 * * * *", _NOW - timedelta(days=12),
+            last_poll_outcome="gated", last_poll_health="healthy",
+            last_poll_error=None, last_poll_at=_NOW - timedelta(hours=1),
+            last_poll_signals_written=0, last_poll_keyword_filtered=10,
+        )
+    ]
+    wd, nats, pg = _cadence_watchdog(rows)
+    assert await wd.check_source_cadence_once(now_monotonic=1000.0) == []
+    assert nats.published == []
+    assert _delivery_rows(pg) == []
+
+
+@pytest.mark.asyncio
+async def test_source_cadence_ten_empties_without_evidence_still_alerts() -> None:
+    # Unchanged: a source whose last polls were 'empty' with NO upstream-entry
+    # evidence is not honest-quiet, so the stall alert stands.
+    rows = [
+        _src_row_full(
+            "source.empty.feed", "18 * * * *", _NOW - timedelta(days=12),
+            last_poll_outcome="empty", last_poll_health="healthy",
+            last_poll_error=None, last_poll_at=_NOW - timedelta(hours=1),
+            last_poll_signals_written=0,
+        )
+    ]
+    wd, nats, _pg = _cadence_watchdog(rows)
+    assert await wd.check_source_cadence_once(now_monotonic=1000.0) == [
+        "source.empty.feed"
+    ]
+    assert len(nats.published) == 1
+
+
+@pytest.mark.asyncio
+async def test_source_cadence_check_flag_off_skips_the_old_check(monkeypatch) -> None:
+    # W3-F12 prep: LEGBA_SOURCE_CADENCE_STALL_CHECK defaults ON; =0 skips the
+    # check entirely (no query, no alert) — the SRC-2 tripwire replaces it.
+    monkeypatch.delenv("LEGBA_SOURCE_CADENCE_STALL_CHECK", raising=False)
+    assert WatchdogConfig.from_env().source_cadence_stall_check is True
+    for off in ("0", "false", "OFF", "no"):
+        monkeypatch.setenv("LEGBA_SOURCE_CADENCE_STALL_CHECK", off)
+        assert WatchdogConfig.from_env().source_cadence_stall_check is False
+    monkeypatch.setenv("LEGBA_SOURCE_CADENCE_STALL_CHECK", "1")
+    assert WatchdogConfig.from_env().source_cadence_stall_check is True
+
+    rows = [_src_row("source.xinhua.world", "18 * * * *", _NOW - timedelta(days=12))]
+    wd, nats, pg = _cadence_watchdog(rows)
+    assert await wd.check_source_cadence_once(now_monotonic=1000.0) == [
+        "source.xinhua.world"
+    ]  # ON (the config default): unchanged
+    wd_off, nats_off, pg_off = _cadence_watchdog(rows)
+    wd_off._cfg.source_cadence_stall_check = False  # type: ignore[attr-defined]
+    assert await wd_off.check_source_cadence_once(now_monotonic=1000.0) == []
+    assert nats_off.published == []
+    assert _delivery_rows(pg_off) == []
 
 
 # ---------------------------------------------------------------------------
@@ -857,6 +920,20 @@ def test_discriminator_never_ingested_with_upstream_entries_is_cursor_fault() ->
     assert [(d[0], d[3]) for d in degraded] == [("source.never.yielded", "cursor_fault")]
 
 
+def test_discriminator_never_ingested_feed_older_than_first_poll_cap_is_quiet() -> None:
+    # W11-F265: a new source whose feed's newest entry was already older than
+    # the first-poll age cap when polled ingested nothing BY DESIGN (the cap
+    # skipped it) — the feed is quiet, not a cursor fault.
+    rows = _with_last_signal(
+        _with_newest_entry(
+            _empty_run("source.stale.archive", 6),
+            newest_entry_ts=_NOW - timedelta(days=45),
+        ),
+        last_signal=None,
+    )
+    assert _evaluate_empty_streaks(rows, threshold=5) == []
+
+
 def test_discriminator_healthy_producing_source_not_flagged() -> None:
     # Producing again (signal newer than the whole empty run) → no flag at
     # all, regardless of the observation evidence.
@@ -939,6 +1016,74 @@ def test_discriminator_honest_quiet_prolonged_threshold_is_tunable() -> None:
     assert (
         _evaluate_empty_streaks(rows, threshold=5, honest_quiet_threshold=20) == []
     )
+
+
+def _weekday_feed_over_a_weekend(n: int, *, quiet_hours: float, declared=None):
+    """Roll 86, source.ansa.english: ``n`` hourly honest-quiet empty polls,
+    the last signal ``quiet_hours`` before the newest poll."""
+    last_signal = _NOW - timedelta(hours=quiet_hours)
+    rows = _with_last_signal(
+        _with_newest_entry(_empty_run("source.ansa.english", n), newest_entry_ts=last_signal),
+        last_signal=last_signal,
+    )
+    if declared is not None:
+        rows = [{**r, "quiet_page_after_hours": declared} for r in rows]
+    return rows
+
+
+def test_honest_quiet_past_the_poll_bound_waits_out_a_weekend() -> None:
+    # 40 polls >= 36, but 41 h of quiet: a weekday-only feed's weekend. Silent.
+    assert _evaluate_empty_streaks(_weekday_feed_over_a_weekend(40, quiet_hours=41), threshold=5) == []
+    # 71 h: still inside the 72 h floor (the weekend plus a day)
+    assert _evaluate_empty_streaks(_weekday_feed_over_a_weekend(40, quiet_hours=71), threshold=5) == []
+    # 73 h: longer than any weekend — pages, as the prolonged class
+    degraded = _evaluate_empty_streaks(_weekday_feed_over_a_weekend(40, quiet_hours=73), threshold=5)
+    assert [(d[0], d[3]) for d in degraded] == [("source.ansa.english", "honest_quiet_prolonged")]
+    # and the poll bound still holds on its own: 30 polls over 5 days is silent
+    assert _evaluate_empty_streaks(_weekday_feed_over_a_weekend(30, quiet_hours=120), threshold=5) == []
+
+
+def test_the_descriptor_declares_its_own_quiet_floor() -> None:
+    # cadence.quiet_page_after_hours (as the SQL reads it: text) replaces the floor
+    rows = _weekday_feed_over_a_weekend(40, quiet_hours=41, declared="24")
+    assert [d[3] for d in _evaluate_empty_streaks(rows, threshold=5)] == ["honest_quiet_prolonged"]
+    rows = _weekday_feed_over_a_weekend(40, quiet_hours=41, declared="0")  # polls alone
+    assert [d[3] for d in _evaluate_empty_streaks(rows, threshold=5)] == ["honest_quiet_prolonged"]
+    rows = _weekday_feed_over_a_weekend(40, quiet_hours=73, declared="96")
+    assert _evaluate_empty_streaks(rows, threshold=5) == []
+    rows = _weekday_feed_over_a_weekend(40, quiet_hours=41, declared="not a number")  # the floor
+    assert _evaluate_empty_streaks(rows, threshold=5) == []
+
+
+def test_the_weekend_floor_never_delays_a_fault() -> None:
+    # A cursor fault (upstream newer than our last ingest) and an unevidenced
+    # run page at the lower threshold exactly as before, however short.
+    last_signal = _NOW - timedelta(hours=8)
+    cursor = _with_last_signal(
+        _with_newest_entry(_empty_run("source.a", 6), newest_entry_ts=_NOW - timedelta(hours=1)),
+        last_signal=last_signal,
+    )
+    unknown = _with_last_signal(_empty_run("source.b", 6), last_signal=last_signal)
+    assert [(d[0], d[3]) for d in _evaluate_empty_streaks(cursor + unknown, threshold=5)] == [
+        ("source.a", "cursor_fault"), ("source.b", "unknown"),
+    ]
+
+
+def test_the_weekend_floor_is_the_weekend_plus_a_day() -> None:
+    from legba.runtime.source_quiet_evidence import QUIET_PAGE_MIN_ELAPSED_S
+    from legba.runtime.source_staleness import WEEKEND_S
+
+    assert WEEKEND_S == 2 * 86_400
+    assert QUIET_PAGE_MIN_ELAPSED_S == 72 * 3600
+
+
+def test_cadence_declares_the_quiet_floor_hash_neutrally() -> None:
+    from legba.data.schemas.source import CadenceBlock
+
+    assert "quiet_page_after_hours" not in CadenceBlock().model_dump()
+    assert CadenceBlock(quiet_page_after_hours=0).model_dump()["quiet_page_after_hours"] == 0
+    with pytest.raises(ValueError):
+        CadenceBlock(quiet_page_after_hours=-1)
 
 
 def test_discriminator_honest_quiet_prolonged_threshold_zero_disables_escalation() -> None:
@@ -1247,6 +1392,7 @@ async def _seed_honest_quiet_source(
     *,
     poll_spacing_minutes: int = 60,
     last_signal_extra_days: int = 0,
+    cadence_extra: dict | None = None,
 ) -> None:
     """Seed one ACTIVE source_descriptor + one real ``signals`` row (so
     ``last_signal`` is non-null) + ``n_polls`` consecutive 'empty'/'healthy'
@@ -1274,7 +1420,7 @@ async def _seed_honest_quiet_source(
     body = {
         "identity": {"id": source_id, "kind": "rss", "state": "active"},
         "acquisition": "poll",
-        "cadence": {"schedule": {"raw": "*/15 * * * *", "ui_hint": {}}},
+        "cadence": {"schedule": {"raw": "*/15 * * * *", "ui_hint": {}}, **(cadence_extra or {})},
     }
     await conn.execute(
         """
@@ -1340,9 +1486,11 @@ async def test_empty_streak_real_fetch_escalates_past_honest_quiet_bound(pg_pool
     # query itself truncates at 20 rows); with the fix
     # (_empty_streak_fetch_window() == 41 for default cfg) the real fetch
     # sees all 37 rows and the escalation fires.
+    # Roll 86: the quiet also has to outlast the weekend floor (72 h since the
+    # last signal), so the signal sits 3 days further back than the run.
     source_id = f"source.streaktest.window37.{uuid4().hex[:8]}"
     async with pg_pool.acquire() as conn:
-        await _seed_honest_quiet_source(conn, source_id, 37)
+        await _seed_honest_quiet_source(conn, source_id, 37, last_signal_extra_days=3)
     wd, nats = _empty_streak_watchdog(pg_pool)
     alerted = await wd.check_source_empty_streak_once(now_monotonic=1000.0)
     assert alerted == [source_id]
@@ -1398,6 +1546,26 @@ async def test_empty_streak_real_fetch_who_news_shaped_regression(pg_pool) -> No
     # strictly exceed the threshold.
     assert env["empty_streak"] >= WatchdogConfig().honest_quiet_streak_threshold
     assert env["empty_streak"] <= 120
+
+
+@pytest.mark.asyncio
+async def test_empty_streak_real_fetch_weekday_feed_over_a_weekend(pg_pool) -> None:
+    # Roll 86: source.ansa.english publishes on weekdays only. 40 hourly
+    # honest-quiet polls is past the 36-poll bound but only ~45 h since the
+    # last signal — a weekend, not a dead feed: silent. A descriptor that
+    # declares cadence.quiet_page_after_hours 0 keeps the poll count alone
+    # and pages, read through the real SQL.
+    quiet = f"source.streaktest.weekday.{uuid4().hex[:8]}"
+    declared = f"source.streaktest.weekday0.{uuid4().hex[:8]}"
+    async with pg_pool.acquire() as conn:
+        await _seed_honest_quiet_source(conn, quiet, 40)
+        await _seed_honest_quiet_source(
+            conn, declared, 40, cadence_extra={"quiet_page_after_hours": 0},
+        )
+    wd, nats = _empty_streak_watchdog(pg_pool)
+    alerted = await wd.check_source_empty_streak_once(now_monotonic=1000.0)
+    assert quiet not in alerted
+    assert declared in alerted
 
 
 # ---------------------------------------------------------------------------
@@ -1774,3 +1942,183 @@ def test_a_liveness_class_is_EXEMPT_from_the_daily_page_budget() -> None:
     )
     assert liveness2.data["budget_deferred"] is False
     assert ordinary2.data["budget_deferred"] is False
+
+
+# ---------------------------------------------------------------------------
+# Migration 0226 (W3-F8): a fully gated poll is productive, never a stall
+# ---------------------------------------------------------------------------
+
+
+def _gated_run(source_id: str, n: int, *, start=_NOW):
+    return [
+        _outcome(source_id, "gated", start - timedelta(hours=i)) for i in range(n)
+    ]
+
+
+def test_empty_streak_eval_ten_gated_polls_is_not_a_stall() -> None:
+    # A narrow include-list feed: every poll delivers, the gate drops it all.
+    rows = _gated_run("source.narrow.gated", 10)
+    assert _evaluate_empty_streaks(rows, threshold=5) == []
+    assert _evaluate_empty_streaks(rows, threshold=2, honest_quiet_threshold=3) == []
+
+
+def test_empty_streak_eval_ten_empty_polls_still_is_a_stall() -> None:
+    rows = _empty_run("source.dead.empty", 10)
+    degraded = _evaluate_empty_streaks(rows, threshold=5)
+    assert [(d[0], d[1]) for d in degraded] == [("source.dead.empty", 10)]
+
+
+def test_empty_streak_eval_a_gated_row_breaks_the_empty_run() -> None:
+    # newest poll gated, then 10 empties behind it: the feed delivered since.
+    rows = _gated_run("s", 1) + _empty_run("s", 10, start=_NOW - timedelta(hours=1))
+    assert _evaluate_empty_streaks(rows, threshold=5) == []
+
+
+@pytest.mark.asyncio
+async def test_empty_streak_check_does_not_alert_on_ten_gated_polls() -> None:
+    wd, nats, _pg = _streak_watchdog(_gated_run("source.narrow.gated", 10))
+    assert await wd.check_source_empty_streak_once(now_monotonic=1000.0) == []
+    assert nats.published_core == []
+    wd2, nats2, _pg2 = _streak_watchdog(_empty_run("source.dead.empty", 10))
+    assert await wd2.check_source_empty_streak_once(now_monotonic=1000.0) == [
+        "source.dead.empty"
+    ]
+
+
+def test_source_stall_diagnosis_gated_says_the_feed_delivered() -> None:
+    when = datetime(2026, 10, 3, 12, 30, tzinfo=timezone.utc)
+    msg = _source_stall_diagnosis(
+        {
+            "last_poll_outcome": "gated",
+            "last_poll_health": "healthy",
+            "last_poll_keyword_filtered": 14,
+            "last_poll_at": when,
+        }
+    )
+    assert "DELIVERED" in msg and "keyword gate" in msg
+    assert "14 entries" in msg and "2026-10-03T12:30:00" in msg
+    # neither the empty-feed wording, the failure wording, nor the dead-reminder one
+    assert "no new items" not in msg
+    assert "FAILED" not in msg and "may be dead" not in msg
+    # a NULL / absent count is not rendered as a number
+    assert "entries)" not in _source_stall_diagnosis({"last_poll_outcome": "gated"})
+
+
+# ---------------------------------------------------------------------------
+# Lane N-U — an intermittent upstream HTTP 5xx is recorded at medium (ledger
+# row, no publish, no fan-out); a source dead past the declared window still
+# pages high; a ``cadence.expect_quiet`` head is out of the empty-streak page.
+# ---------------------------------------------------------------------------
+
+
+def _5xx_row(hours_silent: float, error: str = "HTTP 503 Service Unavailable"):
+    now = datetime.now(tz=timezone.utc)      # the check reads wall-clock age
+    return _src_row_full(
+        "source.flaky.upstream", "18 * * * *", now - timedelta(hours=hours_silent),
+        last_poll_outcome="error", last_poll_health="unhealthy",
+        last_poll_error=error, last_poll_at=now - timedelta(minutes=20),
+    )
+
+
+@pytest.mark.asyncio
+async def test_transient_5xx_stall_is_recorded_medium_not_paged() -> None:
+    sinks = _RecordingSinks()
+    wd, nats, pg = _cadence_watchdog([_5xx_row(8)], alert_sinks=sinks)
+    assert await wd.check_source_cadence_once(now_monotonic=1000.0) == ["source.flaky.upstream"]
+    assert nats.published_core == [] and sinks.payloads == []
+    (row,) = _delivery_rows(pg)
+    assert row["severity"] == "medium"
+    assert row["payload"]["state"] == "entered_transient"
+    assert row["payload"]["transient_5xx"] is True
+    # The same episode does not re-record on the next check.
+    assert await wd.check_source_cadence_once(now_monotonic=1100.0) == []
+    assert len(_delivery_rows(pg)) == 1
+
+
+@pytest.mark.asyncio
+async def test_transient_5xx_recurrence_never_pages() -> None:
+    sinks = _RecordingSinks()
+    wd, nats, pg = _cadence_watchdog([_5xx_row(8)], alert_sinks=sinks)
+    await wd.check_source_cadence_once(now_monotonic=1000.0)
+    pg.rows = [_src_row("source.flaky.upstream", "18 * * * *",
+                        datetime.now(tz=timezone.utc))]                    # recovered
+    await wd.check_source_cadence_once(now_monotonic=1100.0)
+    pg.rows = [_5xx_row(8, "HTTP 502 Bad Gateway")]                        # recurs
+    await wd.check_source_cadence_once(now_monotonic=1200.0)
+    sev = [(r["severity"], r["payload"]["state"]) for r in _delivery_rows(pg)]
+    assert sev == [("medium", "entered_transient"), ("info", "recovered"),
+                   ("medium", "entered_transient")]
+    assert nats.published_core == []
+    # L-1: nothing is handed to delivery — the medium entries are under the
+    # page rule's ``high`` for this kind, and the info recovery closes an
+    # episode that never paged (all three are logged on the alert log)
+    assert sinks.payloads == []
+
+
+@pytest.mark.asyncio
+async def test_a_dead_5xx_source_still_pages_high() -> None:
+    sinks = _RecordingSinks()
+    wd, nats, pg = _cadence_watchdog([_5xx_row(8)], alert_sinks=sinks)
+    await wd.check_source_cadence_once(now_monotonic=1000.0)               # transient
+    pg.rows = [_5xx_row(49)]                                               # past 48 h
+    assert await wd.check_source_cadence_once(now_monotonic=1100.0) == ["source.flaky.upstream"]
+    last = _delivery_rows(pg)[-1]
+    assert (last["severity"], last["payload"]["state"]) == ("high", "entered")
+    assert len(nats.published_core) == 1 and len(sinks.payloads) == 1
+    # and once entered high it stays one episode
+    assert await wd.check_source_cadence_once(now_monotonic=1200.0) == []
+
+
+@pytest.mark.asyncio
+async def test_a_non_5xx_error_stall_still_pages_high() -> None:
+    wd, nats, pg = _cadence_watchdog([_5xx_row(8, "HTTP 404 Not Found")])
+    await wd.check_source_cadence_once(now_monotonic=1000.0)
+    assert _delivery_rows(pg)[0]["severity"] == "high" and len(nats.published_core) == 1
+
+
+def test_the_dead_window_is_declared_and_env_tunable(monkeypatch) -> None:
+    assert WatchdogConfig().source_5xx_dead_after_s == 48 * 3600.0
+    monkeypatch.setenv("LEGBA_SOURCE_5XX_DEAD_AFTER_HOURS", "12")
+    assert WatchdogConfig.from_env().source_5xx_dead_after_s == 12 * 3600.0
+
+
+async def _seed_unknown_empty_source(conn, source_id: str, n_polls: int, *,
+                                     expect_quiet: bool) -> None:
+    """An ACTIVE head + one old signal + ``n_polls`` empty polls carrying NO
+    ``newest_entry_ts`` (the 'unknown' class that pages at the low threshold)."""
+    anchor = datetime.now(tz=timezone.utc)
+    cadence: dict = {"schedule": {"raw": "*/30 * * * *", "ui_hint": {}}}
+    if expect_quiet:
+        cadence["expect_quiet"] = True
+    body = {"identity": {"id": source_id, "kind": "geojson", "state": "active"},
+            "acquisition": "poll", "cadence": cadence}
+    await conn.execute(
+        "INSERT INTO source_descriptors (descriptor_id, version, schema_uri, is_head, kind, "
+        " state, owner, name, body, created_at) VALUES ($1, 'v1', 'legba/source/1.0.0', TRUE, "
+        " 'geojson', 'active', 'test', $1, $2::jsonb, $3)",
+        source_id, json.dumps(body), anchor - timedelta(days=365))
+    await conn.execute(
+        "INSERT INTO signals (id, source_id, source_version, payload, content_hash, fetched_at, "
+        " created_at, updated_at, schema_uri) VALUES (gen_random_uuid(), $1, 'v1', '{}'::jsonb, "
+        " $2, $3, $4, $4, 'iglu:legba/signal/jsonschema/1-0-0')",
+        source_id, uuid4().hex, anchor - timedelta(days=3), anchor)
+    for i in range(n_polls):
+        await conn.execute(
+            "INSERT INTO source_poll_outcomes (source_id, source_version, outcome, health_state, "
+            " signals_written, occurred_at) VALUES ($1, 'v1', 'empty', 'healthy', 0, $2)",
+            source_id, anchor - timedelta(minutes=30 * i))
+
+
+@pytest.mark.asyncio
+async def test_expect_quiet_head_is_out_of_the_empty_streak_page_real_fetch(pg_pool) -> None:
+    quiet = f"source.test.quiet_{uuid4().hex[:8]}"
+    loud = f"source.test.loud_{uuid4().hex[:8]}"
+    async with pg_pool.acquire() as conn:
+        await _seed_unknown_empty_source(conn, quiet, 8, expect_quiet=True)
+        await _seed_unknown_empty_source(conn, loud, 8, expect_quiet=False)
+    wd, _nats = _empty_streak_watchdog(pg_pool)
+    rows = await wd._fetch_source_empty_streak_rows(window=wd._empty_streak_fetch_window())
+    ids = {r["source_id"] for r in rows}
+    assert loud in ids and quiet not in ids
+    alerted = await wd.check_source_empty_streak_once(now_monotonic=1000.0)
+    assert loud in alerted and quiet not in alerted

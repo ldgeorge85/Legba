@@ -3,10 +3,12 @@
 """R1-a — THE FRAME ANCHOR. What a frame is ABOUT, read off authored prose.
 
 The module ``planning/R1_FRAME_REPAIR_DESIGN_2026-09-06.md`` row R1-a asks for,
-**as amended** by ``planning/R1_FRAME_REPAIR_AMENDMENT_2026-09-06.md`` §2. It is
-a pure addition: nothing in the fleet imports it, nothing behaves differently
-because it exists, and it buys nothing until R1-b mints against it. It is here
-so that the bar can be *built and measured* before it is *bound*.
+**as amended** by ``planning/R1_FRAME_REPAIR_AMENDMENT_2026-09-06.md`` §2. It began as a pure
+addition (built and measured before it was bound); it is LIVE now: the event
+signature (``events/signature.py``: ``anchor_token``), geo routing
+(``_geo_routing.py``: ``PolitySurfaceIndex``) and the journal clusters
+(``analysts/journal_clusters.py``) import it, and
+``scripts/r1a_anchor_replay.py`` replays the bar.
 
 WHY THE AMENDMENT REBUILT THIS BAR, WHICH IS THE ONLY THING WORTH KNOWING.
 The design's anchor counted distinct SIGNALS in a frame's own evidence. That
@@ -105,6 +107,7 @@ from dataclasses import dataclass, fields
 from datetime import datetime
 from typing import Any, Iterable, Mapping, Sequence
 
+from . import profile_constants as _profile_constants
 from ._entity_canon import canonicalize_entity
 from ._frame_content import DOMESTIC_ANCHOR, signature_anchor
 from ._polity_match import (
@@ -200,10 +203,12 @@ class FrameAnchorConfig:
     #: mean 1,822 B; 6,000 holds the 30-day mint read at ~29 MB.
     max_body_chars: int = 6_000
 
-    #: The canon class a candidate must canonicalize to. Design §3.2 refuses to
-    #: widen this: an ORG-class anchor without a home-PLACE exclusion and an
-    #: ORG fold would mint a "Reuters" frame on every desk.
-    class_gate: str = "country"
+    #: The canon class a candidate must canonicalize to: the instance
+    #: profile's ``constants.anchor_class`` (SPLIT-3; ``None`` = the profile
+    #: declares none and the gate refuses every candidate, by name). Design
+    #: §3.2 refuses to widen it: an ORG-class anchor without a home-PLACE
+    #: exclusion and an ORG fold would mint a "Reuters" frame on every desk.
+    class_gate: str | None = _profile_constants.anchor_class()
 
     @classmethod
     def from_options(
@@ -520,7 +525,7 @@ def candidate_polities(
     candidates: Iterable[str] | None = None,
     *,
     home_blob: str = "",
-    class_gate: str = "country",
+    class_gate: str | None = FrameAnchorConfig.class_gate,
 ) -> tuple[str, ...]:
     """The gated candidate set: canonical, in-class, and not the desk's own.
 
@@ -533,6 +538,9 @@ def candidate_polities(
     over ``"US"`` or ``"Iranian"`` and get ``United States`` / ``Iran``; the
     result is de-duplicated with the FIRST spelling's position preserved.
     """
+    if class_gate is None:
+        logger.info("frame_anchor.no_anchor_class the profile declares anchor_class none")
+        return ()
     raw = DEFAULT_CANDIDATES if candidates is None else candidates
     kept: list[str] = []
     seen: set[str] = set()

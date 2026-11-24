@@ -236,7 +236,7 @@ describe('ConsultPanel — detached run', () => {
           tool_calls: [],
           cited_refs: [],
           session_id: 'sess-1',
-          model: 'opus',
+          model: 'core',
         },
       })
     })

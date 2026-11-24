@@ -74,6 +74,8 @@ class DeepConsultKindDeps:
     max_analyze_tokens: int = 8192
     emit_facts: bool = True
     emit_hypotheses: bool = True
+    # T-1 — the descriptor's ``method.llm.thinking``; rides the workflow input.
+    thinking: bool = False
 
 
 @dataclass
@@ -147,11 +149,12 @@ async def run_method(
     analyst_version = str(options.get("analyst_version") or "")
 
     # F1 model picker: honor an OPTIONAL per-request LLM plane override. The
-    # registry maps the operator's friendly choice ("opus"/"core") to a
+    # registry maps the operator's friendly choice ("core"/"opus"/"fable") to a
     # sanctioned component id and threads it as ``llm_component_override``;
     # validated here against the SAME allowlist as the chat path (defense in
-    # depth — the registry is the primary gate). Absent / not-allowlisted ⇒ the
-    # descriptor primary (Opus default), unchanged. The workflow's stage deps
+    # depth — the registry is the primary gate; since roll 84 it threads the
+    # core component for a request that names no model). Absent /
+    # not-allowlisted ⇒ the descriptor primary (core in the shipped descriptor). The workflow's stage deps
     # resolve their handler AND their BudgetEnforcer from THIS id, so the whole
     # deep run (plan → analyze) plus its spend accounting key off the chosen
     # plane automatically (deep_consult_workflow.resolve_deep_consult_stage_deps).
@@ -177,6 +180,8 @@ async def run_method(
         max_analyze_tokens=int(deps.max_analyze_tokens),
         emit_facts=bool(deps.emit_facts),
         emit_hypotheses=bool(deps.emit_hypotheses),
+        # T-1: a request row's ``thinking`` overrides the descriptor for one run.
+        thinking=_turn_thinking(deps.thinking, first),
         # Records the operator pinned to the conversation. Normalized ONCE
         # here, at submit — the registry already validated them, but the actor
         # input is JSON off a queue, and the workflow input is DURABLE, so the
@@ -184,6 +189,11 @@ async def run_method(
         # Empty when no pins were sent, so every pre-pin workflow input stays
         # byte-identical to today's.
         pinned_context=normalize_pinned_context(first.get("pinned_context")),
+        # W11-F68b: the asker's display class rides the durable input.
+        display_class=str(first.get("display_class") or ""),
+        # Q-1 — the turn contract's inputs (absent ⇒ defaults; byte-identical).
+        **{k: first[k] for k in ("window", "on_screen") if isinstance(first.get(k), dict)},
+        **({"grounding_mode": str(first["grounding_mode"])} if first.get("grounding_mode") else {}),
     )
 
     # Instance id grammar: deep_consult.<scope>.<short> — NO '::' (D8).
@@ -198,6 +208,13 @@ async def run_method(
         task_id, analyst_id, run_id,
     )
     return DeepConsultSubmitResult(task_id=str(task_id), submit_status="running")
+
+
+def _turn_thinking(declared: bool, first: Mapping[str, Any]) -> bool:
+    from legba.shared.thinking_choice import parse_thinking
+
+    row = parse_thinking(first.get("thinking"))
+    return bool(declared if row is None else row)
 
 
 def build_prompt_module() -> Any:

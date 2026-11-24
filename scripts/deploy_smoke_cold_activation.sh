@@ -150,7 +150,7 @@ say "invoke=${INVOKE_URL}"
 #
 # The 2026-08-04 outage was not visible from `escalation`. The registry image's
 # pip list was missing pycountry, so inside the REGISTRY PROCESS ONLY the chain
-#   legba.data.schemas.analyst -> analysts.handler_options
+#   legba.data.schemas.analyst -> analysts.handler_options (now option_catalog.handler_options, a leaf, W3-F17)
 #     -> analysts.deterministic_handlers -> entity_resolution -> filters.geocode
 # raised ModuleNotFoundError. That chain is walked when the registry types a
 # descriptor whose method resolves handler options — i.e. exactly the
@@ -201,7 +201,7 @@ case "$TYPED_CODE" in
 ## docker/Dockerfile.runtime but ABSENT from the registry image's explicit pip
 ## list in docker/Dockerfile.registry (pycountry, 2026-08-04). Confirm with:
 ##   docker logs --tail 200 legba-legba-registry-1 | grep -iE 'ModuleNotFound|unimportable|dead-options'
-##   docker exec legba-legba-registry-1 python -c 'import legba.data.analysts.handler_options'
+##   docker exec legba-legba-registry-1 python -c 'import legba.data.option_catalog.handler_options'
 ##
 ## Registry response body: ${TYPED_BODY}" ;;
   *) die "typed-canary: GET /typed for '${TYPED_UNIT}' returned HTTP ${TYPED_CODE}. Body: ${TYPED_BODY}" ;;

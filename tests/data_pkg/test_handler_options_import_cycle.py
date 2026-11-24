@@ -70,7 +70,7 @@ def test_handler_options_programs_imports_standalone() -> None:
     interpreter — raised ``ImportError`` for ``DESK_REFERENCE_OPTIONS`` "from
     a partially initialized module".
     """
-    proc = _run_standalone_import("legba.data.analysts.handler_options_programs")
+    proc = _run_standalone_import("legba.data.option_catalog.handler_options_programs")
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
@@ -80,5 +80,5 @@ def test_handler_options_imports_standalone() -> None:
     Not the defect by itself (this direction always worked), but pinned here
     so a future change cannot fix one direction by breaking the other.
     """
-    proc = _run_standalone_import("legba.data.analysts.handler_options")
+    proc = _run_standalone_import("legba.data.option_catalog.handler_options")
     assert proc.returncode == 0, proc.stdout + proc.stderr

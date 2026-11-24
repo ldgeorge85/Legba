@@ -100,6 +100,8 @@ from .journal_assessor import (
     _rewrite_gathered_citations,
 )
 from .journal_clusters import journal_window
+from .journal_prepublish import INSTRUMENT_NUMBERS_KEY
+from ..journal_evidence import field_notes_fallback_record
 from .question_text import is_deictic
 
 logger = logging.getLogger(__name__)
@@ -201,6 +203,11 @@ _NARRATE_MAX_TOOL_ROUNDS = 2
 #: Honesty flags this kind forces deterministically, on top of the journal
 #: family's calibration-derived pair.
 HYPOTHESIS_WITHOUT_TEST_FLAG = "hypothesis_refused_no_resolution_test"
+#: A hypothesis with no (or an unreadable, or an already-passed) ``resolves_by``
+#: horizon is refused at mint: with no horizon it can never be scored, so the
+#: weekly yield (``inquiry_yield``) reads it as open forever. 2026-09-29: all 58
+#: open ledger rows carried ``resolves_by`` NULL.
+HYPOTHESIS_WITHOUT_HORIZON_FLAG = "hypothesis_refused_no_resolves_by"
 QUESTION_NOT_SELF_CONTAINED_FLAG = "question_refused_deictic"
 LEDGER_UNREACHABLE_FLAG = "inquiry_ledger_unreachable"
 
@@ -321,6 +328,31 @@ async def resolve_pre_pass_block(
     return f"{PRE_PASS_BLOCK_HEADER}\n{result.strip()}\n"
 
 
+#: N-T (2026-11-13) — ``data.instrument_numbers`` (the key is
+#: ``journal_prepublish``'s, which reads it) holds the numbers the pre-pass
+#: COMPUTED, by row, when its module declares ``instrument_provenance(block)``
+#: beside the hook; the verify pass checks an entry number against the row it
+#: cites instead of against the cited text.
+
+
+def resolve_instrument_provenance(
+    options: Mapping[str, Any], block: str,
+) -> list[dict[str, Any]]:
+    """The pre-pass module's declared ``instrument_provenance`` over the block
+    it rendered, or ``[]`` (no hook, no block, or the hook raised)."""
+    ref = options.get("pre_pass_module")
+    if not block or not isinstance(ref, str) or ":" not in ref:
+        return []
+    try:
+        hook = getattr(importlib.import_module(ref.partition(":")[0]),
+                       "instrument_provenance", None)
+        rows = hook(block) if callable(hook) else []
+    except Exception as exc:  # noqa: BLE001 — enrichment never fails the run
+        logger.warning("inquiry.instrument_provenance.failed ref=%s err=%s", ref, exc)
+        return []
+    return [dict(r) for r in rows or () if isinstance(r, Mapping)]
+
+
 # ---------------------------------------------------------------------------
 # PLAN — the ledger read + the state block
 # ---------------------------------------------------------------------------
@@ -358,7 +390,11 @@ async def read_ledger(tool_bindings: Mapping[str, Any]) -> tuple[list[dict[str, 
     result = outcome.tool_result
     if result is None or result.status == "failed":
         return [], "failed"
-    rows = (result.output or {}).get("rows") or []
+    # N-T — the tool answers ``{"entries": [...], "count": n}``
+    # (``inquiry_state.ledger_read_tool``). This line read ``rows``, a key the
+    # tool never returns, so every cycle since the kind shipped opened on an
+    # "empty ledger" while hundreds of open rows sat in ``inquiry_ledger``.
+    rows = (result.output or {}).get("entries") or []
     return [r for r in rows if isinstance(r, Mapping)], ""
 
 
@@ -618,7 +654,8 @@ _LEDGER_PHASE_PROMPT = (
     'naming what settled it>", "cited_refs": ["<uuid>", ...]}],\n'
     '  "hypotheses": [{"text": "<the hypothesis>", "resolution_test": "<what '
     'the record would have to show to confirm or refute it>", "resolves_by": '
-    '"<optional ISO date>"}],\n'
+    '"<REQUIRED ISO-8601 date, after NOW above: the day by which the test '
+    'settles it>"}],\n'
     '  "questions": [{"text": "<a SELF-CONTAINED question naming the actor, '
     'the place and the period>", "counter": "<optional competing reading>", '
     '"cited_refs": ["<uuid>", ...]}],\n'
@@ -627,6 +664,9 @@ _LEDGER_PHASE_PROMPT = (
     "}\n\n"
     "RULES THE CODE ENFORCES, not courtesy:\n"
     "  - a hypothesis with no resolution_test is DISCARDED, unread;\n"
+    "  - a hypothesis with no resolves_by date — or one that is not an ISO "
+    "date, or one already past — is DISCARDED, unread: a hypothesis with no "
+    "horizon can never be scored;\n"
     "  - a question that does not say what it is about is DISCARDED;\n"
     "  - every uuid in cited_refs must be one YOUR ENTRY ALREADY CITES — "
     "anything else is dropped rather than stored as a ref that resolves to "
@@ -639,8 +679,30 @@ _LEDGER_PHASE_PROMPT = (
 )
 
 
+def parse_horizon(raw: Any) -> datetime | None:
+    """A ``resolves_by`` value as an aware UTC datetime, or ``None`` when it is
+    absent or not an ISO-8601 date/timestamp. A bare date (``2026-12-31``) or a
+    naive timestamp is read as UTC — the ledger column is ``timestamptz`` and a
+    horizon must not move with the host's clock zone."""
+    if raw is None:
+        return None
+    if isinstance(raw, datetime):
+        parsed = raw
+    else:
+        text = str(raw).strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def plan_ledger_writes(
-    parsed: Any, cited_refs: list[UUID],
+    parsed: Any, cited_refs: list[UUID], *, now: datetime | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int]]:
     """Turn the LEDGER phase's reply into VALIDATED writes + closes.
 
@@ -651,6 +713,11 @@ def plan_ledger_writes(
         constraint ``inquiry_ledger_hypothesis_needs_test`` refuses it at the DB
         too, and this is the copy that makes the refusal VISIBLE (a counted,
         flag-raising drop) instead of a 500 the model never sees;
+      * a ``hypothesis`` with no readable ``resolves_by`` horizon — or, when
+        ``now`` is given, one at or before ``now`` — is REFUSED
+        (``refused_no_horizon``): with no horizon the row can never be scored,
+        and the yield instrument would read it as open forever. The pack's
+        ``ledger_write`` refuses the same row by the same name;
       * a ``question`` that is still deictic ("the incident", "that attack") is
         REFUSED through the platform's EXISTING open-question discipline
         (``question_text.is_deictic``, the CW-3 guard), because a question with a
@@ -665,7 +732,8 @@ def plan_ledger_writes(
     """
     counters = {
         "hypotheses": 0, "questions": 0, "observations": 0, "closes": 0,
-        "refused_no_test": 0, "refused_deictic": 0, "dropped_refs": 0,
+        "refused_no_test": 0, "refused_no_horizon": 0, "refused_deictic": 0,
+        "dropped_refs": 0,
     }
     if not isinstance(parsed, Mapping):
         return [], [], counters
@@ -700,12 +768,14 @@ def plan_ledger_writes(
         if not test:
             counters["refused_no_test"] += 1
             continue
+        horizon = parse_horizon(entry.get("resolves_by"))
+        if horizon is None or (now is not None and horizon <= now):
+            counters["refused_no_horizon"] += 1
+            continue
         row: dict[str, Any] = {
             "kind": "hypothesis", "text": text, "resolution_test": test,
+            "resolves_by": horizon.isoformat(),
         }
-        resolves_by = str(entry.get("resolves_by") or "").strip()
-        if resolves_by:
-            row["resolves_by"] = resolves_by
         refs = _refs(entry)
         if refs:
             row["cited_refs"] = refs
@@ -840,7 +910,11 @@ async def ledger_phase(
         steps.append({"phase": "ledger", "kind": "no_entry"})
         return usage_total, counters
 
-    prompt = _LEDGER_PHASE_PROMPT + body
+    now = datetime.now(timezone.utc)
+    prompt = (
+        f"NOW: {now.isoformat(timespec='seconds')}\n\n"
+        + _LEDGER_PHASE_PROMPT + body
+    )
     for _ in range(_LEDGER_MAX_ROUNDS):
         try:
             content, usage = await _reason(deps, prompt)
@@ -851,7 +925,7 @@ async def ledger_phase(
         for key in usage_total:
             usage_total[key] += int(usage.get(key, 0) or 0)
         parsed = _extract_json(content or "")
-        writes, closes, validation = plan_ledger_writes(parsed, cited_refs)
+        writes, closes, validation = plan_ledger_writes(parsed, cited_refs, now=now)
         counters.update(validation)
         steps.append({
             "phase": "ledger", "kind": "planned",
@@ -1038,7 +1112,7 @@ async def run_method(
     # --- FIELD NOTES + NARRATE -------------------------------------------
     field_notes, fn_usage = await _field_notes(
         deps, base_prompt=user_prompt, analyst_id=analyst_id, steps=steps,
-        instruction=_FIELD_NOTES_INSTRUCTION,
+        instruction=_FIELD_NOTES_INSTRUCTION, orientation=_MEMORY_ORIENTATION,
     )
     _fold(fn_usage)
     body, narrate_usage = await _narrate_with_tools(
@@ -1100,6 +1174,8 @@ async def run_method(
         honesty_flags.append(LEDGER_UNREACHABLE_FLAG)
     if ledger_counters.get("refused_no_test"):
         honesty_flags.append(HYPOTHESIS_WITHOUT_TEST_FLAG)
+    if ledger_counters.get("refused_no_horizon"):
+        honesty_flags.append(HYPOTHESIS_WITHOUT_HORIZON_FLAG)
     if ledger_counters.get("refused_deictic"):
         honesty_flags.append(QUESTION_NOT_SELF_CONTAINED_FLAG)
 
@@ -1116,11 +1192,17 @@ async def run_method(
             "written": ledger_counters.get("written", 0),
             "closed": ledger_counters.get("closed", 0),
             "refused_no_test": ledger_counters.get("refused_no_test", 0),
+            "refused_no_horizon": ledger_counters.get("refused_no_horizon", 0),
             "refused_deictic": ledger_counters.get("refused_deictic", 0),
         },
     }
     if ref_repairs:
         row_data["ref_repairs"] = ref_repairs
+    if instrument := resolve_instrument_provenance(options, pre_pass):
+        row_data[INSTRUMENT_NUMBERS_KEY] = instrument
+    # N-G — record when the field-notes handoff was discarded for the full context.
+    if fn_fallback := field_notes_fallback_record(steps):
+        row_data["field_notes_fallback"] = fn_fallback
     payload = JournalPayload(
         entry_kind=entry_kind,
         title=_derive_title(body, fallback=_TITLE_FALLBACK),
@@ -1180,6 +1262,7 @@ __all__ = [
     "ROUTED_PACK_TOOLS",
     "BRIEF_MAX_CHARS",
     "HYPOTHESIS_WITHOUT_TEST_FLAG",
+    "HYPOTHESIS_WITHOUT_HORIZON_FLAG",
     "QUESTION_NOT_SELF_CONTAINED_FLAG",
     "LEDGER_UNREACHABLE_FLAG",
     "build_prompt_module",
@@ -1187,6 +1270,7 @@ __all__ = [
     "gather_catalog",
     "ledger_phase",
     "plan_ledger_writes",
+    "parse_horizon",
     "read_ledger",
     "render_brief_block",
     "render_state_block",

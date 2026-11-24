@@ -28,6 +28,7 @@ import re
 from typing import Iterable, Mapping
 from uuid import UUID
 
+from ..journal_evidence import marker_refs
 from ..provenance.models import JournalClaim
 
 # Inline citation marker the body carries; the UI resolves it to a chip at the
@@ -109,8 +110,9 @@ def _reflect_claims(body: str) -> tuple[list[JournalClaim], list[UUID], list[str
     an uncited factual span (plan §3.6 / §4.5 / §10 — the REFLECT pass).
 
     For each span (split on blank lines):
-      * a span with ≥1 ``[[ref:<uuid>]]`` → a ``kind='fact'`` claim bound to its
-        refs (a cited factual claim survives intact);
+      * a span with ≥1 ``[[ref:<uuid>]]`` (or a nested ``[[ref:a] [ref:b]]``
+        group, lane N-U) → a ``kind='fact'`` claim bound to its refs (a cited
+        factual claim survives intact);
       * a span with no ref but an explicit speculation marker (``[[spec]]`` …) OR
         no factual hint → a ``kind='perspective'`` claim (wonder/inference is
         honest without a UUID — the perspective sentence is EXEMPT);
@@ -131,9 +133,10 @@ def _reflect_claims(body: str) -> tuple[list[JournalClaim], list[UUID], list[str
         if not text:
             continue
         span_refs: list[UUID] = []
-        for m in _REF_MARKER_RE.finditer(span):
+        # N-U: ``[[ref:<uuid>]]`` AND the nested ``[[ref:a] [ref:b]]`` group.
+        for raw in marker_refs(span):
             try:
-                u = UUID(m.group(1))
+                u = UUID(raw)
             except ValueError:
                 continue
             span_refs.append(u)

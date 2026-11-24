@@ -238,6 +238,23 @@ config:
       #     https://t.me/s/<handle> preview.
       - "Almasirah_En"             # Almasirah English — Houthi/Ansar Allah state media, English arm
       - "ansarollah1"              # official Ansar Allah site channel (Arabic)
+      # --- X-1 CHANNELS, moved here from source_telegram_x1_staged.yaml on
+      #     2026-11-14 (roll 83). Labels as reviewed; classes in
+      #     config.classes below.
+      # OFFICIAL: a government's own channel, read as THAT government's
+      # position (primary source, never independent confirmation):
+      - "GeneralStaffZSU"          # General Staff of the Armed Forces of Ukraine (Ukrainian government; party to the war)
+      - "kpszsu"                   # Ukrainian Air Force (Ukrainian government; party to the war)
+      - "mod_russia"               # Ministry of Defence of Russia (Russian government; party to the war)
+      - "medvedev_telegram"        # Dmitry Medvedev, Russian Security Council deputy chair (Russian government; party to the war)
+      - "idfofficial"              # Israel Defense Forces (Israeli government; party to conflict)
+      - "SyPresidency"             # Presidency of the Syrian Arab Republic (Syrian government)
+      # ANALYSIS:
+      - "DeepStateUA"              # DeepState — Ukrainian volunteer front-line mapping project
+      # REPORTING (the batch default):
+      - "suspilnenews"             # Suspilne — Ukrainian public broadcaster (state-funded)
+      - "zerkalo_io"               # Zerkalo — Belarusian independent, exile
+      - "agentstvonews"            # Agentstvo — Russian independent, investigative
   # 2026-07-29 Ansar Allah decision — OPTIONAL per-channel source_class
   # override (TelegramChannelSourceConfig.classes). This descriptor's
   # scope.source_class above (`reporting`) is the BATCH default for every
@@ -254,6 +271,14 @@ config:
     raw:
       Almasirah_En: state_media
       ansarollah1: state_media
+      # X-1 (moved 2026-11-14, roll 83):
+      GeneralStaffZSU: official
+      kpszsu: official
+      mod_russia: official
+      medvedev_telegram: official
+      idfofficial: official
+      SyPresidency: official
+      DeepStateUA: analysis
   lookback_hours:
     factory_kind: number
     # 12h stays FAR wider than the 30-min cadence gap, so no messages are

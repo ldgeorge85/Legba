@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.sudanwarmonitor.news": {
+      "source": "source_sudanwarmonitor.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -37,6 +37,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
+from ..principals import handle_for_actor
 from .api import RegistryAPIDeps, require_bearer
 
 logger = logging.getLogger(__name__)
@@ -110,7 +111,8 @@ _UPDATE_SQL = f"""
            batch_size    = COALESCE($4, batch_size),
            enabled       = COALESCE($5, enabled),
            description   = COALESCE($6, description),
-           updated_at    = now()
+           updated_at    = now(),
+           written_by    = legba_principal($7)
      WHERE policy_name = $1
     RETURNING {_COLUMNS}
 """
@@ -190,6 +192,7 @@ def build_retention_policies_router(deps: RegistryAPIDeps) -> APIRouter:
                 body.batch_size,
                 body.enabled,
                 body.description,
+                handle_for_actor(principal),
             )
         if row is None:
             raise HTTPException(

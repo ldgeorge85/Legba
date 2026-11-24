@@ -33,8 +33,10 @@ model cannot even detect as incomplete.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
+
+from ..display_policy import OPERATOR, READER, display_payload, principal_class
 
 
 def _trim_args(args: Mapping[str, Any]) -> dict[str, Any]:
@@ -181,8 +183,39 @@ def _bounded_tool_json(tool_result: Any, limit: int) -> str:
             seq = tool_result[list_key]
             trimmed = dict(tool_result)
             trimmed["truncated"] = True
-            trimmed[f"{list_key}_total"] = len(seq)
+            # The TRUE row count: a count the tool itself stated (or an
+            # earlier trim recorded) is never replaced by this copy's length.
+            stated = tool_result.get(f"{list_key}_total")
+            trimmed[f"{list_key}_total"] = (
+                stated
+                if isinstance(stated, int)
+                and not isinstance(stated, bool)
+                and stated >= len(seq)
+                else len(seq)
+            )
             trimmed[list_key] = []
+            # Reserve the ``_shown`` key in the envelope the budget measures
+            # (the final value is at most ``len(seq)``, so same digit width).
+            trimmed[f"{list_key}_shown"] = len(seq)
+            # W11-F150 paging dialect (list_findings): a tool that STATED its
+            # ``rows_total`` pages by ``offset``. Its ``next_offset`` counted
+            # the full page, so after a trim it would skip the rows cut here;
+            # it is re-pointed at the first row not shown. ``offset`` rides
+            # through the dict copy unchanged. Reserve the key's widest value.
+            page_base: int | None = None
+            if (
+                list_key == "rows"
+                and isinstance(stated, int)
+                and not isinstance(stated, bool)
+            ):
+                raw_offset = tool_result.get("offset", 0)
+                page_base = (
+                    raw_offset
+                    if isinstance(raw_offset, int)
+                    and not isinstance(raw_offset, bool)
+                    else 0
+                )
+                trimmed["next_offset"] = page_base + len(seq)
             # Budget for the rows themselves = limit minus the empty envelope
             # (all other keys + the marker), with slack for separators.
             row_budget = limit - len(json.dumps(trimmed)) - 2
@@ -199,6 +232,18 @@ def _bounded_tool_json(tool_result: Any, limit: int) -> str:
                 used += row_len
             if kept:
                 trimmed[list_key] = kept
+                # How many rows the model actually has in front of it, beside
+                # the true total, so it can tell the two differ.
+                trimmed[f"{list_key}_shown"] = len(kept)
+                if page_base is not None:
+                    resume = page_base + len(kept)
+                    if (len(kept) < len(seq)
+                            and resume < trimmed[f"{list_key}_total"]):
+                        trimmed["next_offset"] = resume
+                    elif "next_offset" in tool_result:
+                        trimmed["next_offset"] = tool_result["next_offset"]
+                    else:
+                        trimmed.pop("next_offset", None)
                 out = json.dumps(trimmed)
                 if len(out) <= limit:
                     return out
@@ -216,10 +261,51 @@ def _bounded_tool_json(tool_result: Any, limit: int) -> str:
         prefix = prefix[: max(0, len(prefix) - max(overshoot, 64))]
 
 
+#: The consult request key (``inputs[0]``) the front door stamps with the
+#: asker's display class (``operator`` / ``reader``) — X2-B4.
+DISPLAY_CLASS_KEY = "display_class"
+
+
+def tool_context_renderer(
+    request: Mapping[str, Any],
+) -> Callable[[Any, int], str]:
+    """The CONSULT CONTEXT BUILDER's renderer for this request (X2-B4).
+
+    What a tool result becomes in the model's context is decided here, once
+    per run, from the asker's display class on the request:
+
+      * a READER's consult renders every tool result through the reader display
+        policy FIRST (``display_policy.display_payload``): ``archived_text``,
+        ``raw_body``, ``source_text`` and the other publisher-text fields never
+        enter the context, and every remaining prose field of a publisher
+        document (a corpus hit, its citation block, a read_document body) is
+        bounded to one span. The model cannot repeat what it was never shown.
+      * an OPERATOR's consult renders exactly as before (:func:`_bounded_tool_json`
+        — the same function object, so the context is byte-identical).
+
+    UNSTAMPED = OPERATOR, deliberately: the runtime is not the trust boundary
+    — the consult front door is, and every caller it admits today is an
+    operator-class credential. The front door stamps ``display_class`` from the
+    asker's principal; a stamp that is present but not ``operator`` fails
+    CLOSED to the reader renderer. Only the conversation copy is projected —
+    the raw results still feed refs, gates and the GATHER citation path.
+    """
+    stamp = request.get(DISPLAY_CLASS_KEY) if isinstance(request, Mapping) else None
+    if stamp is None or principal_class(stamp) == OPERATOR:
+        return _bounded_tool_json
+
+    def _reader_tool_json(tool_result: Any, limit: int) -> str:
+        return _bounded_tool_json(display_payload(tool_result, READER), limit)
+
+    return _reader_tool_json
+
+
 __all__ = [
+    "DISPLAY_CLASS_KEY",
     "_BOUNDED_JSON_LIST_KEYS",
     "_CITATION_ONLY_KEYS",
     "_bounded_tool_json",
     "_shed_citation_payload",
     "_trim_args",
+    "tool_context_renderer",
 ]

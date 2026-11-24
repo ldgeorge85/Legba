@@ -34,6 +34,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..tags import BoundTag
+
 
 # ---------------------------------------------------------------------------
 # StateStore protocol
@@ -120,6 +122,13 @@ class SourceContext(BaseModel):
     # here for handlers that want to filter by language / geo at pull time.
     scope_geo: list[str] = Field(default_factory=list)
     scope_languages: list[str] = Field(default_factory=list)
+    # W10 TAX-2: the source descriptor's declared classification —
+    # ``scope.classifications`` then the legacy ``scope.tags`` (as ``src:``),
+    # bound through ``tags.bind_tag`` (``source_classification.bind_declared``).
+    # The baseline lifts its namespaced keys onto every signal's ``tags``
+    # beside the scope_geo lift; the canonical write stamps the bound entries
+    # into ``signals.data.classifications``. ``()`` = the source declares none.
+    classification: tuple[BoundTag, ...] = Field(default=())
 
     def utcnow(self) -> datetime:
         """Time accessor — overridable for deterministic tests."""

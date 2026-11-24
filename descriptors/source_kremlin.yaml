@@ -41,6 +41,12 @@ config:
   parser:
     factory_kind: text
     raw: "atom"
+  # W11-F151: an entry's Atom `published` is the EVENT time; the item is posted
+  # (`updated`) hours to days later, so a since-filter on `published` dropped it.
+  # The cursor follows the later of published / updated.
+  cursor_timestamp:
+    factory_kind: text
+    raw: "latest"
 
 pipeline:
   ingestion_filters:

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:inquiry_pilot": {
+      "source": "analyst_inquiry_pilot.yaml",
+      "state": "draft"
+    }
+  }
+}

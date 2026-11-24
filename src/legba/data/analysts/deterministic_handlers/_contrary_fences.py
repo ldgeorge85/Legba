@@ -113,8 +113,14 @@ HOST_CLASS_UNKNOWN = "unknown"
 #: than omitting a key.
 HOST_CLASSES: tuple[str, ...] = (
     HOST_CLASS_REFERENCE, "reporting", "analysis", "official", "state_media",
-    HOST_CLASS_UNKNOWN,
+    "claim", HOST_CLASS_UNKNOWN,
 )
+
+#: C-1 — host classes F1 fences: they count toward NOTHING. A reference page
+#: is not reporting; a CLAIM host's page is a party's own claim, which can
+#: neither contradict nor support a finding's account of an event (0258 lets
+#: the stored row carry the word).
+FENCED_HOST_CLASSES: frozenset[str] = frozenset({HOST_CLASS_REFERENCE, "claim"})
 
 #: REFERENCE / ENCYCLOPEDIA / DICTIONARY hosts, matched by suffix so
 #: ``en.wikipedia.org`` and ``simple.wikipedia.org`` both land.
@@ -375,7 +381,7 @@ def judge_page(
     host_class = host_class_of(url, catalog)
     page_date, date_source = page_date_of(url, published_at)
     overlap = subject_overlap_of(claim_text, sentence)
-    if host_class == HOST_CLASS_REFERENCE:
+    if host_class in FENCED_HOST_CLASSES:
         return PageVerdict(
             host_class=host_class, page_published_at=page_date,
             date_source=date_source, subject_overlap=overlap,

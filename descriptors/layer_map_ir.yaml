@@ -2,7 +2,7 @@
 # planning/LAYER_MAP_DRAFTS_2026-09-24/layer_map_ir.yaml (the retag
 # generator's `--country IR` output, map_version layer_map_ir.draft, every
 # reason "derived:" and every aperture `unmeasured`). Curation is the
-# layer's bias (docs/LAYERS.md): every entries[].reason below is now either
+# layer's bias (docs/DATA_SOURCES.md): every entries[].reason below is now either
 # "curated: ..." (a per-country judgement was made and is explained) or the
 # original "derived: ..." with " — confirmed" appended (the derived layer
 # was checked against this country's information environment and is

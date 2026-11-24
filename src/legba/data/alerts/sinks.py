@@ -39,9 +39,14 @@ stays a dumb transport:
   ``sink_target`` REDACTED to host only): ``delivered`` / ``failed`` on a
   real attempt, ``skipped_unconfigured`` when the sink is declared-inactive
   (env not set — the gap stays VISIBLE, never a silent drop), and
-  ``skipped_cooldown`` when the anti-noise gate suppressed a would-be POST.
-  A below-``min_severity`` alert writes NO row (a configured filter working
-  as designed is not a delivery event).
+  ``skipped_cooldown`` when the anti-noise gate suppressed a would-be POST,
+  ``skipped_below_severity`` when the sink's floor held it back, and
+  ``skipped_duplicate`` when this ``alert_row_id`` already had its series.
+  Every decision is a row with its reason (N-M, 11-13) — nothing is
+  "delivered" internally without an outward row saying what happened.
+* **Severity mapping.** The units' ``moderate`` / ``elevated`` map to
+  ``medium`` / ``high`` (:data:`SEVERITY_ALIASES`, the table beside it); an
+  unknown word takes a defined default and logs ``severity_unknown``.
 * **Per-alert-row idempotency.** ONE outward attempt series per
   ``alert_row_id`` — a finding escalated on two pack channels POSTs once.
   In-process (bounded LRU set); a restart may re-attempt, which is the
@@ -49,7 +54,17 @@ stays a dumb transport:
 * **Global per-sink cooldown.** At most one outward POST per sink per
   ``cooldown_seconds`` (default 60s), in-process. A suppressed alert is
   still durably visible as its ``skipped_cooldown`` ledger row. Trigger-set
-  shaping beyond this minimum is P1-3's territory.
+  shaping beyond this minimum is P1-3's territory. X4: keyed per (sink,
+  TOPIC), so an ``engine`` push never swallows the ``world``'s next one.
+* **Topics (X4 ALERTS).** Every payload leaves with a ``topic`` (``world`` |
+  ``engine``, :mod:`.topics`) and a ``kind``; both ride the ledger row's
+  ``payload_summary`` for the volume count.
+* **Level-only escalations never push (X4 ALERTS).** :meth:`payload_for_finding`
+  compares the escalated read's severity with the same unit's previous read
+  on the same desk; a held severity is ``level_only`` and lands a
+  ``skipped_level_only`` row instead of a POST
+  (:func:`classify_escalation_transition`; switch
+  ``LEGBA_ALERT_SUPPRESS_LEVEL_ONLY``).
 * **Never raises.** The alert path (escalation emit, watchdog loop) must
   not die because an outward sink misbehaved — every failure degrades to a
   structured :class:`DeliveryResult` + a warning log + a ``failed`` row.
@@ -76,30 +91,25 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from . import topics as _topics
+
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Severity ladder (local copy — importing outputs.alert would drag the
-# pushover/xmpp/matrix transports into this module's import graph)
+# Severity ladder — THE ladder lives in :mod:`.ladder` (L-1); re-exported here
+# so every name a caller or test already imports from this module still works.
+# The mapping table (unit word → ladder → ntfy priority) is in ladder.py.
 # ---------------------------------------------------------------------------
 
-
-Severity = Literal["info", "low", "medium", "high", "critical"]
-
-SEVERITY_ORDER: dict[str, int] = {
-    "info": 0,
-    "low": 1,
-    "medium": 2,
-    "high": 3,
-    "critical": 4,
-}
-
-
-def normalise_severity(raw: Any, *, default: str = "info") -> str:
-    """Coerce an arbitrary severity value onto the ladder (defensive)."""
-    value = str(raw or "").strip().lower()
-    return value if value in SEVERITY_ORDER else default
+from .ladder import (  # noqa: E402 — re-export block
+    SEVERITY_ALIASES,
+    SEVERITY_ORDER,
+    UNKNOWN_SEVERITY_DEFAULT,
+    Severity,
+    map_alert_severity,
+    normalise_severity,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +178,9 @@ class AlertSinkPayload(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_uri: str = "iglu:legba/alert_sink_payload/jsonschema/1-0-0"
+    #: 1-1-0 (X4 ALERTS): additive — ``topic`` / ``kind`` / ``level_only`` /
+    #: ``transition`` / ``batch_count`` / ``batch_alert_ids``.
+    schema_uri: str = "iglu:legba/alert_sink_payload/jsonschema/1-2-0"
 
     #: One-line human summary (the escalation/finding title).
     summary: str
@@ -201,6 +213,10 @@ class AlertSinkPayload(BaseModel):
     receipt_path: str | None = None
     #: Absolute receipt link when ``LEGBA_PUBLIC_BASE_URL`` is set.
     receipt_url: str | None = None
+    #: Roll 84 (additive): the CONSOLE page that opens the record
+    #: (``#rec=<kind>:<id>``, :mod:`.console_link`) — a push's tap target,
+    #: never the JSON receipt. None without ``LEGBA_PUBLIC_BASE_URL``.
+    console_url: str | None = None
     #: Cooldown coalescing (anti-noise honesty): when the dispatcher's per-sink
     #: cooldown suppressed alerts since the previous outward POST, the NEXT
     #: allowed POST carries their count + a bounded preview so a burst is
@@ -208,6 +224,34 @@ class AlertSinkPayload(BaseModel):
     #: suppressed alerts' own ledger rows stay ``skipped_cooldown``).
     suppressed_in_cooldown: int = 0
     suppressed_preview: tuple[str, ...] = ()
+    #: X4 ALERTS — the outward TOPIC (``world`` | ``engine``, see
+    #: :mod:`.topics`). Empty ⇒ the dispatcher resolves it from ``kind`` /
+    #: ``channel_name`` before any sink sees the payload.
+    topic: str = ""
+    #: The alert KIND the topic and the volume count key on: the trigger class
+    #: for trigger-scan alerts, the channel name for everything else. Empty ⇒
+    #: ``channel_name``.
+    kind: str = ""
+    #: X4 ALERTS — an escalation whose read holds the SAME severity as the
+    #: desk's previous read on that unit (a level, not a transition). Never
+    #: pushed; its ledger row says ``skipped_level_only``.
+    level_only: bool = False
+    #: The transition the escalation edge measured (``high → high (level-only)``,
+    #: ``elevated → high``, ``new: — → high``, ``indicator flip``) or why it
+    #: could not (``unmeasured — …``). Empty for alerts that are not escalations.
+    transition: str = ""
+    #: X4 ALERTS — a batched push (the band moves of one trigger tick): how many
+    #: alert rows it carries, and their ids (bounded). 0 ⇒ not a batch.
+    batch_count: int = 0
+    batch_alert_ids: tuple[str, ...] = ()
+    #: L-1 (single alert path, 1-2-0, additive) — the ``alerts`` episode and the
+    #: ``alert_events`` row this push carries; both land on every ledger row.
+    alert_id: str | None = None
+    alert_event_id: str | None = None
+    #: L-1 — True when the ONE page rule (:mod:`.page_rule`) decided this push.
+    #: The rule's minimum severity is then the floor: a sink's own env floor
+    #: does not second-guess it (one rule, not two).
+    rule_paged: bool = False
 
 
 def unverified_state(reason: str) -> str:
@@ -219,6 +263,14 @@ def unverified_state(reason: str) -> str:
 #: the verify pass ran, it simply extracted nothing gradeable, and collapsing the
 #: two would tell an operator no pass had happened when one had.
 UNASSESSABLE_STATE = "unassessable — verify ran but extracted no gradeable claim"
+
+#: SW-9 — the canonical ``carried_ungraded`` verify-state string. Its own words,
+#: not ``unverified`` (the pass ran) and not a score (what it checked was the
+#: desk's own prior read / window ledger, never this cycle's evidence).
+CARRIED_UNGRADED_STATE = (
+    "carried, ungraded — every citation is the desk's own prior read or window "
+    "ledger, so nothing was checked against this cycle's evidence"
+)
 
 
 def verify_state_from_score(
@@ -235,13 +287,17 @@ def verify_state_from_score(
     * ``faithfulness=0.82`` — a real, adjudicated measurement;
     * ``faithfulness=0.82 (provisional — deterministic floor, no LLM judge)`` —
       a real measurement no grader confirmed;
-    * ``unassessable — …`` — no measurement at all.
+    * ``unassessable — …`` — no measurement at all;
+    * ``carried, ungraded — …`` (SW-9) — the pass checked the carry against
+      the desk's own memory only, so no score is published.
 
     ``score_state`` / ``provisional`` are OPTIONAL and default to ``None``, so
     every existing caller that passes only a score is byte-identical.
     """
     if str(score_state or "") == "unassessable":
         return UNASSESSABLE_STATE
+    if str(score_state or "") == "carried_ungraded":
+        return CARRIED_UNGRADED_STATE
     if isinstance(faithfulness_score, (int, float)) and not isinstance(
         faithfulness_score, bool
     ):
@@ -263,20 +319,28 @@ def runtime_alert_payload(
         "deterministic runtime alert (no LLM content; not subject to the "
         "faithfulness verify pass)"
     ),
+    topic: str | None = None,
 ) -> AlertSinkPayload:
     """Payload for a deterministic runtime alert (watchdog stall etc.).
 
     No finding row, no cited signals, no receipt anchor — the verify state
     is an explicit ``unverified — <reason>`` naming why (deterministic
     detector output, not LLM prose).
+
+    X4: a runtime alert is the engine talking about itself, so an unlisted
+    channel defaults to the ``engine`` topic (:func:`.topics.topic_for`).
     """
     return AlertSinkPayload(
         summary=summary[:512],
         detail=detail[:4000],
-        severity=normalise_severity(severity, default="high"),
+        severity=map_alert_severity(
+            severity, default="high", context=f"runtime:{channel_name}"
+        ),
         channel_name=channel_name,
         target_id=target_id,
         verify_state=unverified_state(unverified_reason),
+        kind=channel_name,
+        topic=topic or _topics.topic_for(channel_name, default=_topics.TOPIC_ENGINE),
     )
 
 
@@ -293,6 +357,9 @@ Outcome = Literal[
     "skipped_below_severity",
     "skipped_cooldown",
     "skipped_duplicate",
+    # X4 ALERTS: an escalation whose severity is unchanged from the desk's
+    # previous read on the unit — a level, never a push.
+    "skipped_level_only",
 ]
 
 
@@ -412,6 +479,92 @@ DEFAULT_COOLDOWN_SECONDS = 60.0
 #: Cap on coalesced-preview lines carried onto the next allowed POST.
 _SUPPRESSED_PREVIEW_MAX = 5
 
+#: X4 ALERTS — the level-only rule's switch (``docs/TUNABLES.md`` §5). On by
+#: default; ``0``/``false``/``off``/``no`` pushes level-only escalations again
+#: (the reversal switch — the measurement still rides the ledger row).
+ENV_SUPPRESS_LEVEL_ONLY = "LEGBA_ALERT_SUPPRESS_LEVEL_ONLY"
+
+#: Cap on the member ids a batched push records on its ledger row.
+_BATCH_IDS_MAX = 50
+
+#: The escalated finding, read for the level-only rule: its unit (analyst),
+#: desk, severity column and the two indicator-flip markers.
+_ESCALATED_FINDING_SQL = """
+    SELECT analyst_id, target_id, severity, produced_at,
+           data -> 'data' ->> 'activation_count' AS activation_count,
+           data -> 'tags' AS tags
+      FROM analyst_outputs
+     WHERE id = $1
+"""
+
+#: The SAME unit's previous read on the SAME desk — the read this one replaced.
+#: Bitmap AND of idx_analyst_outputs_analyst_id × idx_analyst_outputs_target_id
+#: (live EXPLAIN in the X4 ALERTS report).
+_PRIOR_READ_SQL = """
+    SELECT severity
+      FROM analyst_outputs
+     WHERE kind = 'finding'
+       AND analyst_id = $1
+       AND target_id = $2
+       AND produced_at < $3
+       AND id <> $4
+     ORDER BY produced_at DESC
+     LIMIT 1
+"""
+
+
+def suppress_level_only_enabled() -> bool:
+    raw = (os.environ.get(ENV_SUPPRESS_LEVEL_ONLY) or "").strip().lower()
+    return raw not in ("0", "false", "off", "no")
+
+
+def _is_indicator_flip(activation_count: Any, tags: Any) -> bool:
+    """The escalate gate's trigger (b) — a pre-registered signpost firing is a
+    transition by construction, whatever its severity column says."""
+    try:
+        if int(activation_count or 0) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    if isinstance(tags, str):
+        try:
+            tags = json.loads(tags)
+        except ValueError:
+            tags = None
+    return isinstance(tags, list) and "indicator_triggered" in tags
+
+
+def classify_escalation_transition(
+    *,
+    current: Any,
+    prior: Any,
+    prior_found: bool,
+    indicator_flip: bool = False,
+) -> tuple[bool, str]:
+    """``(level_only, transition)`` for one escalated read. Pure.
+
+    Level-only means MEASURED unchanged: the unit's previous read on this desk
+    carried the same severity. Every case the rule cannot measure — no
+    previous read, a severity missing on either side — is NOT level-only (it
+    pushes): an alerting path fails toward paging, never toward silence.
+    Compared on the raw severity words (the units' own ladder — ``elevated`` /
+    ``moderate`` / ``high`` …), never on the sink ladder they would collapse
+    onto.
+    """
+    if indicator_flip:
+        return False, "indicator flip"
+    cur = str(current or "").strip().lower()
+    if not cur:
+        return False, "unmeasured — the read carries no severity"
+    if not prior_found:
+        return False, f"new: — → {cur}"
+    prev = str(prior or "").strip().lower()
+    if not prev:
+        return False, f"unmeasured — the previous read carries no severity (→ {cur})"
+    if prev == cur:
+        return True, f"{cur} → {cur} (level-only)"
+    return False, f"{prev} → {cur}"
+
 
 class AlertSinkDispatcher:
     """Fans one alert out across every registered sink, with ledger audit.
@@ -525,11 +678,21 @@ class AlertSinkDispatcher:
         row_id_str = str(alert_row_id) if alert_row_id is not None else None
         event_at, source_links, geo = await self._enrich_from_finding(row_id_str)
         path, url = receipt_link(row_id_str, row_kind="finding")
+        from .console_link import console_link
+
+        console_url = console_link(row_id_str, row_kind="finding")
+        level_only, transition = await self._measure_transition(row_id_str)
 
         return AlertSinkPayload(
+            kind=channel_name,
+            topic=_topics.topic_for(channel_name, default=_topics.TOPIC_WORLD),
+            level_only=level_only,
+            transition=transition,
             summary=str(title or "")[:512],
             detail=str(detail or "")[:4000],
-            severity=normalise_severity(severity, default="info"),
+            severity=map_alert_severity(
+                severity, context=f"escalation:{channel_name}:{row_id_str}"
+            ),
             channel_name=channel_name,
             target_id=target_id,
             geo=geo,
@@ -540,6 +703,49 @@ class AlertSinkDispatcher:
             alert_row_id=row_id_str,
             receipt_path=path,
             receipt_url=url,
+            console_url=console_url,
+        )
+
+    async def _measure_transition(self, alert_row_id: str | None) -> tuple[bool, str]:
+        """X4 ALERTS — is this escalation a TRANSITION or a LEVEL?
+
+        Reads the escalated finding and the same unit's previous read on the
+        same desk (:data:`_PRIOR_READ_SQL`) and classifies the pair
+        (:func:`classify_escalation_transition`). Never raises; a read it cannot
+        do is ``unmeasured`` and pushes.
+        """
+        if self._pg_pool is None or not alert_row_id:
+            return False, "unmeasured — no finding row to compare"
+        try:
+            row_uuid = UUID(alert_row_id)
+        except (ValueError, TypeError, AttributeError):
+            return False, "unmeasured — the alert row id is not a uuid"
+        try:
+            finding = await self._pg_pool.fetchrow(_ESCALATED_FINDING_SQL, row_uuid)
+            if finding is None:
+                return False, "unmeasured — the finding row was not readable"
+            flip = _is_indicator_flip(finding["activation_count"], finding["tags"])
+            prior = None
+            if not flip and finding["analyst_id"] and finding["target_id"]:
+                prior = await self._pg_pool.fetchrow(
+                    _PRIOR_READ_SQL,
+                    finding["analyst_id"], finding["target_id"],
+                    finding["produced_at"], row_uuid,
+                )
+        except Exception as exc:
+            logger.warning(
+                "alert_sinks.transition_unmeasured alert_row_id=%s err=%s "
+                "(pushes — fails toward paging)", alert_row_id, exc,
+            )
+            return False, "unmeasured — the previous read could not be read"
+        if not finding["analyst_id"] or not finding["target_id"]:
+            if not flip:
+                return False, "unmeasured — the read names no unit or desk"
+        return classify_escalation_transition(
+            current=finding["severity"],
+            prior=prior["severity"] if prior is not None else None,
+            prior_found=prior is not None,
+            indicator_flip=flip,
         )
 
     async def _enrich_from_finding(
@@ -611,6 +817,16 @@ class AlertSinkDispatcher:
     async def _fan_out_inner(self, payload: AlertSinkPayload) -> list[DeliveryResult]:
         if not self._sinks:
             return []
+        # X4: every payload leaves with a topic and a kind (the ledger row and
+        # the volume count key on both; the ntfy sink publishes to the topic).
+        if not payload.topic or not payload.kind:
+            kind = payload.kind or payload.channel_name
+            payload = payload.model_copy(
+                update={
+                    "kind": kind,
+                    "topic": payload.topic or _topics.topic_for(kind),
+                }
+            )
 
         # Per-alert-row idempotency: ONE attempt series per alert_row_id.
         # (A finding escalated on two pack channels reaches fan_out twice.)
@@ -620,14 +836,21 @@ class AlertSinkDispatcher:
                     "alert_sinks.duplicate_suppressed alert_row_id=%s",
                     payload.alert_row_id,
                 )
-                return [
+                dupes = [
                     DeliveryResult(
                         sink_kind=sink.sink_kind,
                         outcome="skipped_duplicate",
-                        target=sink.target_summary(),
+                        target=sink.target_summary() if sink.configured else "",
+                        detail=(
+                            "duplicate: this alert_row_id already had an "
+                            "attempt series in this process"
+                        ),
                     )
                     for sink in self._sinks
                 ]
+                for sink, dupe in zip(self._sinks, dupes):
+                    await self._record_ledger_row(sink, payload, dupe)
+                return dupes
             self._attempted[payload.alert_row_id] = None
             while len(self._attempted) > _IDEMPOTENCY_MAX_ENTRIES:
                 self._attempted.popitem(last=False)
@@ -650,29 +873,41 @@ class AlertSinkDispatcher:
                     outcome="skipped_unconfigured",
                     detail=f"{kind} sink not configured",
                 )
-            if not sink.accepts_severity(payload.severity):
+            if not payload.rule_paged and not sink.accepts_severity(payload.severity):
                 return DeliveryResult(
                     sink_kind=kind,
                     outcome="skipped_below_severity",
                     target=sink.target_summary(),
                     detail=f"severity {payload.severity!r} below sink floor",
                 )
+            # X4: a level-only escalation never pushes. Before the cooldown, so
+            # it is never coalesced onto a later push either.
+            if payload.level_only and suppress_level_only_enabled():
+                return DeliveryResult(
+                    sink_kind=kind,
+                    outcome="skipped_level_only",
+                    target=sink.target_summary(),
+                    detail=f"level-only: {payload.transition}"[:500],
+                )
             # Global per-sink cooldown between outward POSTs (anti-noise
-            # minimum; in-process by design — documented module-level).
+            # minimum; in-process by design — documented module-level). X4:
+            # keyed per (sink, topic) — an engine push must not swallow the
+            # world's next one, nor coalesce its preview onto it.
+            cd_key = f"{kind}:{payload.topic}" if payload.topic else kind
             now = self._monotonic()
-            last = self._last_post_at.get(kind)
+            last = self._last_post_at.get(cd_key)
             if last is not None and (now - last) < self._cooldown_s:
                 # Coalesce, don't just drop: remember this alert so the NEXT
                 # allowed POST carries "+N suppressed" with a bounded preview
                 # (a burst is distilled, never silently thinned).
-                count, previews = self._suppressed.get(kind, (0, []))
+                count, previews = self._suppressed.get(cd_key, (0, []))
                 if len(previews) < _SUPPRESSED_PREVIEW_MAX:
                     previews.append(
                         f"{payload.severity} · "
                         f"{payload.target_id or payload.channel_name or '-'} · "
                         f"{(payload.summary or '')[:80]}"
                     )
-                self._suppressed[kind] = (count + 1, previews)
+                self._suppressed[cd_key] = (count + 1, previews)
                 return DeliveryResult(
                     sink_kind=kind,
                     outcome="skipped_cooldown",
@@ -682,9 +917,9 @@ class AlertSinkDispatcher:
                         f"(< {self._cooldown_s:.0f}s); coalesced onto next send"
                     ),
                 )
-            self._last_post_at[kind] = now
+            self._last_post_at[cd_key] = now
             # Attach any cooldown-suppressed backlog to this outgoing payload.
-            suppressed = self._suppressed.pop(kind, None)
+            suppressed = self._suppressed.pop(cd_key, None)
             if suppressed is not None and suppressed[0] > 0:
                 payload = payload.model_copy(
                     update={
@@ -722,10 +957,16 @@ class AlertSinkDispatcher:
         "skipped_unconfigured": "skipped_unconfigured",
         # A suppressed would-be POST is a delivery decision — audited.
         "skipped_cooldown": "skipped_cooldown",
-        # A configured severity filter doing its job is not a delivery event.
-        "skipped_below_severity": None,
-        # The first series already audited this alert_row_id.
-        "skipped_duplicate": None,
+        # N-M (11-13): EVERY dispatch decision is a row. Below the sink's
+        # floor and suppressed-as-duplicate used to write nothing, so an
+        # escalation could read "delivered" internally and never reach the
+        # phone with no trace (371 in 30 days). The reason rides
+        # error_message (the result's detail).
+        "skipped_below_severity": "skipped_below_severity",
+        "skipped_duplicate": "skipped_duplicate",
+        # X4: a measured level — recorded (the volume route counts it as
+        # suppressed), never a push.
+        "skipped_level_only": "skipped_level_only",
     }
 
     async def _record_ledger_row(
@@ -762,7 +1003,16 @@ class AlertSinkDispatcher:
             "source_links": len(payload.source_links),
             "outcome": result.outcome,
             "http_status": result.http_status,
+            # X4 ALERTS — the volume route (``/v3/system/alerts/volume``) and
+            # the watchdog's ``alert_volume_high`` page count on these.
+            "topic": payload.topic or None,
+            "kind": payload.kind or payload.channel_name or None,
         }
+        if payload.transition:
+            summary["transition"] = payload.transition[:200]
+        if payload.batch_count:
+            summary["batch_count"] = payload.batch_count
+            summary["batch_alert_ids"] = list(payload.batch_alert_ids[:_BATCH_IDS_MAX])
         sql = """
             INSERT INTO alert_sink_deliveries (
                 alert_row_id, channel_name, sink_kind, sink_target,
@@ -784,6 +1034,20 @@ class AlertSinkDispatcher:
             delivered_at,
             json.dumps(summary, separators=(",", ":")),
         )
+        if payload.alert_id:
+            # L-1: the push names its alert episode and the raise that decided
+            # it (migration 0250 columns; present whenever raise_alert wrote).
+            sql = """
+                INSERT INTO alert_sink_deliveries (
+                    alert_row_id, channel_name, sink_kind, sink_target,
+                    target_id, severity, effective_confidence, attempt_number,
+                    status, error_message, delivered_at, payload_summary,
+                    alert_id, alert_event_id
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                          $12::jsonb, $13, $14)
+            """
+            args = (*args, _uuid_or_none(payload.alert_id),
+                    _uuid_or_none(payload.alert_event_id))
         try:
             await self._pg_pool.execute(sql, *args)
         except Exception as exc:  # pragma: no cover — fault-injection path
@@ -793,11 +1057,23 @@ class AlertSinkDispatcher:
             )
 
 
+def _uuid_or_none(raw: Any) -> UUID | None:
+    try:
+        return UUID(str(raw)) if raw else None
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
 __all__ = [
     "DEFAULT_COOLDOWN_SECONDS",
+    "ENV_SUPPRESS_LEVEL_ONLY",
+    "classify_escalation_transition",
+    "suppress_level_only_enabled",
     "ENV_PUBLIC_BASE_URL",
     "LINEAGE_API_PATH_TEMPLATE",
+    "SEVERITY_ALIASES",
     "SEVERITY_ORDER",
+    "UNKNOWN_SEVERITY_DEFAULT",
     "AlertSink",
     "AlertSinkDispatcher",
     "AlertSinkFactory",
@@ -806,6 +1082,7 @@ __all__ = [
     "Outcome",
     "Severity",
     "build_registered_sinks",
+    "map_alert_severity",
     "normalise_severity",
     "receipt_link",
     "redact_url_to_host",

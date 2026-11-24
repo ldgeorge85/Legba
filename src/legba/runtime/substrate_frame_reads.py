@@ -44,7 +44,9 @@ from uuid import UUID
 
 import asyncpg
 
+from ..data.case_columns import category_filter_sql
 from ..data.provenance import origin as _origin
+from ..data.signal_slice_scope import FTS_SUMMARY_SQL
 from . import substrate_temporal as _temporal
 
 logger = logging.getLogger(__name__)
@@ -64,6 +66,22 @@ _TIMELINE_PER_KIND_FLOOR = 6
 EVENT_LIFECYCLE_STATES: tuple[str, ...] = (
     "emerging", "developing", "active", "evolving", "resolved",
 )
+
+#: The ``situations.status`` vocabulary. There is no CHECK constraint on the
+#: column; these are the three values the clustering handler writes
+#: (``situation_clustering._situation_status`` — active / dormant / closed)
+#: and the three the live table holds (2026-09-27: dormant 241, closed 43,
+#: active 12). A ``status`` filter outside them can only ever return nothing,
+#: so :func:`list_situations` names it in ``why_empty`` rather than handing
+#: back a silent empty the reader will take for "no such frames".
+#:
+#: The same three are the ``enum`` on ``list_situations.status`` in
+#: ``legba.data.stack.llm.tool_rounds.TOOL_SCHEMAS`` — where they are the
+#: validator's refusal set, so a planner never gets as far as this read with
+#: a bad status. The tuple cannot live in that module (it is a LEAF and this
+#: one carries asyncpg) so the two are declared separately and pinned
+#: together by ``tests/data_pkg/test_native_tool_rounds.py``.
+SITUATION_STATUSES: tuple[str, ...] = ("active", "dormant", "closed")
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +136,18 @@ async def list_situations(
         "       valid_from "
         "FROM situations "
         f"WHERE {where} "
-        "ORDER BY updated_at DESC, produced_at DESC "
+        # ORDER BY updated_at DESC returned NONE of the 12 ACTIVE frames on
+        # 2026-09-28: the hourly re-cluster stamps updated_at on every row it
+        # touches, so the column orders by "when the clusterer last ran over
+        # this frame", which is the same instant for hundreds of rows, and a
+        # LIMIT 20/30 took an arbitrary slice of 296 mostly-dormant frames.
+        # The consult prompt meanwhile promises the caller an intensity
+        # ranking. Rank by what the frame IS — its intensity — then by when
+        # it last actually MOVED (last_event_at, written from the newest
+        # member, not from the sweep), with id as the tiebreak so the page is
+        # deterministic.
+        "ORDER BY intensity_score DESC NULLS LAST, "
+        "         last_event_at DESC NULLS LAST, id "
         f"LIMIT ${len(params)}"
     )
     async with pool.acquire() as conn:
@@ -143,6 +172,15 @@ async def list_situations(
                 if isinstance(r["updated_at"], datetime) else None,
         })
     out: dict[str, Any] = {"rows": rows, "refs": refs, "count": len(rows)}
+    if not rows:
+        # An empty read used to be indistinguishable from "there are no such
+        # frames". Say which filters were actually applied, and when a status
+        # outside the live vocabulary was asked for, say THAT by name — it is
+        # the only filter here that can make a full table look empty.
+        out["why_empty"] = _situations_why_empty(
+            status=status, target_id=target_id,
+            since_hours=since_hours, as_of=as_of_dt,
+        )
     if as_of_dt is not None:
         out["as_of"] = as_of_dt.isoformat()
         # Count over the raw records: the row dicts deliberately do not
@@ -152,6 +190,37 @@ async def list_situations(
         out["unbounded_start"] = sum(
             1 for r in records if r["valid_from"] is None)
     return out
+
+
+def _situations_why_empty(
+    *,
+    status: str | None,
+    target_id: str | None,
+    since_hours: int | None,
+    as_of: datetime | None,
+) -> str:
+    """Why a ``list_situations`` read came back with nothing."""
+    applied: list[str] = []
+    if status is not None:
+        applied.append(f"status={status!r}")
+    if target_id is not None:
+        applied.append(f"target_id={target_id!r}")
+    if since_hours is not None:
+        applied.append(f"since_hours={int(since_hours)}")
+    if as_of is not None:
+        applied.append(f"as_of={as_of.isoformat()}")
+    filters = ", ".join(applied) if applied else "none"
+    parts = [f"No situation frames matched. Filters applied: {filters}."]
+    if status is not None and str(status) not in SITUATION_STATUSES:
+        parts.append(
+            f"status={status!r} is not one of the statuses this platform "
+            f"writes ({', '.join(SITUATION_STATUSES)}), so this filter can "
+            "never match a row — the empty result is the filter, not the "
+            "substrate."
+        )
+    elif not applied:
+        parts.append("The situations table itself has no rows to return.")
+    return " ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +303,7 @@ async def get_timeline(
             FROM signals
             WHERE to_tsvector('simple',
                       coalesce(payload->>'title','') || ' ' ||
-                      coalesce(payload->>'summary',''))
+                      {FTS_SUMMARY_SQL})
                   @@ plainto_tsquery('simple', $1)
                   {_window("COALESCE(fetched_at, created_at)",
                            signal_params)}
@@ -418,8 +487,15 @@ async def query_events(
     situation_id: str | None = None,
     limit: int = 20,
     max_row_limit: int = 200,
+    known_at: datetime | None = None,
 ) -> dict[str, Any]:
-    """The ``query_events`` body — see the port method's docstring."""
+    """The ``query_events`` body — see the port method's docstring.
+
+    ``known_at`` (lane E2, evaluation harness only): events recorded before K,
+    read by validity at ``min(as_of, K)``; lifecycle state (filter and value)
+    from the ledger at K, counts over links recorded before K, timestamps
+    after K masked (:mod:`legba.runtime.substrate_record_known_at`).
+    """
     try:
         as_of_dt = (
             _temporal.parse_instant(as_of, name="as_of")
@@ -435,6 +511,12 @@ async def query_events(
         )
     except _temporal.TemporalParameterError as exc:
         return {"rows": [], "refs": [], "error": str(exc)}
+    if known_at is not None:
+        # Imported here: the cut is evaluation-only and this leaf stays slim.
+        from . import substrate_record_known_at as _record_cut
+        from .substrate_known_at import recorded_before_sql
+
+        as_of_dt = _record_cut.clamp(as_of_dt, known_at)
     if lifecycle_state is not None and lifecycle_state not in EVENT_LIFECYCLE_STATES:
         return {
             "rows": [], "refs": [],
@@ -465,6 +547,11 @@ async def query_events(
     else:
         clauses.append(_origin.live_gate_sql("e"))
     clauses.append(origin_clause)
+    k_param = 0
+    if known_at is not None:
+        params.append(known_at)
+        k_param = len(params)
+        clauses.append(recorded_before_sql("e.created_at", k_param))
     if target_id is not None:
         params.append(target_id)
         clauses.append(f"e.target_id = ${len(params)}")
@@ -474,23 +561,33 @@ async def query_events(
         clauses.append(f"e.geo && ${len(params)}::text[]")
     if category is not None:
         params.append(category)
-        clauses.append(f"e.category = ${len(params)}")
+        # TAX-4: the registered class, or the producer's value (data.category_raw)
+        clauses.append(category_filter_sql("e", len(params)))
     if lifecycle_state is not None:
         params.append(lifecycle_state)
-        clauses.append(f"e.lifecycle_state = ${len(params)}")
+        state_expr = (
+            _record_cut.lifecycle_at_sql("e", k_param) if known_at is not None
+            else "e.lifecycle_state"
+        )
+        clauses.append(f"{state_expr} = ${len(params)}")
+    # Under known_at a filter matches only on links recorded before K.
+    link_cut = (
+        (lambda a: f" AND {recorded_before_sql(f'{a}.created_at', k_param)}")
+        if known_at is not None else (lambda a: "")
+    )
     if entity is not None:
         params.append(f"%{entity}%")
         clauses.append(
             "EXISTS (SELECT 1 FROM event_entity_links eel "
             "JOIN entity_profiles ep ON ep.id = eel.entity_id "
             "WHERE eel.event_id = e.id "
-            f"AND ep.canonical_name ILIKE ${len(params)})"
+            f"AND ep.canonical_name ILIKE ${len(params)}{link_cut('eel')})"
         )
     if situation_uuid is not None:
         params.append(situation_uuid)
         clauses.append(
             "EXISTS (SELECT 1 FROM situation_event_links sel "
-            f"WHERE sel.event_id = e.id AND sel.situation_id = ${len(params)})"
+            f"WHERE sel.event_id = e.id AND sel.situation_id = ${len(params)}{link_cut('sel')})"
         )
     # since/until bound the OCCURRENCE span by overlap — the event began
     # before `until` and had not ended before `since` (NULL time bounds fall
@@ -532,6 +629,13 @@ async def query_events(
         out["since"] = since_dt.isoformat()
     if until_dt is not None:
         out["until"] = until_dt.isoformat()
+    if known_at is not None:
+        async with pool.acquire() as conn:
+            masked = await _record_cut.rebuild_events_at(conn, rows, known_at)
+        return _record_cut.stamp(
+            out, known_at, masked=masked,
+            how="events.created_at < K; validity at min(as_of, K); lifecycle "
+                "and counts rebuilt at K")
     return out
 
 
@@ -549,8 +653,15 @@ async def inspect_event(
     *,
     event_id: str,
     section_cap: int = _INSPECT_SECTION_CAP,
+    known_at: datetime | None = None,
 ) -> dict[str, Any]:
-    """The ``inspect_event`` body — see the port method's docstring."""
+    """The ``inspect_event`` body — see the port method's docstring.
+
+    ``known_at`` (lane E2, evaluation harness only): the event and every
+    section row must have been recorded before K (``$3``; the event read
+    ``$2``); the event's lifecycle and counts are rebuilt at K and its
+    timestamps after K masked (:mod:`legba.runtime.substrate_record_known_at`).
+    """
     try:
         eid = UUID(str(event_id))
     except (ValueError, AttributeError):
@@ -561,6 +672,18 @@ async def inspect_event(
 
     def iso(v: Any) -> str | None:
         return v.isoformat() if isinstance(v, datetime) else None
+
+    kp: tuple[Any, ...] = ()
+    if known_at is not None:
+        # Imported here: the cut is evaluation-only and this leaf stays slim.
+        from . import substrate_record_known_at as _record_cut
+        from .substrate_known_at import recorded_before_sql as _rb
+
+        kp = (known_at,)
+
+    def cut(*anchors: str, param: int = 3) -> str:
+        """`` AND <a> < $<param>`` per anchor under known_at; ``""`` without."""
+        return "".join(f"AND {_rb(a, param)} " for a in anchors) if kp else ""
 
     async with pool.acquire() as conn:
         event = await conn.fetchrow(
@@ -574,14 +697,19 @@ async def inspect_event(
             "       e.analyst_version, e.run_id, e.origin_class, "
             "       e.collection_id, e.valid_from, e.valid_until, "
             "       e.superseded_by, e.produced_at, e.created_at, e.updated_at "
-            "FROM events e WHERE e.id = $1",
-            eid,
+            "FROM events e WHERE e.id = $1"
+            + (f" AND {_rb('e.created_at', 2)}" if kp else ""),
+            eid, *kp,
         )
         if event is None:
-            return {
+            out = {
                 "found": False, "refs": [],
                 "error": f"event not found: {event_id}",
             }
+            if kp:
+                out["error"] = f"event not in the record at known_at: {event_id}"
+                return _record_cut.stamp(out, known_at, how="events.created_at < K")
+            return out
         signal_rows = await conn.fetch(
             "SELECT l.signal_id, l.relevance, l.source_class, l.source_kind, "
             "       l.source_id, l.linked_at, "
@@ -590,9 +718,10 @@ async def inspect_event(
             "FROM signal_event_links l "
             "LEFT JOIN signals s ON s.id = l.signal_id "
             "WHERE l.event_id = $1 "
+            + cut("l.created_at", "s.created_at") +
             "ORDER BY l.relevance DESC, l.linked_at DESC "
             "LIMIT $2",
-            eid, section_cap,
+            eid, section_cap, *kp,
         )
         actor_rows = await conn.fetch(
             "SELECT l.entity_id, l.role, l.confidence, "
@@ -600,20 +729,28 @@ async def inspect_event(
             "FROM event_entity_links l "
             "JOIN entity_profiles ep ON ep.id = l.entity_id "
             "WHERE l.event_id = $1 "
+            + cut("l.created_at", "ep.created_at") +
             "ORDER BY l.confidence DESC, l.role, ep.canonical_name "
             "LIMIT $2",
-            eid, section_cap,
+            eid, section_cap, *kp,
+        )
+        # Under known_at an edge is admitted on its record time and its dated
+        # close (valid_until after K held at K); superseded_by is undated.
+        edge_gate = (
+            f"  {cut('created_at')}AND (valid_until IS NULL OR valid_until > $3) "
+            if kp else
+            "  AND superseded_by IS NULL "
+            "  AND valid_until IS NULL "
         )
         edge_rows = await conn.fetch(
             "SELECT id, src_event_id, dst_event_id, edge_type, confidence, "
             "       why, valid_from, valid_until "
             "FROM event_edges "
             "WHERE (src_event_id = $1 OR dst_event_id = $1) "
-            "  AND superseded_by IS NULL "
-            "  AND valid_until IS NULL "
+            + edge_gate +
             "ORDER BY edge_type, created_at "
             "LIMIT $2",
-            eid, section_cap,
+            eid, section_cap, *kp,
         )
         situation_rows = await conn.fetch(
             "SELECT s.id, s.name, s.status, s.category, s.intensity_score, "
@@ -621,18 +758,20 @@ async def inspect_event(
             "FROM situation_event_links l "
             "JOIN situations s ON s.id = l.situation_id "
             "WHERE l.event_id = $1 "
+            + cut("l.created_at", "s.created_at") +
             "ORDER BY l.relevance DESC, s.updated_at DESC "
             "LIMIT $2",
-            eid, section_cap,
+            eid, section_cap, *kp,
         )
         ledger_rows = await conn.fetch(
             "SELECT id, occurred_at, transition, state_from, state_to, why, "
             "       analyst_id, created_at "
             "FROM event_lifecycle_events "
             "WHERE event_id = $1 "
+            + cut("created_at", "occurred_at") +
             "ORDER BY occurred_at ASC, created_at ASC "
             "LIMIT $2",
-            eid, section_cap,
+            eid, section_cap, *kp,
         )
 
     refs: list[str] = [str(event["id"])]
@@ -702,7 +841,7 @@ async def inspect_event(
             "created_at": iso(r["created_at"]),
         })
 
-    return {
+    out = {
         "found": True,
         "event": {
             "id": str(event["id"]),
@@ -750,3 +889,13 @@ async def inspect_event(
         "lifecycle": lifecycle,
         "refs": refs,
     }
+    if not kp:
+        return out
+    async with pool.acquire() as conn:
+        masked = await _record_cut.rebuild_events_at(conn, [out["event"]], known_at)
+    for e in edges:
+        masked += _record_cut.mask_after(e, ("valid_from", "valid_until"), known_at)
+    return _record_cut.stamp(
+        out, known_at, masked=masked,
+        how="events and every section .created_at < K (signals: link and "
+            "signal); lifecycle and counts rebuilt at K")

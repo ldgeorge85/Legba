@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.cbc.world": {
+      "source": "source_cbc_world.yaml",
+      "state": "draft"
+    }
+  }
+}

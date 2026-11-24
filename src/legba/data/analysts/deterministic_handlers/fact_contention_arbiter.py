@@ -118,6 +118,7 @@ deterministic layer plus caching + a full surface record:
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import asyncio
 import hashlib
@@ -1093,7 +1094,7 @@ async def _llm_tiebreak(
     timeout / exception / unparsable / unlisted result yields an abstain outcome
     (the near-tie stands), mirroring the ACH per-cell lexical fallback — and is
     NOT cacheable, so a recovered model can retry the same evidence later. The
-    call is single-turn, temperature 0, output-capped, and wrapped in a per-call
+    call is single-turn, house temperature (1.0), output-capped, and wrapped in a per-call
     wall-clock timeout. DETECT-ONLY: this only SELECTS a winner — the caller
     still surfaces it through the same sidecar + marker path."""
     if llm is None or len(aggs) < 2:
@@ -1105,7 +1106,7 @@ async def _llm_tiebreak(
             llm.chat_complete(
                 [{"role": "user", "content": prompt}],
                 max_tokens=LLM_TIEBREAK_MAX_TOKENS,
-                temperature=0.0,
+                temperature=HOUSE_TEMPERATURE,
                 system=_TIEBREAK_SYSTEM_PROMPT,
             ),
             timeout=LLM_TIEBREAK_TIMEOUT_SECONDS,

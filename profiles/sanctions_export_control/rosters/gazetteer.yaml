@@ -1,0 +1,55 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# THE GAZETTEER of the sanctions / export-control skeleton (W10 CANON-1). It
+# declares ONLY what this case can honestly supply today: the polity universe
+# (a regime is a jurisdiction's, and a counterparty has one — so a country name
+# a designation prints still types `country`) and the spellings of the four
+# designating AUTHORITIES the regime roster names (United States, United
+# Kingdom, European Union, United Nations).
+#
+# EVERYTHING ELSE IS ABSENT, deliberately, and each guard that needs it answers
+# `not_applicable` by name (SEAMS #67) instead of passing silently:
+#   * desk_ids / desk_countries / slice_geo_countries / slug_to_country /
+#     country_tokens — the regime and counterparty targets are not country
+#     desks, so the absence-slice claim scope and the cross-target leak guard
+#     have nothing to test against;
+#   * officeholder_country_groups / polity_offices / functional_role_country_side
+#     — the case does not reconcile heads of state or government;
+#   * classifier_patterns — no GDELT/CAMEO event codings in the source set;
+#   * target_slug_names / known_country_tokens — the off-target publish guard
+#     is a per-country-desk guard;
+#   * demonym_map / region_adjective_map / known_regions / iso2_home_aliases /
+#     irregular_demonyms / slug_to_abbrev / screen_stopwords — no curated
+#     geography beyond the authorities is claimed here. INST-2 adds what the
+#     instance actually needs (counterparty jurisdictions, programme names).
+#
+# Declared by profile.yaml `rosters.gazetteer`; loaded by
+# src/legba/data/gazetteer.py (closed). docs/PROFILES.md "The gazetteer".
+
+schema: legba/gazetteer/1
+
+# The ISO-3166-1 universe, derived (no rows copied), with no curated additions.
+polities:
+  universe: pycountry
+  curated: []
+
+# The designating authorities' spellings -> their canonical names.
+alias_map:
+  "us": "United States"
+  "u.s.": "United States"
+  "usa": "United States"
+  "united states": "United States"
+  "united states of america": "United States"
+  "uk": "United Kingdom"
+  "u.k.": "United Kingdom"
+  "united kingdom": "United Kingdom"
+  "eu": "European Union"
+  "european union": "European Union"
+  "un": "United Nations"
+  "u.n.": "United Nations"
+  "united nations": "United Nations"
+
+# The two authorities that are supranational BODIES, not countries: they type
+# `organization`.
+alias_org: ["European Union", "United Nations"]

@@ -18,6 +18,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactElement } from 'react'
 import type { PanelRegistration } from '@/types'
 import AlertCenterPanel from './AlertCenter'
+import { pickScopeOption } from '@/test/pickScope'
 
 function reg(): PanelRegistration {
   return {
@@ -58,7 +59,7 @@ function stubFetch() {
     const u = String(url)
     let body: unknown = []
     if (u.includes('/findings')) body = { data: findingsPage }
-    else if (u.includes('/registry/descriptors')) body = SCOPE_ROWS
+    else if ((u.includes('/registry/descriptors') || u.includes('/v3/roster'))) body = SCOPE_ROWS
     return Promise.resolve({ ok: true, json: async () => body })
   })
   vi.stubGlobal('fetch', mock)
@@ -74,12 +75,7 @@ async function repoll() {
  *  Waits for the registry options to land before selecting, then asserts the
  *  controlled value took. */
 async function pickScope(value: string) {
-  const sel = (await screen.findByTestId('alert-scope-id')) as HTMLSelectElement
-  await waitFor(() =>
-    expect([...sel.options].some((o) => o.value === value)).toBe(true),
-  )
-  fireEvent.change(sel, { target: { value } })
-  await waitFor(() => expect(sel.value).toBe(value))
+  await pickScopeOption('alert-scope-id', value)
 }
 
 beforeEach(() => {

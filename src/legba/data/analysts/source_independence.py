@@ -141,6 +141,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from .._url_canon import normalized_levenshtein
+from ..claim_support import claim_only_lineage, is_claim_signal
 from .wire_pair_collapse import _MIN_KEY_TOKENS, _normalize_headline
 
 __all__ = [
@@ -502,6 +503,11 @@ def independence_of(
         sid = entry.get("source_id")
         if not sid or not entry.get("signal_id"):
             continue
+        # C-1: a CLAIM citation (the stamp ``inline_target._citation_entry``
+        # copies off the row) is never an independent source: it supports
+        # "X claimed Y", which no count of outlets turns into Y.
+        if is_claim_signal(entry):
+            continue
         key = str(sid)
         cited += 1
         sources.add(key)
@@ -542,6 +548,25 @@ def independence_of(
     return Independence(
         cited=cited, sources=len(sources), independent=folds.groups()
     )
+
+
+def stamp_cited_head(citation: dict[str, Any], src_row: Mapping[str, Any] | Any) -> dict[str, Any]:
+    """A composition citation of ``src_row`` with what is behind the cited head
+    (``composition_citations._build_composition_citation``): ``single_source`` /
+    ``wire_folded`` when true (7d), and — C-2 — ``claim`` (the hop-2 stamp,
+    ``claim_support.claim_only_lineage``) when every signal the head cited is a
+    claim row. Each key is written only when it says something, so every
+    other citation is byte-identical."""
+    cits = head_citations(src_row)
+    independence = independence_of(cits)
+    if independence.single_source:
+        citation["single_source"] = True
+    if independence.folded:
+        citation["wire_folded"] = True
+    lineage = claim_only_lineage(cits)
+    if lineage is not None:
+        citation["claim"] = lineage
+    return citation
 
 
 def corroboration_block(

@@ -162,11 +162,14 @@ it and the runtime image's matching pin in lockstep.
 
 ## 4. Migrations
 
-Migrations are SQL files in `src/legba/data/migrations/`, discovered by a sorted
-glob over `*.sql`. There is no manifest and no head constant, so:
+Migrations are SQL files in `src/legba/data/migrations/`. There is no manifest
+and no head constant, so:
 
-- **The filename is the ordering.** Use the number reserved for your change;
-  another lane may be holding the next one.
+- **A new migration is time-named.** `python3 scripts/new_migration.py <slug>`
+  creates `YYYYMMDDTHHMM_<slug>.sql` (the current UTC minute), so two changes
+  in flight never race for a shared counter. The numbered files (`0001`–`0268`
+  and their gaps) are closed; the runner applies them in number order, then the
+  time-named ones in time and slug order, and records each by name.
 - **Gaps are harmless.** An unused number breaks nothing, so a reserved-then-
   abandoned slot is simply left empty rather than renumbered.
 - **Additive DDL.** `CREATE TABLE IF NOT EXISTS` and `ADD COLUMN IF NOT EXISTS`
@@ -368,8 +371,14 @@ parameterised bring-up.
 
 The suite runs in a container pinned to a compatible pytest, through
 `scripts/run_tests_in_container.sh` — whole suite, or a subset by path. Run
-targeted paths while iterating; the full suite takes on the order of a quarter
-hour and shares one Postgres.
+targeted paths while iterating; the full suite takes on the order of half an
+hour. It runs on its own substrate, never the production services:
+`deploy/compose.test.yml` brings up a test Postgres, NATS, Redis, Qdrant and
+the journal AGE fixture in one network namespace, and the test container joins
+it, so `127.0.0.1:5432` inside a test is the test Postgres and the production
+ports are unreachable. The runner starts that stack on demand;
+`LEGBA_TEST_FRESH=1` recreates it empty. One stack serves every caller, so
+runs are serialized with `flock /tmp/legba-container-tests.lock`.
 
 Working in a git worktree, point the runner at your own tree or you will verify
 your branch against a different checkout's code. Two families fail only in a
@@ -381,8 +390,8 @@ A green CI badge means the tree is lint-clean and structurally sound, not that
 the tests pass. CI runs the ruff ratchet and the structural gates — the checks
 that need nothing but the source tree. Everything touching Postgres, Qdrant,
 OpenSearch, NATS or a Dapr sidecar is out of reach of a hosted runner, which is
-the great majority of the suite. The real gate is the nightly run on a host with
-the stack up.
+the great majority of the suite. The real gate is the nightly run on the isolated
+test stack, whose verdict `scripts/rolling_deploy.sh` reads before it builds.
 
 ---
 

@@ -12,18 +12,22 @@
  *     selection store shipped `back()` only, capped at 12, with a single
  *     consumer inside the Inspector; v2 had back AND forward over 50, and a
  *     drill trail that nothing can navigate is a breadcrumb, not history.
- *  3. **The panel-open bridges.** A panel asking for another panel fires a DOM
- *     event, and an event with no listener is lost — so the listener that
- *     MATERIALISES the tile has to live where the dock api does. Covered at the
- *     foot of this file.
+ *  3. **A panel opening another panel.** The DOM-event bridges are retired
+ *     (UI-B1/shell): a panel drives an `open_panel` through the ONE executor,
+ *     whose shell port lives where the dock api does, so the FIRST click
+ *     materialises the tile. Covered at the foot of this file.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactElement } from 'react'
 
-import { App, CROSS_FRAMING_KIND, OPEN_CROSS_FRAMING_EVENT } from '@/App'
-import { PANEL_REGISTRY, type RegistryEntry } from '@/panel-registry/registry'
+import { App } from '@/App'
+
+const CROSS_FRAMING_KIND = 'analysis.cross_framing' as const
+import { requestCrossFraming } from '@/lib/crossFramingLink'
+import { pendingPanelParams, resetPanelParams } from '@/state/panelParams'
+import { PANEL_REGISTRY } from '@/panel-registry/registry'
 import { PreferencesProvider } from '@/components/density/PreferencesProvider'
 import { __resetReadTelemetry } from '@/lib/readTelemetry'
 import { resetScope, useScope } from '@/state/scope'
@@ -142,53 +146,25 @@ describe('Alt+Shift+← / → walk the SCOPE trail', () => {
 })
 
 /**
- * The PANEL-OPEN BRIDGES — the third thing that lives in `App.tsx` rather than
- * in any panel.
+ * The cross-framing drill, opened by a claim chip (wave P lane B; UI-B1/shell).
  *
- * A panel that wants another panel opened on a subject parks the subject on
- * `window` and fires a DOM event. The event alone cannot work: a `CustomEvent`
- * with no listener is simply lost, which is exactly the "first click does
- * nothing" bug the optimizer-diff bridge was added to fix. The listener has to
- * sit in the shell, because the shell is the only thing holding the dock api,
- * and only the shell can materialise a tile that is not mounted yet.
+ * The `legba:open-cross-framing` event and its `window` park are retired. A
+ * claim chip drives an `open_panel` carrying the claim through the ONE
+ * executor; the shell port materialises the tile on the FIRST click, and the
+ * claim waits for the tile in `state/panelParams`.
  */
-describe('the cross-framing bridge (wave P lane B)', () => {
-  it('materialises the tile on the event, so the FIRST click opens it', async () => {
-    // Lane B registers `analysis.cross_framing`; this shell lane is pinned
-    // before that merge, so the kind may not be in the registry here. Stand a
-    // minimal entry in when it is missing — what is under test is the SHELL's
-    // half (event → addPanel), which is identical either way, and the entry is
-    // removed again so no other test sees it.
-    const registry = PANEL_REGISTRY as Record<string, RegistryEntry>
-    const injected = !(CROSS_FRAMING_KIND in registry)
-    if (injected) {
-      registry[CROSS_FRAMING_KIND] = {
-        definition: {
-          kind: CROSS_FRAMING_KIND as never,
-          panelId: 'analysis_cross_framing',
-          category: 'system',
-          scopeKey: null,
-          defaultTitle: 'Cross-framing',
-          requiresBinding: false,
-          modes: ['personal'],
-          hidden: true,
-          tier: 'live',
-        },
-        Component: () => <div data-testid="cross-framing-stub" />,
-      }
-    }
-    try {
-      render(wrap(<App />))
-      await waitFor(() => expect(screen.getByTestId('workspace-bar')).toBeInTheDocument())
-      expect(screen.queryByText('Cross-framing')).toBeNull()
+describe('the cross-framing drill opens through the one executor', () => {
+  it('materialises the tile on the FIRST request, with the claim in hand', async () => {
+    resetPanelParams()
+    render(wrap(<App />))
+    await waitFor(() => expect(screen.getByTestId('surface-bar')).toBeInTheDocument())
+    expect(screen.queryByText('Cross-framing')).toBeNull()
 
-      fireEvent(window, new CustomEvent(OPEN_CROSS_FRAMING_EVENT))
+    requestCrossFraming({ targetId: 'country_ruritania', claimId: 'c9', origin: 'test' })
 
-      // The tab carries the kind's title; the panel itself drains the subject
-      // lane B parked on `window` when it mounts.
-      await waitFor(() => expect(screen.getAllByText('Cross-framing').length).toBeGreaterThan(0))
-    } finally {
-      if (injected) delete registry[CROSS_FRAMING_KIND]
-    }
+    await waitFor(() => expect(screen.getAllByText('Cross-framing').length).toBeGreaterThan(0))
+    expect(PANEL_REGISTRY[CROSS_FRAMING_KIND]).toBeDefined()
+    // The request carried the claim; the mounted tile consumed it.
+    await waitFor(() => expect(pendingPanelParams(CROSS_FRAMING_KIND)).toBeNull(), { timeout: 5000 })
   })
 })

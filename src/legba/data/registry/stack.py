@@ -10,6 +10,7 @@ maps to a pydantic model in `legba.data.schemas.stack`, discriminated by
 Operations:
     register(component, actor) -> StackComponentRow
     update(component_id, new_component, actor) -> StackComponentRow
+    rollback(component_id, actor, target_version=None) -> StackComponentRow
     retire(component_id, actor) -> StackComponentRow
     get(component_id, version=None) -> StackComponentRow
     get_by_kind(kind, name=None) -> list[StackComponentRow]
@@ -45,6 +46,7 @@ import asyncpg
 from pydantic import BaseModel, ValidationError
 
 from ..postgres import PostgresStore
+from ..principals import handle_for_actor
 from ..schemas.lifecycle import ALLOWED_TRANSITIONS, LifecycleState
 from ..schemas.properties import FactoryValue, Secret
 from ..schemas.stack import (
@@ -501,14 +503,15 @@ class StackRegistry:
                 """
                 INSERT INTO stack_components
                     (component_id, version, schema_uri, kind, is_head,
-                     state, owner, name, body)
-                VALUES ($1, $2, $3, $4, TRUE, $5, $6, $7, $8::jsonb)
+                     state, owner, name, body, written_by)
+                VALUES ($1, $2, $3, $4, TRUE, $5, $6, $7, $8::jsonb,
+                        legba_principal($9))
                 RETURNING component_id, version, schema_uri, kind, is_head,
                           state, owner, name, body, created_at
                 """,
                 typed.id, typed.version, typed.schema_uri, kind,
                 typed.state.value, typed.owner, typed.name,
-                json.dumps(body),
+                json.dumps(body), handle_for_actor(actor),
             )
             await self._audit.record(
                 conn,
@@ -532,7 +535,16 @@ class StackRegistry:
         actor: str,
     ) -> StackComponentRow:
         """Replace the head version. The old version row stays in the
-        table (immutable history) but flips `is_head=false`."""
+        table (immutable history) but flips `is_head=false`.
+
+        W11-F105: the version is a CONTENT hash, so a body equal to an
+        EARLIER (non-head) version ("put max_concurrent back to what it was
+        two versions ago") names a row that already exists; inserting it
+        again violated `stack_components_pkey` (a 500). That case RE-HEADS
+        the existing row instead (one transaction: demote the head, promote
+        the row, audit `re_head`). Content equal to the CURRENT head is
+        still a `VersionConflict`.
+        """
         current = await self.get(component_id)
         typed = await self._validate(new_component, actor=actor)
         if typed.id != component_id:
@@ -545,9 +557,128 @@ class StackRegistry:
             )
         kind = kind_from_schema_uri(typed.schema_uri)
         body = typed.model_dump(mode="json", by_alias=True)
+        summary: dict[str, Any] = {"kind": kind, "schema_uri": typed.schema_uri}
 
         async with self._store.transaction() as conn:
+            head = await self._lock_head(conn, component_id)
+            if head["version"] != current.version:
+                raise VersionConflict(
+                    f"component {component_id!r}: head moved from "
+                    f"{current.version!r} to {head['version']!r} during update; retry"
+                )
+            existing = await conn.fetchrow(
+                "SELECT version, state FROM stack_components "
+                "WHERE component_id = $1 AND version = $2",
+                component_id, typed.version,
+            )
             # Flip the previous head.
+            await conn.execute(
+                "UPDATE stack_components SET is_head = FALSE "
+                "WHERE component_id = $1 AND is_head",
+                component_id,
+            )
+            if existing is not None:
+                # Re-head: the row already holds this content. Re-assert the
+                # content-derived columns from the validated body (a retire
+                # flips `state` in place without a new version, so a demoted
+                # row can carry a state its hash does not); created_at stays.
+                row = await conn.fetchrow(
+                    """
+                    UPDATE stack_components
+                    SET is_head = TRUE, state = $3, owner = $4, name = $5,
+                        body = $6::jsonb
+                    WHERE component_id = $1 AND version = $2
+                    RETURNING component_id, version, schema_uri, kind, is_head,
+                              state, owner, name, body, created_at
+                    """,
+                    component_id, typed.version, typed.state.value,
+                    typed.owner, typed.name, json.dumps(body),
+                )
+                action = "re_head"
+                summary["head_shift"] = True
+                if existing["state"] != typed.state.value:
+                    summary["state_reasserted_from"] = existing["state"]
+            else:
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO stack_components
+                        (component_id, version, schema_uri, kind, is_head,
+                         state, owner, name, body, written_by)
+                    VALUES ($1, $2, $3, $4, TRUE, $5, $6, $7, $8::jsonb,
+                            legba_principal($9))
+                    RETURNING component_id, version, schema_uri, kind, is_head,
+                              state, owner, name, body, created_at
+                    """,
+                    typed.id, typed.version, typed.schema_uri, kind,
+                    typed.state.value, typed.owner, typed.name,
+                    json.dumps(body), handle_for_actor(actor),
+                )
+                action = "update"
+            await self._audit.record(
+                conn,
+                actor_id=actor,
+                namespace=self.NAMESPACE,
+                descriptor_id=typed.id,
+                action=action,
+                from_version=current.version,
+                to_version=typed.version,
+                change_summary=summary,
+            )
+
+        result = self._row_to_dataclass(row)
+        await self._emit("updated", result, actor, from_version=current.version)
+        return result
+
+    async def rollback(
+        self,
+        component_id: str,
+        actor: str,
+        *,
+        target_version: str | None = None,
+        reason: str | None = None,
+    ) -> StackComponentRow:
+        """Restore a prior version as head (W11-F105; the stack-side twin of
+        `DescriptorRegistry.rollback`).
+
+        `target_version=None` rolls back to the PREVIOUS version: the
+        `from_version` of the newest `update` / `re_head` audit entry that
+        made the current head head (every head change audits inside its own
+        transaction; the version hash is content-derived, so `created_at`
+        order is not head order once a row has been re-headed). Rollback
+        entries are skipped, so repeated rollbacks walk back through the
+        history rather than toggling; undoing a rollback names the version.
+        A head only ever reached by `register` has no previous version.
+        Raises `DescriptorNotFound` (no such component), `VersionConflict`
+        (target absent, no previous version, or already the head) and
+        `IllegalLifecycleTransition` (the head or the target is retired:
+        retired is terminal, a rollback does not un-retire).
+        """
+        async with self._store.transaction() as conn:
+            head = await self._lock_head(conn, component_id)
+            if LifecycleState(head["state"]) == LifecycleState.RETIRED:
+                raise IllegalLifecycleTransition(LifecycleState.RETIRED.value, "rollback")
+            target = target_version or await self._previous_version(
+                conn, component_id, head["version"],
+            )
+            if target is None:
+                raise VersionConflict(
+                    f"component {component_id!r}: no previous version to roll back to"
+                )
+            if target == head["version"]:
+                raise VersionConflict(
+                    f"component {component_id!r}: version {target} is already the head"
+                )
+            target_row = await conn.fetchrow(
+                "SELECT version, state FROM stack_components "
+                "WHERE component_id = $1 AND version = $2",
+                component_id, target,
+            )
+            if target_row is None:
+                raise VersionConflict(
+                    f"component {component_id!r}: target version {target} does not exist"
+                )
+            if LifecycleState(target_row["state"]) == LifecycleState.RETIRED:
+                raise IllegalLifecycleTransition(LifecycleState.RETIRED.value, "rollback")
             await conn.execute(
                 "UPDATE stack_components SET is_head = FALSE "
                 "WHERE component_id = $1 AND is_head",
@@ -555,31 +686,59 @@ class StackRegistry:
             )
             row = await conn.fetchrow(
                 """
-                INSERT INTO stack_components
-                    (component_id, version, schema_uri, kind, is_head,
-                     state, owner, name, body)
-                VALUES ($1, $2, $3, $4, TRUE, $5, $6, $7, $8::jsonb)
+                UPDATE stack_components SET is_head = TRUE
+                WHERE component_id = $1 AND version = $2
                 RETURNING component_id, version, schema_uri, kind, is_head,
                           state, owner, name, body, created_at
                 """,
-                typed.id, typed.version, typed.schema_uri, kind,
-                typed.state.value, typed.owner, typed.name,
-                json.dumps(body),
+                component_id, target,
             )
+            summary: dict[str, Any] = {
+                "from_version": head["version"],
+                "to_version": target,
+                "target": "named" if target_version else "previous",
+            }
+            if reason:
+                summary["reason"] = reason
             await self._audit.record(
                 conn,
                 actor_id=actor,
                 namespace=self.NAMESPACE,
-                descriptor_id=typed.id,
-                action="update",
-                from_version=current.version,
-                to_version=typed.version,
-                change_summary={"kind": kind, "schema_uri": typed.schema_uri},
+                descriptor_id=component_id,
+                action="rollback",
+                from_version=head["version"],
+                to_version=target,
+                change_summary=summary,
             )
 
         result = self._row_to_dataclass(row)
-        await self._emit("updated", result, actor, from_version=current.version)
+        await self._emit("rolled_back", result, actor, from_version=head["version"])
         return result
+
+    async def _lock_head(self, conn: Any, component_id: str) -> Mapping[str, Any]:
+        """The head row's (version, state), locked for the transaction."""
+        head = await conn.fetchrow(
+            "SELECT version, state FROM stack_components "
+            "WHERE component_id = $1 AND is_head FOR UPDATE",
+            component_id,
+        )
+        if head is None:
+            raise DescriptorNotFound(self.NAMESPACE, component_id, None)
+        return head
+
+    async def _previous_version(
+        self, conn: Any, component_id: str, head_version: str,
+    ) -> str | None:
+        """The version `head_version` was written over (see `rollback`):
+        rollback entries are skipped, so repeated rollbacks walk back."""
+        return await conn.fetchval(
+            "SELECT from_version FROM descriptor_audit_log "
+            "WHERE namespace = $1 AND descriptor_id = $2 AND to_version = $3 "
+            "AND action <> 'rollback' "
+            "AND from_version IS NOT NULL AND from_version <> to_version "
+            "ORDER BY occurred_at DESC LIMIT 1",
+            self.NAMESPACE, component_id, head_version,
+        )
 
     async def retire(self, component_id: str, actor: str) -> StackComponentRow:
         """Transition the head row to RETIRED.

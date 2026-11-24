@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.agenciabrasil.english": {
+      "source": "source_agenciabrasil.yaml",
+      "state": "draft"
+    }
+  }
+}

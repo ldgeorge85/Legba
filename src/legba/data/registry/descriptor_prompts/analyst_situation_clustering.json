@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:situation_clustering": {
+      "source": "analyst_situation_clustering.yaml",
+      "state": "active"
+    }
+  }
+}

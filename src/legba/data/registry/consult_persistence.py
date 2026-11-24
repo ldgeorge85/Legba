@@ -27,7 +27,10 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 from typing import Any
+
+from . import consult_turn_stamps as _stamps
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +43,50 @@ def _title_from_question(question: str) -> str:
     if len(q) > _TITLE_MAX:
         return q[: _TITLE_MAX - 1].rstrip() + "…"
     return q or "(untitled consult)"
+
+
+#: The response bag an ASSISTANT turn records (migration 0223). Every key is
+#: always written — ``None`` when the run produced none — so the bag's
+#: PRESENCE is the claim "this turn's measurements were recorded", and its
+#: absence (a NULL column) is "not measured", never zeros.
+RESPONSE_BAG_KEYS: tuple[str, ...] = (
+    "uncertainty",
+    "provenance_census",
+    "hold_reason",
+    "uncertainty_floor_applied",
+    "watch_candidates",
+    "model",
+    # W2 / F-6 — the input-ceiling stamp, present only when the ceiling bit.
+    "context_compaction",
+    # W3 / F-4 — the watch mint's per-candidate outcome; None = not attempted.
+    "watch_minted",
+    # C-1b — the case this turn presented (``consult_case_schema.CaseRecord``);
+    # None = it presented none. A stopped / failed case turn writes the bag
+    # with only this (and the model) set.
+    "case",
+    # C-2b-1 — the turn's consult writes (``None`` = not armed; ``[]`` = armed,
+    # nothing written). ``consult_writes`` is the authority; this is for reload.
+    "writes",
+    # Q-1 — the turn contract (``consult_contract/1``): window, reach, coverage,
+    # explanations, grounding accounting and the turn's ``on_screen`` report.
+    "contract",
+)
+
+
+def response_bag(source: Any) -> dict[str, Any] | None:
+    """Pick the 0223 response bag off a projected consult response.
+
+    ``source`` is the front door's ``ConsultResponse`` (or its dumped dict).
+    Returns ``None`` for anything that is neither — a caller with no response
+    stores a NULL column, which reads back as "not measured".
+    """
+    if source is None:
+        return None
+    if hasattr(source, "model_dump"):
+        source = source.model_dump(mode="json")
+    if not isinstance(source, dict):
+        return None
+    return {key: source.get(key) for key in RESPONSE_BAG_KEYS}
 
 
 def _as_jsonb(value: Any) -> str:
@@ -108,6 +155,8 @@ async def append_turn(
     synthesis_status: str = "complete",
     replay_transcript: Any = None,
     usage: Any = None,
+    response: Any = None,
+    verification: Any = None,
 ) -> str | None:
     """Append one ``consult_turns`` row and bump the session's ``updated_at``.
 
@@ -128,6 +177,14 @@ async def append_turn(
     * ``replay_transcript`` — the synthesis prompt as sent, for a run that may
       need finishing. NULL for a run that answered.
     * ``usage`` — the run's spend receipt (tokens, estimated USD, ceilings).
+
+    ``response`` (migration 0223) is the assistant turn's response bag — see
+    :func:`response_bag`. ``None`` stores NULL: "not measured".
+
+    ``verification`` (migration 0234, X2 C1) is the assistant turn's
+    ``consult_verification/1`` stamp — judged / unassessable / not_judged.
+    ``None`` stores NULL, which reads back as "recorded before judging"; every
+    front-door writer passes a stamp, so a new assistant row is never blank.
     """
     if role not in ("user", "assistant"):
         logger.warning("consult_persistence.append_turn bad role=%r", role)
@@ -142,9 +199,11 @@ async def append_turn(
                     INSERT INTO consult_turns
                         (session_id, role, content, steps, tool_calls,
                          cited_refs, finding_id, request_id, parent_turn_id,
-                         synthesis_status, replay_transcript, usage)
+                         synthesis_status, replay_transcript, usage,
+                         response, verification)
                     VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7,
-                            $8, $9::uuid, $10, $11::jsonb, $12::jsonb)
+                            $8, $9::uuid, $10, $11::jsonb, $12::jsonb,
+                            $13::jsonb, $14::jsonb)
                     RETURNING id
                     """,
                     session_id,
@@ -159,6 +218,8 @@ async def append_turn(
                     synthesis_status or "complete",
                     _as_jsonb(replay_transcript) if replay_transcript else None,
                     _as_jsonb(usage) if usage else "{}",
+                    _as_jsonb(response) if isinstance(response, dict) else None,
+                    _as_jsonb(verification) if isinstance(verification, dict) else None,
                 )
                 await conn.execute(
                     "UPDATE consult_sessions SET updated_at = now() WHERE id = $1",
@@ -177,8 +238,27 @@ async def record_deep_completion(
     answer: str,
     cited_refs: Any = None,
     finding_id: str | None = None,
+    contract: Any = None,
+    verification: Any = None,
+    judged_refs: Any = None,
+    usage: Any = None,
+    plane: str | None = None,
+    route: str | None = None,
 ) -> str | None:
     """Append the deep-consult ANSWER turn to its session, idempotently.
+
+    Roll-86 follow-up: ``usage`` is the run's receipt the workflow carried on
+    the finding (``data.deep_consult.usage``: totals + per-call receipts, from
+    the stages' own run accounts — ``runtime/dapr_workflow/deep_consult_usage``),
+    stamped through the same ``usage_receipt`` as a chat turn with the
+    ``plane`` / ``route`` it ran on. A run that carried none keeps the label.
+
+    Q-2: ``contract`` and ``verification`` are what the deep run's analyze
+    stage settled (carried on the finding's ``data.deep_consult``): the turn
+    stores the contract in its 0223 bag and the verdict as its stamp, checked
+    against the persisted answer and ``judged_refs`` (the refs the verdict's
+    digest was taken over) as the chat front door checks its own. A finding
+    written before Q-2 carries neither: the labels below, as before.
 
     The deep-consult status route is poll-driven — it can observe ``completed``
     many times — so this writes the assistant turn AT MOST ONCE per session: it
@@ -216,6 +296,11 @@ async def record_deep_completion(
         logger.warning("consult_persistence.record_deep_completion lookup failed: %s", exc)
         return None
 
+    # X2 C1 — the deep task's turn carries both stamps: the workflow's spend
+    # never reaches this poll (a label), and the settle-point verdict the
+    # analyze stage carried (Q-2) — else the label. Absence with a reason,
+    # never a blank or a zero (W1-F2).
+    refs = [str(r) for r in judged_refs] if isinstance(judged_refs, list) else None
     return await append_turn(
         pg,
         session_id=session_id,
@@ -223,24 +308,47 @@ async def record_deep_completion(
         content=answer or "",
         cited_refs=cited_refs,
         finding_id=finding_id,
+        usage=_stamps.usage_receipt(
+            usage if isinstance(usage, Mapping) else None, plane=plane, route=route,
+            reason_if_absent="deep_consult_usage_not_carried",
+        ),
+        response=(
+            {**dict.fromkeys(RESPONSE_BAG_KEYS), "contract": dict(contract)}
+            if isinstance(contract, Mapping) else None
+        ),
+        verification=_stamps.verification_stamp(
+            verification if isinstance(verification, Mapping) else None,
+            reason_if_absent="deep_consult_not_judged",
+            answer=answer if isinstance(verification, Mapping) else None,
+            cited_refs=refs,
+        ),
     )
 
 
 async def list_sessions(
     pg: Any, *, limit: int = 50, mode: str | None = None,
+    principal: str | None = None,
 ) -> list[dict[str, Any]]:
     """List session headers, most-recently-active first (history sidebar).
 
     Optional ``mode`` filter ('chat' | 'deep'); ``limit`` clamps the page (1..200).
     Each row carries a ``turn_count`` so the sidebar can show conversation size
     without a second round-trip.
+
+    ``principal`` (X3-B3) confines the list to the sessions that principal
+    opened (``consult_sessions.principal`` — ``user:<id>`` for a signed-in
+    user); ``None`` lists every session (the operator's bearer, unchanged).
     """
     clamped = max(1, min(200, int(limit)))
-    where = ""
+    clauses: list[str] = []
     args: list[Any] = [clamped]
     if mode in ("chat", "deep"):
-        where = "WHERE s.mode = $2"
         args.append(mode)
+        clauses.append(f"s.mode = ${len(args)}")
+    if principal is not None:
+        args.append(principal)
+        clauses.append(f"s.principal = ${len(args)}")
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     async with pg.acquire() as conn:
         rows = await conn.fetch(
             f"""
@@ -284,6 +392,22 @@ def _load_jsonb(value: Any) -> Any:
     return []
 
 
+def _lift_response(value: Any) -> dict[str, Any]:
+    """Lift a turn's 0223 response bag onto the projected turn.
+
+    ``response_recorded`` is False for a turn with no bag (it predates 0223, or
+    the run produced nothing to measure); every lifted key is then ``None`` and
+    the panel renders "not measured" — never a zero it did not read.
+    """
+    bag = _load_jsonb(value) if value is not None else None
+    if not isinstance(bag, dict):
+        return {"response_recorded": False, **dict.fromkeys(RESPONSE_BAG_KEYS)}
+    return {
+        "response_recorded": True,
+        **{key: bag.get(key) for key in RESPONSE_BAG_KEYS},
+    }
+
+
 async def load_session(pg: Any, session_id: str) -> dict[str, Any] | None:
     """Load one session header + its ordered turns (continue-a-prior-chat).
 
@@ -304,7 +428,8 @@ async def load_session(pg: Any, session_id: str) -> dict[str, Any] | None:
         turn_rows = await conn.fetch(
             """
             SELECT id, role, content, steps, tool_calls, cited_refs,
-                   finding_id, created_at, request_id, synthesis_status
+                   finding_id, created_at, request_id, synthesis_status,
+                   response, usage, verification
               FROM consult_turns
              WHERE session_id = $1
              ORDER BY created_at ASC, id ASC
@@ -332,6 +457,14 @@ async def load_session(pg: Any, session_id: str) -> dict[str, Any] | None:
                 "created_at": t["created_at"].isoformat() if t["created_at"] else None,
                 "request_id": t["request_id"],
                 "synthesis_status": t["synthesis_status"] or "complete",
+                **_lift_response(t["response"]),
+                # X2 C1 — ``{}`` = no receipt recorded; ``None`` = the turn
+                # predates judging (0234). The panel renders both as such.
+                "usage": _load_jsonb(t["usage"]) if t["usage"] is not None else {},
+                "verification": (
+                    v if isinstance(v := _load_jsonb(t["verification"]), dict)
+                    and t["verification"] is not None else None
+                ),
             }
             for t in turn_rows
         ],
@@ -360,7 +493,7 @@ async def load_turn_for_recovery(
             """
             SELECT id, session_id, role, content, steps, tool_calls,
                    cited_refs, finding_id, request_id, synthesis_status,
-                   replay_transcript, usage, created_at
+                   replay_transcript, usage, response, created_at
               FROM consult_turns
              WHERE role = 'assistant'
                AND (($1::text IS NOT NULL AND request_id = $1)
@@ -400,14 +533,29 @@ async def load_turn_for_recovery(
             _load_jsonb(transcript) if transcript is not None else None
         ),
         "usage": _load_jsonb(row["usage"]) if row["usage"] is not None else {},
+        # The turn contract the original turn stored in its 0223 bag (Q-1), or
+        # None when it stored none (a turn before Q-1, or a run with no bag).
+        # A recovery returns it: the recovered answer is written over the SAME
+        # evidence, gathered under the same window and reach.
+        "contract": (
+            ct if isinstance(ct := _lift_response(row["response"])["contract"], dict)
+            else None
+        ),
+        # Q-2 — when the original turn was written: a recovery of a turn that
+        # stored no window re-reads its question at THIS instant, not now.
+        "asked_at": (
+            row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else None
+        ),
     }
 
 
 __all__ = [
+    "RESPONSE_BAG_KEYS",
     "append_turn",
     "create_session",
     "list_sessions",
     "load_session",
     "load_turn_for_recovery",
     "record_deep_completion",
+    "response_bag",
 ]

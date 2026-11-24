@@ -1,0 +1,8 @@
+{
+  "states": {
+    "action_pack:incident_response": {
+      "source": "action_pack_incident_response.yaml",
+      "state": "active"
+    }
+  }
+}

@@ -1,0 +1,1285 @@
+{
+ "note": "INVENTED example answers for the Watch surface (U-9): written by hand, never recorded; overlaid on api.json by walk.mjs. No owner content: every source is source.example.*, every page example.org, every subject example_*. One subject is not example_*: ex-alert-015 (roll 87), the NEWEST row, is a closed episode about a place with a two-letter name ('oz') - the live phone walk at 360 px opened such a row first and found no Acknowledge or Snooze (right: a closed episode takes none) and a 28 px-wide subject button.",
+ "clock": "2026-11-14T01:00:00Z",
+ "entries": {
+  "/api/v1/v3/system/alerts/log?hours=24": {
+   "status": 200,
+   "body": {
+    "version": "2026-11/l1-single-alert-path",
+    "measured": true,
+    "not_measured_reason": null,
+    "window_hours": 24,
+    "read_at": "2026-11-14T01:00:00Z",
+    "as_of": "2026-11-14T00:36:00Z",
+    "ladder": [
+     "info",
+     "low",
+     "medium",
+     "high",
+     "critical"
+    ],
+    "rule_version": "2026-11-14/1",
+    "rule_path": "page_rule.yaml",
+    "rule_error": null,
+    "kinds": [
+     {
+      "kind": "escalations",
+      "group": "findings",
+      "topic": "world",
+      "subject_kind": "target",
+      "lifecycle": "event",
+      "summary": "An invented example kind description.",
+      "pages_when": [
+       "escalations >= medium"
+      ]
+     },
+     {
+      "kind": "verified_finding",
+      "group": "findings",
+      "topic": "world",
+      "subject_kind": "target",
+      "lifecycle": "event",
+      "summary": "An invented example kind description.",
+      "pages_when": [
+       "verified_finding >= medium"
+      ]
+     },
+     {
+      "kind": "watchlist_hit",
+      "group": "findings",
+      "topic": "world",
+      "subject_kind": "target",
+      "lifecycle": "event",
+      "summary": "An invented example kind description.",
+      "pages_when": [
+       "watchlist_hit >= medium"
+      ]
+     },
+     {
+      "kind": "baseline_deviation",
+      "group": "baseline",
+      "topic": "world",
+      "subject_kind": "target",
+      "lifecycle": "event",
+      "summary": "An invented example kind description.",
+      "pages_when": []
+     },
+     {
+      "kind": "volume_surge",
+      "group": "baseline",
+      "topic": "world",
+      "subject_kind": "target",
+      "lifecycle": "event",
+      "summary": "An invented example kind description.",
+      "pages_when": [
+       "volume_surge >= medium"
+      ]
+     },
+     {
+      "kind": "source_cadence_stall",
+      "group": "source_health",
+      "topic": "engine",
+      "subject_kind": "source",
+      "lifecycle": "event",
+      "summary": "An invented example kind description.",
+      "pages_when": [
+       "source_cadence_stall >= high"
+      ]
+     },
+     {
+      "kind": "source_degraded",
+      "group": "source_health",
+      "topic": "engine",
+      "subject_kind": "source",
+      "lifecycle": "event",
+      "summary": "An invented example kind description.",
+      "pages_when": [
+       "source_degraded >= high"
+      ]
+     },
+     {
+      "kind": "source_staleness_dead",
+      "group": "source_health",
+      "topic": "engine",
+      "subject_kind": "source",
+      "lifecycle": "event",
+      "summary": "An invented example kind description.",
+      "pages_when": [
+       "source_staleness_dead >= high"
+      ]
+     },
+     {
+      "kind": "evidence_drift",
+      "group": "source_health",
+      "topic": "engine",
+      "subject_kind": "source",
+      "lifecycle": "event",
+      "summary": "An invented example kind description.",
+      "pages_when": []
+     },
+     {
+      "kind": "analyst_cadence_stall",
+      "group": "analyst_failure",
+      "topic": "engine",
+      "subject_kind": "analyst",
+      "lifecycle": "event",
+      "summary": "An invented example kind description.",
+      "pages_when": [
+       "analyst_cadence_stall >= high"
+      ]
+     },
+     {
+      "kind": "production_deficit",
+      "group": "analyst_failure",
+      "topic": "engine",
+      "subject_kind": "analyst",
+      "lifecycle": "event",
+      "summary": "An invented example kind description.",
+      "pages_when": [
+       "production_deficit >= medium"
+      ]
+     },
+     {
+      "kind": "forecast_resolution",
+      "group": "forecasts",
+      "topic": "engine",
+      "subject_kind": "question",
+      "lifecycle": "event",
+      "summary": "An invented example kind description.",
+      "pages_when": [
+       "forecast_resolution >= medium"
+      ]
+     },
+     {
+      "kind": "host_disk",
+      "group": "host",
+      "topic": "engine",
+      "subject_kind": "host",
+      "lifecycle": "event",
+      "summary": "An invented example kind description.",
+      "pages_when": [
+       "host_disk >= low"
+      ]
+     },
+     {
+      "kind": "nightly_suite",
+      "group": "deploy",
+      "topic": "engine",
+      "subject_kind": "deploy",
+      "lifecycle": "event",
+      "summary": "An invented example kind description.",
+      "pages_when": [
+       "nightly_suite >= low"
+      ]
+     }
+    ],
+    "open": [
+     {
+      "id": "ex-alert-001",
+      "kind": "source_cadence_stall",
+      "group": "source_health",
+      "topic": "world",
+      "subject_kind": "source",
+      "subject_id": "source.example.harbour_notices",
+      "severity": "high",
+      "max_severity": "high",
+      "summary": "Example feed silent for 14 hours past its schedule.",
+      "opened_at": "2026-11-13T22:00:00Z",
+      "last_raised_at": "2026-11-14T00:36:00Z",
+      "occurrences": 3,
+      "paged_count": 1,
+      "paged_severity": "high",
+      "last_paged_at": "2026-11-13T22:00:00Z",
+      "raised_by": "example_producer",
+      "closed_at": null,
+      "close_reason": null
+     },
+     {
+      "id": "ex-alert-002",
+      "kind": "volume_surge",
+      "group": "baseline",
+      "topic": "world",
+      "subject_kind": "target",
+      "subject_id": "example_northland",
+      "severity": "medium",
+      "max_severity": "medium",
+      "summary": "Example surge: reports from nine outlets in one hour.",
+      "opened_at": "2026-11-13T23:30:00Z",
+      "last_raised_at": "2026-11-14T00:12:00Z",
+      "occurrences": 1,
+      "paged_count": 1,
+      "paged_severity": "medium",
+      "last_paged_at": "2026-11-13T23:30:00Z",
+      "raised_by": "example_producer",
+      "closed_at": null,
+      "close_reason": null
+     },
+     {
+      "id": "ex-alert-003",
+      "kind": "baseline_deviation",
+      "group": "baseline",
+      "topic": "world",
+      "subject_kind": "target",
+      "subject_id": "example_southmark",
+      "severity": "medium",
+      "max_severity": "medium",
+      "summary": "Example: the daily count sits well above its usual level.",
+      "opened_at": "2026-11-13T22:30:00Z",
+      "last_raised_at": "2026-11-13T23:48:00Z",
+      "occurrences": 1,
+      "paged_count": 0,
+      "paged_severity": null,
+      "last_paged_at": null,
+      "raised_by": "example_producer",
+      "closed_at": null,
+      "close_reason": null
+     },
+     {
+      "id": "ex-alert-004",
+      "kind": "escalations",
+      "group": "findings",
+      "topic": "world",
+      "subject_kind": "target",
+      "subject_id": "example_northland",
+      "severity": "high",
+      "max_severity": "high",
+      "summary": "Example: a statement on the border crossing was raised a level.",
+      "opened_at": "2026-11-13T20:00:00Z",
+      "last_raised_at": "2026-11-13T20:30:00Z",
+      "occurrences": 1,
+      "paged_count": 1,
+      "paged_severity": "high",
+      "last_paged_at": "2026-11-13T20:00:00Z",
+      "raised_by": "example_producer",
+      "closed_at": null,
+      "close_reason": null
+     },
+     {
+      "id": "ex-alert-005",
+      "kind": "source_degraded",
+      "group": "source_health",
+      "topic": "world",
+      "subject_kind": "source",
+      "subject_id": "source.example.port_authority_rss",
+      "severity": "medium",
+      "max_severity": "medium",
+      "summary": "Example: the last six polls came back empty.",
+      "opened_at": "2026-11-13T16:00:00Z",
+      "last_raised_at": "2026-11-13T23:00:00Z",
+      "occurrences": 6,
+      "paged_count": 0,
+      "paged_severity": null,
+      "last_paged_at": null,
+      "raised_by": "example_producer",
+      "closed_at": null,
+      "close_reason": null
+     },
+     {
+      "id": "ex-alert-006",
+      "kind": "analyst_cadence_stall",
+      "group": "analyst_failure",
+      "topic": "world",
+      "subject_kind": "analyst",
+      "subject_id": "example_coastal_desk",
+      "severity": "high",
+      "max_severity": "high",
+      "summary": "Example: no run for 7 hours against an hourly schedule.",
+      "opened_at": "2026-11-13T19:00:00Z",
+      "last_raised_at": "2026-11-14T00:00:00Z",
+      "occurrences": 2,
+      "paged_count": 1,
+      "paged_severity": "high",
+      "last_paged_at": "2026-11-13T19:00:00Z",
+      "raised_by": "example_producer",
+      "closed_at": null,
+      "close_reason": null
+     },
+     {
+      "id": "ex-alert-007",
+      "kind": "evidence_drift",
+      "group": "source_health",
+      "topic": "world",
+      "subject_kind": "source",
+      "subject_id": "source.example.daily_ledger",
+      "severity": "low",
+      "max_severity": "low",
+      "summary": "Example: two pages relied on changed after they were read.",
+      "opened_at": "2026-11-13T05:00:00Z",
+      "last_raised_at": "2026-11-13T23:00:00Z",
+      "occurrences": 4,
+      "paged_count": 0,
+      "paged_severity": null,
+      "last_paged_at": null,
+      "raised_by": "example_producer",
+      "closed_at": null,
+      "close_reason": null
+     },
+     {
+      "id": "ex-alert-008",
+      "kind": "watchlist_hit",
+      "group": "findings",
+      "topic": "world",
+      "subject_kind": "target",
+      "subject_id": "example_eastvale",
+      "severity": "medium",
+      "max_severity": "medium",
+      "summary": "Example: a watched name appeared in three reports.",
+      "opened_at": "2026-11-13T14:00:00Z",
+      "last_raised_at": "2026-11-13T14:00:00Z",
+      "occurrences": 1,
+      "paged_count": 1,
+      "paged_severity": "medium",
+      "last_paged_at": "2026-11-13T14:00:00Z",
+      "raised_by": "example_producer",
+      "closed_at": null,
+      "close_reason": null
+     },
+     {
+      "id": "ex-alert-009",
+      "kind": "host_disk",
+      "group": "host",
+      "topic": "world",
+      "subject_kind": "host",
+      "subject_id": "host",
+      "severity": "low",
+      "max_severity": "low",
+      "summary": "Example: disk at 86 percent.",
+      "opened_at": "2026-11-13T17:00:00Z",
+      "last_raised_at": "2026-11-13T22:00:00Z",
+      "occurrences": 2,
+      "paged_count": 1,
+      "paged_severity": "low",
+      "last_paged_at": "2026-11-13T17:00:00Z",
+      "raised_by": "example_producer",
+      "closed_at": null,
+      "close_reason": null
+     },
+     {
+      "id": "ex-alert-010",
+      "kind": "verified_finding",
+      "group": "findings",
+      "topic": "world",
+      "subject_kind": "target",
+      "subject_id": "example_southmark",
+      "severity": "low",
+      "max_severity": "low",
+      "summary": "Example: a checked statement was published.",
+      "opened_at": "2026-11-13T11:00:00Z",
+      "last_raised_at": "2026-11-13T11:00:00Z",
+      "occurrences": 1,
+      "paged_count": 0,
+      "paged_severity": null,
+      "last_paged_at": null,
+      "raised_by": "example_producer",
+      "closed_at": null,
+      "close_reason": null
+     }
+    ],
+    "closed": [
+     {
+      "id": "ex-alert-015",
+      "kind": "verified_finding",
+      "group": "findings",
+      "topic": "world",
+      "subject_kind": "target",
+      "subject_id": "oz",
+      "severity": "high",
+      "max_severity": "high",
+      "summary": "Example verified statement on a place with a two-letter name.",
+      "opened_at": "2026-11-14T00:20:00Z",
+      "last_raised_at": "2026-11-14T00:20:00Z",
+      "occurrences": 1,
+      "paged_count": 0,
+      "paged_severity": null,
+      "last_paged_at": null,
+      "raised_by": "example_producer",
+      "closed_at": "2026-11-14T00:40:00Z",
+      "close_reason": "quiet for 24 h"
+     },
+     {
+      "id": "ex-alert-011",
+      "kind": "source_cadence_stall",
+      "group": "source_health",
+      "topic": "world",
+      "subject_kind": "source",
+      "subject_id": "source.example.weather_bulletins",
+      "severity": "high",
+      "max_severity": "high",
+      "summary": "Example feed silent for 9 hours.",
+      "opened_at": "2026-11-13T03:00:00Z",
+      "last_raised_at": "2026-11-13T07:00:00Z",
+      "occurrences": 2,
+      "paged_count": 1,
+      "paged_severity": "high",
+      "last_paged_at": "2026-11-13T03:00:00Z",
+      "raised_by": "example_producer",
+      "closed_at": "2026-11-13T09:00:00Z",
+      "close_reason": "recovered: signals flowing again"
+     },
+     {
+      "id": "ex-alert-012",
+      "kind": "forecast_resolution",
+      "group": "forecasts",
+      "topic": "world",
+      "subject_kind": "question",
+      "subject_id": "example-q-12",
+      "severity": "medium",
+      "max_severity": "medium",
+      "summary": "Example: a forecast resolved as no.",
+      "opened_at": "2026-11-12T19:00:00Z",
+      "last_raised_at": "2026-11-12T19:00:00Z",
+      "occurrences": 1,
+      "paged_count": 1,
+      "paged_severity": "medium",
+      "last_paged_at": "2026-11-12T19:00:00Z",
+      "raised_by": "example_producer",
+      "closed_at": "2026-11-13T19:00:00Z",
+      "close_reason": "quiet: no raise for 24 h"
+     },
+     {
+      "id": "ex-alert-013",
+      "kind": "production_deficit",
+      "group": "analyst_failure",
+      "topic": "world",
+      "subject_kind": "analyst",
+      "subject_id": "example_market_desk",
+      "severity": "medium",
+      "max_severity": "medium",
+      "summary": "Example: wrote two items against an expected six.",
+      "opened_at": "2026-11-12T09:00:00Z",
+      "last_raised_at": "2026-11-12T23:00:00Z",
+      "occurrences": 3,
+      "paged_count": 1,
+      "paged_severity": "medium",
+      "last_paged_at": "2026-11-12T09:00:00Z",
+      "raised_by": "example_producer",
+      "closed_at": "2026-11-13T13:00:00Z",
+      "close_reason": "quiet: no raise for 12 h"
+     },
+     {
+      "id": "ex-alert-014",
+      "kind": "nightly_suite",
+      "group": "deploy",
+      "topic": "world",
+      "subject_kind": "deploy",
+      "subject_id": "nightly",
+      "severity": "low",
+      "max_severity": "low",
+      "summary": "Example: the nightly checks passed.",
+      "opened_at": "2026-11-13T10:00:00Z",
+      "last_raised_at": "2026-11-13T10:00:00Z",
+      "occurrences": 1,
+      "paged_count": 1,
+      "paged_severity": "low",
+      "last_paged_at": "2026-11-13T10:00:00Z",
+      "raised_by": "example_producer",
+      "closed_at": "2026-11-13T16:00:00Z",
+      "close_reason": "quiet: no raise for 6 h"
+     }
+    ],
+    "counts": [],
+    "paged": [
+     {
+      "event_id": "ev-ex-alert-001",
+      "alert_id": "ex-alert-001",
+      "raised_at": "2026-11-13T22:00:00Z",
+      "kind": "source_cadence_stall",
+      "severity": "high",
+      "subject_kind": "source",
+      "subject_id": "source.example.harbour_notices",
+      "summary": "Example feed silent for 14 hours past its schedule.",
+      "action": "opened",
+      "why": "a new episode",
+      "rule_entry": "source_cadence_stall >= high",
+      "rule_version": "2026-11-14/1",
+      "outcomes": [
+       "delivered"
+      ],
+      "delivered": true,
+      "raised_by": "example_producer"
+     },
+     {
+      "event_id": "ev-ex-alert-002",
+      "alert_id": "ex-alert-002",
+      "raised_at": "2026-11-13T23:30:00Z",
+      "kind": "volume_surge",
+      "severity": "medium",
+      "subject_kind": "target",
+      "subject_id": "example_northland",
+      "summary": "Example surge: reports from nine outlets in one hour.",
+      "action": "opened",
+      "why": "a new episode",
+      "rule_entry": "volume_surge >= medium",
+      "rule_version": "2026-11-14/1",
+      "outcomes": [
+       "delivered"
+      ],
+      "delivered": true,
+      "raised_by": "example_producer"
+     },
+     {
+      "event_id": "ev-ex-alert-004",
+      "alert_id": "ex-alert-004",
+      "raised_at": "2026-11-13T20:00:00Z",
+      "kind": "escalations",
+      "severity": "high",
+      "subject_kind": "target",
+      "subject_id": "example_northland",
+      "summary": "Example: a statement on the border crossing was raised a level.",
+      "action": "opened",
+      "why": "a new episode",
+      "rule_entry": "escalations >= medium",
+      "rule_version": "2026-11-14/1",
+      "outcomes": [
+       "delivered"
+      ],
+      "delivered": true,
+      "raised_by": "example_producer"
+     },
+     {
+      "event_id": "ev-ex-alert-006",
+      "alert_id": "ex-alert-006",
+      "raised_at": "2026-11-13T19:00:00Z",
+      "kind": "analyst_cadence_stall",
+      "severity": "high",
+      "subject_kind": "analyst",
+      "subject_id": "example_coastal_desk",
+      "summary": "Example: no run for 7 hours against an hourly schedule.",
+      "action": "opened",
+      "why": "a new episode",
+      "rule_entry": "analyst_cadence_stall >= high",
+      "rule_version": "2026-11-14/1",
+      "outcomes": [
+       "delivered"
+      ],
+      "delivered": true,
+      "raised_by": "example_producer"
+     },
+     {
+      "event_id": "ev-ex-alert-008",
+      "alert_id": "ex-alert-008",
+      "raised_at": "2026-11-13T14:00:00Z",
+      "kind": "watchlist_hit",
+      "severity": "medium",
+      "subject_kind": "target",
+      "subject_id": "example_eastvale",
+      "summary": "Example: a watched name appeared in three reports.",
+      "action": "opened",
+      "why": "a new episode",
+      "rule_entry": "watchlist_hit >= medium",
+      "rule_version": "2026-11-14/1",
+      "outcomes": [
+       "delivered"
+      ],
+      "delivered": true,
+      "raised_by": "example_producer"
+     },
+     {
+      "event_id": "ev-ex-alert-009",
+      "alert_id": "ex-alert-009",
+      "raised_at": "2026-11-13T17:00:00Z",
+      "kind": "host_disk",
+      "severity": "low",
+      "subject_kind": "host",
+      "subject_id": "host",
+      "summary": "Example: disk at 86 percent.",
+      "action": "opened",
+      "why": "a new episode",
+      "rule_entry": "host_disk >= low",
+      "rule_version": "2026-11-14/1",
+      "outcomes": [
+       "delivered"
+      ],
+      "delivered": true,
+      "raised_by": "example_producer"
+     },
+     {
+      "event_id": "ev-ex-alert-011",
+      "alert_id": "ex-alert-011",
+      "raised_at": "2026-11-13T03:00:00Z",
+      "kind": "source_cadence_stall",
+      "severity": "high",
+      "subject_kind": "source",
+      "subject_id": "source.example.weather_bulletins",
+      "summary": "Example feed silent for 9 hours.",
+      "action": "opened",
+      "why": "a new episode",
+      "rule_entry": "source_cadence_stall >= high",
+      "rule_version": "2026-11-14/1",
+      "outcomes": [
+       "delivered"
+      ],
+      "delivered": true,
+      "raised_by": "example_producer"
+     },
+     {
+      "event_id": "ev-ex-alert-012",
+      "alert_id": "ex-alert-012",
+      "raised_at": "2026-11-12T19:00:00Z",
+      "kind": "forecast_resolution",
+      "severity": "medium",
+      "subject_kind": "question",
+      "subject_id": "example-q-12",
+      "summary": "Example: a forecast resolved as no.",
+      "action": "opened",
+      "why": "a new episode",
+      "rule_entry": "forecast_resolution >= medium",
+      "rule_version": "2026-11-14/1",
+      "outcomes": [
+       "delivered"
+      ],
+      "delivered": true,
+      "raised_by": "example_producer"
+     },
+     {
+      "event_id": "ev-ex-alert-013",
+      "alert_id": "ex-alert-013",
+      "raised_at": "2026-11-12T09:00:00Z",
+      "kind": "production_deficit",
+      "severity": "medium",
+      "subject_kind": "analyst",
+      "subject_id": "example_market_desk",
+      "summary": "Example: wrote two items against an expected six.",
+      "action": "opened",
+      "why": "a new episode",
+      "rule_entry": "production_deficit >= medium",
+      "rule_version": "2026-11-14/1",
+      "outcomes": [
+       "delivered"
+      ],
+      "delivered": true,
+      "raised_by": "example_producer"
+     },
+     {
+      "event_id": "ev-ex-alert-014",
+      "alert_id": "ex-alert-014",
+      "raised_at": "2026-11-13T10:00:00Z",
+      "kind": "nightly_suite",
+      "severity": "low",
+      "subject_kind": "deploy",
+      "subject_id": "nightly",
+      "summary": "Example: the nightly checks passed.",
+      "action": "opened",
+      "why": "a new episode",
+      "rule_entry": "nightly_suite >= low",
+      "rule_version": "2026-11-14/1",
+      "outcomes": [
+       "delivered"
+      ],
+      "delivered": true,
+      "raised_by": "example_producer"
+     }
+    ]
+   }
+  },
+  "/api/v1/v3/system/source-firing": {
+   "status": 200,
+   "body": [
+    {
+     "source_id": "source.example.wire_one",
+     "state": "active",
+     "signals_24h": 420,
+     "signals_7d": 2520,
+     "last_seen_at": "2026-11-14T00:48:00Z",
+     "age_seconds": 720,
+     "last_poll_outcome": "success",
+     "recent_error_count": 0,
+     "status": "firing",
+     "freshness_grade": "ok",
+     "budget_minutes": 60,
+     "last_poll_newest_entry_at": null,
+     "quiet_class": null
+    },
+    {
+     "source_id": "source.example.wire_two",
+     "state": "active",
+     "signals_24h": 310,
+     "signals_7d": 1860,
+     "last_seen_at": "2026-11-14T00:30:00Z",
+     "age_seconds": 1800,
+     "last_poll_outcome": "success",
+     "recent_error_count": 0,
+     "status": "firing",
+     "freshness_grade": "ok",
+     "budget_minutes": 60,
+     "last_poll_newest_entry_at": null,
+     "quiet_class": null
+    },
+    {
+     "source_id": "source.example.regional_daily",
+     "state": "active",
+     "signals_24h": 88,
+     "signals_7d": 528,
+     "last_seen_at": "2026-11-14T00:00:00Z",
+     "age_seconds": 3600,
+     "last_poll_outcome": "empty",
+     "recent_error_count": 0,
+     "status": "firing",
+     "freshness_grade": "ok",
+     "budget_minutes": 60,
+     "last_poll_newest_entry_at": null,
+     "quiet_class": null
+    },
+    {
+     "source_id": "source.example.ministry_releases",
+     "state": "active",
+     "signals_24h": 12,
+     "signals_7d": 72,
+     "last_seen_at": "2026-11-13T22:00:00Z",
+     "age_seconds": 10800,
+     "last_poll_outcome": "success",
+     "recent_error_count": 0,
+     "status": "firing",
+     "freshness_grade": "ok",
+     "budget_minutes": 60,
+     "last_poll_newest_entry_at": null,
+     "quiet_class": null
+    },
+    {
+     "source_id": "source.example.port_calls",
+     "state": "active",
+     "signals_24h": 140,
+     "signals_7d": 840,
+     "last_seen_at": "2026-11-14T00:42:00Z",
+     "age_seconds": 1080,
+     "last_poll_outcome": "success",
+     "recent_error_count": 0,
+     "status": "firing",
+     "freshness_grade": "ok",
+     "budget_minutes": 60,
+     "last_poll_newest_entry_at": null,
+     "quiet_class": null
+    },
+    {
+     "source_id": "source.example.weather_bulletins",
+     "state": "active",
+     "signals_24h": 30,
+     "signals_7d": 180,
+     "last_seen_at": "2026-11-14T00:06:00Z",
+     "age_seconds": 3240,
+     "last_poll_outcome": "success",
+     "recent_error_count": 0,
+     "status": "firing",
+     "freshness_grade": "ok",
+     "budget_minutes": 60,
+     "last_poll_newest_entry_at": null,
+     "quiet_class": null
+    },
+    {
+     "source_id": "source.example.court_listings",
+     "state": "active",
+     "signals_24h": 4,
+     "signals_7d": 24,
+     "last_seen_at": "2026-11-13T19:00:00Z",
+     "age_seconds": 21600,
+     "last_poll_outcome": "empty",
+     "recent_error_count": 0,
+     "status": "firing",
+     "freshness_grade": "ok",
+     "budget_minutes": 60,
+     "last_poll_newest_entry_at": null,
+     "quiet_class": null
+    },
+    {
+     "source_id": "source.example.parliament_notices",
+     "state": "active",
+     "signals_24h": 0,
+     "signals_7d": 0,
+     "last_seen_at": "2026-11-10T17:00:00Z",
+     "age_seconds": 288000,
+     "last_poll_outcome": "empty",
+     "recent_error_count": 0,
+     "status": "silent",
+     "freshness_grade": "warn",
+     "budget_minutes": 60,
+     "last_poll_newest_entry_at": "2026-11-10T07:00:00Z",
+     "quiet_class": "published_nothing"
+    },
+    {
+     "source_id": "source.example.monthly_statistics",
+     "state": "active",
+     "signals_24h": 0,
+     "signals_7d": 0,
+     "last_seen_at": "2026-10-28T09:00:00Z",
+     "age_seconds": 1440000,
+     "last_poll_outcome": "empty",
+     "recent_error_count": 0,
+     "status": "silent",
+     "freshness_grade": "warn",
+     "budget_minutes": 60,
+     "last_poll_newest_entry_at": "2026-10-27T23:00:00Z",
+     "quiet_class": "published_nothing"
+    },
+    {
+     "source_id": "source.example.trade_bulletin",
+     "state": "active",
+     "signals_24h": 0,
+     "signals_7d": 0,
+     "last_seen_at": "2026-11-11T13:00:00Z",
+     "age_seconds": 216000,
+     "last_poll_outcome": "gated",
+     "recent_error_count": 0,
+     "status": "silent",
+     "freshness_grade": "warn",
+     "budget_minutes": 60,
+     "last_poll_newest_entry_at": null,
+     "quiet_class": "filtered_to_nothing"
+    },
+    {
+     "source_id": "source.example.harbour_notices",
+     "state": "active",
+     "signals_24h": 0,
+     "signals_7d": 0,
+     "last_seen_at": "2026-11-13T08:00:00Z",
+     "age_seconds": 61200,
+     "last_poll_outcome": "error",
+     "recent_error_count": 6,
+     "status": "error",
+     "freshness_grade": "warn",
+     "budget_minutes": 60,
+     "last_poll_newest_entry_at": null,
+     "quiet_class": "polling_fails"
+    },
+    {
+     "source_id": "source.example.port_authority_rss",
+     "state": "active",
+     "signals_24h": 0,
+     "signals_7d": 0,
+     "last_seen_at": "2026-11-11T21:00:00Z",
+     "age_seconds": 187200,
+     "last_poll_outcome": "empty",
+     "recent_error_count": 0,
+     "status": "silent",
+     "freshness_grade": "warn",
+     "budget_minutes": 60,
+     "last_poll_newest_entry_at": "2026-11-13T21:00:00Z",
+     "quiet_class": "published_not_kept"
+    },
+    {
+     "source_id": "source.example.new_registry_feed",
+     "state": "active",
+     "signals_24h": 0,
+     "signals_7d": 0,
+     "last_seen_at": null,
+     "age_seconds": null,
+     "last_poll_outcome": "empty",
+     "recent_error_count": 0,
+     "status": "silent",
+     "freshness_grade": "empty",
+     "budget_minutes": 60,
+     "last_poll_newest_entry_at": "2026-11-12T19:00:00Z",
+     "quiet_class": "never_produced"
+    },
+    {
+     "source_id": "source.example.shipping_gazette",
+     "state": "active",
+     "signals_24h": 0,
+     "signals_7d": 0,
+     "last_seen_at": "2026-11-11T03:00:00Z",
+     "age_seconds": 252000,
+     "last_poll_outcome": "success",
+     "recent_error_count": 0,
+     "status": "silent",
+     "freshness_grade": "warn",
+     "budget_minutes": 60,
+     "last_poll_newest_entry_at": null,
+     "quiet_class": "unrecorded"
+    },
+    {
+     "source_id": "source.example.old_archive",
+     "state": "paused",
+     "signals_24h": 0,
+     "signals_7d": 0,
+     "last_seen_at": "2026-10-07T13:00:00Z",
+     "age_seconds": 3240000,
+     "last_poll_outcome": "success",
+     "recent_error_count": 0,
+     "status": "paused",
+     "freshness_grade": "ungraded",
+     "budget_minutes": 60,
+     "last_poll_newest_entry_at": null,
+     "quiet_class": null
+    },
+    {
+     "source_id": "source.example.retired_feed",
+     "state": "retired",
+     "signals_24h": 0,
+     "signals_7d": 0,
+     "last_seen_at": null,
+     "age_seconds": null,
+     "last_poll_outcome": null,
+     "recent_error_count": 0,
+     "status": "paused",
+     "freshness_grade": "ungraded",
+     "budget_minutes": 60,
+     "last_poll_newest_entry_at": null,
+     "quiet_class": null
+    }
+   ]
+  },
+  "/api/v1/v3/evidence/drift?window_hours=168": {
+   "status": 200,
+   "body": {
+    "version": "2026-11/d2",
+    "available": true,
+    "window_hours": 168,
+    "classified": 11,
+    "by_class": {
+     "cosmetic": 6,
+     "appended": 2,
+     "substantive_edit": 2,
+     "gone": 1
+    },
+    "by_source": {},
+    "flags_by_source": {
+     "source.example.daily_ledger": 2,
+     "source.example.wire_two": 1
+    },
+    "flags": {
+     "open": 3
+    },
+    "open_flags_total": 3,
+    "assessments_by_type": {
+     "fact_corrected": 1,
+     "update_new_facts": 1,
+     "page_gone": 1
+    },
+    "history_rewrites": 1,
+    "auto_closed": {
+     "window": 0,
+     "total": 0,
+     "reopened": 0
+    },
+    "late_unexplained_changes": 1,
+    "would_auto_close": {
+     "window": 1,
+     "total": 1,
+     "rule_version": "drift-autoclose/1",
+     "switch_on": false
+    }
+   }
+  },
+  "/api/v1/v3/evidence/drift/flags?state=open&limit=25": {
+   "status": 200,
+   "body": {
+    "version": "2026-11/d2",
+    "available": true,
+    "state": "open",
+    "closed_by": "any",
+    "flags": [
+     {
+      "id": 1,
+      "drift_id": 101,
+      "address": "https://example.org/ledger/harbour-queue",
+      "source_id": "source.example.daily_ledger",
+      "earlier_version_id": 201,
+      "later_version_id": 301,
+      "drift_class": "substantive_edit",
+      "dependant_kind": "finding",
+      "dependant_id": "ex-statement-1",
+      "depth": 1,
+      "via_kind": null,
+      "via_id": null,
+      "cited_span": "Twelve ships were waiting outside the harbour on Tuesday morning.",
+      "span_check": null,
+      "state": "open",
+      "created_at": "2026-11-13T05:00:00Z",
+      "rule": "drift-classify/1",
+      "earlier_fetched_at": "2026-11-11T23:00:00Z",
+      "later_fetched_at": "2026-11-13T05:00:00Z",
+      "changed": [
+       {
+        "earlier": "Twelve ships were waiting outside the harbour on Tuesday morning.",
+        "later": "Nine ships were waiting outside the harbour on Tuesday morning.",
+        "changed_words": 1
+       }
+      ],
+      "removed": [],
+      "critical": null,
+      "assessment_id": 401,
+      "change_type": "fact_corrected",
+      "component_types": [
+       "fact_corrected"
+      ],
+      "acknowledged": "silent",
+      "summary": "An invented example change.",
+      "history_rewrite": true,
+      "late_unexplained_change": true,
+      "model_type_doubt": null,
+      "assessor": "example",
+      "timing_bucket": "days",
+      "claim_effect": "cited_text_changed",
+      "claim_after_text": null,
+      "model_effect": null,
+      "auto_closed": false,
+      "would_auto_close": false,
+      "review_priority": 0
+     },
+     {
+      "id": 2,
+      "drift_id": 102,
+      "address": "https://example.org/ledger/ferry-timetable",
+      "source_id": "source.example.daily_ledger",
+      "earlier_version_id": 202,
+      "later_version_id": 302,
+      "drift_class": "gone",
+      "dependant_kind": "signal",
+      "dependant_id": "ex-evidence-2",
+      "depth": 1,
+      "via_kind": null,
+      "via_id": null,
+      "cited_span": null,
+      "span_check": null,
+      "state": "open",
+      "created_at": "2026-11-12T23:00:00Z",
+      "rule": "drift-classify/1",
+      "earlier_fetched_at": "2026-11-11T03:00:00Z",
+      "later_fetched_at": "2026-11-12T23:00:00Z",
+      "changed": [],
+      "removed": [
+       "The ferry service will resume on Friday, the operator said."
+      ],
+      "critical": null,
+      "assessment_id": 402,
+      "change_type": "page_gone",
+      "component_types": [
+       "page_gone"
+      ],
+      "acknowledged": "silent",
+      "summary": "An invented example change.",
+      "history_rewrite": false,
+      "late_unexplained_change": false,
+      "model_type_doubt": null,
+      "assessor": "example",
+      "timing_bucket": "days",
+      "claim_effect": "cited_text_gone",
+      "claim_after_text": null,
+      "model_effect": null,
+      "auto_closed": false,
+      "would_auto_close": false,
+      "review_priority": 2
+     },
+     {
+      "id": 3,
+      "drift_id": 103,
+      "address": "https://example.org/wire/fuel-prices",
+      "source_id": "source.example.wire_two",
+      "earlier_version_id": 203,
+      "later_version_id": 303,
+      "drift_class": "substantive_edit",
+      "dependant_kind": "finding",
+      "dependant_id": "ex-statement-3",
+      "depth": 1,
+      "via_kind": null,
+      "via_id": null,
+      "cited_span": "Fuel prices rose for a third week.",
+      "span_check": null,
+      "state": "open",
+      "created_at": "2026-11-13T15:00:00Z",
+      "rule": "drift-classify/1",
+      "earlier_fetched_at": "2026-11-12T19:00:00Z",
+      "later_fetched_at": "2026-11-13T15:00:00Z",
+      "changed": [
+       {
+        "earlier": "Fuel prices rose for a third week.",
+        "later": "Fuel prices rose for a third week, the ministry confirmed on Thursday.",
+        "changed_words": 6
+       }
+      ],
+      "removed": [],
+      "critical": null,
+      "assessment_id": 403,
+      "change_type": "update_new_facts",
+      "component_types": [
+       "update_new_facts"
+      ],
+      "acknowledged": "visible_update_stamp",
+      "summary": "An invented example change.",
+      "history_rewrite": false,
+      "late_unexplained_change": false,
+      "model_type_doubt": null,
+      "assessor": "example",
+      "timing_bucket": "days",
+      "claim_effect": "cited_text_survives",
+      "claim_after_text": null,
+      "model_effect": null,
+      "auto_closed": false,
+      "would_auto_close": true,
+      "review_priority": 2
+     }
+    ]
+   }
+  },
+  "/api/v1/v3/evidence/drift/editors?window_hours=720&limit=50": {
+   "status": 200,
+   "body": {
+    "version": "2026-11/d2",
+    "available": true,
+    "window_hours": 720,
+    "sources": [
+     {
+      "subject": "source.example.daily_ledger",
+      "substantive_or_worse": 3,
+      "classified": 7,
+      "pages": 5,
+      "share": 0.43,
+      "by_class": {},
+      "edit_record": {
+       "7d": {
+        "assessed": 2,
+        "by_type": {},
+        "acknowledged": {
+         "correction_notice": 0,
+         "visible_update_stamp": 0,
+         "metadata_date_only": 0,
+         "silent": 0
+        },
+        "history_rewrite": 0,
+        "late_unexplained_change": 0,
+        "pages_rechecked": 14
+       },
+       "30d": {
+        "assessed": 3,
+        "by_type": {},
+        "acknowledged": {
+         "correction_notice": 0,
+         "visible_update_stamp": 1,
+         "metadata_date_only": 0,
+         "silent": 2
+        },
+        "history_rewrite": 1,
+        "late_unexplained_change": 1,
+        "pages_rechecked": 41
+       }
+      }
+     },
+     {
+      "subject": "source.example.wire_two",
+      "substantive_or_worse": 1,
+      "classified": 3,
+      "pages": 3,
+      "share": 0.33,
+      "by_class": {},
+      "edit_record": {
+       "7d": {
+        "assessed": 1,
+        "by_type": {},
+        "acknowledged": {
+         "correction_notice": 0,
+         "visible_update_stamp": 0,
+         "metadata_date_only": 0,
+         "silent": 0
+        },
+        "history_rewrite": 0,
+        "late_unexplained_change": 0,
+        "pages_rechecked": 30
+       },
+       "30d": {
+        "assessed": 1,
+        "by_type": {},
+        "acknowledged": {
+         "correction_notice": 0,
+         "visible_update_stamp": 1,
+         "metadata_date_only": 0,
+         "silent": 0
+        },
+        "history_rewrite": 0,
+        "late_unexplained_change": 0,
+        "pages_rechecked": 96
+       }
+      }
+     },
+     {
+      "subject": "source.example.regional_daily",
+      "substantive_or_worse": 1,
+      "classified": 1,
+      "pages": 1,
+      "share": 1.0,
+      "by_class": {},
+      "edit_record": {
+       "7d": {
+        "assessed": 0,
+        "by_type": {},
+        "acknowledged": {
+         "correction_notice": 0,
+         "visible_update_stamp": 0,
+         "metadata_date_only": 0,
+         "silent": 0
+        },
+        "history_rewrite": 0,
+        "late_unexplained_change": 0,
+        "pages_rechecked": 5
+       },
+       "30d": {
+        "assessed": 1,
+        "by_type": {},
+        "acknowledged": {
+         "correction_notice": 1,
+         "visible_update_stamp": 0,
+         "metadata_date_only": 0,
+         "silent": 0
+        },
+        "history_rewrite": 0,
+        "late_unexplained_change": 0,
+        "pages_rechecked": 18
+       }
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/v3/evidence/drift/history?address=https://example.org/ledger/harbour-queue": {
+   "status": 200,
+   "body": {
+    "version": "2026-11/d2",
+    "available": true,
+    "address": "https://example.org/ledger/harbour-queue",
+    "versions": [
+     {
+      "id": 201,
+      "url": "https://example.org/ledger/harbour-queue",
+      "role": "page",
+      "sha256": "a3f1c09e7b2d4410c6a8e2f5d7b9c1e3",
+      "text_chars": 2140,
+      "status": 200,
+      "first_seen_at": "2026-11-11T23:00:00Z",
+      "last_seen_at": "2026-11-11T23:00:00Z",
+      "fetch_count": 1
+     },
+     {
+      "id": 301,
+      "url": "https://example.org/ledger/harbour-queue",
+      "role": "page",
+      "sha256": "5be0d2a4c6f8e1b3d5a7c9e2f4b6d8a0",
+      "text_chars": 2131,
+      "status": 200,
+      "first_seen_at": "2026-11-13T05:00:00Z",
+      "last_seen_at": "2026-11-13T23:00:00Z",
+      "fetch_count": 3
+     }
+    ],
+    "changes": [],
+    "unclassified_drift_rows": 0
+   }
+  },
+  "/api/v1/registry/descriptors/source/source.example.harbour_notices": {
+   "status": 200,
+   "body": {
+    "descriptor_id": "source.example.harbour_notices",
+    "version": "v1",
+    "kind": "rss",
+    "state": "active",
+    "name": "Example harbour notices",
+    "body": {
+     "name": "Example harbour notices",
+     "url": "https://example.org/feeds/harbour.xml",
+     "cadence": {
+      "schedule": {
+       "raw": "15 * * * *"
+      }
+     }
+    }
+   }
+  }
+ }
+}

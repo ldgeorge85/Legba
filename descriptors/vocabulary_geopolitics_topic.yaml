@@ -1,0 +1,24 @@
+# The `geopolitics.topic` vocabulary family — THIS PROFILE's thematic beats (K-1).
+#
+# What a SOURCE's stream is about, declared on the source descriptor as
+# `scope.classifications: ["geopolitics.topic:<value>"]` (W10 TAX-2,
+# src/legba/data/source_classification.py). The baseline stamps the key on
+# every signal the source writes (`signals.tags`, first, so the 64-tag cap
+# never drops it), where a thematic desk's `scope.signal_tags` selects it in
+# SQL (W8 TAX-1, src/legba/data/signal_slice_scope.py). A desk with no place
+# routes by this, not by geography.
+#
+# Seeded by the descriptor walker (scripts/bringup_register_descriptors.py,
+# "vocabulary seeds") BEFORE any descriptor that declares a value is
+# registered; the registry refuses an unloaded family or an unknown value by
+# name. A profile family (`<profile>.<axis>`), not a platform one: the axis and
+# its values are this instance's, the machinery names neither.
+identity:
+  id: geopolitics_topic
+  schema_uri: legba/vocabulary/1.0.0
+family: geopolitics.topic
+entries:
+  - value: cyber
+    notes: >-
+      Cyber operations, vulnerabilities, advisories and service outages — the
+      cyber desk's own feeds (target_cyber.yaml)

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:lens_diff": {
+      "source": "analyst_lens_diff.yaml",
+      "state": "active"
+    }
+  }
+}

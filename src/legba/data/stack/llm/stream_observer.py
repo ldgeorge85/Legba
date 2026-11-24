@@ -76,6 +76,11 @@ class TextDeltaSink:
 
     parts: list[str] = field(default_factory=list)
     on_delta: Callable[[str], None] | None = None
+    #: Set once the provider began a ``tool_use`` block in this generation. A
+    #: caller cut mid-round reads it to tell "the model was ANSWERING" (text,
+    #: no tool call — deliver it) from "the model was narrating before a tool
+    #: call" (a preamble — not an answer). Run 9b902fec, 2026-10-29.
+    tool_use_started: bool = False
 
     @property
     def text(self) -> str:
@@ -101,6 +106,11 @@ class TextDeltaSink:
                 self.on_delta(chunk)
             except Exception:  # noqa: BLE001 - a relay fault must not kill a generation
                 pass
+
+
+    def mark_tool_use(self) -> None:
+        """Record that the generation began a tool call. Never raises."""
+        self.tool_use_started = True
 
 
 _SINK: ContextVar[TextDeltaSink | None] = ContextVar(
@@ -133,6 +143,16 @@ def publish_text_delta(chunk: str) -> None:
         sink.feed(chunk)
 
 
+def publish_tool_use_start() -> None:
+    """Tell the installed sink, if any, that a ``tool_use`` block began.
+
+    Called from the provider read loop; a no-op when nothing is observing.
+    """
+    sink = _SINK.get()
+    if sink is not None:
+        sink.mark_tool_use()
+
+
 def active_sink() -> TextDeltaSink | None:
     """The sink installed in this context, or ``None``."""
     return _SINK.get()
@@ -144,4 +164,5 @@ __all__ = [
     "active_sink",
     "capture_text_deltas",
     "publish_text_delta",
+    "publish_tool_use_start",
 ]

@@ -1,0 +1,554 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# THE SOURCE CATALOG of the geopolitics exemplar (ROSTER-1): the 46 verified
+# no-auth rss / geojson feeds the descriptor walker registers beside the
+# descriptor files, with each feed's source_credibility seed. Exemplar DATA
+# (planning/PLATFORM_VS_EXEMPLAR_2026-09-29.md §1): the loader that reads it,
+# the descriptor builder and the credibility seeding are platform code in
+# scripts/bringup_register_source_catalog.py; profile.yaml names this file at
+# rosters.source_catalog.
+#
+# One entry per feed. The keys are CatalogEntry's fields; a key left out takes
+# the field's default:
+#   language en · geo [] (global) · tier wire · state_affiliation false
+#   extra_config {} · enrich_text false · fact_extract false · snapshot false
+#   access_class public · cred_score 0.5 · cred_rationale "" · classifications []
+#   (W10 TAX-2: <family>:<value> tags of registered families, stamped on
+#   every signal the feed writes)
+#   source_class (none: derived from tier — thinktank analysis, gov official,
+#   else reporting; a state-CONTROLLED outlet says state_media, ROSTER-2)
+# An unknown key is refused at load.
+#
+# License note: feed URLs are facts. Every feed below was probed live by us
+# (2026-06-09/10: HTTP GET + feedparser/GeoJSON parse), and
+# `python scripts/bringup_register_source_catalog.py --verify` re-probes them.
+# Order: crisis/humanitarian, human rights, think tanks, defense/OSINT,
+# regional wires, gov/finance, GeoJSON.
+#
+# tests/data_pkg/test_rosters.py pins the loaded tuple to the frozen copy of
+# the code literal this replaced (tests/fixtures/bringup/
+# source_catalog_frozen_2026-10-04.json): same entries, same rendered rows.
+
+entries:
+  # --- RSS: crisis / humanitarian ---
+  - id: "source.gdacs.alerts"
+    name: "GDACS — Disaster Alerts"
+    kind: "rss"
+    url: "https://www.gdacs.org/xml/rss.xml"
+    tags: ["crisis", "humanitarian", "hazard", "alert", "global"]
+    cadence_minutes: 60
+    cred_host: "gdacs.org"
+    cred_score: 0.9
+    cred_rationale: "EC/UN Global Disaster Alert and Coordination System — authoritative multi-hazard alerts."
+    tier: "gov"
+    state_affiliation: true
+    snapshot: true
+    # The live head is `restricted` (every other catalog head is `public`);
+    # folded as-is 2026-10-04 (W6 SPLIT-1) — the reason is not recorded in
+    # the tree, so a review may well flip it to `public`.
+    access_class: "restricted"
+  - id: "source.crisisgroup.latest"
+    name: "International Crisis Group — Latest"
+    kind: "rss"
+    url: "https://www.crisisgroup.org/rss"
+    tags: ["crisis", "conflict", "analysis", "thinktank"]
+    cadence_minutes: 360
+    cred_host: "crisisgroup.org"
+    cred_score: 0.8
+    cred_rationale: "Conflict-prevention NGO; field-researched, methodology published."
+    tier: "thinktank"
+  - id: "source.newhumanitarian.all"
+    name: "The New Humanitarian"
+    kind: "rss"
+    # folded from the live head 2026-10-04 (W6 SPLIT-1); was /rss.xml
+    url: "https://www.thenewhumanitarian.org/rss/all.xml"
+    tags: ["crisis", "humanitarian", "news"]
+    cadence_minutes: 120
+    cred_host: "thenewhumanitarian.org"
+    cred_score: 0.75
+    cred_rationale: "Independent humanitarian newsroom (formerly UN IRIN)."
+  - id: "source.who.news"
+    name: "WHO — News"
+    kind: "rss"
+    url: "https://www.who.int/rss-feeds/news-english.xml"
+    tags: ["health", "crisis", "gov", "global"]
+    cadence_minutes: 360
+    cred_host: "who.int"
+    cred_score: 0.9
+    cred_rationale: "World Health Organization — authoritative on outbreaks and global health."
+    tier: "gov"
+    state_affiliation: true
+  - id: "source.iaea.topnews"
+    name: "IAEA — Top News"
+    kind: "rss"
+    url: "https://www.iaea.org/feeds/topnews"
+    tags: ["nuclear", "energy", "gov", "global"]
+    cadence_minutes: 360
+    cred_host: "iaea.org"
+    cred_score: 0.9
+    cred_rationale: "International Atomic Energy Agency — authoritative on nuclear safety/safeguards."
+    tier: "gov"
+    state_affiliation: true
+  - id: "source.cdc.travel_notices"
+    name: "CDC — Travel Health Notices"
+    kind: "rss"
+    url: "https://wwwnc.cdc.gov/travel/rss/notices.xml"
+    tags: ["health", "travel", "advisory", "gov"]
+    cadence_minutes: 360
+    cred_host: "cdc.gov"
+    cred_score: 0.9
+    cred_rationale: "US Centers for Disease Control — authoritative public-health agency."
+    tier: "gov"
+    state_affiliation: true
+  - id: "source.cdc.outbreaks_us"
+    name: "CDC — US Outbreaks"
+    kind: "rss"
+    url: "https://tools.cdc.gov/api/v2/resources/media/285676.rss"
+    tags: ["health", "outbreak", "gov"]
+    cadence_minutes: 360
+    geo: ["US"]
+    cred_host: "cdc.gov"
+    cred_score: 0.9
+    cred_rationale: "US Centers for Disease Control — authoritative public-health agency."
+    tier: "gov"
+    state_affiliation: true
+  # --- RSS: human rights ---
+  - id: "source.hrw.news"
+    name: "Human Rights Watch — News"
+    kind: "rss"
+    url: "https://www.hrw.org/rss/news"
+    tags: ["human_rights", "news", "global"]
+    cadence_minutes: 360
+    cred_host: "hrw.org"
+    cred_score: 0.75
+    cred_rationale: "Advocacy organisation with documented research methodology."
+    tier: "thinktank"
+  - id: "source.amnesty.latest"
+    name: "Amnesty International — Latest"
+    kind: "rss"
+    url: "https://www.amnesty.org/en/latest/feed/"
+    tags: ["human_rights", "news", "global"]
+    cadence_minutes: 360
+    cred_host: "amnesty.org"
+    cred_score: 0.75
+    cred_rationale: "Advocacy organisation with documented research methodology."
+    tier: "thinktank"
+  - id: "source.civicus.monitor"
+    name: "CIVICUS Monitor"
+    kind: "rss"
+    url: "https://monitor.civicus.org/feed/"
+    tags: ["human_rights", "civil_society", "global"]
+    cadence_minutes: 360
+    cred_host: "civicus.org"
+    cred_score: 0.7
+    cred_rationale: "Civic-space tracking alliance; country reports from partner organisations."
+    tier: "thinktank"
+  # --- RSS: think tanks / analysis ---
+  - id: "source.csis.analysis"
+    name: "CSIS — Analysis"
+    kind: "rss"
+    url: "https://www.csis.org/rss.xml"
+    tags: ["thinktank", "analysis", "geopolitical"]
+    cadence_minutes: 360
+    cred_host: "csis.org"
+    cred_score: 0.8
+    cred_rationale: "Center for Strategic and International Studies — established policy research."
+    tier: "thinktank"
+  - id: "source.rand.press"
+    name: "RAND — Press Releases"
+    kind: "rss"
+    url: "https://www.rand.org/news/press.xml"
+    tags: ["thinktank", "analysis", "geopolitical"]
+    cadence_minutes: 360
+    cred_host: "rand.org"
+    cred_score: 0.8
+    cred_rationale: "RAND Corporation — peer-reviewed policy research."
+    tier: "thinktank"
+    # The live head sends this user agent (folded from the live head 2026-10-04 (W6 SPLIT-1)).
+    extra_config: {user_agent: "Mozilla/5.0 (compatible; LegbaBot/2.0; +https://www.rand.org/news/press.xml)"}
+  - id: "source.atlanticcouncil.all"
+    name: "Atlantic Council"
+    kind: "rss"
+    url: "https://www.atlanticcouncil.org/feed/"
+    tags: ["thinktank", "analysis", "geopolitical"]
+    cadence_minutes: 360
+    cred_host: "atlanticcouncil.org"
+    cred_score: 0.75
+    cred_rationale: "Established foreign-policy think tank; declared funders."
+    tier: "thinktank"
+  - id: "source.warontherocks.all"
+    name: "War on the Rocks"
+    kind: "rss"
+    url: "https://warontherocks.com/feed/"
+    tags: ["thinktank", "analysis", "defense"]
+    cadence_minutes: 360
+    cred_host: "warontherocks.com"
+    cred_score: 0.75
+    cred_rationale: "Practitioner-written defense/strategy analysis; named expert authors."
+    tier: "thinktank"
+  - id: "source.bellingcat.all"
+    name: "Bellingcat"
+    kind: "rss"
+    url: "https://www.bellingcat.com/feed/"
+    tags: ["osint", "analysis", "investigation"]
+    cadence_minutes: 360
+    cred_host: "bellingcat.com"
+    cred_score: 0.8
+    cred_rationale: "Open-source investigation collective; methods published per piece."
+    tier: "thinktank"
+  - id: "source.foreignpolicy.all"
+    name: "Foreign Policy"
+    kind: "rss"
+    url: "https://foreignpolicy.com/feed/"
+    tags: ["news", "analysis", "geopolitical"]
+    cadence_minutes: 120
+    cred_host: "foreignpolicy.com"
+    cred_score: 0.75
+    cred_rationale: "Established foreign-affairs magazine."
+  - id: "source.foreignaffairs.all"
+    name: "Foreign Affairs"
+    kind: "rss"
+    url: "https://www.foreignaffairs.com/rss.xml"
+    tags: ["thinktank", "analysis", "geopolitical"]
+    cadence_minutes: 360
+    cred_host: "foreignaffairs.com"
+    cred_score: 0.8
+    cred_rationale: "Council on Foreign Relations publication."
+    tier: "thinktank"
+  # --- RSS: defense / OSINT ---
+  - id: "source.defenseone.all"
+    name: "Defense One"
+    kind: "rss"
+    url: "https://www.defenseone.com/rss/all/"
+    tags: ["defense", "news"]
+    cadence_minutes: 120
+    cred_host: "defenseone.com"
+    cred_score: 0.75
+    cred_rationale: "GovExec defense trade press; sourced reporting."
+  - id: "source.twz.all"
+    name: "The War Zone (TWZ)"
+    kind: "rss"
+    url: "https://www.twz.com/feed"
+    tags: ["defense", "osint", "news"]
+    cadence_minutes: 120
+    cred_host: "twz.com"
+    cred_score: 0.7
+    cred_rationale: "Defense/OSINT trade press; imagery-driven reporting."
+  - id: "source.gcaptain.all"
+    name: "gCaptain — Maritime News"
+    kind: "rss"
+    url: "https://gcaptain.com/feed/"
+    tags: ["maritime", "defense", "news"]
+    cadence_minutes: 120
+    cred_host: "gcaptain.com"
+    cred_score: 0.7
+    cred_rationale: "Maritime-industry trade press."
+  - id: "source.taskandpurpose.all"
+    name: "Task & Purpose"
+    kind: "rss"
+    url: "https://taskandpurpose.com/feed/"
+    tags: ["defense", "news"]
+    cadence_minutes: 360
+    geo: ["US"]
+    cred_host: "taskandpurpose.com"
+    cred_score: 0.65
+    cred_rationale: "US military-affairs outlet."
+  # --- RSS: regional wires ---
+  - id: "source.yonhap.english"
+    name: "Yonhap News — English"
+    kind: "rss"
+    url: "https://en.yna.co.kr/RSS/news.xml"
+    tags: ["news", "wire", "asia"]
+    cadence_minutes: 60
+    geo: ["KR"]
+    cred_host: "yna.co.kr"
+    cred_score: 0.8
+    cred_rationale: "South Korea's national news agency (partly state-funded; editorially conventional wire)."
+    state_affiliation: true
+  - id: "source.cna.all"
+    name: "Channel News Asia"
+    kind: "rss"
+    url: "https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml"
+    tags: ["news", "asia"]
+    cadence_minutes: 60
+    geo: ["SG"]
+    cred_host: "channelnewsasia.com"
+    cred_score: 0.75
+    cred_rationale: "Mediacorp (Singapore state-owned) regional broadcaster."
+    state_affiliation: true
+    fact_extract: true
+  - id: "source.anadolu.english"
+    name: "Anadolu Agency — English"
+    kind: "rss"
+    url: "https://www.aa.com.tr/en/rss/default?cat=guncel"
+    tags: ["news", "wire", "middle_east"]
+    cadence_minutes: 60
+    geo: ["TR"]
+    cred_host: "aa.com.tr"
+    cred_score: 0.45
+    cred_rationale: "Turkish state news agency; documented government editorial influence."
+    state_affiliation: true
+    source_class: "state_media"
+  - id: "source.tehrantimes.all"
+    name: "Tehran Times"
+    kind: "rss"
+    url: "https://www.tehrantimes.com/rss"
+    tags: ["news", "middle_east"]
+    cadence_minutes: 120
+    geo: ["IR"]
+    cred_host: "tehrantimes.com"
+    cred_score: 0.3
+    cred_rationale: "Iranian state-aligned outlet; treat as official-position signal."
+    state_affiliation: true
+    source_class: "state_media"
+  - id: "source.tass.english"
+    name: "TASS — English"
+    kind: "rss"
+    url: "https://tass.com/rss/v2.xml"
+    tags: ["news", "wire", "europe"]
+    cadence_minutes: 60
+    geo: ["RU"]
+    cred_host: "tass.com"
+    cred_score: 0.3
+    cred_rationale: "Russian state news agency; conduit for official positions."
+    state_affiliation: true
+    source_class: "state_media"
+  - id: "source.allafrica.headlines"
+    name: "AllAfrica — Latest Headlines"
+    kind: "rss"
+    url: "https://allafrica.com/tools/headlines/rdf/latest/headlines.rdf"
+    tags: ["news", "aggregator", "africa"]
+    cadence_minutes: 60
+    cred_host: "allafrica.com"
+    cred_score: 0.6
+    cred_rationale: "Aggregates African outlets; credibility varies with the underlying publisher."
+    tier: "aggregator"
+  - id: "source.africanews.all"
+    name: "Africanews"
+    kind: "rss"
+    url: "https://www.africanews.com/feed/rss"
+    tags: ["news", "africa"]
+    cadence_minutes: 60
+    cred_host: "africanews.com"
+    cred_score: 0.7
+    cred_rationale: "Euronews-group pan-African broadcaster."
+  - id: "source.timesofindia.world"
+    name: "Times of India — World"
+    kind: "rss"
+    url: "https://timesofindia.indiatimes.com/rssfeeds/296589292.cms"
+    tags: ["news", "world", "south_asia"]
+    cadence_minutes: 60
+    cred_host: "timesofindia.indiatimes.com"
+    cred_score: 0.65
+    cred_rationale: "Major Indian daily; world desk."
+  - id: "source.hindustantimes.world"
+    name: "Hindustan Times — World"
+    kind: "rss"
+    url: "https://www.hindustantimes.com/feeds/rss/world-news/rssfeed.xml"
+    tags: ["news", "world", "south_asia"]
+    cadence_minutes: 60
+    cred_host: "hindustantimes.com"
+    cred_score: 0.65
+    cred_rationale: "Major Indian daily; world desk."
+  - id: "source.mercopress.all"
+    name: "MercoPress — South Atlantic News"
+    kind: "rss"
+    url: "https://en.mercopress.com/rss"
+    tags: ["news", "americas"]
+    cadence_minutes: 120
+    cred_host: "mercopress.com"
+    cred_score: 0.65
+    cred_rationale: "Independent South Atlantic / Mercosur news agency."
+  - id: "source.globalvoices.all"
+    name: "Global Voices"
+    kind: "rss"
+    url: "https://globalvoices.org/feed/"
+    tags: ["news", "civil_society", "aggregator", "global"]
+    cadence_minutes: 120
+    cred_host: "globalvoices.org"
+    cred_score: 0.65
+    cred_rationale: "Community newsroom curating citizen media; bylined volunteer contributors."
+    tier: "aggregator"
+  - id: "source.voa.africa"
+    name: "VOA — Africa"
+    kind: "rss"
+    url: "https://www.voanews.com/api/z-botl-vomx-tpertmq"
+    tags: ["news", "africa"]
+    cadence_minutes: 60
+    cred_host: "voanews.com"
+    cred_score: 0.6
+    cred_rationale: "Voice of America — US-government international broadcaster (USAGM); statutory editorial firewall."
+    state_affiliation: true
+  - id: "source.npr.world"
+    name: "NPR — World"
+    kind: "rss"
+    url: "https://feeds.npr.org/1004/rss.xml"
+    tags: ["news", "world", "global"]
+    cadence_minutes: 60
+    cred_host: "npr.org"
+    cred_score: 0.9
+    cred_rationale: "US public broadcaster (already in 0014 baseline; row kept for catalog completeness)."
+    fact_extract: true
+  - id: "source.france24.english"
+    name: "France 24 — English"
+    kind: "rss"
+    url: "https://www.france24.com/en/rss"
+    tags: ["news", "world", "global"]
+    cadence_minutes: 60
+    cred_host: "france24.com"
+    cred_score: 0.7
+    cred_rationale: "France Médias Monde — French state-funded international broadcaster."
+    state_affiliation: true
+    fact_extract: true
+  - id: "source.economist.international"
+    name: "The Economist — International"
+    kind: "rss"
+    url: "https://www.economist.com/international/rss.xml"
+    tags: ["news", "analysis", "world"]
+    cadence_minutes: 360
+    cred_host: "economist.com"
+    cred_score: 0.9
+    cred_rationale: "Already in 0014 baseline; row kept for catalog completeness."
+    fact_extract: true
+  - id: "source.xinhua.world"
+    name: "Xinhua — World (English)"
+    kind: "rss"
+    url: "http://www.xinhuanet.com/english/rss/worldrss.xml"
+    tags: ["news", "wire", "world", "asia"]
+    cadence_minutes: 60
+    cred_host: "xinhuanet.com"
+    cred_score: 0.35
+    cred_rationale: "Chinese state news agency; conduit for official positions."
+    state_affiliation: true
+    source_class: "state_media"
+  - id: "source.globaltimes.all"
+    name: "Global Times"
+    kind: "rss"
+    url: "https://www.globaltimes.cn/rss/outbrain.xml"
+    tags: ["news", "asia"]
+    cadence_minutes: 120
+    geo: ["CN"]
+    cred_host: "globaltimes.cn"
+    cred_score: 0.3
+    cred_rationale: "People's Daily-group (CCP-affiliated) outlet; strongly state-aligned."
+    state_affiliation: true
+    source_class: "state_media"
+  - id: "source.aljazeera.arabic"
+    name: "Al Jazeera — Arabic"
+    kind: "rss"
+    url: "https://www.aljazeera.net/aljazeerarss/a7c186be-1baa-4bd4-9d80-a84db769f779/73d0e1b4-532f-45ef-b135-bfdff8b8cab9"
+    tags: ["news", "world", "middle_east"]
+    cadence_minutes: 60
+    language: "ar"
+    cred_host: "aljazeera.net"
+    cred_score: 0.6
+    cred_rationale: "Qatari state-funded broadcaster; Arabic edition carries stronger editorial slant than AJE."
+    state_affiliation: true
+  # --- RSS: gov / finance ---
+  - id: "source.federalreserve.press"
+    name: "US Federal Reserve — Press Releases"
+    kind: "rss"
+    url: "https://www.federalreserve.gov/feeds/press_all.xml"
+    tags: ["gov", "finance", "economic"]
+    cadence_minutes: 360
+    geo: ["US"]
+    cred_host: "federalreserve.gov"
+    cred_score: 0.9
+    cred_rationale: "US central bank — primary-source monetary policy."
+    tier: "gov"
+    state_affiliation: true
+  - id: "source.eia.press"
+    name: "US EIA — Press Releases"
+    kind: "rss"
+    url: "https://www.eia.gov/rss/press_rss.xml"
+    tags: ["gov", "energy", "economic"]
+    cadence_minutes: 360
+    geo: ["US"]
+    cred_host: "eia.gov"
+    cred_score: 0.9
+    cred_rationale: "US Energy Information Administration — primary-source energy statistics."
+    tier: "gov"
+    state_affiliation: true
+  - id: "source.stategov.travel_advisories"
+    name: "US State Dept — Travel Advisories"
+    kind: "rss"
+    url: "https://travel.state.gov/_res/rss/TAsTWs.xml"
+    tags: ["gov", "travel", "advisory"]
+    cadence_minutes: 360
+    cred_host: "state.gov"
+    cred_score: 0.9
+    cred_rationale: "Official US travel advisories — primary-source policy positions."
+    tier: "gov"
+    state_affiliation: true
+  - id: "source.fcdo.travel_advice"
+    name: "UK FCDO — Foreign Travel Advice"
+    kind: "rss"
+    url: "https://www.gov.uk/foreign-travel-advice.atom"
+    tags: ["gov", "travel", "advisory"]
+    cadence_minutes: 360
+    cred_host: "gov.uk"
+    cred_score: 0.9
+    cred_rationale: "Official UK travel advisories — primary-source policy positions."
+    tier: "gov"
+    state_affiliation: true
+  # --- GeoJSON (kind exists; source_usgs_earthquakes.yaml is the template) ---
+  # "Major events only" curation (2026-06-12): the raw geophysical feeds
+  # firehose minor tremors + every county heat advisory, swamping the signal
+  # set with low-newsworthiness noise (and EMSC duplicated USGS). We point
+  # each at its significant/severe-only slice instead.
+  - id: "source.usgs.earthquakes_m45"
+    name: "USGS — Significant Earthquakes, Past Week (GeoJSON)"
+    kind: "geojson"
+    # Was 4.5_week (~hundreds/wk of routine quakes). The "significant" feed
+    # is USGS's own curated major-event slice (notable M6.5+ / high-impact).
+    url: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/significant_week.geojson"
+    tags: ["gis", "geospatial", "structured", "hazard", "seismic", "global"]
+    cadence_minutes: 30
+    # Lane N-U: days with no new significant quake are the norm — exempt from
+    # the empty-poll streak page (a NEW descriptor head must be registered).
+    expect_quiet: true
+    cred_host: "usgs.gov"
+    cred_score: 0.9
+    cred_rationale: "US Geological Survey — authoritative seismic feed (significant events)."
+    tier: "gov"
+    state_affiliation: true
+    extra_config: {feature_id_key: "id", max_features: 5000}
+  # EMSC retired 2026-06-12: duplicated USGS coverage with lower-quality
+  # titles and no curated significance slice — net noise. (Live descriptor
+  # is retired separately; removed here so re-runs don't re-register it.)
+  - id: "source.nws.active_alerts"
+    name: "US NWS — Severe/Extreme Weather Alerts (GeoJSON)"
+    kind: "geojson"
+    # Was all active alerts (every county heat advisory / minor statement).
+    # severity=Severe,Extreme keeps only the high-impact, newsworthy alerts.
+    url: "https://api.weather.gov/alerts/active?severity=Severe,Extreme"
+    tags: ["gis", "geospatial", "structured", "hazard", "weather", "alert", "gov"]
+    cadence_minutes: 30
+    geo: ["US"]
+    cred_host: "weather.gov"
+    cred_score: 0.9
+    cred_rationale: "US National Weather Service — severe/extreme weather alerts only."
+    tier: "gov"
+    state_affiliation: true
+    extra_config: {feature_id_key: "id", max_features: 5000}
+    # Severe/Extreme alert headlines are rich English text — enrich language
+    # + entities. NWS is a snapshot feed too, but it KEEPS NER (SRC-5,
+    # 2026-10-03): ~20% of its signals (null/marine polygons) get their geo
+    # from NER place entities via nominatim, and NER is its only entity
+    # source (0% coverage without it) — so it is NOT tagged snapshot.
+    enrich_text: true
+  - id: "source.nasa.eonet_events"
+    name: "NASA EONET — Natural Events (GeoJSON)"
+    kind: "geojson"
+    # EONET is already curated to named natural events; trim the window
+    # 7d -> 3d to keep the slice current and lower backfill volume.
+    url: "https://eonet.gsfc.nasa.gov/api/v3/events/geojson?days=3"
+    tags: ["gis", "geospatial", "structured", "hazard", "gov", "global"]
+    cadence_minutes: 60
+    cred_host: "nasa.gov"
+    cred_score: 0.9
+    cred_rationale: "NASA Earth Observatory Natural Event Tracker."
+    tier: "gov"
+    state_affiliation: true
+    extra_config: {feature_id_key: "id", max_features: 5000}

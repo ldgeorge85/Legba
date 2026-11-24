@@ -16,12 +16,6 @@ KEY, so the importer:
      + validation apply), stamped ``source_type`` (the imported row's own
      source_type, defaulting to ``'seed'``) + a single ``seed_batches`` row for
      the whole import;
-  3. rebuilds the AGE graph FROM THE RE-HOMED ROWS (not from an exported cypher
-     dump): each fact whose endpoints classify to a graph vertex is MERGEd as
-     an edge via the existing ``upsert_fact_edge`` helper. The nexus-consuming
-     analysts (structural_balance / graph_mining) read the ``nexuses`` TABLE
-     directly, so the table re-home already restores the signed graph; the AGE
-     rebuild is the optional fact-derived edge layer.
 
 IDEMPOTENCY: a re-import of the same bundle adds NO duplicate OPEN triples —
 ``write_fact`` / ``write_nexus`` upsert on the open temporal-triple uniqueness,
@@ -32,7 +26,6 @@ Usage:
     python3 scripts/seed_import.py --bundle /tmp/bundle
     python3 scripts/seed_import.py --bundle /tmp/bundle --dry-run
     python3 scripts/seed_import.py --bundle /tmp/bundle --source-type imported
-    python3 scripts/seed_import.py --bundle /tmp/bundle --no-graph
 
 Connection: ``PostgresConfig.from_env()``.
 """
@@ -61,7 +54,6 @@ except Exception:  # pragma: no cover — dotenv optional
 import asyncpg
 
 from legba.data.config import PostgresConfig
-from legba.data.filters._fact_graph import upsert_fact_edge, vertex_label_for_class
 from legba.data.provenance import (
     AnalystContext,
     FactPayload,
@@ -114,10 +106,9 @@ async def _rehome(
     bundle: Path,
     *,
     source_type_override: str | None,
-    rebuild_graph: bool,
     manifest: dict[str, Any],
 ) -> dict[str, int]:
-    """Resolve entities → write facts/nexuses → record the batch → rebuild AGE."""
+    """Resolve entities → write facts/nexuses → record the batch."""
     entities = _read_jsonl(bundle / "entities.jsonl")
     facts = _read_jsonl(bundle / "facts.jsonl")
     nexuses = _read_jsonl(bundle / "nexuses.jsonl")
@@ -126,15 +117,12 @@ async def _rehome(
         "entities": 0,
         "facts": 0,
         "nexuses": 0,
-        "graph_edges": 0,
         "skipped": 0,
     }
     actx = _import_ctx()
-    # canonical_name.lower() -> entity_class (for the AGE rebuild vertex labels).
+    # canonical_name.lower() -> entity_class / entity_profiles.id of every entity
+    # re-homed so far (used to resolve fact and nexus endpoints).
     entity_class_by_name: dict[str, str] = {}
-    # canonical_name.lower() -> entity_profiles.id. The AGE rebuild keys
-    # vertices on the entity uuid (never the name), so the id resolved when the
-    # entity was re-homed is carried forward to the edge write.
     entity_id_by_name: dict[str, str] = {}
 
     async with pool.acquire() as conn:
@@ -230,33 +218,6 @@ async def _rehome(
                 )
                 continue
 
-            # 3a) AGE rebuild: project the fact-derived edge from the re-homed
-            #     row (best-effort; never fails the import).
-            if rebuild_graph:
-                subj_cls = entity_class_by_name.get(subject.lower())
-                val_cls = entity_class_by_name.get(value.lower())
-                if (
-                    vertex_label_for_class(subj_cls)
-                    and vertex_label_for_class(val_cls)
-                    and out is not None
-                ):
-                    try:
-                        emitted = await _emit_fact_edge(
-                            pool,
-                            subject=subject,
-                            subject_id=entity_id_by_name.get(subject.lower()),
-                            subject_class=subj_cls,
-                            predicate=predicate,
-                            value=value,
-                            value_id=entity_id_by_name.get(value.lower()),
-                            value_class=val_cls,
-                            fact_id=str(out.id),
-                        )
-                        if emitted:
-                            counts["graph_edges"] += 1
-                    except Exception:
-                        pass
-
         # 4) Nexuses — re-home each by writing through write_nexus.
         for n in nexuses:
             nk = n.get("natural_key") or {}
@@ -316,48 +277,6 @@ async def _rehome(
     return counts
 
 
-async def _emit_fact_edge(
-    pool: asyncpg.Pool,
-    *,
-    subject: str,
-    subject_id: str | None,
-    subject_class: str | None,
-    predicate: str,
-    value: str,
-    value_id: str | None,
-    value_class: str | None,
-    fact_id: str,
-) -> bool:
-    """Project one fact-derived AGE edge via the existing helper.
-
-    ``upsert_fact_edge`` calls ``store.cypher(query, cols=…, graph_name=…)``;
-    we hand it a tiny shim that runs the AGE cypher on a pooled connection that
-    has the agtype codec loaded. Best-effort — a graph error never fails the
-    import (the fact row has already persisted).
-    """
-
-    class _Shim:
-        async def cypher(self, query: str, *, cols: str, graph_name: str) -> Any:
-            async with pool.acquire() as conn:
-                await conn.execute("LOAD 'age'")
-                await conn.execute('SET search_path = ag_catalog, "$user", public')
-                stmt = f"SELECT * FROM cypher('{graph_name}', $$ {query} $$) AS ({cols})"
-                return await conn.fetch(stmt)
-
-    return await upsert_fact_edge(
-        _Shim(),
-        subject=subject,
-        subject_id=subject_id,
-        subject_class=subject_class,
-        predicate=predicate,
-        value=value,
-        value_id=value_id,
-        value_class=value_class,
-        fact_id=fact_id,
-        graph="legba_graph",
-    )
-
-
 def _validate_manifest(bundle: Path) -> dict[str, Any]:
     mpath = bundle / "manifest.json"
     if not mpath.exists():
@@ -399,7 +318,6 @@ async def _run(args: argparse.Namespace) -> int:
             pool,
             bundle,
             source_type_override=args.source_type,
-            rebuild_graph=not args.no_graph,
             manifest=manifest,
         )
     finally:
@@ -420,11 +338,6 @@ def main() -> int:
         "--source-type",
         help="override source_type stamped on every imported row "
         "(default: each row's own source_type, else 'seed')",
-    )
-    p.add_argument(
-        "--no-graph",
-        action="store_true",
-        help="skip the AGE fact-edge rebuild (rows are still re-homed)",
     )
     args = p.parse_args()
     return asyncio.run(_run(args))

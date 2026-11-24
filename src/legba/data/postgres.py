@@ -1,22 +1,18 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""legba.data.postgres — async asyncpg pool with AGE-aware Cypher helper.
+"""legba.data.postgres — the async asyncpg pool.
 
-The pool is the primary substrate store: relational tables + AGE graph
-(`legba_graph`). AGE requires:
-  * `LOAD 'age'` on every connection (session-scoped, persists in session).
-  * `SET search_path = ag_catalog, "$user", public` (session-scoped, resets
-    when a connection is released back to an asyncpg pool — must reapply on
-    acquire).
-
-This module's `PostgresStore.cypher()` helper takes care of both.
+The pool is the primary substrate store (relational tables). The Apache AGE
+graph (`legba_graph`) was removed on 2026-11-15 (it held no row), and the
+cypher helper with it. The AGE *extension* is still installed, so each
+connection still loads it and keeps ``ag_catalog`` on the search path until
+the stock-Postgres image swap (see SEAMS).
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import re
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Iterable, Mapping
 
@@ -28,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class PostgresStore:
-    """Async wrapper around `asyncpg.Pool` with AGE helpers.
+    """Async wrapper around `asyncpg.Pool`.
 
     Usage:
         store = PostgresStore.from_env()
@@ -37,8 +33,6 @@ class PostgresStore:
             rows = await conn.fetch("SELECT 1")
         await store.close()
     """
-
-    GRAPH_NAME = "legba_graph"
 
     def __init__(self, cfg: PostgresConfig):
         self._cfg = cfg
@@ -157,17 +151,6 @@ class PostgresStore:
         except Exception as exc:
             logger.debug("search_path reset skipped: %s", exc)
 
-    @staticmethod
-    async def _prepare_for_cypher(conn: asyncpg.Connection) -> None:
-        """Reapply session state needed before any cypher() call.
-
-        Kept for backward compatibility — `_setup_connection` already
-        re-applies search_path on every acquire, but explicit Cypher
-        callers may still want to re-`LOAD 'age'` defensively.
-        """
-        await conn.execute("LOAD 'age'")
-        await conn.execute('SET search_path = ag_catalog, "$user", public')
-
     # ------------------------------------------------------------------
     # Acquire / transaction helpers
     # ------------------------------------------------------------------
@@ -182,85 +165,6 @@ class PostgresStore:
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 yield conn
-
-    # ------------------------------------------------------------------
-    # Cypher helper
-    # ------------------------------------------------------------------
-
-    async def cypher(
-        self,
-        query: str,
-        *,
-        cols: str = "v agtype",
-        graph_name: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """Execute a Cypher query against the AGE graph and parse results.
-
-        `cols` is the AS column list — e.g. `"v agtype"` for `RETURN n AS v`,
-        or `"a agtype, b agtype"` for `RETURN a, b`. Values are parsed into
-        Python dicts/scalars via `_parse_agtype`.
-        """
-        graph = graph_name or self.GRAPH_NAME
-        async with self.acquire() as conn:
-            await self._prepare_for_cypher(conn)
-            sql = (
-                f"SELECT * FROM cypher('{graph}', $$ {query} $$) AS ({cols})"
-            )
-            rows = await conn.fetch(sql)
-            col_names = [c.strip().split()[0] for c in cols.split(",")]
-            return [
-                {name: self._parse_agtype(row[name]) for name in col_names}
-                for row in rows
-            ]
-
-    # ------------------------------------------------------------------
-    # agtype parsing
-    # ------------------------------------------------------------------
-
-    _VERTEX_RE = re.compile(r"::vertex$")
-    _EDGE_RE = re.compile(r"::edge$")
-    _PATH_RE = re.compile(r"::path$")
-
-    @classmethod
-    def _parse_agtype(cls, value: Any) -> Any:
-        """Parse an AGE agtype string into a Python object.
-
-        agtype literals look like:
-            {"id": 1, "label": "Entity", "properties": {…}}::vertex
-            {"id": 1, "label": "AlliedWith", "start_id": 2, "end_id": 3,
-             "properties": {…}}::edge
-        Strip the trailing `::type` tag and JSON-decode.
-        """
-        if value is None or not isinstance(value, str):
-            return value
-
-        s = value.strip()
-        # Strip type suffix
-        for suffix in ("::vertex", "::edge", "::path", "::numeric"):
-            if s.endswith(suffix):
-                s = s[: -len(suffix)]
-                break
-
-        # Try JSON first (covers most cases — objects, arrays, strings).
-        try:
-            return json.loads(s)
-        except (ValueError, TypeError):
-            pass
-
-        # Numeric literal
-        try:
-            return int(s)
-        except ValueError:
-            pass
-        try:
-            return float(s)
-        except ValueError:
-            pass
-
-        # Cypher escapes quote strings as `"foo"`; fall back to stripped.
-        if s.startswith('"') and s.endswith('"'):
-            return s[1:-1]
-        return s
 
     # ------------------------------------------------------------------
     # Convenience operations
@@ -296,32 +200,3 @@ class PostgresStore:
                 table,
             )
             return [dict(r) for r in rows]
-
-    async def graph_labels(self) -> dict[str, list[str]]:
-        """Return AGE graph labels grouped by kind.
-
-        Returns {'vertex': [...], 'edge': [...]} for the legba_graph.
-        """
-        async with self.acquire() as conn:
-            await self._prepare_for_cypher(conn)
-            rows = await conn.fetch(
-                """
-                SELECT l.name AS label_name, l.kind::text AS label_kind
-                FROM ag_catalog.ag_label l
-                JOIN ag_catalog.ag_graph g ON l.graph = g.graphid
-                WHERE g.name = $1
-                ORDER BY l.kind, l.name
-                """,
-                self.GRAPH_NAME,
-            )
-            out: dict[str, list[str]] = {"vertex": [], "edge": []}
-            for row in rows:
-                k = row["label_kind"]
-                kind = (
-                    "vertex" if k == "v"
-                    else "edge" if k == "e"
-                    else str(k)
-                )
-                if kind in out:
-                    out[kind].append(row["label_name"])
-            return out

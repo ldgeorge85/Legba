@@ -56,6 +56,7 @@ from functools import lru_cache
 from typing import Sequence
 
 from ._entity_canon import _ALIAS_MAP, _DEMONYM_MAP
+from .gazetteer import gazetteer, or_empty
 from .provenance.text_fold import normalize_for_match
 
 _PUNCT = re.compile(r"[^a-z0-9]+")
@@ -203,10 +204,31 @@ def represented_by(canonical_name: str, frame_prose: str) -> str | None:
     assembled reads: no row loses a polity that a whole-token reading of its
     prose supports. See ``planning/GEO_POLITY_INDEX_WHOLE_TOKEN_REPORT.md``.
     """
+    return represented_in(
+        normalized_surfaces(canonical_name), *prepare_prose(frame_prose)
+    )
+
+
+def prepare_prose(frame_prose: str) -> tuple[str, str]:
+    """``(prose, squashed)`` exactly as :func:`represented_by` derives them —
+    for a caller testing MANY polities against one prose (N-W)."""
     prose = normalize_prose(frame_prose)
-    squashed = prose.replace(" ", "")
-    for surface in entity_surfaces(canonical_name):
-        norm = normalize_prose(surface)
+    return prose, prose.replace(" ", "")
+
+
+def normalized_surfaces(canonical_name: str) -> tuple[tuple[str, str], ...]:
+    """``(surface, normalized surface)`` in :func:`entity_surfaces`' order."""
+    return tuple((s, normalize_prose(s)) for s in entity_surfaces(canonical_name))
+
+
+def represented_in(
+    surfaces: tuple[tuple[str, str], ...], prose: str, squashed: str
+) -> str | None:
+    """:func:`represented_by` over pre-normalized sides (N-W, 2026-11-13: the
+    frame-content gauge re-folded a finding's whole body once PER candidate
+    polity and held the runtime's event loop 3.5 s; it now folds each body
+    and each polity's surfaces once). Same first match, same answer."""
+    for surface, norm in surfaces:
         if not norm:
             continue
         if _surface_matches(norm, prose, squashed):
@@ -237,18 +259,12 @@ def represented_by(canonical_name: str, frame_prose: str) -> str | None:
 #: direction: an ISO2 missing from this map still gets its gazetteer names, so
 #: a gap can at worst let a desk's own country through to the frame check —
 #: which the desk's frames then almost always cover anyway. Pinned per fleet
-#: desk by ``test_every_fleet_desk_excludes_its_own_country``.
-_ISO2_HOME_ALIASES: dict[str, tuple[str, ...]] = {
-    "CD": ("Democratic Republic of the Congo", "DR Congo", "DRC", "Congo"),
-    "GB": ("Britain", "Great Britain", "England"),
-    "IR": ("Iran", "Islamic Republic of Iran", "Persia"),
-    "KP": ("North Korea", "DPRK"),
-    "KR": ("South Korea", "ROK"),
-    "RU": ("Russia", "Russian Federation"),
-    "TR": ("Turkey", "Turkiye", "Türkiye"),
-    "TW": ("Taiwan", "Republic of China"),
-    "US": ("United States", "America", "USA"),
-}
+#: desk by ``test_every_fleet_desk_excludes_its_own_country``. The table is the
+#: profile gazetteer's ``iso2_home_aliases`` (W10 CANON-1), read once at import;
+#: the FIRST spelling is :func:`home_country_name`'s answer.
+_ISO2_HOME_ALIASES: dict[str, tuple[str, ...]] = or_empty(
+    "iso2_home_aliases", consumer="polity_match",
+)
 
 
 def _pycountry_names(iso2: str) -> tuple[str, ...]:
@@ -256,8 +272,14 @@ def _pycountry_names(iso2: str) -> tuple[str, ...]:
 
     pycountry is already the canon's gazetteer dependency; this read is the
     reason KR/KP/IR/TW need no override entry (their ``common_name`` is the
-    newsroom spelling) while RU/TR do.
+    newsroom spelling) while RU/TR do. It is read only where the profile's
+    gazetteer DECLARES the pycountry universe (``polities.universe``, W10
+    CANON-1); a profile that declares no polity universe has no ISO2 names.
     """
+    polities = gazetteer().get("polities")
+    if polities is None or polities.universe != "pycountry":
+        or_empty("polities", consumer="polity_match")
+        return ()
     try:
         import pycountry
     except Exception:  # pragma: no cover — dependency-shape guard
@@ -314,5 +336,8 @@ __all__ = [
     "home_prose",
     "is_home_country",
     "normalize_prose",
+    "normalized_surfaces",
+    "prepare_prose",
     "represented_by",
+    "represented_in",
 ]

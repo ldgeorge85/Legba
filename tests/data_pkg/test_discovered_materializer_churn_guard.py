@@ -61,7 +61,7 @@ from legba.data.schemas import TargetDescriptor, content_hash
 # both the seeded operator head and the materialisation *template* (so the
 # materialised body inherits the same behavioural fields).
 _REPO_ROOT = Path("/usr/local/deployments/active/legba")
-_G20_YAML = Path(__file__).resolve().parents[2] / "descriptors" / "target_country_g20.yaml"
+_G20_YAML = Path(__file__).resolve().parents[2] / "descriptors" / "target_country_g20_br.yaml"
 
 
 def _g20_body() -> dict:

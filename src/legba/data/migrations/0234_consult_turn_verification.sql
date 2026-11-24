@@ -1,0 +1,50 @@
+-- SPDX-FileCopyrightText: 2026 Lewis George
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+--
+-- 0234_consult_turn_verification.sql
+--
+-- A CONSULT TURN SAYS WHETHER ITS ANSWER WAS JUDGED (X2 lane C1).
+--
+-- WHY
+-- ---
+-- Consult answers were the one product surface outside the measurement chain
+-- (W11-F5, W11-F27): every finding a desk writes is faithfulness-judged and
+-- carries the verdict on its critique row, and a consult answer carried
+-- nothing — not a score, not a statement that it had none. A reader could not
+-- tell a judged answer from an unjudged one, because there was no unjudged
+-- one: there was no judging.
+--
+-- The judge now runs over a consult turn's CITED claims the way it runs over
+-- a finding (`analysts/consult_judging.py`, the JUDGE-2 chain), and the turn
+-- records the outcome here.
+--
+-- WHAT THIS ADDS
+-- --------------
+--   * `verification jsonb` (nullable) on `consult_turns` — for an ASSISTANT
+--     turn, the stamp `consult_verification/1`:
+--       {schema, state, score, reason, judge_status, checkable_claims,
+--        supported_claims, judge_model, judge_llm_ref, judge_route, weak_judge,
+--        judge_pipeline_version, judged_at, ...}
+--     `state` is one of `judged` (an adjudicated verdict; `score` is the
+--     pooled supported share), `unassessable` (the turn had nothing a judge
+--     could grade; `score` is NULL and `reason` says why — NEVER 0.5, the
+--     W11-F29 averaging defect), or `not_judged` (no judge ran; `reason`
+--     names why). Every assistant turn written from this migration on carries
+--     a stamp — the label is never blank.
+--     NULL means the turn predates this column; the panel renders that as
+--     "not judged (recorded before judging)", never as a score.
+--
+-- `consult_turns.usage` (0195) already exists and needs no change: it was
+-- never WRITTEN on the live chat path (W1-F1 — 91 assistant turns, every one
+-- `{}`), which this lane fixes in code, not in schema.
+--
+-- SAFETY
+-- ------
+-- Additive, nullable, no default, no backfill (an old turn was never judged,
+-- and stamping it now would be a verdict nobody reached). `IF NOT EXISTS`, so
+-- re-running is a no-op. No index: the column is read by the per-session load
+-- (keyed on session_id) and by the usage route's per-day count, which scans
+-- the turns it already selected by time.
+
+ALTER TABLE public.consult_turns
+    ADD COLUMN IF NOT EXISTS verification jsonb;

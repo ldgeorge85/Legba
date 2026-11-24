@@ -335,69 +335,6 @@ def _enumerate_triads(
     }
 
 
-# ---------------------------------------------------------------------------
-# Live-substrate AGE augmentation (best-effort)
-# ---------------------------------------------------------------------------
-
-
-async def _augment_from_age(
-    deps: Any,
-    inputs: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Pull signed edges over AGE incident to input entities.
-
-    Returns extra rows in the canonical input shape so they merge cleanly
-    upstream. Failures degrade to ``[]``.
-    """
-    pool = getattr(deps, "pg_pool", None) if deps is not None else None
-    if pool is None:
-        return []
-    seed_entities: set[str] = set()
-    for row in inputs:
-        for k in ("source_entity", "src", "subject", "target_entity", "dst", "object"):
-            v = row.get(k)
-            if v:
-                seed_entities.add(str(v))
-    if not seed_entities:
-        return []
-    sample = list(seed_entities)[:200]
-    quoted = ", ".join(f'"{e}"' for e in sample)
-    # Only pull labels we have polarity for.
-    label_filter = ", ".join(f"'{lbl}'" for lbl in POLARITY if POLARITY[lbl] != 0)
-    cypher = (
-        "MATCH (a)-[r]->(b) "
-        f"WHERE label(r) IN [{label_filter}] AND "
-        f"(a.id IN [{quoted}] OR b.id IN [{quoted}]) "
-        "RETURN a.id AS src, b.id AS dst, label(r) AS rel "
-        "LIMIT 5000"
-    )
-    try:
-        async with pool.acquire() as conn:
-            await conn.execute("LOAD 'age'")
-            await conn.execute('SET search_path = ag_catalog, "$user", public')
-            rows = await conn.fetch(
-                "SELECT * FROM cypher('legba_graph', $$"
-                + cypher
-                + "$$) AS (src agtype, dst agtype, rel agtype)"
-            )
-    except Exception as exc:
-        logger.warning("structural_balance.age.pull_failed err=%s", exc)
-        return []
-    extras: list[dict[str, Any]] = []
-    for row in rows:
-        src = _strip_agtype(row["src"])
-        dst = _strip_agtype(row["dst"])
-        rel = _strip_agtype(row["rel"])
-        if not src or not dst:
-            continue
-        extras.append({
-            "source_entity": src,
-            "target_entity": dst,
-            "edge_label": rel,
-        })
-    return extras
-
-
 #: The families whose polarity is EVIDENCE OF ALIGNMENT, and therefore the only
 #: ones a balance ratio may count. This is the narrowest default in the system
 #: and 0143's header is why:
@@ -515,19 +452,6 @@ async def _augment_from_nexuses(
     return out
 
 
-def _strip_agtype(value: Any) -> str:
-    if value is None:
-        return ""
-    s = str(value).strip()
-    for suffix in ("::vertex", "::edge", "::path", "::numeric"):
-        if s.endswith(suffix):
-            s = s[: -len(suffix)]
-    s = s.strip()
-    if s.startswith('"') and s.endswith('"'):
-        s = s[1:-1]
-    return s
-
-
 # ---------------------------------------------------------------------------
 # Finding assembly
 # ---------------------------------------------------------------------------
@@ -606,8 +530,6 @@ async def handle(
     if deps is not None and bool(options.get("augment_from_nexuses", True)):
         # PIECE A: the signed typed edges are the primary signed-edge source.
         rows.extend(await _augment_from_nexuses(deps, fams))
-    if deps is not None and bool(options.get("augment_from_age", True)):
-        rows.extend(await _augment_from_age(deps, inputs))
 
     g = _signed_graph_from_inputs(rows)
     if g.number_of_nodes() > _MAX_NODES:

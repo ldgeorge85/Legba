@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.un_news.africa": {
+      "source": "source_un_news_africa.yaml",
+      "state": "draft"
+    }
+  }
+}

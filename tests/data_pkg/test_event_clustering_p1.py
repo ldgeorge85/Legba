@@ -109,7 +109,7 @@ def test_registration_is_trace_only_and_options_are_declared() -> None:
     assert SUB_HANDLERS["event_reconciler"] is event_reconciler.handle
     assert OUTPUT_KIND_BY_SUB_HANDLER["event_clustering"] is TRACE_ONLY
     assert OUTPUT_KIND_BY_SUB_HANDLER["event_reconciler"] is TRACE_ONLY
-    from legba.data.analysts.handler_options import HANDLER_OPTIONS
+    from legba.data.option_catalog.handler_options import HANDLER_OPTIONS
 
     assert "lookback_hours" in {
         spec.name for spec in HANDLER_OPTIONS["event_clustering"]
@@ -757,7 +757,6 @@ def _watermark_state(row) -> dict:
 
 
 _PHASES = {"slice", "cluster", "match", "write", "tower", "lifecycle"}
-_NIL = "00000000-0000-0000-0000-000000000000"
 
 
 @pytest.mark.integration
@@ -766,8 +765,12 @@ async def test_budget_truncated_pass_saves_cursor_and_resumes(
     pg_pool, monkeypatch
 ) -> None:
     """A pass that spends its budget mid-write ends inside the turn with a
-    partial receipt and an inclusive resume cursor; the next tick picks the
-    slice up there instead of re-examining it."""
+    partial receipt and a resume cursor at the end of the processed prefix;
+    the next tick picks the slice up there instead of re-examining it.
+
+    2026-11-09: the cursor is EXCLUSIVE at the last processed row (A's
+    newest member), no longer INCLUSIVE at the earliest member of any
+    unwritten candidate — the bound that froze the live slice for 7 weeks."""
     monkeypatch.setenv("LEGBA_EVENTS", "1")
     base = datetime.now(timezone.utc) - timedelta(hours=1)
     # Deterministic candidate order: cluster order follows each cluster's
@@ -816,16 +819,18 @@ async def test_budget_truncated_pass_saves_cursor_and_resumes(
     assert data["funnel"]["promoted"] == 1
     assert await pg_pool.fetchval("SELECT count(*) FROM events") == 1
 
-    # The deferred candidate's oldest member is the INCLUSIVE resume bound.
+    # The processed prefix ends at A's newest member: the exclusive bound.
     cursor = data["cursor"]["signal_slice"]
-    assert cursor["id"] == _NIL
-    assert cursor["ts"] == (base + timedelta(minutes=10)).isoformat()
+    assert cursor["id"] == str(id_a2)
+    assert cursor["ts"] == (base + timedelta(minutes=1)).isoformat()
+    assert data["slice"]["processed"] == 2
+    assert data["slice"]["advanced"] is True
     wm = await pg_pool.fetchrow(
         "SELECT state FROM alert_trigger_watermarks"
         " WHERE trigger_class='event_clustering'"
         " AND watermark_key='signal_slice'"
     )
-    assert _watermark_state(wm)["id"] == _NIL
+    assert _watermark_state(wm)["id"] == str(id_a2)
 
     second = await event_clustering.handle(
         [], opts, SimpleNamespace(pg_pool=pg_pool, extras={})
@@ -847,7 +852,10 @@ async def test_tiny_pass_budget_returns_inside_the_turn(
     pg_pool, monkeypatch
 ) -> None:
     """The descriptor-side ``pass_budget_seconds`` mirror bounds the real
-    wall-clock budget; nothing consumed means nothing advances."""
+    wall-clock budget. N-Z: the receipt still names the cut, but the progress
+    floor carries the pass's first candidate through, so even a spent budget
+    advances the slice (the old contract — nothing consumed, the page halved,
+    the stall counted — is the 2026-11-14 live stall)."""
     monkeypatch.setenv("LEGBA_EVENTS", "1")
     async with pg_pool.acquire() as conn:
         ent = await _entity(conn, f"P1b Fordow {uuid4().hex[:8]}")
@@ -867,12 +875,18 @@ async def test_tiny_pass_budget_returns_inside_the_turn(
     assert data["funnel"]["examined"] == 2
     assert set(data["phase_seconds"]) == _PHASES
     assert data["phase_seconds"]["slice"] > 0
-    assert await pg_pool.fetchval("SELECT count(*) FROM events") == 0
-    # Nothing was consumed, so no cursor was written — the slice is re-offered.
-    assert await pg_pool.fetchval(
-        "SELECT count(*) FROM alert_trigger_watermarks"
+    assert await pg_pool.fetchval("SELECT count(*) FROM events") == 1
+    wm = await pg_pool.fetchrow(
+        "SELECT state FROM alert_trigger_watermarks"
         " WHERE trigger_class='event_clustering'"
-    ) == 0
+        " AND watermark_key='signal_slice'"
+    )
+    state = _watermark_state(wm)
+    assert "ts" in state and "id" in state
+    assert state["stall_ticks"] == 0
+    assert data["slice"]["stalled"] is False
+    assert data["slice"]["floor_ran"] is True
+    assert data["slice"]["processed"] == 2
 
 
 @pytest.mark.integration
@@ -1882,7 +1896,7 @@ def test_match_event_deadline_cuts_mid_walk_and_reports_best_so_far(
 
 def test_p1c_knobs_are_declared_in_the_catalog() -> None:
     """The three P1c knobs are operator-settable through the X-1 catalog."""
-    from legba.data.analysts.handler_options import HANDLER_OPTIONS
+    from legba.data.option_catalog.handler_options import HANDLER_OPTIONS
 
     specs = {s.name: s for s in HANDLER_OPTIONS["event_clustering"]}
     for name in (
@@ -1901,7 +1915,7 @@ def test_p1c_knobs_are_declared_in_the_catalog() -> None:
 
 def test_max_tower_members_knob_is_declared_in_the_catalog() -> None:
     """P1d's member cap is operator-settable through the X-1 catalog."""
-    from legba.data.analysts.handler_options import HANDLER_OPTIONS
+    from legba.data.option_catalog.handler_options import HANDLER_OPTIONS
 
     specs = {s.name: s for s in HANDLER_OPTIONS["event_clustering"]}
     assert "max_tower_members" in specs

@@ -1,0 +1,72 @@
+# reenrich_pending — the standing sweep over signals written UNENRICHED (W11-F118).
+#
+# W11-F103 (runtime/source_enrich_hold.py) makes a SourceActor write an entry
+# WITHOUT its enrichment chain when the NLP plane is degraded for the rest of a
+# poll, or when the same entry was skipped on three consecutive polls, tagging it
+# payload.enrichment_pending (nlp_degraded_this_poll / enrich_hold_exhausted).
+# Nothing else re-enriches such a row. Every time this analyst fires it takes the
+# next pending_batch rows (default 200, oldest first) and re-runs the SAME chain
+# the ingest path runs — run_baseline with the row's own source descriptor's
+# pipeline.enrichment stage, built by the host's source-enrichment factory; a
+# fallback language_detect + translate-then-NER chain when the descriptor cannot
+# be resolved — then updates the row in place and removes the marker. A failed row
+# keeps its marker (see deterministic_handlers/reenrich_pending.py).
+#
+# Target-agnostic + META, like reenrich_ner: no `targets` selector, so the cadence
+# heartbeat is ONE global sweep per tick; the handler reads signals directly via
+# deps.pg_pool. Migration 0239 adds the partial index the SELECT rides.
+#
+# STANDING, not one-time: the pool is empty in steady state (examined=0 per tick,
+# one index probe) and refills only during an NLP-plane outage.
+
+identity:
+  id: reenrich_pending
+  name: Pending-enrichment sweep
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: reenrich_pending
+
+subscription:
+  # No `targets` block → META analyst: one global sweep per cadence tick over the
+  # whole shared signal pool, directly via deps.pg_pool.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: reenrich_pending
+  # Deterministic kind, NO LLM block: the chain uses the self-hosted NLP plane
+  # ($0). The runtime deps-builder threads the registry client, the host's
+  # source-enrichment factory and the hosted NlpServiceClient onto deps.extras
+  # whenever the bound sub_handler is reenrich_pending (analyst_deps_reenrich.py);
+  # with neither chain wired the sweep no-ops that tick (skipped_no_chain).
+
+cadence:
+  # ── deterministic kind → token-budget-EXEMPT ──
+  #
+  # fallback_schedule = "1-59/15 * * * *" — every 15 min (fires :01/:16/:31/:46),
+  # OFFSET from the other signal sweeps so they never fire on the same tick:
+  #   corpus_indexer "7-59/15"        · reenrich_ner "9-59/15"
+  #   signal_embedder "11-59/15"      · signal_summarizer "13-59/15"
+  #   reenrich_translation "14-59/15" · corpus_retention "23-59/15"
+  #   reenrich_pending (this) "1-59/15"
+  fallback_schedule: "1-59/15 * * * *"
+  # Idempotent forward-progressing sweep — a short re-fire floor is plenty.
+  cooldown_seconds: 600
+
+# No extra output sinks: the per-run summary finding (examined / enriched /
+# failed / still_pending) is suppressed to the trace via the TRACE_ONLY map; the
+# enrichment lands directly on the signals rows.
+outputs: []

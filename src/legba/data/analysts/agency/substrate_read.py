@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import replace
 from typing import Any
 
 from ...schemas.action_pack import ActionPack
@@ -88,6 +89,17 @@ SUBSTRATE_READ_TOOLS = (
     # consult path. (Not added to inline_target._GATHER_READ_TOOLS by design.)
     "list_targets",
     "list_sources",
+    # W11-F141 — the scheduled-events calendar (migration 0240): the
+    # operator-entered register of FUTURE dated things, so a consult can tell
+    # "nothing scheduled" apart from "could not look".
+    "list_scheduled_events",
+    # W11-F162 — the forecast ledger's due-date reader (migrations 0242/0244).
+    "list_due_resolvers",
+    # W11-F152 — per-source health with a staleness verdict (fresh / quiet /
+    # stale / dead against the feed's own cadence). The journal_read pack
+    # already grants it; the consult loop is governed through THIS pack, so
+    # without the entry it is blocked as unknown_tool.
+    "get_source_health",
     # 7g-2 — the COLLECTION series reads. HISTORY, not now: the only tools in
     # this pack that reach `observations` (the bitemporal store a curated
     # holding loads once and nothing schedules), and the only ones whose rows
@@ -99,6 +111,11 @@ SUBSTRATE_READ_TOOLS = (
     # the sha256 of the file the number came from.
     "series_history",
     "series_compare",
+    # E2 — the LIVE numeric series (chokepoint transits, policy rates:
+    # `observations` rows with origin_class='live', collection 'live:<source>').
+    # A SEPARATE, explicitly labelled reader: the two history tools above never
+    # select a live row (migration 0246, SEAMS #57/#62) and that stays so.
+    "live_series",
 )
 
 
@@ -133,6 +150,70 @@ def _subjects(args: Any) -> list[str]:
     if not isinstance(raw, (list, tuple)):
         return []
     return [str(x).strip() for x in raw if str(x).strip()]
+
+
+# ---------------------------------------------------------------------------
+# X3/G0 — PACK-CONFIGURED read scopes (the bake-off's arm C).
+#
+# The handler is shared by every pack that lists the tool; what differs per pack
+# is the ToolSpec ``config``. Two keys are read, and ONLY from the pack — never
+# from the planner's args (the agency's arg grammar refuses a planner-supplied
+# ``verified_only`` as ``invalid_arg``; the handler drops it again), so a
+# reader can neither escape the scope nor opt into it:
+#
+#   * ``verified_only: true`` on ``list_findings`` / ``belief_as_of`` — only the
+#     findings a composition would admit (``legba.data.verified_findings``);
+#   * ``receipt_scoped: true`` on ``read_document`` — only a signal an admitted
+#     finding cites. Anything else is refused by name, not read.
+#
+# A pack that sets neither (``substrate_read``) behaves byte-identically.
+# ---------------------------------------------------------------------------
+
+_VERIFIED_KEY = "verified_only"
+
+
+def _tool_config(pack: ActionPack | None, name: str) -> dict[str, Any]:
+    for spec in getattr(pack, "tools", None) or []:
+        if getattr(spec, "name", None) == name:
+            return dict(getattr(spec, "config", None) or {})
+    return {}
+
+
+def _scoped_call(call: ToolCall, pack: ActionPack | None, name: str) -> ToolCall:
+    """``call`` with the planner's ``verified_only`` replaced by the pack's."""
+    args = {k: v for k, v in call.args.items() if k != _VERIFIED_KEY}
+    if _tool_config(pack, name).get(_VERIFIED_KEY) is True:
+        args[_VERIFIED_KEY] = True
+    return replace(call, args=args)
+
+
+def _verified_kw(args: dict[str, Any]) -> dict[str, Any]:
+    """The port kwarg, only when set — a port without the flag stays callable."""
+    return {_VERIFIED_KEY: True} if args.get(_VERIFIED_KEY) is True else {}
+
+
+def _findings_paging_kw(args: dict[str, Any]) -> dict[str, Any]:
+    """W11-F150 — ``list_findings``' survey mode and paging kwargs, only when
+    set, so a port without them stays callable and a plain read is unchanged.
+
+    ``limit`` rides here too: a survey with no ``limit`` takes the port's
+    survey default (a page of targets), not the 20-row page default.
+    """
+    kw: dict[str, Any] = {}
+    if args.get("mode") is not None:
+        kw["mode"] = str(args["mode"]).strip().lower()
+    raw = args.get("target_ids")
+    if isinstance(raw, str):
+        raw = [p for p in re.split(r"[,\s]+", raw) if p]
+    if isinstance(raw, (list, tuple)) and raw:
+        kw["target_ids"] = [str(x) for x in raw]
+    if args.get("offset") is not None:
+        kw["offset"] = int(args["offset"])
+    if args.get("limit") is not None:
+        kw["limit"] = int(args["limit"])
+    elif kw.get("mode") != "survey":
+        kw["limit"] = 20
+    return kw
 
 
 async def _call_port(
@@ -263,8 +344,9 @@ async def _call_port(
                 include_superseded=str(
                     args.get("include_superseded", False)
                 ).lower() in ("true", "1"),
-                limit=int(args.get("limit", 20)),
                 believed_as_of=args.get("believed_as_of"),
+                **_verified_kw(args),
+                **_findings_paging_kw(args),
             )
         elif name == "list_situations":
             out = await port.list_situations(
@@ -284,6 +366,7 @@ async def _call_port(
                 target_id=args.get("target_id"),
                 fold_verdicts=str(args.get("fold_verdicts", "as_of")),
                 limit=int(args.get("limit", 20)),
+                **_verified_kw(args),
             )
         elif name == "query_events":
             raw_geo = args.get("geo")
@@ -329,6 +412,31 @@ async def _call_port(
                 silent_only=bool(args.get("silent_only", False)),
                 silent_hours=int(args.get("silent_hours", 48)),
             )
+        elif name == "list_scheduled_events":
+            raw_keys = args.get("subject_keys")
+            out = await port.list_scheduled_events(
+                window_start=args.get("window_start"),
+                window_end=args.get("window_end"),
+                scope=args.get("scope"),
+                subject_keys=(
+                    [str(k) for k in raw_keys]
+                    if isinstance(raw_keys, list)
+                    else ([str(raw_keys)] if raw_keys is not None else None)
+                ),
+                limit=int(args.get("limit", 50)),
+            )
+        elif name == "list_due_resolvers":
+            out = await port.list_due_resolvers(
+                horizon_days=int(args.get("horizon_days", 14)),
+                include_closed=bool(args.get("include_closed", False)),
+                limit=int(args.get("limit", 50)),
+            )
+        elif name == "get_source_health":
+            out = await port.get_source_health(
+                silent_only=bool(args.get("silent_only", False)),
+                silent_hours=int(args.get("silent_hours", 48)),
+                limit=int(args.get("limit", 200)),
+            )
         elif name == "series_history":
             out = await port.series_history(
                 series_id=str(args.get("series_id", "")),
@@ -348,6 +456,15 @@ async def _call_port(
                 as_of=args.get("as_of"),
                 collection_id=args.get("collection_id"),
                 limit=int(args.get("limit", 500)),
+            )
+        elif name == "live_series":
+            out = await port.live_series(
+                series_id=args.get("series_id"),
+                subject=args.get("subject"),
+                source_id=args.get("source_id"),
+                since=args.get("from") or args.get("since"),
+                until=args.get("to") or args.get("until"),
+                limit=int(args.get("limit", 200)),
             )
         else:  # pragma: no cover — registry only maps the known names
             return ToolResult(status="failed", error=f"unknown substrate tool {name!r}")
@@ -396,6 +513,27 @@ async def search_corpus_tool(
 async def read_document_tool(
     call: ToolCall, pack: ActionPack, ctx: ToolContext
 ) -> ToolResult:
+    if _tool_config(pack, "read_document").get("receipt_scoped") is True:
+        checker = getattr(ctx.substrate, "verified_receipt", None)
+        if checker is None:
+            return ToolResult(
+                status="failed",
+                error="receipt_scope_unavailable: this pack opens receipts of "
+                "verified findings only, and the wired port cannot check scope",
+            )
+        doc_id = str(call.args.get("doc_id", ""))
+        try:
+            admitted = await checker(doc_id=doc_id)
+        except Exception as exc:  # noqa: BLE001 — a failed check is a refusal
+            logger.warning("substrate_read.receipt_scope.error err=%s", exc)
+            admitted = False
+        if not admitted:
+            return ToolResult(
+                status="failed",
+                error=f"receipt_scope: {doc_id!r} is not cited by any verified "
+                "finding — this reader opens the receipts of verified findings "
+                "only (pass a signal id a returned finding cites)",
+            )
     return await _call_port(call, ctx, "read_document")
 
 
@@ -444,7 +582,7 @@ async def query_brokers_tool(
 async def list_findings_tool(
     call: ToolCall, pack: ActionPack, ctx: ToolContext
 ) -> ToolResult:
-    return await _call_port(call, ctx, "list_findings")
+    return await _call_port(_scoped_call(call, pack, "list_findings"), ctx, "list_findings")
 
 
 async def list_situations_tool(
@@ -462,7 +600,7 @@ async def query_predictions_tool(
 async def belief_as_of_tool(
     call: ToolCall, pack: ActionPack, ctx: ToolContext
 ) -> ToolResult:
-    return await _call_port(call, ctx, "belief_as_of")
+    return await _call_port(_scoped_call(call, pack, "belief_as_of"), ctx, "belief_as_of")
 
 
 async def query_events_tool(
@@ -489,6 +627,24 @@ async def list_sources_tool(
     return await _call_port(call, ctx, "list_sources")
 
 
+async def list_scheduled_events_tool(
+    call: ToolCall, pack: ActionPack, ctx: ToolContext
+) -> ToolResult:
+    return await _call_port(call, ctx, "list_scheduled_events")
+
+
+async def list_due_resolvers_tool(
+    call: ToolCall, pack: ActionPack, ctx: ToolContext
+) -> ToolResult:
+    return await _call_port(call, ctx, "list_due_resolvers")
+
+
+async def get_source_health_tool(
+    call: ToolCall, pack: ActionPack, ctx: ToolContext
+) -> ToolResult:
+    return await _call_port(call, ctx, "get_source_health")
+
+
 async def series_history_tool(
     call: ToolCall, pack: ActionPack, ctx: ToolContext
 ) -> ToolResult:
@@ -499,6 +655,12 @@ async def series_compare_tool(
     call: ToolCall, pack: ActionPack, ctx: ToolContext
 ) -> ToolResult:
     return await _call_port(call, ctx, "series_compare")
+
+
+async def live_series_tool(
+    call: ToolCall, pack: ActionPack, ctx: ToolContext
+) -> ToolResult:
+    return await _call_port(call, ctx, "live_series")
 
 
 def register_substrate_read_tools(registry: ToolRegistry) -> None:
@@ -532,9 +694,15 @@ def register_substrate_read_tools(registry: ToolRegistry) -> None:
     # Navigation readers (consult-surface only; still pack-governed).
     registry.register("list_targets", list_targets_tool)
     registry.register("list_sources", list_sources_tool)
+    # W11-F141 — the scheduled-events calendar.
+    registry.register("list_scheduled_events", list_scheduled_events_tool)
+    registry.register("list_due_resolvers", list_due_resolvers_tool)
+    registry.register("get_source_health", get_source_health_tool)
     # 7g-2 — the collection series reads.
     registry.register("series_history", series_history_tool)
     registry.register("series_compare", series_compare_tool)
+    # E2 — the live series reader (a separate tool from the history reads).
+    registry.register("live_series", live_series_tool)
 
 
 __all__ = [
@@ -563,6 +731,10 @@ __all__ = [
     "inspect_event_tool",
     "list_targets_tool",
     "list_sources_tool",
+    "list_scheduled_events_tool",
+    "list_due_resolvers_tool",
+    "get_source_health_tool",
     "series_history_tool",
     "series_compare_tool",
+    "live_series_tool",
 ]

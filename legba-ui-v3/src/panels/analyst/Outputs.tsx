@@ -64,7 +64,7 @@ export default function OutputsPanel({ registration, scope }: PanelProps) {
     refetchInterval: 30_000, // poll backstop; live-tail handles real-time
     queryFn: async () => {
       const r = await apiGet<FindingsResponse>(
-        `/findings?analyst_id=${encodeURIComponent(analyst_id)}&limit=50`,
+        `/findings?analyst_id=${encodeURIComponent(analyst_id)}&limit=50&fields=full`,
       )
       setLive([])
       return r

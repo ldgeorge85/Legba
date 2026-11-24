@@ -29,9 +29,9 @@ in `RUNBOOK.md`; the not-built list is `SEAMS.md`.
 
 ## 1. The shape
 
-Legba watches many vantage points at once — country desks, thematic lanes,
-sectors, single entities — and keeps a current, provenance-traceable model of
-what is true for each of them.
+Legba watches many vantage points at once (in the example instance: country
+desks, thematic lanes, sectors, single entities) and keeps a current,
+provenance-traceable model of what is true for each of them.
 
 The naive shape of such a system is one watcher that owns its feeds, pulls them,
 enriches what it pulls, and reasons over the result. That shape does not survive
@@ -40,7 +40,8 @@ hundred dedupe pipelines over identical bytes, and a hundred transcriptions of
 the same audio. The root cause is that *observation* (acquiring and normalising
 a fact about the world) and *interpretation* (deciding what that fact means for
 one concern) are entangled. Everything below is the consequence of separating
-them.
+them. A *desk* below is the example instance's word for a target: one scoped
+concern a set of analysts work.
 
 ```
   SOURCES ──────► SIGNALS ─────► predicate FAN-OUT ─────► DESKS ──────► ANALYSTS ─────► OUTPUTS
@@ -78,19 +79,21 @@ Four planes, three of them runtime and one of them storage.
 
 | Plane | Runs as | Job |
 |---|---|---|
-| **Substrate** | `postgres` (Apache AGE image), `nats`, `qdrant`, `redis`, `opensearch` | shared state and truth |
+| **Substrate** | `postgres` (built on the Apache AGE image; the graph itself is removed), `nats`, `qdrant`, `redis`, `opensearch` | shared state and truth |
 | **Control** | `legba-registry` | the descriptor registry, the lifecycle FSM, the credential vault, the REST and WebSocket surface, the dead-letter queues |
 | **Runtime** | `legba-runtime-dapr` plus its `daprd` sidecar, `dapr-placement`, `dapr-scheduler` | turns active descriptors into Dapr virtual actors that read and write the substrate |
 | **Durable jobs** | `legba-dapr-workflow-worker` | the multi-step Dapr Workflows that do not fit a turn-based actor |
 
-Around them: `legba-caddy` is the edge (it serves the built single-page console
-and proxies `/api/*` to the registry), `legba-ui-build` is a one-shot job that
-publishes the console's static tree into a shared volume, and `legba-mcp` is a
-stdio image launched per conversation rather than a long-running service. Local
-sidecars ship behind compose profiles and are off unless an operator turns them
-on: `searxng` (search), `rsshub` (extra sources), `ntfy` (alerts), `legba-media`
-(media extraction). `docker-compose.yml` is the one file that defines all of
-them; `RUNBOOK.md` owns bring-up order.
+Around them: `legba-caddy` is the edge (it serves the built single-page console,
+the installable phone shell under `/m/`, and proxies `/api/*` to the registry),
+`legba-ui-build` is a one-shot job that publishes both static trees into a shared
+volume, and `legba-mcp` is a stdio image launched per conversation rather than a
+long-running service. Local sidecars ship behind compose profiles and are off
+unless the person running the instance turns them on: `searxng` (search),
+`rsshub` (extra sources), `ntfy` (alerts), `legba-media` (media extraction).
+`docker-compose.yml` is the one file that defines all of them; `RUNBOOK.md` owns
+bring-up order, the tiered deploy (`scripts/rolling_deploy.sh`) and the nightly
+test suite (`scripts/host_nightly_suite.sh`).
 
 **No model runs inside a Legba container.** The language models, the embedding
 model and the baseline NLP models are served out of process on model-serving
@@ -102,20 +105,22 @@ rebuild; `AI_MODELS.md` owns the model surface.
 
 | Store | Holds | Why it is the one that holds it |
 |---|---|---|
-| **Postgres** | descriptors, signals, facts, nexuses, entity profiles and edges, situations, events, hypotheses, analyst outputs, traces, critiques, journal entries, runtime and governance state | the source of truth; every durable write lands here first |
+| **Postgres** | descriptors, signals, facts, nexuses, entity profiles and edges, situations, events, hypotheses, analyst outputs, traces, critiques, citations as rows, the held record, journal entries, users and sessions, runtime and governance state | the source of truth; every durable write lands here first |
 | **NATS JetStream** | the signal bus, the descriptor-lifecycle streams, the job work-queues, the dead-letter stream, the consult relay | transport and notification, never a dataset; the durable copy is always in Postgres |
 | **Qdrant** | signal vectors for dedupe, plus the curated `world_context` and `tradecraft` retrieval corpora | similarity, which SQL cannot answer |
 | **Redis** | geocode cache, ingest-dedupe hints, registry health, source state | a cache with a time-to-live; never a source of truth |
 | **OpenSearch** | one index over the whole raw body of every ingested signal | lexical recall over full text, which the relational pool indexes only shallowly |
-| **Filesystem archive** | the original bytes of signals cited by verified findings, content-addressed | a receipt chain that ends at a URL ends at something that rots |
+| **Filesystem archive** | content-addressed bytes: what each fetch received (`fetch_versions`) and the archived pages of cited signals; older objects can move to an S3-compatible cold tier | a receipt chain that ends at a URL ends at something that rots |
 
-The Apache AGE graph inside Postgres is retained but dormant: both write legs
-ship off by default, and the operative graph is relational — `nexuses` and
-`entity_edges`, with graph computation in in-process networkx. At the current
-edge count a second query language, a second dialect and a sync pipeline would
-buy nothing, and the relational tables are transactional with everything else.
-`DATA_MODEL.md` lists the tables; `SEAMS.md` records what the AGE path would
-have to earn to be armed.
+There is no graph database. The Apache AGE graph inside Postgres held no row
+and was dropped by migration `20261115T1829_drop_empty_age_graph`; the extension
+stays installed until the database image is swapped for stock Postgres (SEAMS).
+The operative graph is relational: `nexuses` and the id-keyed `entity_edges`,
+with graph computation in in-process networkx, and an optional rebuilt
+projection (`graph_arcs`, off by default) that names every cross-layer join in
+one vocabulary. A second query language, a second dialect and a sync pipeline
+would buy nothing, and the relational tables are transactional with everything
+else. `DATA_MODEL.md` lists the tables.
 
 ## 3. The descriptor model — an instance is its descriptors
 
@@ -126,8 +131,9 @@ set is the `*_descriptors` database rows, not the files under `descriptors/` —
 the files are the reviewable home of a body, and a registrar script pushes them
 in so the tree and the registry cannot drift.
 
-Five families share one shape — content-hashed, versioned, lifecycle-managed,
-audited:
+The main families share one shape (content-hashed, versioned, lifecycle-managed,
+audited); collections, the bounded holdings of the past, are a further family of
+the same shape (`COLLECTIONS.md`):
 
 | Family | Owns |
 |---|---|
@@ -140,22 +146,24 @@ audited:
 Four properties are what make the model load-bearing rather than decorative.
 
 **Content-hashed identity.** A descriptor's `version` is the hash of its body,
-so "is this the same descriptor as before?" needs no operator-managed version
-string. An operator can re-tune a desk fifty times a day, each producing a new
+so "is this the same descriptor as before?" needs no hand-managed version
+string. A desk can be re-tuned fifty times a day, each change producing a new
 content hash, while the schema version stays stable for months.
 
 **A lifecycle FSM** — `draft → configured → active → paused → retired`, plus an
 `error` state — in `runtime/lifecycle.py`. `configured` is the explicit
 "validated, components bound, ready but not running" step, because registering a
 descriptor and running it are different decisions. A new descriptor that needs
-operator verification ships `state: draft`; bulk registration of drafts creates
+a person's verification ships `state: draft`; bulk registration of drafts creates
 no actor at all, so breadth can be registered in one wave and activated one
 measured desk at a time.
 
 **An audit trail that cannot be skipped.** Every mutation appends an
-Ed25519-signed row to `descriptor_audit_log` in the same transaction as the
-mutation, so an audit-write failure aborts the change rather than leaving an
-unrecorded one.
+Ed25519-signed, hash-chained row to `descriptor_audit_log` in the same
+transaction as the mutation, so an audit-write failure aborts the change rather
+than leaving an unrecorded one. The row names who made the change (a principal:
+a signed-in user, a service, or the shared admin token), and every descriptor
+version carries the same principal in `written_by`.
 
 **A dead-letter queue on validation failure.** A malformed descriptor lands in
 `descriptor_dead_letter` with a NATS event, and the caller is told the mutation
@@ -264,16 +272,16 @@ per-desk trigger registration; everything else runs on its cadence alone.
 `inline_target`, `cross_target_raw`, `meta_findings_synthesizer`,
 `cross_analyst_correlator`, `relationship_reifier`, `competing_hypotheses`,
 `deterministic`, `predictor`, `critic`, `optimizer`, `consult_on_demand`,
-`deep_consult` — and an operator registers further kinds at runtime through the
+`deep_consult` — and an admin registers further kinds at runtime through the
 `analyst_kind` vocabulary without a migration. The journal's kind is registered
 that way, which is why the built-in count does not move when the journal ships.
 
 The analyst *kind* selects the Python module and the deps bundle. It is distinct
 from `method.kind` (`llm_planner`, `llm_single_turn`, `deterministic`, `hybrid`,
 `react_loop`, `stat_forecaster`, `critic`, `dspy_compile`), which is what the
-runtime dispatches the call on. The nine bounded units are all kind
-`inline_target` with `method.kind: llm_planner`; the compositions and the two
-assessment voices are all kind `meta_findings_synthesizer`. Reusing a kind is
+runtime dispatches the call on. In the example instance the bounded units are
+all kind `inline_target` with `method.kind: llm_planner`, and the compositions
+and assessment voices are all kind `meta_findings_synthesizer`. Reusing a kind is
 deliberate: a new analyst that fits an existing kind is a descriptor, and every
 integration keyed on kind — the verify dispatch allowlist, the judge sampling
 default, the findings route — stays a no-op.
@@ -291,23 +299,25 @@ per-kind and per-handler reference.
 ## 7. The tower — the record and the voice
 
 The product is the composed, verified chain, not any single analyst. It reads
-bottom-up.
+bottom-up. The tower below is described as the geopolitical example instance
+builds it; the mechanisms are the platform's, the unit and tier names are the
+example's.
 
-**Nine bounded units.** Each answers one narrow question over a cited raw-signal
+**Bounded units.** Each answers one narrow question over a cited raw-signal
 slice plus a grounding preamble of accumulated facts, situations and graph
-structure, and each ends in a mandatory faithfulness pass. Seven broad units —
-leadership transition, energy security, escalation, narrative coordination,
-internal stability, military posture, economic coercion — bind to every country
-desk through a single coverage-tag predicate, `has_tag("g20") or has_tag("watch")`.
-An eighth, proliferation watch, is tag-scoped to the nuclear-relevant desks
-only. A ninth, disruption status, is scoped off the country plane entirely to
-the thematic supply-chain lane and flow desks on a shorter window.
+structure, and each ends in a mandatory faithfulness pass. In the example, most
+units (leadership transition, energy security, escalation, narrative
+coordination, internal stability, military posture, economic coercion) bind to
+every country desk through one coverage-tag predicate; one (proliferation watch)
+is tag-scoped to a subset of desks; and one (disruption status) is scoped off the
+country plane entirely, to thematic supply-chain and flow desks on a shorter
+window.
 
-That ninth unit is the proof that **the tag predicate, not the country plane, is
+That last unit is the proof that **the tag predicate, not the country plane, is
 the fan-out primitive**: a whole new desk family costs a set of target
-descriptors and one selector — no new analyst kind, no new code path. Adding a
-country is the same move: register a desk descriptor and the whole spine picks
-it up by predicate.
+descriptors and one selector, with no new analyst kind and no new code path.
+Adding a subject is the same move: register a target descriptor and the whole
+spine picks it up by predicate.
 
 **Composition is assembly, and the voice is a separate row.** A composition tier
 does not write prose about its inputs. It quotes them: each source head's lead
@@ -363,7 +373,7 @@ reference. The invariant is held twice — by a gating test and by the grant
 layer, since neither pack the journal holds can write a fact. Everything the
 journal wants to change outside its own entries goes to a human-gated proposal
 queue: it can write its own next breath but cannot rewrite its own rules without
-the operator.
+a person accepting the change.
 
 ## 8. Outputs and provenance
 
@@ -402,16 +412,21 @@ chain heads are periodically checkpointed, and those checkpoint rows are the
 Ed25519-signed artifact — the per-run receipts themselves are not signed.
 
 Emit bindings then fire per output kind: a STIX 2.1 bundle producer, and the
-alert sinks, which coerce a gated finding into a severity-laddered alert and fan
-it out to every registered sink with a ledger row per attempt. Alerting carries
-three ordered anti-noise mechanisms — a steady-state guard, a daily page budget
-with a per-kind diversity cap, and a kill list for classes that are off — and
-the invariant across all three is that **a suppressed alert still writes its
-row**: the ledger records what was decided, so nothing is ever silently dropped.
+alert path. Every alert producer, analyst or host script, calls one function
+(`legba.data.alerts.raise_alert`), which records an episode in `alerts` and a
+row per raise in `alert_events` with the paging decision and its reason, then
+hands paged alerts to the registered sinks with a ledger row per delivery
+attempt. Anti-noise rules (a steady-state guard, a page budget with a per-kind
+diversity cap, a kill list) decide whether a raise pages, and the invariant is
+that **a suppressed alert still writes its row**: nothing is silently dropped.
+`ALERTING.md` owns the alert kinds and the page rule.
 
 Lineage is a recursive query over `derived_from`, walked with cycle and dangling
 detection. Because those chains cross source-descriptor references, a walk runs
-from any finding back to the raw signal and its source. For cited signals the
+from any finding back to the raw signal and its source. A new finding's
+citations are also stored as rows (one per sentence, one per supporting record,
+pinned to the stored version the material was read from), so "what does this
+sentence rest on" is a join rather than a walk through JSON. For cited signals the
 walk terminates in the **evidence archive** rather than a URL: the archiver
 fetches the original bytes of signals cited by verified findings and stores them
 content-addressed, behind an egress guard, a size cap, per-host politeness and a
@@ -471,11 +486,14 @@ two instruments measuring different things must never pool.
 
 Around those three sit the calibration surfaces: a per-unit skill scoreboard, a
 Brier score over hypotheses resolved exogenously, band calibration over the
-scorecard's own claims, and a pre-registered acute-forecast pilot. Every one of
-them is honest-null where unmeasured and publishes a no-skill result rather than
-hiding it. Forecasting exists **only** as that scoreboard — never as a free-text
-claim — and a degenerate probability vector abstains rather than producing a
-number.
+scorecard's own claims, the platform's own acute hazard calls, and the
+**forecast ledger** (`LEDGER.md`): sealed questions that each name what resolves
+them and when, every issuer's probability on each, a resolver that proposes an
+outcome from the evidence for a person to confirm, and a scorecard kept against
+the world by date. Every one of them is honest-null where unmeasured and
+publishes a no-skill result rather than hiding it. A forecast exists **only** as
+a ledger row, never as a free-text claim, and a degenerate probability vector
+abstains rather than producing a number.
 
 One structural cost is worth stating: because every stamp partitions, a readout
 that needs resolved outcomes can be starved when the stamp lifetime is shorter
@@ -492,17 +510,17 @@ hard-coded**: an action pack is a registered, versioned, content-hashed bundle
 of tools, prompt fragments, rules, channels, a governor and an applicability
 predicate, and effective capability is the intersection of three independent
 grants — what the analyst declares, what the target permits, and where the pack
-applies. The operator holds the permit leg, which is the single lever that keeps
-the write surface off, and that is the default.
+applies. The target's permit leg is the single lever that keeps the write
+surface off, and off is the default.
 
 A pack that is effective still passes a per-pack governor before dispatch —
 invocations per hour, calls per minute, sources per window, cost per day — over
 an invocation ledger, plus a global token envelope. A breach blocks the tool and
-writes an operator-visible governor event. There is no flat tool whitelist
+writes a visible governor event. There is no flat tool whitelist
 anywhere; this is the only agency surface.
 
 `AGENCY_GATING_MODEL.md` is the full trust model, including why the write tools
-are operator-gated by default and what a denied call leaves behind.
+are gated off by default and what a denied call leaves behind.
 
 One consequence of that model shows up in external retrieval. Search is a stack
 component family like any other, with a provider ladder that escalates only on
@@ -528,8 +546,9 @@ Three roles of model, resolved through stack components:
   grader and its second rater. These are the paid calls, and they are paid
   because a judge that shares a writer's blind spots is not an independent
   check.
-- **The consult plane** — a hosted frontier model reserved for the on-demand
-  consult and deep-consult kinds, reached only when an operator asks.
+- **The consult plane** — the on-demand consult and deep-consult kinds run on
+  the core plane by default; a person may explicitly pick a billed hosted model
+  for one request, and the hosted models serve nothing else.
 
 Two conventions hold on the core plane and are checked at the gate: a descriptor
 carries `budget_tokens_per_day: 0`, and an LLM route carries `temperature: 1.0`.
@@ -644,13 +663,30 @@ and the discovery informer are singletons gated by a leader lease.
 
 ## 14. The perimeter
 
-Legba ships as a single-operator, single-tenant deployment: one operator, one
-instance, one credential at the edge, one logical tenant. There is no
-in-application role-based access control, no multi-tenant isolation and no
-per-role access control. The network and deployment perimeter is the security
-boundary — the edge proxy plus loopback-bound internal services — and the
-acquisition plane's `owner_tenant` column is forward-compatible metadata, not an
-isolation guarantee to separate untrusting tenants.
+Legba ships as a single-tenant deployment: one instance, one logical tenant, run
+by one owner. The network and deployment perimeter is the outer security
+boundary: the edge proxy plus loopback-bound internal services.
+
+Inside it, who may do what depends on one switch, `LEGBA_AUTH_SIGNIN`:
+
+- **Off (the default).** The edge holds one shared admin credential and every
+  person who passes the edge acts with it; a write records that credential
+  (`shared:admin-token`), never a guessed person.
+- **On.** People sign in with local accounts (argon2id passwords, an HttpOnly
+  session cookie with an idle limit). Each holds one role: **reader** (reads the
+  record, keeps their own Consult sessions; cannot change anything shared),
+  **contributor** (a reader who may also make gated judgements: grading labels,
+  journal proposal decisions, alert acknowledgements, forecast resolution
+  confirmations), or **admin** (sources, descriptors, the stack, users
+  and the engine's own surfaces). The **owner** is an admin with a flag, set once
+  by a bootstrap command. Every mounted route has a minimum role in one table
+  (`registry/route_policy.py`; `API_ROLES.md` is generated from it), each service
+  gets its own token, and the shared admin token becomes a logged break-glass
+  credential.
+
+There is no multi-tenant isolation, and the acquisition plane's `owner_tenant`
+column is forward-compatible metadata, not an isolation guarantee between
+untrusting tenants.
 
 Acquisition-plane tenancy is real and enforced at match time: the column is
 indexed on `signals`, pinned on the row, the subject and the published envelope
@@ -668,10 +704,12 @@ fails unless each hit is the bare abstract-method idiom or listed in the
 machine-readable allowlist in that file. There is no per-line escape.
 
 The architecturally significant seams today are media extraction behind a
-service that ships refusing rather than fabricating, an object-store backend for
-the evidence archive, a third `stream` acquisition mode, the cheap-model budget
-demotion path (which today equals an audited pause), the closer half of the
-standing-question watcher, and retention sweeps that ship disabled. `STATUS.md`
+service that ships refusing rather than fabricating, the subscribe acquisition
+mode's further transports (the mode and its first transport are built, behind a
+switch that is off), the cheap-model budget demotion path (which today equals an
+audited pause), the correcting half of the standing-question watcher, the held
+record's promotion, contradiction and expiry rules, and retention sweeps that
+ship disabled. `STATUS.md`
 is the companion page for the other direction: capabilities that *are* built,
 with their honest limits.
 
@@ -680,8 +718,9 @@ with their honest limits.
 - `ANALYSIS.md` — the kinds, the units, the compositions, the judge, the grader,
   the audit, in depth.
 - `FLOWS.md` — life of a signal, an analyst cycle, a fact, a consult.
-- `DATA_MODEL.md` — the tables, by plane. `DATA_MODEL_V3.md` for events, the
-  temporal surface and the typed graph.
+- `DATA_MODEL.md` — the tables, by plane, including who writes each, citations
+  as rows, the held record, events, the temporal surface and the graph
+  projection.
 - `DESIGN.md` — the implementation rules new code follows.
 - `AGENCY_GATING_MODEL.md` · `AI_MODELS.md` · `TUNABLES.md` · `SEAMS.md` ·
   `STATUS.md`.

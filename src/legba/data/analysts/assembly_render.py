@@ -56,6 +56,12 @@ from .contrary_tension import TENSION_KIND_CONTRARY, counter_refs
 from .composition_window import MAX_TITLE_CHARS, _defuse_child_ref_markers
 from .source_independence import SINGLE_SOURCE_MARKER, WIRE_FOLDED_LABEL
 from .unit_names import payload_names, unit_label
+from .world_block_evidence import (
+    BALANCE_KEY,
+    CONTESTED_FACTS_KEY,
+    balance_sentence,
+    contested_sentence,
+)
 
 __all__ = [
     "CONNECTIVES",
@@ -130,6 +136,41 @@ CONNECTIVES: tuple[str, ...] = (
     "no publication date stated",
     "counter-query",
     "sha256",
+    # W4 F-3 — THE FLOOR LINE. Each describes the SELECTION (how many subject
+    # groups the read carried, whether the floor guarantee held, which block
+    # the floor kept and where the order had ranked it); none asserts a state
+    # of the world. The group noun beside them is ``floor.grain`` pluralised —
+    # data, not a connective. ``CONNECTIVE_VOCABULARY_VERSION`` does not move
+    # (decision D3): the line renders only on a payload carrying ``floor``, so
+    # every country / thematic / pre-floor body is byte-identical; the floor is
+    # versioned by ``subject_group_floor.v1`` instead.
+    "carried, floor honoured",
+    "carried, floor NOT honoured",
+    "kept by the floor",
+    "order rank",
+    # N-C (2026-11-11) — THE WEIGHED TENSION, CONTESTED FACTS, SHARED THREADS
+    # AND EMPTY SLOTS. Each describes the READ's evidence or its selection — how
+    # many distinct sources each side of a declared tension cites, which cited
+    # headlines disagree, which signals two units' heads both cite, which slot
+    # was left empty — never a state of the world. Guarded on payload keys only
+    # the N-C producer writes, so every earlier body is byte-identical and
+    # ``CONNECTIVE_VOCABULARY_VERSION`` does not move (the 7d / F-3 argument).
+    "Evidence balance (cited signals only)",
+    "distinct source",
+    "distinct sources",
+    "the count favours",
+    "balanced",
+    "set aside",
+    "Contested in cited reporting",
+    "reported by",
+    "confirmed by",
+    "disputed by",
+    "## Shared threads",
+    "heads cite",
+    "shared signal",
+    "shared signals",
+    "carried by the shared-thread slot",
+    "declared empty",
 )
 
 #: How much of the lead span the title may quote. 120 keeps the whole title
@@ -292,7 +333,97 @@ def _attribution(block: Mapping[str, Any]) -> str:
             tail.append(f"{int(corr['wire_folded'])} {WIRE_FOLDED_LABEL}")
     if str(block.get("tier") or "") == "periphery":
         tail.append("below floor")
-    return " · ".join([p for p in parts if p] + tail)
+    line = " · ".join([p for p in parts if p] + tail)
+    # W4 F-3 — a block the subject-group floor KEPT says so, with the rank the
+    # pure order had given it and, when known, its age (a kept block can be old;
+    # the age is the reader's guard against reading it as fresh).
+    if block.get("carried_by_floor") is True:
+        line += f" — kept by the floor (order rank {block.get('order_rank')})"
+        age = block.get("evidence_age_h")
+        if isinstance(age, (int, float)) and not isinstance(age, bool):
+            line += f", {_fmt(age, 1)}h old"
+    # W1 — a political/institutional change the restraint-shift floor gave a
+    # world slot (``assembly_world``) says so, the way a floor-kept block does.
+    if block.get("carried_by_restraint_floor") is True:
+        line += " — carried by the restraint-shift floor"
+    if block.get("carried_by_thread") is True:
+        line += " — carried by the shared-thread slot"
+    return line
+
+
+def _empty_slot_line(payload: Mapping[str, Any]) -> str | None:
+    """N-C — ``*1 slot declared empty: hybrid_threat_composition …*`` or ``None``."""
+    plan = payload.get("carry_plan")
+    empty = (plan or {}).get("empty_slots") if isinstance(plan, Mapping) else None
+    if not empty:
+        return None
+    units = ", ".join(str(e.get("unit") or "") for e in empty if isinstance(e, Mapping))
+    noun = "slot" if len(empty) == 1 else "slots"
+    return (
+        f"*{len(empty)} {noun} declared empty: {units} carried no block of its "
+        f"own (ordinal fallback refused).*"
+    )
+
+
+def _thread_lines(payload: Mapping[str, Any]) -> list[str]:
+    """N-C — the ``## Shared threads`` section, EMPTY unless the world plan
+    published one: which units' heads cite the same signals, and where on this
+    page those signals sit."""
+    threads = [t for t in payload.get("threads") or [] if isinstance(t, Mapping)]
+    if not threads:
+        return []
+    names = payload_names(payload)
+    lines = ["## Shared threads", ""]
+    for t in threads:
+        units = [unit_label(names.get(str(u)), str(u)) for u in t.get("units") or []]
+        n = len(t.get("signal_ids") or [])
+        noun = "shared signal" if n == 1 else "shared signals"
+        titles = [str(x) for x in (t.get("titles") or [])[:2]]
+        refs = " ".join(f"[[ref:{o}]]" for o in t.get("block_ordinals") or [])
+        lines.append(
+            f"- {' + '.join(units)} heads cite {n} {noun}"
+            + (f" (e.g. \"{titles[0]}\")" if titles else "")
+            + (f" — {refs}" if refs else " — on no carried block")
+        )
+    lines.append("")
+    return lines
+
+
+def _floor_line(payload: Mapping[str, Any]) -> str | None:
+    """W4 F-3 — the world read's floor line, or ``None`` (no floor, or not the
+    world tier — every other body is byte-identical).
+
+    ``*6 regions carried, floor honoured — 1 kept by the floor.*`` /
+    ``*5 of 6 regions carried, floor NOT honoured: Americas.*``. Counts the
+    groups that OFFERED a candidate; a roster group with none is not a group
+    the floor could carry.
+    """
+    floor = payload.get("floor")
+    if not isinstance(floor, Mapping) or str(payload.get("tier") or "") != TIER_WORLD:
+        return None
+    # N-C — a group whose slot was DECLARED EMPTY is stated by the empty-slot
+    # line beside this one, not counted as a group the floor failed.
+    declared = {str(x) for x in floor.get("declared_empty") or []}
+    groups = [
+        g for g in (floor.get("groups") or [])
+        if isinstance(g, Mapping) and int(g.get("offered") or 0) >= 1
+        and str(g.get("group_id")) not in declared
+    ]
+    carried = [g for g in groups if int(g.get("carried") or 0) >= 1]
+    grain = str(floor.get("grain") or "group")
+    noun = grain if len(groups) == 1 else f"{grain}s"
+    if len(carried) == len(groups):
+        kept = len(floor.get("promoted") or [])
+        suffix = f" — {kept} kept by the floor" if kept else ""
+        return f"*{len(carried)} {noun} carried, floor honoured{suffix}.*"
+    missed = ", ".join(
+        str(g.get("group_name") or g.get("group_id") or "")
+        for g in groups if int(g.get("carried") or 0) < 1
+    )
+    return (
+        f"*{len(carried)} of {len(groups)} {noun} carried, floor NOT "
+        f"honoured: {missed}.*"
+    )
 
 
 
@@ -362,6 +493,12 @@ def render_assembly_body(payload: Mapping[str, Any]) -> str:
         f"{reads}; {int(counts.get('shown_not_carried') or 0)} shown and not "
         f"carried.*"
     )
+    floor_line = _floor_line(payload)
+    if floor_line is not None:
+        lines.append(floor_line)
+    empty_line = _empty_slot_line(payload)
+    if empty_line is not None:
+        lines.append(empty_line)
     lines.append("")
 
     kind = str(lead.get("kind") or "")
@@ -402,6 +539,9 @@ def render_assembly_body(payload: Mapping[str, Any]) -> str:
                 lines.append(f"> {para}" if para.strip() else ">")
         lines.append("")
         lines.append(_attribution(b))
+        for fact in b.get(CONTESTED_FACTS_KEY) or []:
+            if isinstance(fact, Mapping):
+                lines.append(contested_sentence(fact))
         lines.append("")
 
     lines.append("## Tension")
@@ -427,7 +567,14 @@ def render_assembly_body(payload: Mapping[str, Any]) -> str:
                     f"[[ref:{b_ord}]]" if b_ord
                     else "a read that was not carried"
                 )
-            lines.append(f"- [[ref:{a}]] / {ref_b} — {t.get('statement')}")
+            weighed = balance_sentence(
+                t.get(BALANCE_KEY), a_label=f"block {a}",
+                b_label=f"block {b_ord}" if b_ord else "the uncarried read",
+            )
+            lines.append(
+                f"- [[ref:{a}]] / {ref_b} — {t.get('statement')}"
+                + (f" {weighed}" if weighed else "")
+            )
     else:
         lines.append(
             f"- no conflicting pair was detected among the "
@@ -436,6 +583,7 @@ def render_assembly_body(payload: Mapping[str, Any]) -> str:
             f"{checked.get('scope_note')})."
         )
     lines.append("")
+    lines.extend(_thread_lines(payload))
 
     coverage = list(payload.get("coverage") or [])
     if coverage:
@@ -450,6 +598,7 @@ def render_assembly_body(payload: Mapping[str, Any]) -> str:
                 "below_floor": "below floor",
                 "unverified": "not verified",
                 "no_head_in_horizon": "no read inside the horizon",
+                "carried_unsupported": "carried, unsupported",
             }.get(str(c.get("status") or ""), str(c.get("status") or ""))
             age = c.get("age_h")
             suffix = f", {_fmt(age, 1)}h old" if age is not None else ""

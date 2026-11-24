@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """``layer_divergence`` sub-handler — Program 6 L2, the divergence-baseline unit.
 
-THE THESIS (docs/DIRECTION.md, "The layered source fan-out"; docs/LAYERS.md).
+THE THESIS (docs/DIRECTION.md, "The layered source fan-out"; docs/DATA_SOURCES.md).
 Per target country the platform ingests the same stack of source LAYERS, and
 the finding is the CHANGE in that country's own layer-to-layer divergence —
 never the raw gap, which every country has. A country whose official layer has
@@ -47,7 +47,7 @@ THE FIVE STEPS
 4. **THE APERTURE.** A layer declared ``absent`` contributes NO count and the
    finding says so (with the operator's reason). ``unmeasured`` is excluded and
    named. A layer with NO row for this target is ``undeclared`` — a third,
-   distinct exclusion, because docs/LAYERS.md is emphatic that undeclared is
+   distinct exclusion, because docs/DATA_SOURCES.md is emphatic that undeclared is
    not the same thing as unmeasured. A pair with either side excluded is
    SKIPPED and the receipt says which side and why. When the map carries
    sources for a layer the aperture declares ``absent``, the receipt reports

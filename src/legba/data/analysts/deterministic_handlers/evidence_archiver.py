@@ -146,7 +146,7 @@ measured for them. So the posture is now governed rather than assumed:
     skip that R-3b was already making.
   * An UNRECOGNISED option value keeps the DEFAULT and logs a WARNING — the
     descriptor channel also drops it with a ``handler_options`` trace note
-    (choices are declared in ``legba.data.analysts.handler_options``). Neither
+    (choices are declared in ``legba.data.option_catalog.handler_options``). Neither
     direction of typo changes policy silently.
 
 **THE RECOMMENDATION: run ``fail_closed`` unless your catalog is allowlisted.**
@@ -240,6 +240,26 @@ Output ``data`` keys (the cadence receipt the operator reads):
     bytes_stored        int — NEW bytes written to the archive this run
     deadline_stop       int — 1 when the run stopped at the soft deadline
     skipped_no_root     int — 1 when the archive root was absent/unwritable
+    per_source          {source_id: {fetched, challenge_blocked,
+                          boilerplate_rejected, body_stored}} — W11-F138,
+                          the per-feed outcomes the source-health surface
+                          computes off the evidence_archive sidecar with the
+                          same vocabulary (a feed's body-extraction rate is
+                          body_stored / fetched).
+
+**W11-F138 — PER-HOST FETCH POLICY.** Times of Israel and the Jerusalem Post
+answer every fetch with an anti-bot challenge (http_403, several times a
+day), so their signals carry a summary and no body. The fetch now consults
+:mod:`legba.data.sources._fetch_policy`: an edge block (401/403/429) on a
+host registered ``impersonate: on`` is counted under
+``blocked_by_challenge`` and re-issued through the impersonated leg
+(curl_cffi browser fingerprint — opened lazily, so an unblocked run never
+pays for it). The global ``LEGBA_FETCH_IMPERSONATE`` keeps its meaning: a
+non-off global already impersonates the primary client and the registry can
+never weaken it, and an explicit ``off`` is the fleet-wide kill switch (no
+escalation on any host). A block that an escalation then wins still counts as a
+block — the refusal happened — so ``blocked_by_challenge`` can exceed
+``fetch_failed`` on a run the impersonated leg saved.
 """
 
 from __future__ import annotations
@@ -249,6 +269,7 @@ import hashlib
 import logging
 import os
 import time
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import urlsplit
@@ -264,6 +285,9 @@ from ...archive import (
     cas_path,
     sha256_from_object_ref,
 )
+from ...archive_store import EvidenceStore
+from ._ingest_copy import load_ingest_copy, observe_refetch
+from ._intake_route import intake_copy_or_defer
 from ...opensearch import signal_license_class
 from ...provenance.models import FindingPayload
 from ...retrieval_origin import is_web_retrieved, resolve_retrieval_origin
@@ -277,6 +301,22 @@ from ._challenge_detect import (
     challenge_from_status,
     detect_challenge_page,
     detect_challenge_text,
+)
+from ...sources.page_text import (  # noqa: F401 — the archiver's historical names
+    _NO_CONTENT_REGION_HOSTS,
+    _TEXTUAL_CONTENT_TYPES,
+    _WALL_DENY_PATTERNS,
+    _WALL_MAX_CHARS,
+    _extract_text,
+    _is_textual,
+    _match_wall_pattern,
+)
+from ...sources.page_text import _skip_text_extraction as _skip_text_extraction_in
+from ._fetch_leg import (
+    _ObjectTooLargeError,
+    _feed,
+    _fetch_bytes,
+    _fetch_canonical,
 )
 from ....runtime.analyst_method import AnalystMethodResult
 
@@ -353,9 +393,6 @@ _DEFAULT_MAX_TEXT_CHARS = 200_000    # extracted-text cap stored into payload
 _DEFAULT_TIMEOUT_S = 30.0            # per-request timeout
 _DEFAULT_RUN_DEADLINE_S = 1200.0     # soft per-run wall-clock stop (20 min)
 
-#: Content-type prefixes Trafilatura extraction is attempted for.
-_TEXTUAL_CONTENT_TYPES = ("text/html", "application/xhtml", "text/plain", "application/xml", "text/xml")
-
 
 # ---------------------------------------------------------------------------
 # Selection — signals cited by VERIFIED findings, not yet archived
@@ -396,6 +433,9 @@ _SELECT_CANDIDATES_SQL = f"""
      WHERE s.object_ref IS NULL
        AND s.canonical_url IS NOT NULL
        AND s.canonical_url <> ''
+       -- C-1: a CLAIM row is text only — never archive-fetched (its page
+       -- carries the leak-post captures a claim source must not keep).
+       AND COALESCE(s.payload->'claim'->>'source_class', '') <> 'claim'
        AND (ea.signal_id IS NULL
             OR (ea.status = 'failed' AND ea.attempts < $3))
      ORDER BY s.fetched_at DESC
@@ -563,215 +603,30 @@ def license_unreviewed(
     return license_class is None or license_class in UNREVIEWED_LICENSE_CLASSES
 
 
-def _is_textual(content_type: str | None, body: bytes) -> bool:
-    """Whether Trafilatura extraction should be attempted on this object."""
-    if content_type:
-        ct = content_type.split(";", 1)[0].strip().lower()
-        if any(ct.startswith(p) for p in _TEXTUAL_CONTENT_TYPES):
-            return True
-        # A declared non-text type (image/pdf/…) is authoritative — don't sniff.
-        return False
-    head = body[:512].lstrip().lower()
-    return head.startswith((b"<!doctype", b"<html", b"<?xml"))
-
-
-#: R6b — hosts whose pages carry no article-shaped main-content region for
-#: Trafilatura to find. A ``t.me/<channel>/<msg>`` (and the ``/s/<channel>/<msg>``
-#: public-preview variant) page is a Telegram embed-WIDGET: nav chrome, a
-#: "Download"/"Context"/"Embed" action row, and the ``telegram-widget.js`` loader
-#: snippet — never the message prose. Trafilatura's main-text heuristic, given
-#: no content region, falls back to that chrome and writes it to
-#: ``payload.archived_text`` as if it were the article — measured at ~30.7% of
-#: archived telegram rows. The raw HTML bytes are still archived either way;
-#: this only withholds the derived-text upgrade for a host that can never
-#: produce one.
-_NO_CONTENT_REGION_HOSTS: frozenset[str] = frozenset({"t.me", "telegram.me"})
+# The page-text helpers (``_is_textual``, ``_skip_text_extraction``, the V-E1
+# wall list ``_match_wall_pattern`` and the Trafilatura pass ``_extract_text``)
+# live in :mod:`legba.data.sources.page_text` since lane I-2, so the archiver,
+# the fetch-receipt writer and the ``page`` source kind run ONE extraction.
+# They are imported at the top of this module under their historical names.
 
 
 def _skip_text_extraction(url: str) -> bool:
-    """Whether ``url`` is a known no-article-content page (see
-    :data:`_NO_CONTENT_REGION_HOSTS`) that Trafilatura extraction must be
-    skipped for. Any parse failure degrades to ``False`` (attempt extraction
-    — the existing best-effort ``_extract_text`` failure path already handles
-    a genuinely bad fetch)."""
-    try:
-        host = urlsplit(url).netloc.lower()
-    except ValueError:
-        return False
-    host = host.rsplit("@", 1)[-1].split(":", 1)[0]  # drop userinfo/port
-    return host in _NO_CONTENT_REGION_HOSTS
-
-
-#: V-E1 — deny list of known JS-wall / bot-check / redirect-interstitial
-#: boilerplate. Case-insensitive substring match, gated by :data:`_WALL_MAX_CHARS`
-#: (see :func:`_match_wall_pattern`). Seeded HONESTLY from a read-only live-DB
-#: audit of ``signals.payload.archived_text`` on 2026-07-31 (never guessed):
-#:
-#:   * ``"javascript is disabled"`` / ``"enable javascript"`` — 86 confirmed
-#:     live rows (lemonde.fr x83, press.un.org x3), all exactly the no-JS
-#:     fallback page ("JavaScript is disabled in your browser. Please enable
-#:     JavaScript to proceed...") at 286 chars — the EXACT artifact named in
-#:     JUDGE_READOUT §5.
-#:   * ``"one of your browser extensions seems to be blocking the video
-#:     player"`` — 148 confirmed live rows (france24.com), but ONLY when short
-#:     (see :data:`_WALL_MAX_CHARS` docstring — the identical string also
-#:     occurs as an embedded-video caption inside multi-KB GENUINE articles,
-#:     which must never be rejected).
-#:   * ``"transferring to the website"`` — 83 confirmed live rows (en.irna.ir),
-#:     a Google-redirect interstitial, all exactly 70 chars.
-#:   * ``"we are optimizing your request for the best experience"`` — 1
-#:     confirmed live row (a ShopShield-style bot-mitigation "please wait"
-#:     page reached via a link-shortener).
-#:   * ``"error message heading"`` — 2 confirmed live rows: a literal, never-
-#:     substituted template placeholder ("ERROR MESSAGE HEADING ERROR MESSAGE
-#:     SUBHEADING...") — unambiguous, zero legitimate-prose overlap risk.
-#:   * ``"are you a robot"`` / ``"unusual traffic from your computer
-#:     network"`` / ``"verify you are human"`` / ``"checking your browser
-#:     before accessing"`` — industry-standard bot-challenge phrasing (Google/
-#:     Cloudflare); not observed live in this audit, but included defensively
-#:     — same zero-overlap-risk reasoning as above, and cheap insurance against
-#:     the next walled publisher.
-#:
-#: DELIBERATELY EXCLUDED (found live, considered, rejected as patterns):
-#:   * A GDACS disaster-alert boilerplate paragraph (32 rows) — genuine
-#:     low-information template content from a real page, not a wall. This is
-#:     exactly what the V-E2 substance-floor marker is FOR (thin-but-real),
-#:     not what V-E1 rejection is for (not-real-at-all).
-#:   * CGTN's cookie-notice footer ("By continuing to browse our site you
-#:     agree to our use of cookies...", 77 rows) — appears on articles from
-#:     314 chars up to 7,517 chars; it is decorative chrome CGTN appends to
-#:     EVERY page, never the entire body. A blind "accept cookies" pattern
-#:     would have false-rejected real, cited news content — this is why every
-#:     pattern above was checked against its own live length distribution
-#:     before being kept, not lifted uncritically from the spec's example list.
-_WALL_DENY_PATTERNS: tuple[str, ...] = (
-    "javascript is disabled",
-    "enable javascript",
-    "one of your browser extensions seems to be blocking the video player",
-    "transferring to the website",
-    "we are optimizing your request for the best experience",
-    "error message heading",
-    "are you a robot",
-    "unusual traffic from your computer network",
-    "verify you are human",
-    "checking your browser before accessing",
-)
-
-#: V-E1 length gate: a wall/redirect pattern only REJECTS the extraction when
-#: the whole cleaned text is this short or shorter. Live-audit-derived, not
-#: guessed: the longest confirmed 100%-boilerplate body (no article prose at
-#: all — headline-only stubs included) was 499 chars; the SHORTEST confirmed
-#: GENUINE article that merely happens to contain one of the deny patterns
-#: (an embedded-video caption sentence inside real France24 prose) was 852
-#: chars. 500 sits cleanly in that gap — every pattern hit above this length
-#: is left untouched (and, if genuinely thin, is still visible via the V-E2
-#: ``archived_text_chars`` marker rather than being silently discarded).
-_WALL_MAX_CHARS: int = 500
-
-
-def _match_wall_pattern(text: str) -> str | None:
-    """The matched deny-pattern when ``text`` looks like a JS-wall / bot-check
-    / redirect-interstitial body rather than real extracted prose, else
-    ``None``.
-
-    Both conditions must hold (see :data:`_WALL_DENY_PATTERNS` and
-    :data:`_WALL_MAX_CHARS` docstrings for the live-DB audit behind each):
-
-      1. the text is short (``len(text) <= _WALL_MAX_CHARS``) — a pattern
-         inside a long article is furniture (an embedded-video caption, a
-         cookie-notice footer), not the whole "extraction";
-      2. it contains one of the curated patterns (case-insensitive).
-    """
-    # (a′) THE CHALLENGE TIER RUNS FIRST AND IS NOT LENGTH-GATED. The 500-char
-    # cap below was measured against ≤500-char no-JS fallback pages and does
-    # not reach a modern interstitial (AP 5 507 B, ToI 12 604 B — FETCH_REVIEW
-    # §2). ``detect_challenge_text`` carries its discrimination in conjunctive
-    # RULES instead of in a character count.
-    challenge = detect_challenge_text(text)
-    if challenge is not None:
-        return challenge
-    if len(text) > _WALL_MAX_CHARS:
-        return None
-    lowered = text.lower()
-    for pattern in _WALL_DENY_PATTERNS:
-        if pattern in lowered:
-            return pattern
-    return None
-
-
-def _extract_text(body: bytes, encoding: str | None, *, max_chars: int) -> str | None:
-    """Trafilatura main-text extraction — bonus only; ``None`` on any failure.
-
-    Lazy import (trafilatura is a base dep, but its import is heavy and every
-    other sub-handler would pay it at package import time otherwise). Does
-    NOT apply the V-E1 wall-pattern gate — that is a separate, independently
-    testable check applied by the caller (:func:`_match_wall_pattern`) so a
-    "Trafilatura extracted nothing" outcome and a "Trafilatura extracted a
-    wall" outcome stay distinguishable in the counters."""
-    try:
-        import trafilatura  # noqa: PLC0415 — deliberate lazy import (see docstring)
-
-        html = body.decode(encoding or "utf-8", errors="replace")
-        text = trafilatura.extract(html, include_comments=False)
-        if text and text.strip():
-            return text.strip()[:max_chars]
-        return None
-    except Exception as exc:  # extraction is best-effort by contract
-        logger.debug("evidence_archiver.extract_failed err=%s", exc)
-        return None
+    """The shared rule over THIS module's :data:`_NO_CONTENT_REGION_HOSTS`
+    (kept the archiver's own name, so a test or an operator patch of the set
+    here is honoured)."""
+    return _skip_text_extraction_in(url, _NO_CONTENT_REGION_HOSTS)
 
 
 def _store_bytes(root: Path, body: bytes) -> tuple[str, str, bool]:
     """Content-address ``body`` under ``root``.
 
-    Returns ``(sha256_hex, object_ref, was_already_present)``. Write is
-    temp-file + atomic rename; an existing object is NEVER rewritten (CAS —
-    same hash IS same bytes)."""
-    digest = hashlib.sha256(body).hexdigest()
-    dest = cas_path(root, digest)
-    if dest.exists():
-        return digest, cas_object_ref(digest), True
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.parent / f".tmp.{os.getpid()}.{digest[:12]}"
-    tmp.write_bytes(body)
-    os.replace(tmp, dest)  # atomic on the same filesystem
-    return digest, cas_object_ref(digest), False
-
-
-class _ObjectTooLargeError(Exception):
-    """The response exceeded the archiver's size cap."""
-
-
-async def _fetch_bytes(
-    client: httpx.AsyncClient, url: str, *, max_bytes: int,
-) -> tuple[bytes, str | None, str | None]:
-    """Stream ``url`` → ``(body, content_type, encoding)`` under the size cap.
-
-    Raises :class:`_ObjectTooLargeError` past the cap (checked against the
-    declared Content-Length first, then enforced on the actual stream — a
-    lying header can't blow the cap), and lets httpx/egress errors propagate
-    to the per-row handler."""
-    async with client.stream("GET", url) as resp:
-        resp.raise_for_status()
-        declared = resp.headers.get("content-length")
-        if declared is not None:
-            try:
-                if int(declared) > max_bytes:
-                    raise _ObjectTooLargeError(f"declared {declared} bytes > cap {max_bytes}")
-            except ValueError:
-                pass
-        chunks: list[bytes] = []
-        total = 0
-        async for chunk in resp.aiter_bytes():
-            total += len(chunk)
-            if total > max_bytes:
-                raise _ObjectTooLargeError(f"stream exceeded cap {max_bytes}")
-            chunks.append(chunk)
-        return (
-            b"".join(chunks),
-            resp.headers.get("content-type"),
-            resp.charset_encoding,
-        )
+    Returns ``(sha256_hex, object_ref, was_already_present)``. The sha256 is
+    of the ORIGINAL bytes; the object rests in the configured codec (zstd by
+    default — :mod:`legba.data.archive_codec`; readers detect it by frame
+    magic). Write is temp-file + fsync + atomic rename; an existing object is
+    NEVER rewritten (CAS — same hash IS same bytes, store once, cite many)."""
+    res = EvidenceStore(root).put(body)
+    return res.sha256, res.object_ref, res.existed
 
 
 class _HostPoliteness:
@@ -795,11 +650,88 @@ class _HostPoliteness:
 
 
 # ---------------------------------------------------------------------------
+# W11-F138 — the per-host fetch policy (sources/_fetch_policy.py) reaches the
+# archiver as a TWO-LEG client bundle:
+#
+#   * ``primary`` — the ONE plain guarded client every host shares, opened
+#     lazily with byte-identical kwargs to the single client this sweep has
+#     always built (the 2026-09-29 ``http2=False`` pin included — the h1 pin
+#     is the archiver's own, fleet-wide, and the per-host policy's ``http2``
+#     field deliberately does NOT reopen it: that pin exists because
+#     Cloudflare keys on the h2 fingerprint, and a per-host h2 exception is
+#     the defect it closed).
+#   * ``impersonated`` — the curl_cffi leg, opened on FIRST use only. A run
+#     whose fetches are never challenge-blocked on a policy host never pays
+#     the impersonated session (nor the curl_cffi import — the off path stays
+#     import-free exactly like _egress.fetch_client's own).
+#
+# The block itself is still COUNTED before the escalation re-asks — a
+# publisher's refusal happened, and the counter is its receipt.
+# ---------------------------------------------------------------------------
+
+
+class _FetchClients:
+    """The run's fetch clients, opened lazily on one exit stack."""
+
+    def __init__(self, stack: AsyncExitStack, *, timeout: float) -> None:
+        self._stack = stack
+        self._timeout = timeout
+        self._primary: Any = None
+        self._impersonated: Any = None
+
+    async def primary(self) -> Any:
+        """The plain guarded client — identical kwargs for EVERY host."""
+        if self._primary is None:
+            self._primary = await self._stack.enter_async_context(
+                fetch_client(
+                    # ``guarded=`` hands ``fetch_client`` THIS module's own
+                    # ``guarded_async_client``, so the flag-off path is the
+                    # exact call this site made before, through the exact
+                    # name the existing e2e suites monkeypatch.
+                    guarded=guarded_async_client,
+                    timeout=self._timeout,
+                    follow_redirects=True,
+                    headers={"User-Agent": _USER_AGENT},
+                    # 2026-09-29 — HTTP/1.1 for the ARCHIVER ONLY. The 09-26
+                    # transport change (pinned ciphers + ALPN h2) put httpx's
+                    # HTTP/2 fingerprint in front of Cloudflare's managed
+                    # challenge: dawn.com went to 0 archived pages/day, scmp
+                    # to 0 by 09-29, 326 challenges/day; h2 off alone returned
+                    # full pages. Fleet-wide, by design — a per-host policy's
+                    # http2 field does NOT move this pin.
+                    http2=False,
+                )
+            )
+        return self._primary
+
+    async def impersonated(self) -> Any:
+        """The impersonated leg — opened only when a policy host is blocked."""
+        if self._impersonated is None:
+            self._impersonated = await self._stack.enter_async_context(
+                fetch_client(
+                    guarded=guarded_async_client,
+                    # The per-host policy's resolution has ALREADY been done
+                    # by the caller (impersonate_kwarg); an explicit True is
+                    # the escalation itself.
+                    impersonate=True,
+                    timeout=self._timeout,
+                    follow_redirects=True,
+                    headers={"User-Agent": _USER_AGENT},
+                    # Ignored by the impersonated adapter (curl carries its
+                    # own fingerprint); pinned literally so the archiver's
+                    # every fetch_client call keeps naming h1.
+                    http2=False,
+                )
+            )
+        return self._impersonated
+
+
+# ---------------------------------------------------------------------------
 # The sweep
 # ---------------------------------------------------------------------------
 
 
-def _zero_counters() -> dict[str, int]:
+def _zero_counters() -> dict[str, Any]:
     return {
         "examined": 0,
         "archived": 0,
@@ -835,6 +767,13 @@ def _zero_counters() -> dict[str, int]:
         "bytes_stored": 0,
         "deadline_stop": 0,
         "skipped_no_root": 0,
+        # W11-F138 — per-feed outcomes: {source_id: {fetched,
+        # challenge_blocked, boilerplate_rejected, body_stored}}. The same
+        # four names the source-health surface computes per feed off the
+        # evidence_archive sidecar, so a run receipt and the health read
+        # speak one vocabulary. Nested, never flattened — the flat keys
+        # above keep their exact per-run meaning.
+        "per_source": {},
     }
 
 
@@ -889,18 +828,20 @@ async def _record(
 
 async def _archive_one(
     pool: Any,
-    client: httpx.AsyncClient,
+    clients: _FetchClients,
     row: Mapping[str, Any],
     *,
     root: Path,
     politeness: _HostPoliteness,
-    counters: dict[str, int],
+    counters: dict[str, Any],
     forbid: frozenset[str],
     max_bytes: int,
     max_text_chars: int,
     max_attempts: int,
     web_origin_fail_closed: bool = True,
     unknown_fail_closed: bool = False,
+    prefer_ingest_copy: bool = True,
+    intake_route: Mapping[str, Any] | None = None,
 ) -> None:
     """Fetch + store + record ONE candidate signal (all outcomes recorded)."""
     signal_id = row["id"]
@@ -964,20 +905,47 @@ async def _archive_one(
         return
 
     # ---- fetch the original bytes (egress-guarded, size-capped, polite) ----
-    try:
-        await politeness.wait(url)
-        body, content_type, encoding = await _fetch_bytes(
-            client, url, max_bytes=max_bytes,
+    # W11-F138 — the fetch consults the per-host policy: an edge block on a
+    # host registered impersonate=on is counted and re-issued through the
+    # impersonated leg (``_fetch_canonical``); every other host takes the
+    # plain client it always took.
+    feed = _feed(counters, row.get("source_id"))
+    # N-L: the bytes the POLL kept win over a later re-fetch (_ingest_copy.py);
+    # the re-fetch is the fallback, and it is recorded as a page version so a
+    # page that changed or went away since leaves one drift row.
+    copy = await load_ingest_copy(pool, signal_id, url, root) if prefer_ingest_copy else None
+    if copy is None and intake_route:  # I-1: the re-fetch as an intake request (_intake_route.py)
+        verdict, got = await intake_copy_or_defer(pool, signal_id, url, root=root, **intake_route)
+        if verdict == "defer":
+            counters["intake_deferred"] = counters.get("intake_deferred", 0) + 1
+            return
+        if verdict == "copy":
+            counters["intake_copy_used"] = counters.get("intake_copy_used", 0) + 1
+            copy = got
+    if copy is not None:
+        counters["ingest_copy_used"] = counters.get("ingest_copy_used", 0) + 1
+        (body, content_type, encoding), fetch_error, escalated_tell = copy, None, None
+    else:
+        body, content_type, encoding, fetch_error, escalated_tell = (
+            await _fetch_canonical(
+                clients, politeness, url,
+                max_bytes=max_bytes, counters=counters, feed=feed,
+            )
         )
-    except _ObjectTooLargeError as exc:
+        await observe_refetch(
+            pool, url, root=root, body=body if fetch_error is None else None,
+            content_type=content_type, source_id=row.get("source_id"),
+            error_status=getattr(getattr(fetch_error, "response", None), "status_code", None),
+        )
+    if isinstance(fetch_error, _ObjectTooLargeError):
         counters["skipped_size"] += 1
         await _record(
             pool, signal_id=signal_id, status="skipped_size",
             attempts=attempts, fetched_url=url, license_class=license_class,
-            retrieval_origin=retrieval_origin, last_error=str(exc),
+            retrieval_origin=retrieval_origin, last_error=str(fetch_error),
         )
         return
-    except EgressBlockedError as exc:
+    if isinstance(fetch_error, EgressBlockedError):
         # Terminal — a non-public target never becomes fetchable. Cap the
         # attempts immediately so the budget is never re-burned on it.
         counters["fetch_failed"] += 1
@@ -986,20 +954,28 @@ async def _archive_one(
             pool, signal_id=signal_id, status="failed",
             attempts=max(attempts, max_attempts), fetched_url=url,
             license_class=license_class, retrieval_origin=retrieval_origin,
-            last_error=f"egress blocked: {exc}",
+            last_error=f"egress blocked: {fetch_error}",
         )
         return
-    except httpx.HTTPStatusError as exc:
+    if isinstance(fetch_error, httpx.HTTPStatusError):
         # (a′) A publisher's edge answered. 401/403/429 IS a block — say so.
         # The status stays ``failed`` (retryable, attempt-capped) rather than
         # ``blocked_challenge``: the refusal may well clear if an operator
         # turns LEGBA_FETCH_IMPERSONATE on, and a terminal status would freeze
         # the row out of that re-attempt.
-        status_code = getattr(getattr(exc, "response", None), "status_code", None)
-        tell = challenge_from_status(status_code)
+        status_code = getattr(
+            getattr(fetch_error, "response", None), "status_code", None,
+        )
+        tell = challenge_from_status(status_code) or escalated_tell
         counters["fetch_failed"] += 1
         if tell is not None:
-            counters[BLOCKED_BY_CHALLENGE] += 1
+            # ``escalated_tell`` means the block was already counted inside
+            # ``_fetch_canonical`` (a counted block that the impersonated leg
+            # then also failed); counting it again would double a single
+            # refusal.
+            if escalated_tell is None:
+                counters[BLOCKED_BY_CHALLENGE] += 1
+                feed["challenge_blocked"] += 1
             logger.warning(
                 "evidence_archiver.%s host=%s tell=%s",
                 BLOCKED_BY_CHALLENGE, urlsplit(url).hostname, tell,
@@ -1009,23 +985,33 @@ async def _archive_one(
             attempts=attempts, fetched_url=url, license_class=license_class,
             retrieval_origin=retrieval_origin,
             last_error=(
-                f"{BLOCKED_BY_CHALLENGE}: {tell} — {exc}" if tell is not None
-                else repr(exc)
+                f"{BLOCKED_BY_CHALLENGE}: {tell} — {fetch_error}"
+                if tell is not None else repr(fetch_error)
             ),
         )
         return
-    except Exception as exc:
+    if fetch_error is not None:
         counters["fetch_failed"] += 1
         await _record(
             pool, signal_id=signal_id, status="failed",
             attempts=attempts, fetched_url=url, license_class=license_class,
-            retrieval_origin=retrieval_origin, last_error=repr(exc),
+            retrieval_origin=retrieval_origin,
+            last_error=(
+                f"{BLOCKED_BY_CHALLENGE}: {escalated_tell} — escalated leg "
+                f"failed: {fetch_error!r}"
+                if escalated_tell is not None else repr(fetch_error)
+            ),
         )
         return
 
     # ---- store (content-addressed, atomic, dedup-aware) ----
+    # N-V: hashing + zstd + fsync of up to max_bytes, and Trafilatura over the
+    # page below, are blocking work — off the event loop, which every other
+    # actor turn, poll and /healthz shares (fetch_receipts already does this).
     try:
-        digest, object_ref, existed = _store_bytes(root, body)
+        digest, object_ref, existed = await asyncio.to_thread(
+            _store_bytes, root, body
+        )
     except OSError as exc:
         counters["fetch_failed"] += 1
         await _record(
@@ -1049,6 +1035,7 @@ async def _archive_one(
     challenge_tell = detect_challenge_page(body, content_type, encoding)
     if challenge_tell is not None:
         counters[BLOCKED_BY_CHALLENGE] += 1
+        feed["challenge_blocked"] += 1
         logger.warning(
             "evidence_archiver.%s host=%s tell=%s bytes=%d",
             BLOCKED_BY_CHALLENGE, urlsplit(url).hostname, challenge_tell, len(body),
@@ -1067,13 +1054,16 @@ async def _archive_one(
 
     # ---- bonus text extraction (bytes are the archive either way) ----
     archived_text: str | None = None
+    rejected_pattern: str | None = None
     if _skip_text_extraction(url):
         # R6b — a known no-content-region page (t.me widget preview): never
         # invoke Trafilatura, it would only harvest page chrome. Bytes are
         # already archived above; only the derived-text upgrade is withheld.
         counters["text_extract_skipped"] += 1
     elif _is_textual(content_type, body):
-        archived_text = _extract_text(body, encoding, max_chars=max_text_chars)
+        archived_text = await asyncio.to_thread(
+            _extract_text, body, encoding, max_chars=max_text_chars
+        )
         if archived_text is not None:
             wall_pattern = _match_wall_pattern(archived_text)
             if wall_pattern is not None:
@@ -1083,6 +1073,12 @@ async def _archive_one(
                 # corpus dirty-marker requeue. The BYTES stay archived either
                 # way — only the derived-text upgrade is withheld.
                 counters["text_extract_rejected_boilerplate"] += 1
+                feed["boilerplate_rejected"] += 1
+                # W11-F138 — stamped on the sidecar row (not a status: the
+                # closed CHECK vocabulary has none for it) so the health
+                # surface's per-feed boilerplate_rejected can read the SAME
+                # event the counter just tallied.
+                rejected_pattern = wall_pattern
                 logger.warning(
                     "evidence_archiver.rejected_boilerplate host=%s pattern=%r",
                     urlsplit(url).hostname, wall_pattern,
@@ -1102,10 +1098,10 @@ async def _archive_one(
         try:
             await politeness.wait(media_ref)
             media_body, _, _ = await _fetch_bytes(
-                client, media_ref, max_bytes=max_bytes,
+                await clients.primary(), media_ref, max_bytes=max_bytes,
             )
             media_sha256, media_object_ref, media_existed = (
-                _store_bytes(root, media_body)
+                await asyncio.to_thread(_store_bytes, root, media_body)
             )
             media_size = len(media_body)
             if not media_existed:
@@ -1126,6 +1122,10 @@ async def _archive_one(
         media_size_bytes=media_size, license_class=license_class,
         retrieval_origin=retrieval_origin,
         text_extracted=archived_text is not None,
+        last_error=(
+            f"rejected_boilerplate: {rejected_pattern}"
+            if rejected_pattern is not None else None
+        ),
     )
     async with pool.acquire() as conn:
         # V-E2 — the substance-floor marker: a free len() alongside the text
@@ -1136,9 +1136,13 @@ async def _archive_one(
             _STAMP_SIGNAL_SQL, signal_id, object_ref, archived_text, archived_text_chars,
         )
     counters["archived"] += 1
+    # W11-F138 — a real stored body for the feed's extraction rate (a
+    # challenge page never reaches this line: it returns above with the
+    # blocked_challenge record).
+    feed["body_stored"] += 1
 
 
-async def _sweep(pool: Any, options: Mapping[str, Any]) -> dict[str, int]:
+async def _sweep(pool: Any, options: Mapping[str, Any]) -> dict[str, Any]:
     counters = _zero_counters()
 
     root = _archive_root()
@@ -1209,32 +1213,32 @@ async def _sweep(pool: Any, options: Mapping[str, Any]) -> dict[str, int]:
 
     politeness = _HostPoliteness(per_host_delay)
     started = time.monotonic()
-    async with fetch_client(
-        # ``guarded=`` hands ``fetch_client`` THIS module's own
-        # ``guarded_async_client``, so the flag-off path is the exact call
-        # this site made before, through the exact name the existing e2e
-        # suites monkeypatch. See _egress.fetch_client's docstring.
-        guarded=guarded_async_client,
-        timeout=timeout_s,
-        follow_redirects=True,
-        headers={"User-Agent": _USER_AGENT},
-    ) as client:
+    async with AsyncExitStack() as stack:
+        # W11-F138 — the plain client opens lazily with the exact kwargs this
+        # sweep always passed (see ``_FetchClients``); a second impersonated
+        # leg opens only if a challenge-blocked policy host ever calls for it.
+        clients = _FetchClients(stack, timeout=timeout_s)
         for row in rows:
             if time.monotonic() - started > deadline_s:
                 counters["deadline_stop"] = 1
                 break
             await _archive_one(
-                pool, client, row,
+                pool, clients, row,
                 root=root, politeness=politeness, counters=counters,
                 forbid=forbid, max_bytes=max_bytes,
                 max_text_chars=max_text_chars, max_attempts=max_attempts,
                 web_origin_fail_closed=web_origin_fail_closed,
                 unknown_fail_closed=unknown_fail_closed,
+                prefer_ingest_copy=bool(options.get("prefer_ingest_copy", True)),
+                intake_route=({
+                    "pipeline": str(options.get("intake_pipeline") or ""),
+                    "wait_minutes": float(options.get("intake_wait_minutes") or 60),
+                } if options.get("fetch_via_intake") is True else None),
             )
     return counters
 
 
-def _build_finding(counters: Mapping[str, int]) -> FindingPayload:
+def _build_finding(counters: Mapping[str, Any]) -> FindingPayload:
     title = (
         f"Evidence archiver: archived {counters.get('archived', 0)} of "
         f"{counters.get('examined', 0)} cited signal(s), "

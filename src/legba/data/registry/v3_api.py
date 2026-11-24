@@ -20,32 +20,27 @@ The ``POST /optimizer/candidates/{id}/review`` mutation lets an operator
 promote or reject a queued candidate.  Promotion goes *through* the
 registry's descriptor lifecycle (``DescriptorRegistry.update``) so the
 audit log, content-hash, dead-letter, and NATS event paths stay
-authoritative — see :func:`build_v3_router` for the route and the
-``_apply_optimizer_review`` helper below for the body of the action.
+authoritative. Since X2-B2 (2026-10-08) the models, the action body and the
+three optimizer-queue routes live in the leaf modules ``optimizer_review``
+(``apply_optimizer_review``) and ``optimizer_review_api``, whose routes
+:func:`build_v3_router` declares in place; this module re-exports the names.
 """
 from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Literal
-from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, Field
 
-from .. import correctness_axis
+from .. import correctness_axis, profile_constants as _profile_constants
+from ..calibration_honesty import reduce_calibration
 from ..provenance import external_truth as _external_truth
-from ..schemas import AnalystDescriptor
-from . import source_freshness
+from . import source_freshness, source_quiet
 from .api import RegistryAPIDeps, require_bearer
-from .descriptor import Family
-from .errors import (
-    DescriptorNotFound,
-    DescriptorValidationError,
-    IllegalLifecycleTransition,
-    VersionConflict,
-)
+from .read_latency import TTLCache, stamp_as_of
 
 # B0-5 (audit W6) — the scorecard↔composition reconciliation reducers + model
 # now live in a PURE, substrate-free module so the journal's ``get_assessments``
@@ -71,6 +66,23 @@ from .escalation_delivery import (
     build_escalations_response as _build_escalations_response,
     escalation_delivery_row as _escalation_delivery_row,
 )
+
+# X2-B2 — the optimizer-candidate REVIEW family (four models, the promotion-
+# target resolver, the promote/reject action) moved to the leaf
+# ``optimizer_review``; its three routes to ``optimizer_review_api``. Aliased to
+# the historical private names so anything reaching for them off THIS module
+# resolves unchanged (the escalation_delivery precedent).
+from .optimizer_review import (  # noqa: F401 — re-exported
+    OptimizerCandidate,
+    OptimizerReviewBody,
+    OptimizerReviewResult,
+    PromptModuleDiff,
+    apply_optimizer_review as _apply_optimizer_review,
+    candidate_target_path as _candidate_target_path,
+)
+from .optimizer_review_api import register_optimizer_review_routes
+from .alert_volume_api import register_alert_volume_routes
+from .alert_log_api import register_alert_log_routes
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +155,71 @@ class ScorecardRow(BaseModel):
     ground_truth_accuracy: float | None = None
     produced_at: str
     judge_pipeline_version: str | None = None
+    score_state: str | None = None  # SW-9: carried_ungraded = memory-only, counted beside the means, never in them
+
+
+# P-4 (2026-11-14) — READ COST of ``GET /eval/scorecard``. The live console walk
+# saw it take up to 19.4 s; EXPLAIN ANALYZE on live put 15.4 s (2.7M buffer
+# touches) on ONE node: a parallel seq scan that evaluated the seven
+# ``data->...`` projections on EVERY critique (~88k), each a fresh detoast of
+# the whole critique document, before a top-N sort threw all but 500 away.
+#
+# Same rows, now:
+#   * the newest critiques are ordered by ``created_at`` from the narrow heap
+#     columns alone (no detoast), and the document is read only for the rows
+#     walked until ``LIMIT`` is met: fetched by primary key and detoasted ONCE
+#     (``jsonb_path_query_first(data, '$')`` is the document itself, as an
+#     in-memory value every projection then reads — the P-3 ``OFFSET 0``
+#     pattern keeps the planner from inlining it back into each use);
+#   * with an ``analyst_id`` filter the key match is the only per-row detoast
+#     (``data->>'analyzed_analyst_id' = $1`` already implies IS NOT NULL), the
+#     top-N is taken on (id, created_at), and only those rows are projected.
+# ``id DESC`` breaks ``created_at`` ties (inserts in one transaction share
+# ``now()``), which the old ORDER BY left to the plan.
+_SCORECARD_PROJECTION = """
+SELECT o.id::text AS id,
+       x.d->>'analyzed_analyst_id'      AS analyst_id,
+       x.d->>'analyzed_analyst_version' AS analyst_version,
+       COALESCE(x.d->'scores', '{}'::jsonb) AS scores,
+       COALESCE((x.d->>'overall_score')::float8, 0.0) AS overall_score,
+       o.created_at AS produced_at,
+       x.d->'data'->'verification'->>'score_state' AS score_state,
+       -- M-2: the population split key, so the UI's per-analyst
+       -- means and trends never span a judge swap unlabelled.
+       x.d->'data'->'verification'->>'judge_pipeline_version'
+           AS judge_pipeline_version"""
+
+#: The critique document, detoasted once per projected row.
+_SCORECARD_DOC_ONCE = """
+  CROSS JOIN LATERAL (
+        SELECT jsonb_path_query_first(ao.data, '$') AS d
+          FROM public.analyst_outputs ao
+         WHERE ao.id = o.id
+        OFFSET 0) x"""
+
+#: No analyst filter (the console's ``?limit=500``): walk newest-first, stop at
+#: ``$1`` rows that carry an analyzed analyst.
+_SCORECARD_SQL = f"""{_SCORECARD_PROJECTION}
+  FROM (SELECT id, created_at
+          FROM public.analyst_outputs
+         WHERE kind = 'critique'
+         ORDER BY created_at DESC, id DESC
+        OFFSET 0) o{_SCORECARD_DOC_ONCE}
+ WHERE x.d->>'analyzed_analyst_id' IS NOT NULL
+ ORDER BY o.created_at DESC, o.id DESC
+ LIMIT $1
+"""
+
+#: One analyzed analyst: ``$1`` = analyst id, ``$2`` = limit.
+_SCORECARD_FOR_ANALYST_SQL = f"""{_SCORECARD_PROJECTION}
+  FROM (SELECT id, created_at
+          FROM public.analyst_outputs
+         WHERE kind = 'critique'
+           AND data->>'analyzed_analyst_id' = $1::text
+         ORDER BY created_at DESC, id DESC
+         LIMIT $2) o{_SCORECARD_DOC_ONCE}
+ ORDER BY o.created_at DESC, o.id DESC
+"""
 
 
 class BandCalibrationSection(BaseModel):
@@ -266,13 +343,28 @@ class CalibrationScoreboard(BaseModel):
     available: bool
     produced_at: str | None = None
     # Headline calibration (exogenous-only).
+    # Lane E: every Brier carries ITS OWN n. `brier` == `brier_exogenous`
+    # (paired with `exogenous_sample_size`); `brier_pooled` pairs with
+    # `pooled_sample_size` (the old bare `sample_size`, renamed).
     brier: float | None = None
     brier_exogenous: float | None = None
     exogenous_sample_size: int | None = None
-    sample_size: int | None = None
+    brier_pooled: float | None = None
+    pooled_sample_size: int | None = None
     insufficient_exogenous: bool | None = None
     self_consistency_only: bool | None = None
-    # Segregated acute-forecast pilot (n<30, reported honestly — its own keys).
+    # Lane E — these are LEGACY figures (never the sealed forecast ledger).
+    label: str = ""
+    ledger_note: str = ""
+    legacy_finding_format: bool = False
+    withheld_reason: str | None = None
+    stale: bool | None = None
+    newest_member_at: str | None = None
+    stale_after_days: int | None = None
+    hypothesis_confidence_signed_from: str | None = None
+    collection_volume_sample_size: int | None = None
+    populations: list[dict[str, Any]] = Field(default_factory=list)
+    # Segregated acute-forecast pilot (reported honestly — its own keys).
     brier_forecast_acute: float | None = None
     brier_skill_score: float | None = None
     forecast_acute_sample_size: int | None = None
@@ -534,94 +626,12 @@ class SourceFiringRow(BaseModel):
         "ungraded"
     )
     budget_minutes: int | None = None
-
-
-class OptimizerCandidate(BaseModel):
-    """One optimizer-emitted prompt-module candidate awaiting decision.
-
-    Surfaces `analyst_outputs` rows with `kind='prompt_module_candidate'`.
-    Field layout follows `PromptModuleCandidatePayload`
-    (`src/legba/data/provenance/models.py`) — `_insert_analyst_output`
-    persists the full payload into the `data` JSONB column, so all
-    fields below extract from there.
-
-    `state` is derived from `promotion_gate` per L-176:
-
-      * `human_gated`, `auto_with_threshold` → `pending`
-      * `rejected`                            → `rejected`
-      * `promoted` requires a downstream promotion log that doesn't
-        exist yet; the value is reserved for when that table lands.
-    """
-    id: str
-    analyst_id: str
-    analyst_version: str
-    parent_prompt_module_path: str
-    eval_score: float
-    eval_score_delta: float
-    training_set_size: int
-    gepa_generation: int
-    promotion_gate: str
-    state: Literal["pending", "rejected"]
-    temporal_workflow_id: str | None
-    produced_at: datetime
-    # The REAL method the GEPA workflow took for this candidate
-    # (dspy_gepa / naive_best_of_n / noop_empty_training / skipped_validation /
-    # unknown). Lets the UI flag a non-dspy fallback (a worker-less deploy
-    # silently runs naive search). Read from data['method']; falls back to
-    # data['diagnostics']['method'] for rows written before the top-level field.
-    method: str
-
-
-class PromptModuleDiff(BaseModel):
-    """Current-vs-candidate prompt-module diff for one optimizer candidate.
-
-    Drives the ``system.optimizer.diff`` panel (``OptimizerDiff.tsx``). Built
-    entirely from the persisted candidate row — ``current_text`` is the parent
-    snapshot the candidate was scored against (``parent_prompt_module_text``,
-    captured at compile time), with a live promoted-prompt override when one
-    exists. CRITICAL: this route NEVER imports the prompt module / dspy — the
-    text comes from substrate columns only (the snapshot lives on the row so
-    the registry process stays dspy-free; test asserts no dspy import).
-    """
-    candidate_id: str
-    analyst_id: str
-    current_module_path: str
-    candidate_module_path: str
-    current_text: str
-    candidate_text: str
-    eval_score: float
-    eval_score_delta: float
-
-
-class OptimizerReviewBody(BaseModel):
-    """Body of POST ``/optimizer/candidates/{id}/review``.
-
-    ``action`` is the operator's decision; ``reviewer`` is the principal
-    identifier stamped on the resulting audit-log row; ``note`` is a free-form
-    rationale persisted on the audit row's ``change_summary``.
-    """
-    action: Literal["promote", "reject"]
-    reviewer: str = Field(min_length=1, max_length=256)
-    note: str | None = Field(default=None, max_length=4096)
-
-
-class OptimizerReviewResult(BaseModel):
-    """Response from POST ``/optimizer/candidates/{id}/review``.
-
-    On promote: ``new_descriptor_version`` is the content-hash of the new
-    head row of the parent analyst's descriptor (the registry mints it from
-    the updated body; see ``DescriptorRegistry.update``).
-
-    On reject: ``new_descriptor_version`` is ``null`` (no descriptor
-    mutation) — the only side effect is an audit-log row and an update
-    to the candidate's ``data->promotion_gate`` JSONB field flipping it
-    to ``rejected``.
-    """
-    candidate_id: str
-    action: Literal["promote", "reject"]
-    analyst_id: str
-    new_descriptor_version: str | None
-    promotion_gate: Literal["promoted", "rejected"]
+    #: U-9 (additive): the newest upstream entry the latest poll observed, and
+    #: why a quiet source is quiet (``source_quiet.QUIET_CLASSES``; ``None``
+    #: for a firing or paused source) — "looked, nothing there" vs "could not
+    #: look", the same truth table the liveness watchdog stalls by.
+    last_poll_newest_entry_at: datetime | None = None
+    quiet_class: str | None = None
 
 
 def _reduce_band_calibration(row: Any) -> BandCalibrationSection:
@@ -684,243 +694,127 @@ def _reduce_band_calibration(row: Any) -> BandCalibrationSection:
         return BandCalibrationSection(available=False)
 
 
-def _candidate_target_path(payload: dict[str, Any]) -> str:
-    """Compute the prompt_module path that the parent descriptor's
-    ``method.prompt_module`` should be flipped to.
+#: Seconds a computed ``/system/source-firing`` answer is reused (R-1).
+SOURCE_FIRING_TTL_S = 30.0
 
-    Resolution order:
-
-      1. If the candidate's stored ``data`` dict carries an explicit
-         ``candidate_prompt_module_path``, use it as-is.  (The optimizer
-         doesn't currently set this field; reserved for future generators
-         that mint distinct paths per candidate.)
-      2. Otherwise derive a versioned sibling of the parent path by
-         appending ``.gepa_gen_{N}`` (where N is ``gepa_generation``).
-         This matches the L-176 §"Promotion gates" §6 brief: each promoted
-         candidate version of an analyst's prompt module is stored at a
-         distinct importable path.
-    """
-    explicit = (payload.get("data") or {}).get("candidate_prompt_module_path")
-    if isinstance(explicit, str) and explicit:
-        return explicit
-    parent = str(payload.get("parent_prompt_module_path") or "")
-    gen = int(payload.get("gepa_generation") or 0)
-    if not parent:
-        raise ValueError(
-            "candidate row missing parent_prompt_module_path; cannot derive "
-            "promotion target",
-        )
-    return f"{parent}.gepa_gen_{gen}"
-
-
-async def _apply_optimizer_review(
-    deps_: RegistryAPIDeps,
-    *,
-    candidate_id: str,
-    body: OptimizerReviewBody,
-) -> OptimizerReviewResult:
-    """Promotion strategy (Lewis's call per
-    ``plans/legba_done_plan_2026_05_28.md`` §6 Q6 — option (b)):
-
-      * Flip the parent analyst descriptor's ``method.prompt_module``
-        field directly to the candidate's new path; the registry's
-        ``update()`` mints a new content-hash version + writes a signed
-        audit row + publishes the ``descriptor.updated.analyst.<id>``
-        event.
-      * The candidate row in ``analyst_outputs`` stays in place as the
-        historical record (its ``data->promotion_gate`` is flipped from
-        ``human_gated`` / ``auto_with_threshold`` to ``promoted`` so the
-        P-11 queue surfaces it as decided).
-      * No separate ``prompt_module_promotions`` table — historical
-        promotions are reconstructible by joining the analyst's
-        descriptor history against the candidate rows.
-
-    On reject:
-
-      * No descriptor mutation.
-      * Candidate row's ``data->promotion_gate`` flipped to ``rejected``.
-      * One audit-log row written against the parent analyst with
-        ``action='optimizer_reject'`` so the rationale is preserved in
-        the audit chain (the rest of the registry only writes audit rows
-        as a side effect of descriptor mutations; the reject path is
-        the one operator action that emits an audit row without
-        otherwise touching descriptor state).
-    """
-    try:
-        cand_uid = UUID(candidate_id)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=400, detail=f"candidate id must be a UUID: {exc}",
-        ) from exc
-
-    # Load the candidate row.
-    async with deps_.descriptor_registry.pg.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            SELECT id, kind, data
-              FROM analyst_outputs
-             WHERE id = $1
-            """,
-            cand_uid,
-        )
-    if row is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"optimizer candidate {candidate_id!r} not found",
-        )
-    if row["kind"] != "prompt_module_candidate":
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"analyst_outputs row {candidate_id!r} is kind={row['kind']!r}, "
-                f"not 'prompt_module_candidate'"
-            ),
-        )
-    data = row["data"]
-    if isinstance(data, str):
-        data = json.loads(data)
-    payload: dict[str, Any] = dict(data or {})
-
-    current_gate = str(payload.get("promotion_gate") or "human_gated")
-    if current_gate in ("promoted", "rejected"):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"candidate {candidate_id!r} already decided "
-                f"(promotion_gate={current_gate!r})"
-            ),
-        )
-
-    analyst_id = str(payload.get("analyst_id") or "")
-    if not analyst_id:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"candidate {candidate_id!r} missing analyst_id in its data "
-                f"payload; cannot resolve parent descriptor"
-            ),
-        )
-
-    if body.action == "reject":
-        # Flip the candidate's stored promotion_gate + emit an audit row.
-        new_payload = dict(payload)
-        new_payload["promotion_gate"] = "rejected"
-        new_payload["reviewed_by"] = body.reviewer
-        new_payload["reviewed_at"] = datetime.now(tz=timezone.utc).isoformat()
-        if body.note is not None:
-            new_payload["review_note"] = body.note
-        async with deps_.descriptor_registry.pg.acquire() as conn:
-            async with conn.transaction():
-                await conn.execute(
-                    "UPDATE analyst_outputs SET data = $1::jsonb WHERE id = $2",
-                    json.dumps(new_payload),
-                    cand_uid,
-                )
-                await deps_.audit_logger.record(
-                    conn,
-                    actor_id=body.reviewer,
-                    namespace=Family.ANALYST.value,
-                    descriptor_id=analyst_id,
-                    action="optimizer_reject",
-                    actor_role="operator",
-                    from_version=str(payload.get("analyst_version") or "") or None,
-                    to_version=None,
-                    change_summary={
-                        "candidate_id": candidate_id,
-                        "reason": body.note,
-                        "prior_gate": current_gate,
-                    },
-                )
-        return OptimizerReviewResult(
-            candidate_id=candidate_id,
-            action="reject",
-            analyst_id=analyst_id,
-            new_descriptor_version=None,
-            promotion_gate="rejected",
-        )
-
-    # ----- promote -----
-    try:
-        candidate_path = _candidate_target_path(payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    # Pull the parent analyst's HEAD descriptor as a typed instance so we
-    # can mutate it and feed it back through the registry. Falls back to
-    # raw `get()` + manual pydantic parse if `get_typed` blows up (e.g.
-    # the auto_upgrade conversion path isn't wired in the test substrate).
-    try:
-        typed = await deps_.descriptor_registry.get_typed(
-            analyst_id, family=Family.ANALYST, auto_upgrade=False,
-        )
-    except DescriptorNotFound as exc:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"parent analyst descriptor {analyst_id!r} not found; "
-                f"cannot promote candidate {candidate_id!r}"
-            ),
-        ) from exc
-    if not isinstance(typed, AnalystDescriptor):  # pragma: no cover — defensive
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                f"parent descriptor {analyst_id!r} is not an analyst; "
-                f"got {type(typed).__name__}"
-            ),
-        )
-
-    # Build the new descriptor body with the flipped prompt_module.
-    new_body = typed.model_dump(mode="json", by_alias=True)
-    method_block = dict(new_body.get("method") or {})
-    method_block["prompt_module"] = candidate_path
-    new_body["method"] = method_block
-
-    try:
-        new_descriptor = AnalystDescriptor.model_validate(new_body, strict=False)
-        new_row = await deps_.descriptor_registry.update(
-            analyst_id, new_descriptor, actor=body.reviewer,
-        )
-    except DescriptorNotFound as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except DescriptorValidationError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "validation",
-                "message": str(exc),
-                "dead_letter_id": exc.dead_letter_id,
-            },
-        ) from exc
-    except (VersionConflict, IllegalLifecycleTransition) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    # Mutate the candidate row's promotion_gate now that the descriptor
-    # flip succeeded.  Outside the descriptor's transaction is fine: this
-    # row is informational; even if the JSONB update fails the descriptor
-    # promotion is the canonical record.
-    new_payload = dict(payload)
-    new_payload["promotion_gate"] = "promoted"
-    new_payload["reviewed_by"] = body.reviewer
-    new_payload["reviewed_at"] = datetime.now(tz=timezone.utc).isoformat()
-    new_payload["promoted_to_descriptor_version"] = new_row.version
-    new_payload["promoted_prompt_module_path"] = candidate_path
-    if body.note is not None:
-        new_payload["review_note"] = body.note
-    async with deps_.descriptor_registry.pg.acquire() as conn:
-        await conn.execute(
-            "UPDATE analyst_outputs SET data = $1::jsonb WHERE id = $2",
-            json.dumps(new_payload),
-            cand_uid,
-        )
-
-    return OptimizerReviewResult(
-        candidate_id=candidate_id,
-        action="promote",
-        analyst_id=analyst_id,
-        new_descriptor_version=new_row.version,
-        promotion_gate="promoted",
+#: ``/system/source-firing``'s read. Driven by the source HEADS: the route only
+#: ever emitted rows that resolve to a real (non-junk) head, so each head's
+#: numbers are read for it alone — its 7-day signal range and newest signal
+#: through ``idx_signals_source_created_at`` (migration 0251), its 24 h poll
+#: errors and latest poll outcome through
+#: ``source_poll_outcomes_source_time_idx`` — instead of a GROUP BY over every
+#: signal and every poll row. Same rows as the whole-table form (pinned against
+#: it in one snapshot by tests/data_pkg/test_registry_read_latency_db.py).
+#:
+#: * firing truth is ACTUAL signal production, keyed on ``created_at`` (when
+#:   the row landed in the substrate); ``signals_recent`` is the 48 h floor
+#:   (covers a couple of cycles even for the slowest cron cadences);
+#: * the poll ledger is SECONDARY: it records successes too since migration
+#:   0114, and only its ``error`` rows in 24 h are counted;
+#: * retired template / autowire junk descriptors are excluded so they do not
+#:   read as normal paused sources;
+#: * ``cadence_raw`` is the declared poll cadence the A7 freshness budget
+#:   derives from;
+#: * ``last_poll_newest_entry_at`` (U-9, last column, read off the same latest
+#:   poll row) is the newest upstream entry that poll observed — the evidence
+#:   ``source_quiet.quiet_class`` splits "published nothing" from "published,
+#:   nothing kept" by, exactly as the liveness watchdog does.
+_SOURCE_FIRING_SQL = """
+    WITH heads AS (
+        SELECT descriptor_id AS source_id, state,
+               body->'cadence'->'schedule'->>'raw' AS cadence_raw
+          FROM public.source_descriptors
+         WHERE is_head
+           AND descriptor_id NOT LIKE 'src_autowire_p13_%'
+           AND descriptor_id NOT LIKE 'src_locked_p13_%'
+           AND descriptor_id NOT LIKE 'src_template_p13_%'
+           AND descriptor_id NOT LIKE 'src_tmpl_aw_%'
+           AND descriptor_id NOT LIKE 'src_tmpl_ds_%'
+           AND descriptor_id NOT LIKE 'src_disc_%'
     )
+    SELECT h.source_id,
+           h.state,
+           h.cadence_raw,
+           COALESCE(s.signals_24h, 0) AS signals_24h,
+           COALESCE(s.signals_7d, 0) AS signals_7d,
+           l.last_seen_at,
+           EXTRACT(EPOCH FROM (now() - l.last_seen_at))::bigint AS age_seconds,
+           (l.last_seen_at IS NOT NULL
+            AND l.last_seen_at > now() - interval '48 hours') AS signals_recent,
+           lp.last_poll_outcome,
+           COALESCE(p.recent_error_count, 0) AS recent_error_count,
+           lp.last_poll_newest_entry_at
+      FROM heads h
+      LEFT JOIN LATERAL (
+          SELECT count(*) FILTER (
+                     WHERE x.created_at > now() - interval '24 hours'
+                 ) AS signals_24h,
+                 count(*) AS signals_7d
+            FROM public.signals x
+           WHERE x.source_id = h.source_id
+             AND x.created_at > now() - interval '7 days'
+      ) s ON TRUE
+      LEFT JOIN LATERAL (
+          SELECT max(x.created_at) AS last_seen_at
+            FROM public.signals x
+           WHERE x.source_id = h.source_id
+      ) l ON TRUE
+      LEFT JOIN LATERAL (
+          SELECT count(*) AS recent_error_count
+            FROM public.source_poll_outcomes o
+           WHERE o.source_id = h.source_id
+             AND o.outcome = 'error'
+             AND o.occurred_at > now() - interval '24 hours'
+      ) p ON TRUE
+      LEFT JOIN LATERAL (
+          SELECT o.outcome AS last_poll_outcome,
+                 o.newest_entry_ts AS last_poll_newest_entry_at
+            FROM public.source_poll_outcomes o
+           WHERE o.source_id = h.source_id
+           ORDER BY o.occurred_at DESC
+           LIMIT 1
+      ) lp ON TRUE
+     ORDER BY signals_recent DESC, signals_24h DESC, h.source_id
+     LIMIT 1000
+"""
+
+
+#: ``GET /v3/system/analyst-cadence``. P-5: the newest run's status per analyst
+#: is one backward probe of ``analyst_traces_analyst_idx`` per analyst (a
+#: LATERAL ... LIMIT 1 over the ~100 ids the aggregate yields), not a
+#: ``DISTINCT ON`` over every trace (that walked the whole index AND fetched
+#: every heap row: 112k rows, ~109k buffers, 185 ms of a 239 ms read live).
+#: Same rows: both take the first row of the same index order per analyst.
+_ANALYST_CADENCE_SQL = """
+    WITH agg AS (
+        SELECT analyst_id,
+               max(run_started_at) AS last_run_at,
+               count(*) FILTER (
+                   WHERE run_started_at > now() - interval '1 hour'
+               ) AS runs_1h,
+               count(*) FILTER (
+                   WHERE run_started_at > now() - interval '24 hours'
+               ) AS runs_24h
+          FROM public.analyst_traces
+         GROUP BY analyst_id
+    )
+    SELECT a.analyst_id,
+           a.last_run_at,
+           EXTRACT(EPOCH FROM (now() - a.last_run_at))::bigint AS age_seconds,
+           a.runs_1h,
+           a.runs_24h,
+           l.last_outcome
+      FROM agg a
+      LEFT JOIN LATERAL (
+          SELECT t.status AS last_outcome
+            FROM public.analyst_traces t
+           WHERE t.analyst_id = a.analyst_id
+           ORDER BY t.run_started_at DESC
+           LIMIT 1
+      ) l ON TRUE
+     ORDER BY a.last_run_at DESC NULLS LAST
+     LIMIT 500
+"""
 
 
 def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
@@ -964,42 +858,7 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
         """
         try:
             async with deps.descriptor_registry.pg.acquire() as conn:
-                rows = await conn.fetch(
-                    """
-                    WITH agg AS (
-                        SELECT analyst_id,
-                               max(run_started_at) AS last_run_at,
-                               count(*) FILTER (
-                                   WHERE run_started_at > now()
-                                         - interval '1 hour'
-                               ) AS runs_1h,
-                               count(*) FILTER (
-                                   WHERE run_started_at > now()
-                                         - interval '24 hours'
-                               ) AS runs_24h
-                          FROM public.analyst_traces
-                         GROUP BY analyst_id
-                    ),
-                    latest AS (
-                        SELECT DISTINCT ON (analyst_id)
-                               analyst_id, status AS last_outcome
-                          FROM public.analyst_traces
-                         ORDER BY analyst_id, run_started_at DESC
-                    )
-                    SELECT a.analyst_id,
-                           a.last_run_at,
-                           EXTRACT(
-                               EPOCH FROM (now() - a.last_run_at)
-                           )::bigint AS age_seconds,
-                           a.runs_1h,
-                           a.runs_24h,
-                           l.last_outcome
-                      FROM agg a
-                      LEFT JOIN latest l USING (analyst_id)
-                     ORDER BY a.last_run_at DESC NULLS LAST
-                     LIMIT 500
-                    """
-                )
+                rows = await conn.fetch(_ANALYST_CADENCE_SQL)
         except Exception as exc:  # noqa: BLE001 — degrade to empty, HTTP 200
             logger.info("v3.system.analyst_cadence.unavailable err=%s", exc)
             return []
@@ -1127,13 +986,30 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
             last_matcher_run_at=last_run,
         )
 
+    # R-1 — the answer is the same for every caller and moves on a poll
+    # cadence, so it is computed at most once per SOURCE_FIRING_TTL_S (single
+    # flight: the landing's three concurrent asks share one read). Its age is
+    # on the response (`X-Legba-As-Of`, `Age`); an empty answer — the degraded
+    # path included — is never cached.
+    source_firing_cache: TTLCache[list[SourceFiringRow]] = TTLCache(
+        SOURCE_FIRING_TTL_S
+    )
+
     @router.get(
         "/system/source-firing",
         response_model=list[SourceFiringRow],
     )
     async def system_source_firing(
+        response: Response,
         principal: str = Depends(require_bearer),
     ) -> list[SourceFiringRow]:
+        cached = await source_firing_cache.get_or_compute(
+            "all", _source_firing_rows, should_cache=bool
+        )
+        stamp_as_of(response, cached)
+        return cached.value
+
+    async def _source_firing_rows() -> list[SourceFiringRow]:
         """Per-source firing health (System Status panel).
 
         Composes signal flow (``signals`` count + freshest ``created_at`` per
@@ -1166,99 +1042,7 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
         """
         try:
             async with deps.descriptor_registry.pg.acquire() as conn:
-                rows = await conn.fetch(
-                    """
-                    WITH heads AS (
-                        SELECT descriptor_id AS source_id, state,
-                               -- A7 freshness taxonomy: the declared poll
-                               -- cadence the per-source budget derives from
-                               body->'cadence'->'schedule'->>'raw'
-                                   AS cadence_raw
-                          FROM public.source_descriptors
-                         WHERE is_head
-                           -- exclude retired template / autowire junk so it
-                           -- does not read as a normal paused source
-                           AND descriptor_id NOT LIKE 'src_autowire_p13_%'
-                           AND descriptor_id NOT LIKE 'src_locked_p13_%'
-                           AND descriptor_id NOT LIKE 'src_template_p13_%'
-                           AND descriptor_id NOT LIKE 'src_tmpl_aw_%'
-                           AND descriptor_id NOT LIKE 'src_tmpl_ds_%'
-                           AND descriptor_id NOT LIKE 'src_disc_%'
-                    ),
-                    sig AS (
-                        -- firing truth is ACTUAL signal production, keyed on
-                        -- created_at (when the row landed in the substrate)
-                        SELECT source_id,
-                               count(*) FILTER (
-                                   WHERE created_at > now()
-                                         - interval '24 hours'
-                               ) AS signals_24h,
-                               count(*) FILTER (
-                                   WHERE created_at > now()
-                                         - interval '7 days'
-                               ) AS signals_7d,
-                               max(created_at) AS last_seen_at
-                          FROM public.signals
-                         GROUP BY source_id
-                    ),
-                    poll AS (
-                        -- SECONDARY only: source_poll_outcomes informs error
-                        -- context but never primary firing state (real signal
-                        -- production is the truth). It records successes too
-                        -- since migration 0114 — this filter counts only the
-                        -- 'error' rows either way, so the read is unchanged.
-                        SELECT source_id,
-                               count(*) FILTER (
-                                   WHERE outcome = 'error'
-                                     AND occurred_at > now()
-                                         - interval '24 hours'
-                               ) AS recent_error_count
-                          FROM public.source_poll_outcomes
-                         GROUP BY source_id
-                    ),
-                    latest_poll AS (
-                        SELECT DISTINCT ON (source_id)
-                               source_id, outcome AS last_poll_outcome
-                          FROM public.source_poll_outcomes
-                         ORDER BY source_id, occurred_at DESC
-                    ),
-                    ids AS (
-                        SELECT source_id FROM heads
-                        UNION
-                        SELECT source_id FROM sig
-                        UNION
-                        SELECT source_id FROM poll
-                    )
-                    SELECT i.source_id,
-                           h.state,
-                           h.cadence_raw,
-                           COALESCE(s.signals_24h, 0) AS signals_24h,
-                           COALESCE(s.signals_7d, 0) AS signals_7d,
-                           s.last_seen_at,
-                           EXTRACT(
-                               EPOCH FROM (now() - s.last_seen_at)
-                           )::bigint AS age_seconds,
-                           -- primary firing flag: produced a signal recently
-                           -- (48h safe floor — covers a couple of cycles even
-                           -- for the slowest cron cadences)
-                           (s.last_seen_at IS NOT NULL
-                            AND s.last_seen_at > now()
-                                - interval '48 hours') AS signals_recent,
-                           lp.last_poll_outcome,
-                           COALESCE(p.recent_error_count, 0)
-                               AS recent_error_count
-                      FROM ids i
-                      LEFT JOIN heads h USING (source_id)
-                      LEFT JOIN sig s USING (source_id)
-                      LEFT JOIN poll p USING (source_id)
-                      LEFT JOIN latest_poll lp USING (source_id)
-                     -- only emit rows that resolve to a real (non-junk) head
-                     WHERE h.source_id IS NOT NULL
-                     ORDER BY signals_recent DESC, signals_24h DESC,
-                              i.source_id
-                     LIMIT 1000
-                    """
-                )
+                rows = await conn.fetch(_SOURCE_FIRING_SQL)
         except Exception as exc:  # noqa: BLE001 — degrade to empty, HTTP 200
             logger.info("v3.system.source_firing.unavailable err=%s", exc)
             return []
@@ -1310,6 +1094,13 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
                     status=status,  # type: ignore[arg-type]
                     freshness_grade=grade,
                     budget_minutes=budget_minutes,
+                    last_poll_newest_entry_at=r.get("last_poll_newest_entry_at"),
+                    quiet_class=source_quiet.quiet_class(
+                        status=status,
+                        last_seen_at=r["last_seen_at"],
+                        last_poll_outcome=r["last_poll_outcome"],
+                        newest_entry_at=r.get("last_poll_newest_entry_at"),
+                    ),
                 )
             )
         return out
@@ -1394,190 +1185,14 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
             window_hours=int(window_hours),
         )
 
-    @router.get(
-        "/optimizer/candidates", response_model=list[OptimizerCandidate],
-    )
-    async def list_optimizer_candidates(
-        state: Literal["pending", "rejected", "all"] = Query(default="pending"),
-        principal: str = Depends(require_bearer),
-    ) -> list[OptimizerCandidate]:
-        if state == "pending":
-            gate_clause = (
-                "AND (data->>'promotion_gate') "
-                "IN ('human_gated', 'auto_with_threshold')"
-            )
-        elif state == "rejected":
-            gate_clause = "AND (data->>'promotion_gate') = 'rejected'"
-        else:
-            gate_clause = ""
-
-        async with deps.descriptor_registry.pg.acquire() as conn:
-            rows = await conn.fetch(
-                f"""
-                SELECT id, data, produced_at
-                  FROM analyst_outputs
-                 WHERE kind = 'prompt_module_candidate'
-                       {gate_clause}
-                 ORDER BY produced_at DESC
-                 LIMIT 500
-                """
-            )
-
-        out: list[OptimizerCandidate] = []
-        for r in rows:
-            raw = r["data"]
-            if isinstance(raw, str):
-                raw = json.loads(raw)
-            data: dict[str, Any] = dict(raw) if raw else {}
-            gate = str(data.get("promotion_gate", "human_gated"))
-            row_state: Literal["pending", "rejected"] = (
-                "rejected" if gate == "rejected" else "pending"
-            )
-            tw = data.get("temporal_workflow_id")
-            # Real workflow method. The persisted row's `data` column IS the
-            # PromptModuleCandidatePayload dump, whose free-form `data` bag
-            # carries `method` (top-level) + `diagnostics.method` (the optimizer
-            # now stamps both from workflow_result.diagnostics['method']).
-            # Resolution: bag.method → bag.diagnostics.method → 'unknown'.
-            inner = data.get("data") if isinstance(data.get("data"), dict) else {}
-            method = inner.get("method")
-            if not method:
-                diag = inner.get("diagnostics")
-                if isinstance(diag, dict):
-                    method = diag.get("method")
-            method = str(method or "unknown")
-            out.append(OptimizerCandidate(
-                id=str(r["id"]),
-                analyst_id=str(data.get("analyst_id", "")),
-                analyst_version=str(data.get("analyst_version", "")),
-                parent_prompt_module_path=str(
-                    data.get("parent_prompt_module_path", ""),
-                ),
-                eval_score=float(data.get("eval_score", 0.0)),
-                eval_score_delta=float(data.get("eval_score_delta", 0.0)),
-                training_set_size=int(data.get("training_set_size", 0)),
-                gepa_generation=int(data.get("gepa_generation", 0)),
-                promotion_gate=gate,
-                state=row_state,
-                temporal_workflow_id=str(tw) if tw else None,
-                produced_at=r["produced_at"],
-                method=method,
-            ))
-        return out
-
-    @router.get(
-        "/optimizer/candidates/{candidate_id}/diff",
-        response_model=PromptModuleDiff,
-    )
-    async def optimizer_candidate_diff(
-        candidate_id: str,
-        _principal: str = Depends(require_bearer),
-    ) -> PromptModuleDiff:
-        """Current-vs-candidate prompt-module diff for one queued candidate.
-
-        Built ENTIRELY from substrate (the persisted candidate row +, when
-        present, the analyst's live promoted-prompt row). This route MUST NOT
-        import the prompt module or dspy — the parent text is read from the
-        ``parent_prompt_module_text`` snapshot the optimizer captured at
-        compile time. ``current_text`` resolution:
-
-          1. the analyst's live promoted candidate text (newest
-             ``promotion_gate='promoted'`` row) if one exists — what the
-             candidate would actually replace today; else
-          2. this candidate's own ``parent_prompt_module_text`` snapshot — the
-             baseline its ``eval_score_delta`` was measured against; else
-          3. empty string (rows written before the snapshot field existed —
-             the UI still renders the candidate side + a degraded note).
-
-        404 when the candidate id is unknown / not a candidate row.
-        """
-        try:
-            cid = UUID(candidate_id)
-        except (ValueError, AttributeError):
-            raise HTTPException(status_code=404, detail="unknown candidate")
-
-        async with deps.descriptor_registry.pg.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT id, data
-                  FROM analyst_outputs
-                 WHERE id = $1 AND kind = 'prompt_module_candidate'
-                """,
-                cid,
-            )
-            if row is None:
-                raise HTTPException(status_code=404, detail="unknown candidate")
-
-            raw = row["data"]
-            if isinstance(raw, str):
-                raw = json.loads(raw)
-            payload: dict[str, Any] = dict(raw) if raw else {}
-
-            analyst_id = str(payload.get("analyst_id", ""))
-            parent_path = str(payload.get("parent_prompt_module_path", ""))
-            candidate_text = str(payload.get("candidate_prompt_module_text", ""))
-            snapshot = str(payload.get("parent_prompt_module_text", "") or "")
-
-            # Live promoted-prompt override — pure substrate read (no dspy
-            # import). When a previously-promoted candidate is the analyst's
-            # live prompt, diff against THAT (what this candidate would replace
-            # today); otherwise fall back to this candidate's own parent
-            # snapshot (the baseline its delta was measured against).
-            current_text = snapshot
-            if analyst_id:
-                promoted = await conn.fetchrow(
-                    """
-                    SELECT data->>'candidate_prompt_module_text' AS text
-                      FROM analyst_outputs
-                     WHERE kind = 'prompt_module_candidate'
-                       AND data->>'analyst_id' = $1
-                       AND data->>'promotion_gate' = 'promoted'
-                     ORDER BY created_at DESC
-                     LIMIT 1
-                    """,
-                    analyst_id,
-                )
-                if promoted and promoted["text"]:
-                    current_text = str(promoted["text"])
-
-        try:
-            candidate_module_path = _candidate_target_path(payload)
-        except ValueError:
-            candidate_module_path = parent_path
-
-        return PromptModuleDiff(
-            candidate_id=str(row["id"]),
-            analyst_id=analyst_id,
-            current_module_path=parent_path,
-            candidate_module_path=candidate_module_path,
-            current_text=current_text,
-            candidate_text=candidate_text,
-            eval_score=float(payload.get("eval_score", 0.0)),
-            eval_score_delta=float(payload.get("eval_score_delta", 0.0)),
-        )
-
-    @router.post(
-        "/optimizer/candidates/{candidate_id}/review",
-        response_model=OptimizerReviewResult,
-    )
-    async def review_optimizer_candidate(
-        candidate_id: str,
-        body: OptimizerReviewBody,
-        _principal: str = Depends(require_bearer),
-    ) -> OptimizerReviewResult:
-        """Promote or reject one queued optimizer candidate.
-
-        See ``_apply_optimizer_review`` for the descriptor-lifecycle
-        contract.  Promote flips the parent analyst's
-        ``method.prompt_module`` via the registry's ``update()`` (which
-        mints a new content-hash version + writes a signed audit row +
-        emits the ``descriptor.updated.analyst.<id>`` event).  Reject
-        only flips the candidate's ``promotion_gate`` JSONB field and
-        writes one audit row tagged ``optimizer_reject``.
-        """
-        return await _apply_optimizer_review(
-            deps, candidate_id=candidate_id, body=body,
-        )
+    # X2-B2 — the optimizer-candidate queue (list / diff / review) moved to the
+    # leaf ``optimizer_review_api``; declared on THIS router HERE, at the
+    # position the three routes were declared, so the route order is unchanged.
+    register_optimizer_review_routes(router, deps)
+    # X4 ALERTS — pushes per topic and kind (`/system/alerts/volume`).
+    register_alert_volume_routes(router, deps)
+    # L-1 — the alert log (`/system/alerts/log`): the Watch surface's data.
+    register_alert_log_routes(router, deps)
 
     @router.get("/streams/consumer_lag", response_model=list[ConsumerLagRow])
     async def streams_consumer_lag(
@@ -1675,27 +1290,13 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
         up per analyst into latest/mean/trend/axis-means.
         """
         async with deps.descriptor_registry.pg.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT id::text AS id,
-                       data->>'analyzed_analyst_id'      AS analyst_id,
-                       data->>'analyzed_analyst_version' AS analyst_version,
-                       COALESCE(data->'scores', '{}'::jsonb) AS scores,
-                       COALESCE((data->>'overall_score')::float8, 0.0) AS overall_score,
-                       created_at AS produced_at,
-                       -- M-2: the population split key, so the UI's per-analyst
-                       -- means and trends never span a judge swap unlabelled.
-                       data->'data'->'verification'->>'judge_pipeline_version'
-                           AS judge_pipeline_version
-                  FROM public.analyst_outputs
-                 WHERE kind = 'critique'
-                   AND data->>'analyzed_analyst_id' IS NOT NULL
-                   AND ($1::text IS NULL OR data->>'analyzed_analyst_id' = $1)
-                 ORDER BY created_at DESC
-                 LIMIT $2
-                """,
-                analyst_id, limit,
-            )
+            # P-4: two bounded reads, same rows (see _SCORECARD_SQL).
+            if analyst_id is None:
+                rows = await conn.fetch(_SCORECARD_SQL, limit)
+            else:
+                rows = await conn.fetch(
+                    _SCORECARD_FOR_ANALYST_SQL, analyst_id, limit,
+                )
         out: list[ScorecardRow] = []
         for r in rows:
             raw = r["scores"]
@@ -1718,7 +1319,7 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
                         if hasattr(produced, "isoformat")
                         else str(produced)
                     ),
-                    judge_pipeline_version=r["judge_pipeline_version"],
+                    judge_pipeline_version=r["judge_pipeline_version"], score_state=r["score_state"],
                 )
             )
         return out
@@ -1782,13 +1383,10 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
         bss = data.get("brier_skill_score")
         ready = bool(data.get("forecast_acute_ready"))
         degenerate = bool(data.get("forecast_acute_degenerate"))
-        # The forecast leg counts as PROVEN only if it is ready, non-degenerate,
-        # and has earned positive skill (mirrors get_calibration ~2128).
-        forecast_proven = (
-            ready and not degenerate and isinstance(bss, (int, float)) and bss > 0.0
-        )
-        exo_n = data.get("exogenous_sample_size")
-        calibration_thin = not isinstance(exo_n, int) or exo_n < 5
+        # ONE shared reduction (calibration_honesty, a stdlib leaf — slim-safe),
+        # identical to SubstrateQueryPort.get_calibration.
+        red = reduce_calibration(data)
+        exo_n = red["exogenous_sample_size"]
         produced = row["produced_at"]
 
         def _int_or_none(v: Any) -> int | None:
@@ -1801,12 +1399,25 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
                 if hasattr(produced, "isoformat")
                 else str(produced)
             ),
-            brier=data.get("brier"),
-            brier_exogenous=data.get("brier_exogenous"),
+            brier=red["brier_exogenous"],
+            brier_exogenous=red["brier_exogenous"],
             exogenous_sample_size=_int_or_none(exo_n),
-            sample_size=_int_or_none(data.get("sample_size")),
-            insufficient_exogenous=data.get("insufficient_exogenous"),
-            self_consistency_only=data.get("self_consistency_only"),
+            brier_pooled=red["brier_pooled"],
+            pooled_sample_size=_int_or_none(red["pooled_sample_size"]),
+            insufficient_exogenous=red["insufficient_exogenous"],
+            self_consistency_only=red["self_consistency_only"],
+            label=red["label"],
+            ledger_note=red["ledger_note"],
+            legacy_finding_format=red["legacy_finding_format"],
+            withheld_reason=red.get("withheld_reason"),
+            stale=red["stale"],
+            newest_member_at=red["newest_member_at"],
+            stale_after_days=red["stale_after_days"],
+            hypothesis_confidence_signed_from=red["hypothesis_confidence_signed_from"],
+            collection_volume_sample_size=_int_or_none(
+                red["collection_volume_sample_size"]
+            ),
+            populations=red["populations"],
             brier_forecast_acute=data.get("brier_forecast_acute"),
             brier_skill_score=bss if isinstance(bss, (int, float)) else None,
             forecast_acute_sample_size=_int_or_none(
@@ -1815,8 +1426,8 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
             forecast_acute_ready=ready,
             forecast_acute_degenerate=degenerate,
             forecast_acute_status=data.get("forecast_acute_status"),
-            forecast_unproven=not forecast_proven,
-            calibration_thin=calibration_thin,
+            forecast_unproven=red["forecast_unproven"],
+            calibration_thin=red["calibration_thin"],
             refs=[str(row["id"])],
             band_calibration=band_calibration,
         )
@@ -2098,20 +1709,20 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
             rows=out,
         )
 
+    @router.get("/eval/subject_scorecard", response_model=list[CountryScorecard])
     @router.get("/eval/country_scorecard", response_model=list[CountryScorecard])
     async def eval_country_scorecard(
         target_id: str | None = Query(default=None),
         principal: str = Depends(require_bearer),
     ) -> list[CountryScorecard]:
-        """The latest P4-T2 banded scorecard per active G20 country (or one, when
-        ``target_id`` is given).
-
-        Reads the freshest live-head ``kind='scorecard'`` row per country and
-        PROJECTS its persisted ``data.bands`` — no re-banding, no
-        scorecard_banding / deterministic import (the ``eval_calibration`` /
-        ``journal_api._read_calibration`` slim precedent), so the registry image
-        stays slim. The path is DELIBERATELY ``/eval/country_scorecard`` (NOT
-        ``/eval/scorecard``, which is the cross-analyst critic rollup).
+        """The latest P4-T2 banded scorecard per scored subject (or one, when
+        ``target_id`` is given). ONE handler, two paths (SPLIT-3):
+        ``/eval/subject_scorecard`` is canonical, ``/eval/country_scorecard``
+        its kept alias (the workstation calls it); NOT ``/eval/scorecard``,
+        the cross-analyst critic rollup. Reads the freshest live-head
+        ``kind='scorecard'`` row per subject and PROJECTS its persisted
+        ``data.bands`` — no re-banding, no scorecard_banding / deterministic
+        import (the ``journal_api._read_calibration`` slim precedent).
 
         Returns an empty list when no scorecard has been computed yet — a
         first-class honest state, NOT a 404. Each row's per-dimension bands carry
@@ -2119,14 +1730,13 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
         drills into the P1 evidence + signed lineage.
 
         B0-5 (audit W6) — each card also carries ``disagreements``: the
-        scorecard reconciled against the CURRENT ``country_composition`` head
-        (its ``data.data.citations[*].ref_id``/``source`` + its
-        ``derived_from`` lineage column). A row = a finding this scorecard
-        EXCLUDED from a dimension's basis that the composition nonetheless
-        uses; empty is the normal reconciled state. Fully defensive (the
-        ``system_escalations`` precedent): any failure in the reconciliation
-        queries degrades to ``disagreements: []`` at HTTP 200 — it never
-        breaks the scorecard read itself.
+        scorecard reconciled against the CURRENT head of the profile's subject
+        producer (``country_composition``; none declared ⇒ ``[]``): its
+        citations' ``ref_id``/``source`` and its ``derived_from`` lineage. A row
+        = a finding this scorecard EXCLUDED from a dimension's basis that the
+        composition nonetheless uses; empty is the normal reconciled state.
+        Fully defensive (the ``system_escalations`` precedent): any failure in
+        the reconciliation degrades to ``disagreements: []`` at HTTP 200.
         """
         async with deps.descriptor_registry.pg.acquire() as conn:
             rows = await conn.fetch(
@@ -2197,12 +1807,12 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
                                data
                           FROM public.analyst_outputs
                          WHERE kind = 'finding'
-                           AND analyst_id = 'country_composition'
+                           AND analyst_id = $2
                            AND superseded_by IS NULL
                            AND target_id = ANY($1::text[])
                          ORDER BY target_id, produced_at DESC, id DESC
                         """,
-                        targets,
+                        targets, _profile_constants.subject_producer(),
                     )
                     # Parse each head's LIVE-VERIFIED shapes: citations at
                     # data['data']['citations'] (ref_id + source = the producing

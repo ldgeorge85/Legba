@@ -28,6 +28,8 @@ const config: Config = {
           1: 'var(--surf-1)',
           2: 'var(--surf-2)',
           3: 'var(--surf-3)',
+          // L4 — the overlay surface (popover, tooltip, ⌘K, dialogs). UI-B1.
+          4: 'var(--surf-4)',
         },
         ink: {
           1: 'var(--ink-1)',
@@ -37,6 +39,8 @@ const config: Config = {
         line: {
           DEFAULT: 'var(--line-1)',
           strong: 'var(--line-2)',
+          // Intra-panel row dividers, a step quieter than a section border.
+          subtle: 'var(--line-0)',
         },
         // ── THE THREE CHANNELS (UI_HOLISTIC_DESIGN_2026-08-24 §5.2) ─────────
         // "One meaning, one channel, one ramp." These MIRROR the `--sev-*` /
@@ -53,10 +57,13 @@ const config: Config = {
         // CHANNEL C · SYSTEM STATE — ops surfaces only. The ONLY place ok-green
         // is allowed to mean "nothing is wrong".
         accent: {
-          critical: '#f85149',
-          warning: '#d29922',
-          info: '#3b82f6',
-          ok: '#3fb950',
+          critical: '#f2694d',
+          warning: '#e2a43c',
+          info: '#9dbacb',
+          ok: '#5cbf8e',
+          // The focus ring / active outline (`--accent-emphasis`). A var, so it
+          // flips with the theme; it takes no opacity modifier.
+          emphasis: 'var(--accent-emphasis)',
         },
         // CHANNEL A · SEVERITY — the only WARM ramp in the product (§5.2/§5.3).
         // Was the neon v4 ramp (#ff5555/#ff9955/#ffdd55/#55ff55, UI_V4_PLAN
@@ -66,21 +73,24 @@ const config: Config = {
         // redundant here (SeverityBadge/ProvenanceBadge carry meaning in icon
         // shape + text label), which is what makes a ramp re-key safe.
         severity: {
-          critical: '#f85149',
-          high: '#db6d28',
-          medium: '#d29922',
-          low: '#6e7681',
-          info: '#4493f8',
+          critical: '#f2694d',
+          high: '#e8843f',
+          medium: '#e2a43c',
+          low: '#7d8890',
+          info: '#9dbacb',
         },
         // CHANNEL B · CONFIDENCE — one hue, sequential, + a "no data" neutral.
         // Never red/amber/green: low confidence is not danger, high confidence
         // is not "ok" (§5.1's exact confusion).
         confidence: {
-          high: '#79c0ff',
-          moderate: '#4493f8',
-          low: '#1f6feb',
-          unassessed: '#30363d',
+          high: '#b4d0df',
+          moderate: '#86aabf',
+          low: '#5d8299',
+          unassessed: '#2a343b',
         },
+        // THE ONE ACCENT (U-2; 04 §1) — chart magenta, `--point` in
+        // globals.css: the reader's point and Consult's actions, nothing else.
+        point: '#ec6fa9',
       },
       // Typographic scale (Wave 3 Move 5) — replaces the ad-hoc
       // text-[10px]/text-[11px] sprawl with three named tiers. Base font is
@@ -92,13 +102,30 @@ const config: Config = {
         label: ['0.75rem', { lineHeight: '1.1rem' }], // 12px — keys, chips, meta
         body: ['0.8125rem', { lineHeight: '1.2rem' }], // 13px — field values, cells, rows
         'body-lg': ['0.875rem', { lineHeight: '1.35rem' }], // 14px — emphasised body
-        heading: ['0.9375rem', { lineHeight: '1.35rem' }], // 15px — panel titles
-        'heading-lg': ['1.0625rem', { lineHeight: '1.5rem' }], // 17px — section titles
+        // U-2 (04 §1): the scale is 12 · 13 · 14 · 16 · 20 · 28, and 12 is the
+        // floor on the shell and the reader surfaces.
+        heading: ['1rem', { lineHeight: '1.4rem' }], // 16px — a statement in a list, panel titles
+        'heading-lg': ['1.25rem', { lineHeight: '1.6rem' }], // 20px — a surface title
+        display: ['1.75rem', { lineHeight: '2.1rem' }], // 28px — a subject's name, a headline figure
+      },
+      // Mono for identity (ids, hashes, timestamps, ratios), sans for prose —
+      // both read the tokens in globals.css (UI_HOLISTIC_DESIGN §5.4 change 7).
+      fontFamily: {
+        sans: ['var(--font-ui)'],
+        mono: ['var(--font-mono)'],
+        serif: ['var(--font-serif)'],
+      },
+      // Two radii and nothing above 6px (§5.3 SHAPE).
+      borderRadius: {
+        control: 'var(--radius-control)',
+        panel: 'var(--radius-panel)',
       },
       // 8pt spacing scale (Wave 3 Move 5). Named steps on an 8px grid so panel
       // padding/gaps use a scale, not arbitrary values. `density.*` aliases the
       // CSS-var-driven steps so a panel can also follow the active density mode.
       spacing: {
+        // The pinned row height (`h-row`, `min-h-row`) — retuned by density.
+        row: 'var(--row-h)',
         density: 'var(--density-pad)',
         'density-gap': 'var(--density-gap)',
         'density-row': 'var(--density-row)',

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "action_pack:research": {
+      "source": "action_pack_research.yaml",
+      "state": "active"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:region_indo_pacific": {
+      "source": "target_region_indo_pacific.yaml",
+      "state": "active"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.ecb.deposit_rate_daily": {
+      "source": "source_ecb_deposit_rate_daily.yaml",
+      "state": "draft"
+    }
+  }
+}

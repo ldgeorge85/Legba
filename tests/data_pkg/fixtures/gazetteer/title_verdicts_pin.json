@@ -1,0 +1,1201 @@
+{
+ "_about": "CANON-1 verdict-parity fixture: 50 live signal titles (public headlines, read-only SELECT 2026-10-04: 15 source.gdelt.files CAMEO codings, 25 officeholder-shaped titles, 10 colon titles) with the verdicts the PIN fcbafb2e computed through _CAMEO_TITLE_RE, the machine-structured row screen, the officeholder extractor, the stale-leader guard, the cross-target leak guard (four desks) and the V-B claim-scope resolver.",
+ "pin": "fcbafb2e",
+ "rows": [
+  {
+   "sample": "gdelt",
+   "source_id": "source.gdelt.files",
+   "title": "CHINA <-> LIBERATION ARMY: fight in Zhongping, Jilin, China",
+   "verdicts": {
+    "cameo_title": true,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": true,
+     "country_g20_us": true,
+     "country_watch_ua": true
+    },
+    "machine_structured": true,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "china",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "gdelt",
+   "source_id": "source.gdelt.files",
+   "title": "CHINA <-> LIBERATION ARMY: fight in He Qing, Guangdong, China",
+   "verdicts": {
+    "cameo_title": true,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": true,
+     "country_g20_us": true,
+     "country_watch_ua": true
+    },
+    "machine_structured": true,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "china",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "gdelt",
+   "source_id": "source.gdelt.files",
+   "title": "SYRIAN: assault in Syria",
+   "verdicts": {
+    "cameo_title": true,
+    "cross_target_leak": {
+     "country_g20_cn": true,
+     "country_g20_de": true,
+     "country_g20_us": true,
+     "country_watch_ua": true
+    },
+    "machine_structured": true,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "syria",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "gdelt",
+   "source_id": "source.gdelt.files",
+   "title": "POLICE <-> NORTH WEST: fight in Ghazab, Balochistan, Pakistan",
+   "verdicts": {
+    "cameo_title": true,
+    "cross_target_leak": {
+     "country_g20_cn": true,
+     "country_g20_de": true,
+     "country_g20_us": true,
+     "country_watch_ua": true
+    },
+    "machine_structured": true,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "pakistan",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "gdelt",
+   "source_id": "source.gdelt.files",
+   "title": "DHAKA <-> AIRLINE: coerce in Dubai, Dubayy, United Arab Emirates",
+   "verdicts": {
+    "cameo_title": true,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": true,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "u.s.",
+     "united arab emirates",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "gdelt",
+   "source_id": "source.gdelt.files",
+   "title": "PRISONER: coerce",
+   "verdicts": {
+    "cameo_title": true,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": true,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "gdelt",
+   "source_id": "source.gdelt.files",
+   "title": "POLICE <-> CHICAGO: fight in Chicago, Illinois, United States",
+   "verdicts": {
+    "cameo_title": true,
+    "cross_target_leak": {
+     "country_g20_cn": true,
+     "country_g20_de": true,
+     "country_g20_us": false,
+     "country_watch_ua": true
+    },
+    "machine_structured": true,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "gdelt",
+   "source_id": "source.gdelt.files",
+   "title": "POLICE <-> HOSPITAL: assault",
+   "verdicts": {
+    "cameo_title": true,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": true,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "gdelt",
+   "source_id": "source.gdelt.files",
+   "title": "AUSTRALIA <-> TEL AVIV: fight in Melbourne, Victoria, Australia",
+   "verdicts": {
+    "cameo_title": true,
+    "cross_target_leak": {
+     "country_g20_cn": true,
+     "country_g20_de": true,
+     "country_g20_us": true,
+     "country_watch_ua": true
+    },
+    "machine_structured": true,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "australia",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "gdelt",
+   "source_id": "source.gdelt.files",
+   "title": "EMBASSY: fight in Athens, AttikíR, Greece",
+   "verdicts": {
+    "cameo_title": true,
+    "cross_target_leak": {
+     "country_g20_cn": true,
+     "country_g20_de": true,
+     "country_g20_us": true,
+     "country_watch_ua": true
+    },
+    "machine_structured": true,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "greece",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "gdelt",
+   "source_id": "source.gdelt.files",
+   "title": "DETECTIVE <-> GOVERNMENT OFFICIAL: coerce",
+   "verdicts": {
+    "cameo_title": true,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": true,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "gdelt",
+   "source_id": "source.gdelt.files",
+   "title": "INVESTOR: assault in Australia",
+   "verdicts": {
+    "cameo_title": true,
+    "cross_target_leak": {
+     "country_g20_cn": true,
+     "country_g20_de": true,
+     "country_g20_us": true,
+     "country_watch_ua": true
+    },
+    "machine_structured": true,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "australia",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "gdelt",
+   "source_id": "source.gdelt.files",
+   "title": "BUDDHIST MONK: coerce in Sri Lanka",
+   "verdicts": {
+    "cameo_title": true,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": true,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "sri lanka",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "gdelt",
+   "source_id": "source.gdelt.files",
+   "title": "KOLKATA: assault in Taltala, West Bengal, India",
+   "verdicts": {
+    "cameo_title": true,
+    "cross_target_leak": {
+     "country_g20_cn": true,
+     "country_g20_de": true,
+     "country_g20_us": true,
+     "country_watch_ua": true
+    },
+    "machine_structured": true,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "india",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "gdelt",
+   "source_id": "source.gdelt.files",
+   "title": "ITHACA <-> COLLEGE: assault in Alexandria, Al Iskandariyah, Egypt",
+   "verdicts": {
+    "cameo_title": true,
+    "cross_target_leak": {
+     "country_g20_cn": true,
+     "country_g20_de": true,
+     "country_g20_us": true,
+     "country_watch_ua": true
+    },
+    "machine_structured": true,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "egypt",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.france24.english",
+   "title": "Russian strike hits Kyiv amid Chancellor Merz visit",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": true,
+     "country_g20_de": true,
+     "country_g20_us": true,
+     "country_watch_ua": true
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "russia",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.anadolu.english",
+   "title": "German Chancellor Merz arrives in Ukraine for unannounced visit",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": true,
+     "country_g20_de": false,
+     "country_g20_us": true,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "germany",
+     "u.s.",
+     "ukraine",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.aljazeera.world",
+   "title": "Fury to invite US President Trump to lead ring walk before Joshua fight",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [
+     [
+      "president",
+      "Trump",
+      "US",
+      [
+       "united states",
+       "united states of america",
+       "america",
+       "usa"
+      ]
+     ]
+    ],
+    "slice_scope": [
+     "america",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.kyivindependent.news",
+   "title": "German Chancellor Merz arrives in Kyiv, pledges further support for Ukraine",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": true,
+     "country_g20_de": false,
+     "country_g20_us": true,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "germany",
+     "u.s.",
+     "ukraine",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.japantimes.news",
+   "title": "Latvian Prime Minister Andris Kulbergs wins election held under shadow of Ukraine war",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": true,
+     "country_g20_de": true,
+     "country_g20_us": true,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "latvia",
+     "u.s.",
+     "ukraine",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.anadolu.english",
+   "title": "Trump praises Turkish President Erdogan when pressed on delay in lifting sanctions on Ankara",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": true,
+     "country_g20_de": true,
+     "country_g20_us": true,
+     "country_watch_ua": true
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "turkey",
+     "turkiye",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.anadolu.english",
+   "title": "Swiss President Guy Parmelin to step down at end of 2026",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "switzerland",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.anadolu.english",
+   "title": "UK's Manchester City formally appeals guilty verdict in Premier League financial case",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "u.s.",
+     "uk",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.lemonde.english",
+   "title": "Swiss President Guy Parmelin to leave government at end of 2026",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "switzerland",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.euronews.news",
+   "title": "Switzerland's President Guy Parmelin says he will quit government at end of year",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "switzerland",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.cna.all",
+   "title": "Man City appeal Premier League financial ruling",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.cna.all",
+   "title": "Man City confirm appeal after Premier League charges verdict",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.meduza.english",
+   "title": "German retailer Globus stayed in Russia after the full-scale invasion. Now its Russian arm has put former German Chancellor Gerhard Schröder on its supervisory board.",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": true,
+     "country_g20_de": false,
+     "country_g20_us": true,
+     "country_watch_ua": true
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "germany",
+     "russia",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.jpost.frontpage",
+   "title": "Indian flydubai pilot who opened cockpit door shares story with Prime Minister Narendra Modi",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": true,
+     "country_g20_de": true,
+     "country_g20_us": true,
+     "country_watch_ua": true
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "india",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.gcaptain.all",
+   "title": "Premier Alliance Prepares for Asia-N Europe Services Return to Suez",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.batimes.news",
+   "title": "Reports: US Vice-President JD Vance to visit Argentina in November",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": true,
+     "country_g20_de": true,
+     "country_g20_us": false,
+     "country_watch_ua": true
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "argentina",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.theloadstar.news",
+   "title": "Premier Alliance prepares for Asia-N Europe services return to Suez",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.jpost.frontpage",
+   "title": "Iran will 'never' shy away from dialogue with US, says Iranian President Pezeshkian",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": true,
+     "country_g20_de": true,
+     "country_g20_us": false,
+     "country_watch_ua": true
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "iran",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.antara.english",
+   "title": "President Prabowo swears in Suyudi Ario Seto as new police chief",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.splash247.news",
+   "title": "Premier Alliance joins accelerating return to Suez",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.cna.all",
+   "title": "President Prabowo replaces Indonesia police chief Listyo Sigit with narcotics agency head",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": true,
+     "country_g20_de": true,
+     "country_g20_us": true,
+     "country_watch_ua": true
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "indonesia",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.lemonde.english",
+   "title": "Argentinian President Javier Milei seeks investors to support a struggling economy",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.aawsat.english",
+   "title": "Etihad to Seek Legal Advice After Premier League’s Man City Findings",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.cna.all",
+   "title": "Etihad to seek legal advice after Premier League’s Man City findings",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "office",
+   "source_id": "source.anadolu.english",
+   "title": "ECB President Lagarde signals possible departure months before term ends in 2027",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "other",
+   "source_id": "source.hindustantimes.world",
+   "title": "Trump's Ohio rally: How gas prices and AI data centres could shape November 2026 midterm elections",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "other",
+   "source_id": "source.hindustantimes.world",
+   "title": "Elon Musk backs SpaceXSI rebrand as Trump pushes ‘SI’ over ‘AI’: What it means for Grok",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "other",
+   "source_id": "source.aljazeera.world",
+   "title": "Somali president: Ethiopia can access our port, but must negotiate",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "ethiopia",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "other",
+   "source_id": "source.anadolu.english",
+   "title": "4 civilians killed in RSF drone strikes in Sudan’s South Kordofan: Medical group",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "sudan",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "other",
+   "source_id": "source.lemonde.english",
+   "title": "French high school protests: Up to 500 schools to be totally or partly closed Monday",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": true,
+     "country_g20_de": true,
+     "country_g20_us": true,
+     "country_watch_ua": true
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "france",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "other",
+   "source_id": "source.amap.news",
+   "title": "Tombouctou : L’Imam de la Mosquée Sankoré, Abderrahmane Ben Alhakoum Al Aquib Seyfou est décédé samedi",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "other",
+   "source_id": "source.amap.news",
+   "title": "Koutiala : des positions de groupes armés terroristes ciblées et frappées par les FAMa",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "other",
+   "source_id": "source.amap.news",
+   "title": "Koulikoro : La CANAM sensibilise les entreprises et les structures publiques à l’AMO et au RAMU",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "other",
+   "source_id": "source.lefaso.news",
+   "title": "Nécrologie : L'auteur de « L'Aventure ambiguë », Cheikh Hamidou Kane, est décédé",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  },
+  {
+   "sample": "other",
+   "source_id": "source.nws.active_alerts",
+   "title": "Flood Warning issued October 3 at 7:50PM CDT until October 5 at 8:00PM CDT by NWS Omaha/Valley NE",
+   "verdicts": {
+    "cameo_title": false,
+    "cross_target_leak": {
+     "country_g20_cn": false,
+     "country_g20_de": false,
+     "country_g20_us": false,
+     "country_watch_ua": false
+    },
+    "machine_structured": false,
+    "officeholder_claims": [],
+    "slice_scope": [
+     "america",
+     "u.s.",
+     "united states",
+     "usa"
+    ],
+    "stale_leader": 0
+   }
+  }
+ ]
+}

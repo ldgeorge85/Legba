@@ -32,7 +32,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from ..principals import handle_for_actor
 from .api import RegistryAPIDeps, require_bearer
+from .route_roles import recorded_author
 
 logger = logging.getLogger(__name__)
 
@@ -75,9 +77,10 @@ class RequirementOut(BaseModel):
 class DispositionUpdate(BaseModel):
     """The ONLY writable surface: advance status + optionally stamp who/why.
 
-    ``reviewed_by`` defaults to ``operator`` (the watchlist convention) — the
-    principal is the raw bearer token value when a token is configured, and a
-    secret must never be persisted into a data table.
+    ``reviewed_by`` defaults to ``operator`` (the watchlist convention), not
+    the bearer principal — that was the raw token value until W4 (it is now a
+    hashed ``bearer:<12 hex>`` label, which still names a credential, not a
+    reviewer), and a secret must never be persisted into a data table.
     """
 
     status: Literal["proposed", "reviewed", "registered", "dismissed"]
@@ -111,7 +114,8 @@ _GET_SQL = f"SELECT {_COLUMNS} FROM collection_requirements WHERE id = $1"
 _UPDATE_SQL = f"""
     UPDATE collection_requirements
        SET status = $2, reviewed_by = $3, reviewed_at = now(),
-           disposition_note = $4, updated_at = now()
+           disposition_note = $4, updated_at = now(),
+           written_by = legba_principal($5)
      WHERE id = $1
     RETURNING {_COLUMNS}
 """
@@ -229,8 +233,9 @@ def build_collection_requirements_router(deps: RegistryAPIDeps) -> APIRouter:
                 _UPDATE_SQL,
                 rid,
                 body.status,
-                body.reviewed_by.strip(),
+                recorded_author(principal, body.reviewed_by.strip()),
                 body.disposition_note,
+                handle_for_actor(principal),
             )
         if row is None:
             raise HTTPException(

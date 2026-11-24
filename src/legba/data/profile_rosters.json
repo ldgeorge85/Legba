@@ -1,0 +1,229 @@
+{
+  "_generated": "scripts/gen_profile_rosters.py from profiles/geopolitics/profile.yaml - do not edit by hand",
+  "profile": "geopolitics",
+  "schema": "legba/profile_rosters/2",
+  "scored_subject_tags": [
+    "g20",
+    "watch"
+  ],
+  "scored_units": [
+    "leadership_transition",
+    "energy_security",
+    "escalation",
+    "narrative_coordination",
+    "internal_stability",
+    "military_posture",
+    "economic_coercion"
+  ],
+  "subject_tags": [
+    "g20",
+    "watch",
+    "supply_chain"
+  ],
+  "unit_terms": {
+    "disruption_status": {
+      "query": "shipping traffic disruption closure transit flow",
+      "scope_tag": "supply_chain"
+    },
+    "economic_coercion": {
+      "query": "sanctions tariffs export controls trade restrictions",
+      "reference_queries": [
+        "{country} tariffs imposed imports",
+        "{country} sanctions export ban trade",
+        "{country} investment screening blocked deal",
+        "{country} IMF review forecast downgrade"
+      ],
+      "title": [
+        "sanction",
+        "tariff",
+        "embargo",
+        "export control",
+        "blacklist",
+        "asset freeze",
+        "coercion",
+        "boycott",
+        "trade ban",
+        "import ban"
+      ]
+    },
+    "energy_security": {
+      "query": "energy security oil gas electricity supply",
+      "reference_queries": [
+        "{country} gas supply pipeline outage",
+        "{country} electricity grid blackout capacity",
+        "{country} LNG contract export terminal",
+        "{country} fuel price cap subsidy decision"
+      ],
+      "title": [
+        "oil",
+        "gas",
+        "energy",
+        "chokepoint",
+        "refinery",
+        "pipeline",
+        "lng",
+        "crude",
+        "barrel",
+        "tanker",
+        "strait",
+        "blockade",
+        "power grid",
+        "electricity",
+        "fuel supply"
+      ]
+    },
+    "escalation": {
+      "query": "escalation risk military tension conflict",
+      "reference_queries": [
+        "{country} border incident troops clash",
+        "{country} strike attack casualties",
+        "{country} airspace violation intercepted",
+        "{country} summons ambassador protest diplomatic"
+      ],
+      "title": [
+        "escalat",
+        "strike",
+        "offensive",
+        "clash",
+        "shelling",
+        "missile",
+        "airstrike",
+        "air strike",
+        "war",
+        "militant",
+        "insurgen",
+        "attack",
+        "bombard",
+        "ceasefire",
+        "front line",
+        "frontline"
+      ]
+    },
+    "internal_stability": {
+      "query": "political stability protests unrest government crisis",
+      "reference_queries": [
+        "{country} protest thousands police",
+        "{country} strike union industrial action",
+        "{country} court ruling government challenge",
+        "{country} arrests crackdown opposition"
+      ],
+      "title": [
+        "protest",
+        "unrest",
+        "riot",
+        "crackdown",
+        "repression",
+        "coup",
+        "gang",
+        "civil disorder",
+        "curfew",
+        "detention",
+        "purge",
+        "state of emergency"
+      ]
+    },
+    "leadership_transition": {
+      "query": "leadership succession election cabinet resignation",
+      "reference_queries": [
+        "{country} cabinet reshuffle minister appointed",
+        "{country} prime minister resignation no-confidence vote",
+        "{country} election result coalition talks",
+        "{country} central bank governor appointed replaced"
+      ],
+      "title": [
+        "succession",
+        "election",
+        "leadership",
+        "transition",
+        "president",
+        "prime minister",
+        "resign",
+        "cabinet",
+        "handover",
+        "inaugurat",
+        "impeach",
+        "term limit",
+        "junta leader"
+      ]
+    },
+    "military_posture": {
+      "query": "military deployment forces exercise posture",
+      "reference_queries": [
+        "{country} defence spending budget announcement",
+        "{country} military exercise deployment",
+        "{country} arms purchase procurement contract",
+        "{country} troops deployed reinforcements"
+      ],
+      "title": [
+        "deployment",
+        "deploy",
+        "mobiliz",
+        "mobilis",
+        "exercise",
+        "drill",
+        "procurement",
+        "basing",
+        "buildup",
+        "build-up",
+        "posture",
+        "troop",
+        "naval",
+        "fleet",
+        "brigade",
+        "garrison",
+        "rearm"
+      ]
+    },
+    "narrative_coordination": {
+      "query": "state media propaganda disinformation narrative",
+      "reference_queries": [
+        "{country} foreign ministry statement condemns",
+        "{country} joint statement allies communique",
+        "{country} disinformation campaign attributed",
+        "{country} state media coordinated messaging"
+      ],
+      "title": [
+        "disinformation",
+        "propaganda",
+        "narrative",
+        "influence operation",
+        "bot network",
+        "coordinated messaging",
+        "information campaign"
+      ]
+    },
+    "proliferation_watch": {
+      "query": "nuclear weapons enrichment missile programme",
+      "reference_queries": [
+        "{country} IAEA inspection enrichment",
+        "{country} missile test launch",
+        "{country} nuclear programme agreement",
+        "{country} export controls dual-use technology"
+      ],
+      "scope_tag": "nuclear_watch",
+      "title": [
+        "nuclear",
+        "enrichment",
+        "uranium",
+        "warhead",
+        "iaea",
+        "safeguards",
+        "centrifuge",
+        "proliferation",
+        "weapons-grade",
+        "fissile"
+      ]
+    }
+  },
+  "units": [
+    "leadership_transition",
+    "energy_security",
+    "escalation",
+    "narrative_coordination",
+    "internal_stability",
+    "military_posture",
+    "economic_coercion",
+    "proliferation_watch",
+    "disruption_status"
+  ]
+}

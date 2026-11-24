@@ -50,6 +50,7 @@ from typing import Any, ClassVar, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .. import profile_constants as _profile_constants
 from ..sources._contract import Signal
 from ..stack.nlp_service import (
     NlpServiceAuthError,
@@ -116,14 +117,13 @@ class NERModelMissing(NERServiceUnconfigured):
 # English spaCy still recognises their proper nouns (measured live: fr/es/de
 # all extract), so translating them would burn NLLB calls for little gain.
 #
-# The set below is exactly the NLLB_LANG_CODES (legba-models/app/main.py)
-# whose script is non-Latin. Operators can extend it via
-# ``NERMultilingualConfig.translate_languages``.
+# The set is the instance profile's ``constants.translation_languages``
+# (SPLIT-3, ``profile_constants``); the exemplar declares exactly the
+# NLLB_LANG_CODES (legba-models/app/main.py) whose script is non-Latin.
+# Operators can extend it via ``NERMultilingualConfig.translate_languages``.
 # ---------------------------------------------------------------------------
 
-_NON_LATIN_TRANSLATE_LANGS: frozenset[str] = frozenset({
-    "ar", "fa", "he", "ru", "uk", "zh", "ja", "ko", "hi", "th", "ur",
-})
+_NON_LATIN_TRANSLATE_LANGS: frozenset[str] = frozenset(_profile_constants.translation_languages())
 
 # A Latin letter: ASCII + Latin-1 supplement/extended-A/B + extended additional.
 _LATIN_CHAR_RE = re.compile(r"[A-Za-zÀ-ɏḀ-ỿ]")

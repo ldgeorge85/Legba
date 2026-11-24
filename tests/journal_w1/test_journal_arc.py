@@ -965,6 +965,28 @@ async def test_empty_lens_still_empty_after_fallback_stays_honest():
 
 
 @pytest.mark.asyncio
+async def test_lens_row_stamps_its_declared_prior_header():
+    """W2 S-batch — a lens row's ``data`` carries ``lens_prior``: the one-line
+    header of the SAME declared-prior block the run echoed (lens_trend's
+    persona module), beside the existing ``lens_id``."""
+    binding = _FakeBinding(outputs={"get_calibration": {
+        "available": True, "forecast_unproven": True, "calibration_thin": True,
+    }})
+    scripted = ['{"done": true}', "field notes", "", ""]
+    deps = InlineTargetDeps(
+        llm=_ScriptedLLM(scripted), system_prompt="LENS", max_rounds=1,
+        agency_binding=binding,
+    )
+    result = await run_method([], _lens_options(binding), deps)
+    payload = result.finding
+    assert payload.entry_kind == "lens"
+    assert payload.data["lens_id"] == "lens_trend"
+    assert payload.data["lens_prior"] == (
+        "the Extrapolist; reads the slope, extends the line"
+    )
+
+
+@pytest.mark.asyncio
 async def test_empty_narrate_fallback_is_lens_only():
     """A non-VOICES tier (entry) with an empty NARRATE keeps its pre-existing
     honest empty body — the fallback never fires off the lens/lens_diff

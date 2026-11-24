@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.euronews.news": {
+      "source": "source_euronews.yaml",
+      "state": "draft"
+    }
+  }
+}

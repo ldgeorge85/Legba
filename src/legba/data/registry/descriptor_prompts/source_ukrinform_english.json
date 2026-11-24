@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.ukrinform.english": {
+      "source": "source_ukrinform_english.yaml",
+      "state": "active"
+    }
+  }
+}

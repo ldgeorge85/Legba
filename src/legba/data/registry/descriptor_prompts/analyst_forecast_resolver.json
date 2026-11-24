@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:forecast_resolver": {
+      "source": "analyst_forecast_resolver.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -50,7 +50,7 @@ WORKDIR /build
 # removed the genuinely fat ones (torch + spacy + sentence-
 # transformers).
 RUN pip install --prefix=/install \
-        "fastapi>=0.115" \
+        "fastapi==0.142.2" \
         "uvicorn[standard]>=0.32" \
         "pydantic>=2.0" \
         "asyncpg>=0.29" \
@@ -95,11 +95,15 @@ RUN pip install --prefix=/install \
         "aiohttp>=3.9" \
         "warcio>=1.7" \
         "aiobotocore>=2.7" \
+        # N-K: the evidence archive's at-rest codec (legba.data.archive_codec).
+        # Without it new objects are stored uncompressed (logged ERROR) and a
+        # zstd object raises on read — never a wrong body. BSD, ~5 MB wheel.
+        "zstandard>=0.22" \
         # telethon — the telegram_channel source kind (MTProto user-API).
         # ~13 MB + pyaes + rsa. Shipped so the Telegram source actor activates
         # without a separate image; the handler still lazy-imports it.
         "telethon>=1.36" \
-        "mcp>=1.0" \
+        "mcp>=1.0,<2" \
         # stix2 eagerly imported by legba.data.outputs.__init__
         # (analyst outputs flow through this module at runtime).
         "stix2>=3.0"
@@ -116,6 +120,22 @@ RUN pip install --prefix=/install \
 COPY pyproject.toml /build/pyproject.toml
 COPY src /build/src
 RUN pip install --prefix=/install --no-deps /build
+
+# W9 SPLIT-2 — the selected profile's prompt package (docs/PROFILES.md "Prompt
+# packages"; the geopolitics profile: legba_geopolitics, the six political-lean
+# lenses). profiles/ is not part of the wheel, so the build copies the
+# profile's prompts/ directory into site-packages beside `legba` and then
+# imports every module in it: an absent or broken package fails the BUILD,
+# never an analyst's first run. LEGBA_PROFILE names the profile directory
+# (docker-compose.yml passes ${LEGBA_PROFILE}; default: the reference profile).
+# docker/Dockerfile.registry carries the same step — the registry resolves
+# every descriptor's prompt_module at registration. Keep the two in lockstep.
+ARG LEGBA_PROFILE=profiles/geopolitics
+COPY ${LEGBA_PROFILE}/ /build/profile/
+RUN if [ -d /build/profile/prompts ]; then \
+      cp -r /build/profile/prompts/. /install/lib/python3.11/site-packages/ \
+      && PYTHONPATH=/install/lib/python3.11/site-packages python -c "import importlib, pkgutil; mods = [m.name for m in pkgutil.walk_packages(['/build/profile/prompts'])]; [importlib.import_module(m) for m in mods]; print('profile prompt modules:', ' '.join(mods) or 'none')"; \
+    else echo "profile ${LEGBA_PROFILE} declares no prompts/ directory"; fi
 
 # Strip bytecode caches + test SUITES from the installed packages.
 # Saves ~80-150 MB on the numpy/pandas test-suite tail. Bytecode regenerates

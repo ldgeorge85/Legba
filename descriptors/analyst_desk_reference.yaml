@@ -178,7 +178,7 @@ method:
     temperature: 1.0        # a reference is not a writer; reproducibility wins
     primary:
       factory_kind: stack_ref
-      raw: llm.judge.openrouter_mistral_large.openai_compat   # third family; Cerebras Gemma was the first pick, its key unfunded (HTTP 402) 2026-09-05
+      raw: llm.grader.innoai_lightning.openai_compat   # cutover 2026-10-23: the third family on the box (the OpenRouter Mistral lane is retired); Cerebras Gemma was the first pick, its key unfunded (HTTP 402) 2026-09-05
       expected_family: llm_provider
     # Output cap. The handler's own REFERENCE_MAX_TOKENS is the live control;
     # this is the hosted-endpoint safety net.

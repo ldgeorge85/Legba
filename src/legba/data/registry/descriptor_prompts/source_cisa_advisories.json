@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.cisa.advisories": {
+      "source": "source_cisa_advisories.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -1,0 +1,150 @@
+{
+  "_generated": "scripts/gen_profile_constants.py from profiles/geopolitics/profile.yaml - do not edit by hand",
+  "adjacency": [
+    [
+      "land_border",
+      [
+        [
+          "AR",
+          "BR"
+        ],
+        [
+          "CA",
+          "US"
+        ],
+        [
+          "MX",
+          "US"
+        ],
+        [
+          "DE",
+          "FR"
+        ],
+        [
+          "FR",
+          "IT"
+        ],
+        [
+          "CN",
+          "RU"
+        ],
+        [
+          "CN",
+          "IN"
+        ],
+        [
+          "CN",
+          "KP"
+        ],
+        [
+          "CN",
+          "PK"
+        ],
+        [
+          "CN",
+          "MM"
+        ],
+        [
+          "IN",
+          "PK"
+        ],
+        [
+          "IN",
+          "MM"
+        ],
+        [
+          "RU",
+          "UA"
+        ],
+        [
+          "RU",
+          "KP"
+        ],
+        [
+          "KR",
+          "KP"
+        ],
+        [
+          "IR",
+          "TR"
+        ],
+        [
+          "IR",
+          "PK"
+        ],
+        [
+          "ML",
+          "BF"
+        ],
+        [
+          "ML",
+          "NE"
+        ],
+        [
+          "BF",
+          "NE"
+        ]
+      ]
+    ]
+  ],
+  "anchor_class": "country",
+  "applicability_tags": [
+    "nuclear_watch",
+    "conflict_active",
+    "sanctions_regime"
+  ],
+  "audit_tier_producers": [
+    "world_assessor",
+    "escalation_composition",
+    "world_assessment",
+    "country_composition"
+  ],
+  "auto_merge_class": "country",
+  "desk_tiers": [
+    [
+      "world_assessor",
+      "world"
+    ],
+    [
+      "country_composition",
+      "country"
+    ],
+    [
+      "region_composition",
+      "region"
+    ],
+    [
+      "escalation_composition",
+      "thematic"
+    ],
+    [
+      "world_assessment",
+      "voice"
+    ],
+    [
+      "country_assessment",
+      "voice"
+    ]
+  ],
+  "profile": "geopolitics",
+  "reference_subject_tags": [
+    "supply_chain"
+  ],
+  "schema": "legba/profile_constants/1",
+  "subject_frame": "country",
+  "subject_producer": "country_composition",
+  "top_floor": "world_assessor",
+  "translation_languages": [
+    "ar",
+    "fa",
+    "he",
+    "ru",
+    "uk",
+    "zh",
+    "ja",
+    "ko",
+    "hi",
+    "th",
+    "ur"
+  ]
+}

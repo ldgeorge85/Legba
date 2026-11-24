@@ -128,10 +128,12 @@ signal route to many targets.
 
 **situation** — A first-class durable temporal frame grouping related
 signals/findings into an ongoing state of affairs, keyed by a
-`situation_signature` and detected bottom-up. It is how a temporal grouping
-is expressed in the product: an `events` table exists as a pure leaf, every
-write flag-gated and nothing reading it, so a situation — not an event — is
-what a desk reasons over. The situation write path has known maturity gaps.
+`situation_signature` and detected bottom-up. A situation tracks
+**events** (bounded occurrences in the `events` table, linked through
+`situation_event_links`); events are written by the event clustering and
+reconciling analysts and read by `/v3/events`, the timeline, the graph
+projection, unit grounding (the OPEN EVENTS block) and Consult. The situation
+write path has known maturity gaps.
 
 **source** — A declared connector that acquires observations — either by
 polling a feed on a cadence or by receiving a webhook push — enriches each
@@ -272,8 +274,9 @@ Google's tiny Python-like config language) evaluating the fine-grained
 narrowed the candidates. Each evaluation is capped at ~5ms and fails closed.
 
 **substrate** — The persistent state layer holding all signals, facts,
-entities, relations, situations, and outputs: **Postgres + Apache AGE**
-(relational + entity graph), **Qdrant** (vectors), **Redis** (hot cache), and
+entities, relations, situations, and outputs: **Postgres** (relational,
+including the entity graph; there is no separate graph database), **Qdrant**
+(vectors), **OpenSearch** (full-text recall), **Redis** (hot cache), and
 **NATS JetStream** (event bus + durable streams). It is the hand-off point
 between otherwise-decoupled actors.
 
@@ -282,6 +285,12 @@ happens, kept strictly apart as a cost firewall. Tier 1 is inline, at-ingest,
 per-signal, deterministic (**baseline enrichment**, no LLM); Tier 2 is the
 cadence/slice analysts that batch accumulated signals and *reason*, never
 per-signal — decoupling LLM cost from ingest volume.
+
+**type registry** — The one code registry of declared types
+(`src/legba/data/type_registry/`), one module per type in families such as
+principal kinds, citation targets, assertion types and alert kinds; a table that
+refers to a type stores its id, and the writer refuses an undeclared one. See
+[TYPES.md](TYPES.md) and [ADDING_A_TYPE.md](ADDING_A_TYPE.md).
 
 **worker actors / bounded fan-out** — A primary `AnalystActor` owns the
 cadence heartbeat and dispatches one run per matched target to
@@ -297,6 +306,16 @@ single `canonical_signal_id` via a `signal_aliases` table ("link, never
 collapse" — raw rows are kept for audit). A four-tier scheme escalates from
 exact content-hash/URL match to semantic similarity via Qdrant; the semantic
 tiers refuse loudly if their embedding/vector ports are absent.
+
+**citations as rows** — Since migration `20261115T1828_citations_as_rows`, a
+new finding's citations are also stored as rows beside its JSON citations, in
+the same transaction: one row per sentence (`finding_sentences`), one per
+"this sentence rests on that record" with the stored version it was read from
+(`citation_support`), one per marker that names nothing (`citation_unresolved`,
+logged, not refused), what the run was handed (`run_handed`) and the counts
+(`finding_citation_receipts`). Insert-only. The kinds a citation may name are
+the `citation_target` family of the **type registry**. See
+[DATA_MODEL.md](DATA_MODEL.md#citations-as-rows).
 
 **content-hashed identity** — A record's version *is* the hash of its content:
 descriptors and signals are identified by a body hash, so any change is
@@ -339,7 +358,7 @@ and records the disagreement in a sidecar so it surfaces honestly as
 system's **own substrate**: how often a source's claims ended on the winning
 side of resolved **contentions** (Beta-smoothed, Wilson-lower-bounded,
 corroboration-counted), written by the `source_track_record` analyst (ships
-draft). It is *earned*, not asserted — distinct from operator-authored
+draft). It is *earned*, not asserted — distinct from human-authored
 ratings — and guarded for acyclicity (a lag window plus self-exclusion, so a
 source can never vote on its own dispute). Consuming it in arbiter tie-breaks
 is flag-gated **off by default**, and it never touches faithfulness.
@@ -362,8 +381,10 @@ evidence today (a declared seam). The archiver ships as a draft descriptor.
 
 **fact** — An atomic, temporally-versioned assertion (subject, predicate,
 value) in the `facts` table with `valid_from` / `valid_until` and a
-`superseded_by` pointer, carrying a `source_type`
-(`ingestion` / `seed` / `curated` / `proposed`) and a confidence. An
+`superseded_by` pointer, carrying a `source_type` and a confidence. On live (2026-11-14) the
+rows are `ingestion` (extracted from signals, nearly all of them), `seed`,
+`agent` (an analyst's or Consult's proposal) and `manual`; the code also
+writes `curated`, `proposed`, `operator` and `backfill`. An
 ingestion fact carries the extractor's real per-relation score where there is
 one and a declared default where there is not; only **seed/curated** facts are
 used for grounding.
@@ -375,11 +396,24 @@ cluster (see **Q·C·R·F score**), and writes only the **contention sidecar** +
 markers. Its hard invariant: it **never** mutates a fact — disagreement is
 annotated, never adjudicated into the facts table.
 
+**fetch receipt (`fetch_versions`)** — The bytes a fetch actually received,
+kept content-addressed as a version sequence per canonical address: an
+identical re-fetch stores nothing new, a changed body is a new version, and
+every record parsed from a fetch is linked to its version. A later change to a
+cited page is recorded as drift and flags what relied on it.
+
+**graph projection (`graph_arcs`)** — A derived, disposable table that names
+every cross-layer join (mentions, entity edges, event membership, citations,
+supersessions) in one vocabulary, each arc tagged `world`, `evidence` or
+`lineage`, rebuilt whole by the `graph_projector` and never written back. Off by
+default (`LEGBA_GRAPH_PROJECTION`). There is no graph database: the empty
+Apache AGE graph was dropped in 2026-11.
+
 **grounding / grounding preamble** — At run time the GROUND phase prepends a
 dated "authoritative current context" preamble of currently-valid facts,
 nexuses, and situations from the substrate, correcting the LLM's stale
 training cutoff. Restricted to still-valid facts of **seed/curated**
-provenance only; all nine **bounded reasoning units** opt in. The Tier-2 vector
+provenance only; every **bounded reasoning unit** opts in. The Tier-2 vector
 `world_context` RAG source is a **guarded, measured pilot** on the
 `internal_stability` unit only — retrieved from a curated, re-embedded Qdrant
 corpus through the stack embedder port (bge-m3 1024-dim) with a focused
@@ -388,6 +422,15 @@ country-filtering, and degrade-not-drop. Its injected priors stay **non-citable*
 (fenced background, no `[N]` ids); `leadership_transition` RAG is **off** (rolled
 back); and a per-run **RAG rollback guard** (see **rag_watch**) reverts injection
 if faithfulness drops or token cost rises.
+
+**held record / statement (`assertions`)** — The tables in which the record
+holds what it has established over time, as versioned records with a
+hash-chained status log (held, not held, contested, superseded, withdrawn) and
+typed support links. In the database the family is `assertion`; on screen the
+checked kind is a "statement", and it becomes a "fact" only by a person's
+visible act (not built). Fed only from a desk's row-shaped shadow output behind
+`LEGBA_HELD_RECORD_SHADOW` (off by default); not shown to readers. See
+[DATA_MODEL.md](DATA_MODEL.md#the-held-record).
 
 **modality** — The medium of a signal — text, image, audio, video, structured,
 or binary — treated as a first-class axis from ingest onward. A modality
@@ -409,14 +452,30 @@ relationship row between two entities, carrying a relation type, a
 Nexuses feed signed-graph analysis; the sign is a polarity label, not a
 cryptographic signature.
 
+**origin / origin group** — An *origin* is one place content comes from (a
+source descriptor, a knowledge set, or a licence-ledger host); an *origin group*
+is the unit independence is meant to count, so two feeds of one publisher or two
+channels of one claimant are one group. Groups are derived by a recorded rule and
+an admin may correct one; every assignment is logged. Independence counting does
+not use them yet.
+
 **OutputKind** — The fourteen typed kinds an analyst can emit (finding,
 situation, hypothesis, prediction, alert, meta_finding, critique, fact, nexus,
 prompt-module candidate, **journal**, **scorecard**, situation_update,
 **event**); a registry maps each to its table, payload model, schema URI, and
-NATS subject. The **event** kind is a pure leaf — every write is flag-gated and
-nothing reads it yet. `analyst_outputs` is
+NATS subject. The **event** kind lands in the dedicated `events` table
+(writes gated by `LEGBA_EVENTS`) and is read by the event routes, the
+timeline, the graph projection and unit grounding. `analyst_outputs` is
 the generic table for kinds without a dedicated one; **journal** lands in its
 own `journal_entries` table off the fact/finding/nexus chain.
+
+**principal / `written_by`** — Who wrote a row: one `principals` row per writer,
+with an immutable handle `<kind>:<name>` (`user:`, `service:`, `agent:<analyst>@<version>`,
+`rule:<handler>`, or `shared:admin-token` for the shared credential). Tables that
+hold judgements, labels, decisions, descriptor versions or entered knowledge
+carry a `written_by` reference to it; rows written before it existed stay NULL
+rather than guessed. Distinct from where the content came from (an **origin**)
+and who speaks inside it (a claimant).
 
 **proposed_edges** — Provisional untyped candidate relationships inferred from
 entity co-mention, queued for a governance handler to promote into typed
@@ -428,7 +487,7 @@ cluster: **Q** quorum (distinct backing lineage) × **C** credibility share ×
 cluster; the score only ranks clusters for the **surfaced winner vs abstain**
 decision and never edits a fact.
 
-**read receipts (`read_events`)** — The append-only ledger of what an operator
+**read receipts (`read_events`)** — The append-only ledger of what a person
 actually read, written by a fail-silent client emitter at a handful of
 chokepoints and rolled up in the database. A malformed event is dropped and
 counted rather than failing its batch, and a failed batch is dropped rather
@@ -507,7 +566,7 @@ slice under the input-token budget (with a hard signal-count backstop); GROUND
 injects the grounding preamble between PLAN and REASON.
 
 **analyst kind / `method.kind`** — An open taxonomy (sixteen built-in kinds
-plus operator-registered extension kinds, which is how a kind is added without
+plus admin-registered extension kinds, which is how a kind is added without
 touching the enum) classifying what an analyst reads and
 writes (`inline_target`, `meta_findings_synthesizer`, `predictor`, `critic`,
 `consult_on_demand`, `deterministic`, …). `method.kind` names *how* it reasons
@@ -589,19 +648,19 @@ to surface the least-contradicted one. Built but unproven — it writes real
 rows but has no validated skill metric; cell scoring falls back to a lexical
 scorer when the token budget is exhausted.
 
-**consult / deep_consult** — On-demand analysts that answer operator questions
+**consult / deep_consult** — On-demand analysts that answer a person's questions
 over the substrate. `consult` runs a **ReAct** (reason-then-act) loop over
 governed read-only substrate tools, returning cited references and stated
 uncertainty; `deep_consult` schedules a longer plan → acquire → analyze →
 synthesize Dapr workflow and persists the result. Each request may pick which
-registered LLM plane answers — **Opus** (Anthropic, billed, the default; no
-selection preserves prior behavior) or **Core** (the free **self-hosted core**
-plane) — via a server-side allowlist that maps the friendly value to a
-component id (the client never names a component); the choice **fails closed**
-(a chosen plane that can't be honored raises rather than silently billing the
-default) and a provider outage surfaces as a graceful HTTP 503 naming the
-*other* plane. Anthropic is now reserved for consult/deep_consult only (the
-**journal** moved fully to the core plane). Production consult is governed
+registered LLM plane answers — **core** (the **self-hosted core** plane, the
+default when the request names none) or one of the billed hosted planes
+(`opus`, `fable`), each an explicit pick — via a server-side allowlist that maps
+the friendly value to a component id (the client never names a component); the
+choice **fails closed** (a chosen plane that can't be honored raises rather than
+silently falling back) and a provider outage surfaces as a graceful HTTP 503.
+The hosted planes are reserved for consult and deep consult; every scheduled
+analyst, the **journal** included, runs on the core plane. Production consult is governed
 through the `substrate_read` pack — a tool not in that pack blocks as
 `unknown_tool`.
 
@@ -614,7 +673,7 @@ or one aged past its grace window). It can never write a reference.
 
 **correctness gate** — The composition's rule that authority climbs only as far
 as the verification underneath it reaches. A desk unit whose **correctness**
-number is missing, single-family, or below the operator's bar is *quoted* into
+number is missing, single-family, or below the configured bar is *quoted* into
 the **periphery** tier rather than dropped, and the verdicts and the bars in
 force are stamped onto the composition. Its thresholds are environment, not
 descriptor options, on the same discipline as the grader's ceiling.
@@ -632,7 +691,7 @@ foreign polity no frame names is carrying the desk's own reporting. It exists
 because a single-frame desk can be structurally blind to its second story.
 
 **critic** — A meta analyst using an LLM judge to score another analyst's
-output against an operator-authored rubric. The critic *actuates* —
+output against a human-authored rubric. The critic *actuates* —
 `effective_confidence = min(self-confidence, critic_score)` — so a poor grade
 can only reduce surfaced confidence, never inflate it. The live critic
 currently runs on the same core plane as the analysts it grades (a deliberate,
@@ -698,6 +757,13 @@ the floor labelled `judge-unavailable` (PROVISIONAL, under a ceiling) when
 unreachable. Every critique stamps a `judge_pipeline_version` so verdicts
 from different judge revisions never pool. The verdict persists as a `critique` and folds
 `effective_confidence = min(confidence, overall_score)`.
+
+**forecast ledger / forecast resolver** — The register of *exogenous* forecast
+questions: each sealed question names what resolves it and when, every issuer's
+probability is recorded (or recorded as absent), the deterministic
+`forecast_resolver` proposes an outcome from the evidence, and a person confirms
+or overrides it; the scorecard is kept against the world by date. See
+[LEDGER.md](LEDGER.md).
 
 **forecast_scoreboard** — The deterministic weekly driver of the
 acute-forecast pilot — the only honest home of a forecast number. It issues
@@ -767,6 +833,9 @@ commits to) rather than by **function** (which cognitive move it makes). They
 run daily in the 09:00–11:30 UTC band. The chorus diff's roster is deliberately
 **not** widened to them: `lens_diff`'s persona declares a four-prior aperture
 verbatim, so folding the leans in is its own change with its own persona edit.
+They belong to the geopolitics profile, not the platform: their persona modules
+are its prompt package (`legba_geopolitics.lens_*`) and their ids its
+`geopolitics.lens` vocabulary family ([PROFILES.md](PROFILES.md)).
 
 **Journal (OutputKind)** — The typed output for a journal
 entry/consolidation landing in the dedicated `journal_entries` table, not
@@ -871,18 +940,26 @@ not noise to launder away.
 
 **typed absence** — The platform's name for the thing it says when it has
 nothing: an absence with a **scope**, a **kind**, a **proof** and a **shelf
-life**, rather than a blank. Eight kinds, one closed vocabulary, every item
+life**, rather than a blank. Nine kinds, one closed vocabulary, every item
 carrying exactly one — `not_collected` (nothing covers the subject for this
 desk), `collected_but_silent` (a covering source exists, is healthy, and
 carried nothing — silent-but-healthy is its OWN kind, because a quiet desk is
 not a broken one), `source_stale` (the producer that measures the subject is
 past its own cadence budget or failing), `searched_found_nothing` (the audit
-searched and nothing decided the claim; the proof carries what was searched),
+searched, the search plane answered without degradation, and nothing decided
+the claim; the proof carries what was searched and which engines answered),
 `search_failed` (the search itself did not answer — unreachable, blocked, over
-budget — never the same fact as finding nothing), `below_floor` (evidence
+budget — or answered DEGRADED: engines lost at or above
+`LEGBA_SEARCH_DEGRADED_MIN_UNRESPONSIVE`, or zero results with an engine error;
+never the same fact as finding nothing — typed at read time by one rule,
+`search_health.read_search_health`), `below_floor` (evidence
 exists and did not clear the floor: the banded scorecard's
-`insufficient-evidence`), `layer_declared_absent` (a **desk aperture** an
-operator declared absent, with the reason), and `history_gap` (a curated **collection**
+`insufficient-evidence`), `layer_declared_absent` (a **desk aperture** a
+person declared absent, with the reason), `carried_unsupported` (the unit HAS a current
+read, but the status it states is carried rather than evidenced — none of its indicators
+triggered, and its last read whose indicators did is older than N of its own cadence windows;
+the proof is that last evidencing read and its age; the state-level twin of the verify pass's
+claim-level `carried_unsupported` reason), and `history_gap` (a curated **collection**
 declares a series-and-subject for this desk and the `observations` table does not hold it —
 the only kind about the PAST rather than the present; its proof is a LOAD receipt rather than
 a read, because a gap is the absence of a row and the honest thing to point at is the run that
@@ -905,13 +982,13 @@ with no clock (`layer_declared_absent`) carries `expires_at: null` and a
 an empty list — never an error and never a fabricated row — for a desk with
 nothing absent. **Where it is shown:** the desk **gap strip** drills into it;
 the **Morning Read**'s *Gaps* band reads it once per desk it shows and renders
-the eight kinds grouped, each item with its clock ("last known absence, not
+the nine kinds grouped, each item with its clock ("last known absence, not
 re-checked" where `expires_at` has passed) and the proof's `ref_kind` offered
 as a control only where it resolves — a kind the route could not read says so
 in the route's own words, a kind it read and found nothing under is named as
 read, and the card-derived gaps follow as the rows no kind already names; and
 the **desk brief** (`POST /v3/export` with `appendix.absences` + the desk's
-`appendix.scope`) prints all eight kinds after the cited events, composed
+`appendix.scope`) prints all nine kinds after the cited events, composed
 SERVER-side off the same reader (`registry/export_absences.py`) so the
 markdown and the JSON of one export carry the same block, and given its own
 page in the printed document.
@@ -932,6 +1009,13 @@ claims would not segment, so no score is published — never a perfect 1.0.
 *Provisional*: the LLM judge did not run and the verdict rests on the
 deterministic citation floor alone, so it publishes under a ceiling and is
 labelled as such, never as a clean pass.
+
+**carried, ungraded** — The third non-number a **faithfulness verify** verdict
+can carry: a unit read whose every resolved citation is the desk's own prior
+read or window ledger. The judge could only check the carry against what the
+desk already said, never against this cycle's evidence, so no score is
+published, the gate number sits on the verify floor, and scorecards count the
+row beside their means instead of inside them.
 
 **voice contract** — The prompt rules every read carries so the prose cannot
 drift from the query that built it: an as-of line copied from the printed slice
@@ -1001,7 +1085,7 @@ no per-country code.
 
 **DLQ / dead-letter** — A holding store (`descriptor_dead_letter`,
 `output_dead_letter`) for malformed or failed descriptors/outputs, so a bad
-item fails cleanly and is available for operator resubmission rather than
+item fails cleanly and is available for resubmission rather than
 half-landing or corrupting a table.
 
 **emit / output binding** — Best-effort post-write handlers that serialize a
@@ -1020,7 +1104,7 @@ registered sinks — a generic webhook and a native **ntfy** push sink — with 
 durable ledger row per outcome, per-alert idempotency, and a cooldown that
 produces **coalesced alerts**. Every payload states its verification posture
 (a faithfulness score or an explicit `unverified — <reason>`) and carries a
-**receipt link**. Sinks activate by operator env (`LEGBA_ALERT_WEBHOOK_URL` /
+**receipt link**. Sinks activate by environment settings (`LEGBA_ALERT_WEBHOOK_URL` /
 `LEGBA_ALERT_NTFY_URL`); unset means every alert is an audited
 `skipped_unconfigured` row and the NATS subject `channels.escalations` remains
 the always-on bus edge.
@@ -1041,14 +1125,25 @@ and a quiet fast feed is. A source with no parsable cadence reads
 
 **governor** — The `PackGovernorEnforcer`: per-pack invocation/rate/cost caps
 plus the global token envelope, applied before each tool call (precall-check →
-record → settle), logging every decision to ledgers and emitting an
-operator-visible event on a block. Known seam: a batch reserve can overshoot
+record → settle), logging every decision to ledgers and emitting a
+visible event on a block. Known seam: a batch reserve can overshoot
 the pack cap by ≤4 (read-only, $0 impact).
+
+**ingestion intake (on-request fetching)** — One queue of requests to fetch an
+address, re-poll a source window, or re-check a stored page, each run under a
+named source's pipeline and sinks, with who asked and why recorded
+(`ingestion_requests`). See
+[operations/on-request-fetching.md](operations/on-request-fetching.md).
 
 **lifecycle FSM** — The state machine every descriptor moves through:
 `draft → configured → active → paused → retired`, with per-state hooks
 separating *register* from *configure* from *activate*. The registrar advances
 a freshly-registered descriptor to declared-active on first register.
+
+**phone shell (`/m/`)** — The installable phone web app the edge serves under
+`/m/` (`legba-ui-v3/src/mobile/`), with five destinations (what changed, watch,
+ledger, Consult, subjects), built from the same API as the desktop console. See
+[UI.md](UI.md).
 
 **propose-and-gate / `journal_proposals`** — A human always sits between the
 **journal**'s voice and any change it wants to make: everything outward — a
@@ -1075,18 +1170,22 @@ low-faith ratio, or a token-cost rise (≥35%); it is actuated by
 honest. Known limit: the pilot state file currently lives at an ephemeral path
 (move to a volume for persistence).
 
-**receipt link** — The URL every outward alert carries back into the lineage
-API: tapping the notification opens the receipt chain for the exact finding or
-transition that fired it, so an alert is never an unaccountable ping — the
+**receipt link** — The URL every outward alert carries back into the record:
+the lineage API path (`receipt_path` / `receipt_url`, JSON) and the console
+page that opens it (`console_url`, `#rec=<kind>:<id>` — the tap
+target of a push, so a phone opens the Record sheet, not JSON) for the exact
+finding or transition that fired it, so an alert is never an unaccountable ping — the
 claim, its citations, its verify verdict, and its source hops are one link
 away. Built from `LEGBA_PUBLIC_BASE_URL`; the link is part of the mandatory
 alert anatomy, not an optional nicety.
 
-**security perimeter (Caddy basic-auth)** — The single outer boundary: Caddy
-serves the operator UI over HTTPS behind HTTP basic auth and proxies `/api` to
-the registry; internal services bind to loopback, and registry endpoints
-additionally require a bearer token that fails closed if unset. This is the
-whole perimeter — there is no RBAC/SSO (designed, not built).
+**security perimeter (Caddy)** — The outer boundary: Caddy serves the console
+over HTTPS and proxies `/api` to the registry; internal services bind to
+loopback, and registry endpoints require a bearer token that fails closed if
+unset. With sign-in off, Caddy's basic-auth perimeter is the only person check
+and every request carries the shared admin token; with sign-in on, people sign
+in with local accounts and each route checks the caller's **role** (see
+**sign-in / roles**). External single sign-on (OIDC) is declared, not built.
 
 **self-hostable / AGPL** — Released under the GNU Affero GPL-3.0-or-later,
 whose §13 network clause requires offering source to users of a network
@@ -1094,10 +1193,19 @@ service run on modified code. Commercial/dual-licensing is intended (a CLA is
 needed before outside contributions); AGPL "source-available" is a licensing
 fact, distinct from the "source-first" acquisition architecture.
 
+**sign-in / roles** — Local accounts behind `LEGBA_AUTH_SIGNIN` (off by
+default). Each person holds one role: **reader** (reads the record, keeps their
+own Consult sessions), **contributor** (a reader who may also make gated
+judgements such as grading labels and forecast confirmations) or **admin**
+(sources, descriptors, the stack, users, the engine's own surfaces); the
+**owner** is an admin with a flag. Every route's minimum role is listed in
+[API_ROLES.md](API_ROLES.md).
+
 **single-tenant / `owner_tenant`** — `owner_tenant` is stamped on
 sources/signals/outputs but is **not** an enforced isolation boundary today —
-Legba ships single-tenant, single-operator, single-node. RBAC / SSO /
-multi-tenant row-level security are designed but explicitly not built.
+Legba ships single-tenant and single-node. Per-person roles exist behind the
+sign-in switch (**sign-in / roles**); multi-tenant row-level security is not
+built.
 
 **SSRF guard** — An `SsrfGuardedTransport` that refuses agency web fetches to
 loopback, RFC-1918 private ranges, link-local, and the cloud-metadata IP
@@ -1110,9 +1218,14 @@ held separately in the **vault**; descriptors bind via a `StackRef`. A
 shared-schema change requires rebuilding **both** `legba-runtime-dapr` and
 `legba-registry` — a stale registry silently stops analysts firing.
 
+**subscribe (acquisition mode)** — A source Legba holds a connection open to,
+receiving records as the upstream emits them (Server-Sent Events is the built
+transport), landing on the same sinks and receipts as a poll. Built and off by
+default (`LEGBA_SUBSCRIBE_SUPERVISOR`).
+
 **System Status panel (`system.status`)** — The per-component / per-layer
 health view answering "are all sources firing? how is the queue? which cadence
-triggers are stalled?" in one operator page. It composes four layers:
+triggers are stalled?" in one admin page. It composes four layers:
 Acquisition (per-source firing matrix), Analysis (per-analyst cadence health,
 read from `analyst_traces`), Queues (consumer lag), and Infra (substrate
 reachability).
@@ -1129,7 +1242,7 @@ exhausted. On exhaustion the strategy is *demote-and-continue* to a cheaper
 fallback model, or — if none is wired — pause loudly until the next budget
 window (`BUDGET_THROTTLED`).
 
-**watchlist / watch** — An operator-defined standing watch: an **entity**
+**watchlist / watch** — A person's standing watch: an **entity**
 (alias- and merge-fold-resolved), a free-text **topic** (served by the
 existing text-search plane, with its limits stated rather than papered over),
 or a **place** (countries, or a point+radius that matches only
@@ -1153,7 +1266,7 @@ from backfill.
 
 **width** — The external audit's operating mode: every eligible claim from the newest heads is queued and graded, rather than a small daily sample. The width stamp on a grade names the instrument revision it was taken under.
 
-**panel** — One registered view in the operator console: a kind in the panel registry paired with one component, opened into the Dockview dock. A panel *instance* is one panel bound to one target or analyst, fetched from the registry rather than hard-coded, so adding a desk adds its panels.
+**panel** — One registered view in the console: a kind in the panel registry paired with one component, opened into the Dockview dock. A panel *instance* is one panel bound to one target or analyst, fetched from the registry rather than hard-coded, so adding a desk adds its panels.
 
 **workspace / stance** — A curated arrangement of the dock for one reason to open the app, selected from the workspace bar. Switching serialises the outgoing arrangement into its own slot and restores the incoming one; a stance is an object you return to, not a reset.
 
@@ -1161,4 +1274,4 @@ from backfill.
 
 **source_class** — A source descriptor's declared editorial class (reporting, analysis, official, state media), a closed vocabulary that lets the analysis plane weight a claim by what kind of source made it, separately from host credibility. A per-channel map can override it on a multi-channel source.
 
-**license_class** — The declared licence posture of a source's material, a closed vocabulary carried on the source scope and mirrored as a per-host ledger the operator curates. Declared, never inferred: an unset class is not "unknown", and the evidence archiver fails closed on it.
+**license_class** — The declared licence posture of a source's material, a closed vocabulary carried on the source scope and mirrored as a per-host ledger an admin curates. Declared, never inferred: an unset class is not "unknown", and the evidence archiver fails closed on it.

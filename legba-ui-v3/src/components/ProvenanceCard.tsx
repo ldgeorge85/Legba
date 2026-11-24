@@ -24,7 +24,7 @@ import { ProvenanceStateBadge } from '@/components/ProvenanceBadge'
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex gap-2 text-[11px]">
+    <div className="flex gap-2 text-label">
       <span className="w-20 shrink-0 uppercase tracking-wide text-ink-3">{label}</span>
       <span className="min-w-0 flex-1 text-ink-2">{children}</span>
     </div>

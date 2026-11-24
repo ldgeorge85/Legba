@@ -1,0 +1,99 @@
+# dialogues_mapped/2 — dialogues_mapped/1 re-sized and re-judged (lane G-6).
+# Same shape as /1 (blind openings, one rebuttal, a code sentence table, a gate
+# judge then three voting judges, quorum two of three, a synthesis that keeps
+# dissent). What changed:
+#  * deadlines from measurement: the view seats think (they argue a stance) —
+#    measured 10-40 s, p95 121 s for a thinking call, so 180 s; the synthesis
+#    thinks too (it weighs the tally against the dissent) and ran p50 241 s
+#    with ~19.7 k reasoning tokens against 280 s, so 480 s;
+#  * every model seat retries once, handed the refusal's reasons;
+#  * the judges are verdict/2 judges (a check of every sentence against its
+#    quotes, shown as a table with candidate letters) on their own cards
+#    (cards/judges/*), and each may gate only with a passing calibration
+#    record (the interpreter's host rule);
+#  * the persona gate judge is not in /2: it reads only the sentence table, so
+#    it cannot see the stance a seat was asked to hold, and the planted set
+#    cannot measure it; the weakest-link judge stays non-voting.
+round:
+  id: dialogues_mapped
+  version: 2
+  about: three views and a no-view control argue one question blind, rebut once, and are judged
+  inputs:
+    subject: {type: subject_ref}
+    question: {type: text}
+    as_of: {type: timestamp}
+  seats:
+    freeze:
+      kind: code
+      fn: scope_and_freeze
+      reads: [{from: input.subject}, {from: input.as_of}]
+      output: frozen_scope/1
+      deadline_s: 30
+    packet:
+      kind: code
+      fn: core_packet_and_slices
+      reads: [{from: freeze}]
+      output: seat_slices/1
+      deadline_s: 30
+    seat_one:
+      kind: model
+      card: cards/drafts/view_one.md
+      plane: llm.primary.openai_compat
+      thinking: on
+      reads: [{from: input.question}, {from: packet}]
+      output: position/1
+      gates: [handed_rows, quote_in_source]
+      deadline_s: 180
+      retries: 1
+      repair: reasons
+    seat_two: {seat_ref: seat_one, card: cards/drafts/view_two.md}
+    seat_three: {seat_ref: seat_one, card: cards/drafts/view_three.md}
+    control: {seat_ref: seat_one, card: cards/no_view_control.md}
+    table:
+      kind: code
+      fn: sentence_table
+      reads: [{from: rebut.sealed, view: rows}]
+      output: sentence_table/1
+      deadline_s: 30
+    j_support:
+      kind: judge
+      card: cards/judges/support.md
+      plane: llm.verify.innoai_gemma.openai_compat
+      family_rule: {differs_from: [seat_one, seat_two, seat_three, control]}
+      reads: [{from: table, view: sentence_table}]
+      output: verdict/2
+      deadline_s: 120
+      retries: 1
+      repair: reasons
+    j_logic: {seat_ref: j_support, card: cards/judges/logic.md}
+    j_diagnostic: {seat_ref: j_support, card: cards/judges/diagnosticity.md}
+    j_use: {seat_ref: j_support, card: cards/judges/decision_use.md}
+    j_weakest: {seat_ref: j_support, card: cards/judges/weakest_link.md}   # non-voting
+    synthesis:
+      kind: model
+      card: cards/synthesis_keep_dissent.md
+      plane: llm.primary.openai_compat
+      thinking: on
+      reads: [{from: judge.tally}, {from: table, view: sentence_table}, {from: j_weakest}]
+      output: synthesis/1
+      gates: [every_sentence_maps_to_rows, probabilities_copied_not_averaged]
+      deadline_s: 480
+      retries: 1
+      repair: reasons
+  flow:
+    seq:
+      - {seat: freeze}
+      - {seat: packet}
+      - {blind: [{seat: seat_one}, {seat: seat_two}, {seat: seat_three}, {seat: control}], id: open, deadline_s: 420, min_present: 3}
+      - {rebuttal: {of: open, passes: 1}, id: rebut, deadline_s: 420}
+      - {seat: table}
+      - par:
+          - {panel: {judges: [j_logic, j_diagnostic, j_use], on: table, gates_first: [j_support], tally: {quorum: {k: 2, of: 3, threshold: 0.6}}}, id: judge, deadline_s: 480}
+          - {seat: j_weakest}
+        id: judging
+        join: all
+        deadline_s: 540
+      - {seat: synthesis}
+    id: main
+  budgets: {wall_s: 2700, model_calls: 28, max_parallel: 4}
+  publishes: shadow

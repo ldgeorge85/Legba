@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.query_source_discovery.template": {
+      "source": "source_query_source_discovery_template.yaml",
+      "state": "draft"
+    }
+  }
+}

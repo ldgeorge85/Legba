@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:region_americas": {
+      "source": "target_region_americas.yaml",
+      "state": "active"
+    }
+  }
+}

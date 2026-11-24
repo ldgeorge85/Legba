@@ -53,7 +53,11 @@ the consult path — it runs in-actor through the agency ``run_pack_tool`` GATHE
 loop. The instrument tools are journal-specific self-introspection that the
 operator-facing consult surface does NOT need, so they are deliberately NOT added
 to consult's ``_KNOWN_TOOLS`` (consult reaches the substrate, not the journal's
-own dormancy/budget). The five SHARED reads already in ``_KNOWN_TOOLS`` (via
+own dormancy/budget). The one exception is ``get_source_health`` (W11-F152):
+the consult gained it (it is the honest per-source staleness read, where
+``list_sources`` is the thin one), so it is now ALSO a substrate_read pack tool
+and a consult ``_KNOWN_TOOL``; its handler is the same port call either way.
+The five SHARED reads already in ``_KNOWN_TOOLS`` (via
 substrate_read) keep working on consult unchanged. The journal's GATHER loop
 recognises every JOURNAL_READ_TOOLS entry via ``inline_target._gather``'s
 ``extra_read_tools`` channel.

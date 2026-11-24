@@ -16,6 +16,7 @@ from ..data.provenance.kinds import OutputKind
 from ..data.run_accounting import (
     current_llm_calls as _current_llm_calls,
     current_prompt_rendered as _current_prompt_rendered,
+    current_prompt_tail as _current_prompt_tail,
     current_steps as _current_steps,
     current_tool_calls as _current_tool_calls,
 )
@@ -294,6 +295,7 @@ async def _write_failure_trace(
         # them. Each accessor returns [] / (None, None) when nothing is bound
         # (the spike path, most tests), which is byte-identically the old row.
         acct_prompt, acct_prompt_sha = _current_prompt_rendered()
+        acct_prompt_tail = _current_prompt_tail()
         acct_steps = _current_steps()
         acct_llm_calls = _current_llm_calls()
         acct_tool_calls = _current_tool_calls()
@@ -316,7 +318,7 @@ async def _write_failure_trace(
             cadence_trigger=cadence_trigger,
             target_id=target_id,
             input_row_refs=[],
-            input_payload=None,
+            input_payload=acct_prompt_tail,
             prompt_module_hash=None,
             prompt_rendered=acct_prompt,
             prompt_sha256=acct_prompt_sha,

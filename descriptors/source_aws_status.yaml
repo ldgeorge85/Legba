@@ -1,0 +1,79 @@
+# K-1 cyber desk (2026-11-14) — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# Amazon Web Services' public service-health RSS (all services, all regions):
+# the operator's OWN statement about its own service — an incident's start,
+# updates and resolution, with the cause when AWS states one. Probed
+# 2026-11-13 (one GET, generic client identity): HTTP 200,
+# application/rss+xml, 38 items from March to September 2026, ~870-character
+# descriptions; quiet for weeks at a time (`expect_quiet`).
+#
+# CLASS: `official` in the S1-T8 sense of a primary-source publisher — this
+# is what AWS SAYS about its service. It supports "AWS reported X", never an
+# independent confirmation of cause.
+# Geography: deliberately NO declared geo; region names ("us-east-1") are not
+# countries. The feed is published for subscription. No credibility seed:
+# the host is amazon.com's, and a host row would score every amazon.com URL.
+# Every fifteen minutes: an outage is a short event.
+#
+# Desk routing: scope.classifications `geopolitics.topic:cyber` is stamped on
+# every signal (W10 TAX-2) — the cyber desk's tag arm (target_cyber.yaml).
+
+identity:
+  id: source.aws.status
+  name: AWS Health Dashboard — all services (status RSS)
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: cyber_desk_k1
+  created: "2026-11-14T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [cyber, outage, status, cloud, cyber_desk]
+  classifications: ["geopolitics.topic:cyber"]
+  source_class: official
+  license_class: permissive_feed_unreviewed
+  access_class: public          # free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "*/15 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+  expect_quiet: true             # days with no incident are the norm
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://status.aws.amazon.com/rss/all.rss"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor (the conservative default of the official-feed drafts).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

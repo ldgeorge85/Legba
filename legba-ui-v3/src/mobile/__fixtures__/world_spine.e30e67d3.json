@@ -1,0 +1,1808 @@
+{
+ "analyst_id": "world_assessor",
+ "body": "[world read body]",
+ "confidence": 0.55,
+ "data": {
+  "data": {
+   "assembly": {
+    "as_of": "2026-11-07T12:21:03.428588+00:00",
+    "blocks": [
+     {
+      "carry_reason": "by_mass",
+      "contextSpans": [],
+      "corroboration": {
+       "n_desks_sharing": 1,
+       "n_sources": 10
+      },
+      "desk": "escalation",
+      "evidence_age_h": 1.47,
+      "finding_id": "e8b3cc08-0148-44e2-ba95-30a4965e28b0",
+      "order_rank": 1,
+      "ordinal": 1,
+      "produced_at": "2026-11-07T07:01:49.493806+00:00",
+      "question": "Escalation",
+      "question_source": "fallback_desk_name",
+      "salience": {
+       "cited_mass": 3.0,
+       "cited_max": 0.9,
+       "n_above": 9,
+       "n_cited": 14,
+       "n_cited_scored": 14,
+       "source": "cited_signals",
+       "version": "cited_mass.v1"
+      },
+      "severity": "high",
+      "signals": [
+       {
+        "also_cited_by": [],
+        "marker": "[12]",
+        "salience_magnitude": 0.75,
+        "signal_id": "332f7e90-692e-902d-d3c5-29512ffe451c",
+        "source_id": "source.ukrinform.english",
+        "title": "[signal title 1.0]",
+        "url": "https://example.invalid/s/1/0"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[30]",
+        "salience_magnitude": 0.8,
+        "signal_id": "baac1b66-5d3d-e226-1653-0d89cf197e08",
+        "source_id": "source.ukrinform.english",
+        "title": "[signal title 1.1]",
+        "url": "https://example.invalid/s/1/1"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[69]",
+        "salience_magnitude": 0.85,
+        "signal_id": "78a398c8-1b75-abce-31f9-33d4b14b3e06",
+        "source_id": "source.cbc.world",
+        "title": "[signal title 1.2]",
+        "url": "https://example.invalid/s/1/2"
+       }
+      ],
+      "spans": [
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 3969,
+         "body_sha256": "f31a2ede207d229a14b6a88b634015568670ed34b981f7600fe214f8d582d79a",
+         "end": 470,
+         "head_id": "e8b3cc08-0148-44e2-ba95-30a4965e28b0",
+         "start": 93
+        },
+        "role": "bluf",
+        "scope_tokens": [],
+        "text": "[desk sentence 1.0]"
+       }
+      ],
+      "target_id": "country_g20_ru",
+      "target_name": "country_g20_ru",
+      "tier": "basis",
+      "verify": {
+       "checkable_claims": 12,
+       "effective_confidence": 0.8,
+       "judge_status": "unavailable",
+       "overall_score": 1.0,
+       "score_state": "scored",
+       "supported_claims": 12
+      },
+      "via_head_id": "8bf6055c-89ac-4ce5-b145-ca81785e1b1a",
+      "via_ordinal": 3
+     },
+     {
+      "carry_reason": "by_mass",
+      "contextSpans": [],
+      "context_match": "assessment_of_target_recent",
+      "context_origin_id": "9ec1b7ad-5dbb-47ac-b22e-fdc0ec49561f",
+      "corroboration": {
+       "n_desks_sharing": 5,
+       "n_sources": 10
+      },
+      "desk": "escalation",
+      "evidence_age_h": 4.48,
+      "finding_id": "e8b3cc08-0148-44e2-ba95-30a4965e28b0",
+      "order_rank": 2,
+      "ordinal": 2,
+      "produced_at": "2026-11-07T07:01:49.493806+00:00",
+      "question": "Escalation",
+      "question_source": "fallback_desk_name",
+      "salience": {
+       "cited_mass": 3.0,
+       "cited_max": 0.9,
+       "n_above": 9,
+       "n_cited": 14,
+       "n_cited_scored": 14,
+       "source": "cited_signals",
+       "version": "cited_mass.v1"
+      },
+      "severity": "high",
+      "signals": [
+       {
+        "also_cited_by": [],
+        "marker": "[12]",
+        "salience_magnitude": 0.75,
+        "signal_id": "cf6c09ec-1da1-a918-7b50-b586f10feb72",
+        "source_id": "source.ukrinform.english",
+        "title": "[signal title 2.0]",
+        "url": "https://example.invalid/s/2/0"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[30]",
+        "salience_magnitude": 0.8,
+        "signal_id": "048888bb-cd1d-7f4b-1338-2ec45bfc8a75",
+        "source_id": "source.ukrinform.english",
+        "title": "[signal title 2.1]",
+        "url": "https://example.invalid/s/2/1"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[69]",
+        "salience_magnitude": 0.85,
+        "signal_id": "403f9f17-a652-1811-60ca-63c0eca23373",
+        "source_id": "source.cbc.world",
+        "title": "[signal title 2.2]",
+        "url": "https://example.invalid/s/2/2"
+       }
+      ],
+      "spans": [
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 3969,
+         "body_sha256": "f31a2ede207d229a14b6a88b634015568670ed34b981f7600fe214f8d582d79a",
+         "end": 470,
+         "head_id": "e8b3cc08-0148-44e2-ba95-30a4965e28b0",
+         "start": 93
+        },
+        "role": "bluf",
+        "scope_tokens": [],
+        "text": "[desk sentence 2.0]"
+       },
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 7495,
+         "body_sha256": "5b5bea0360898a03d8da2945291147247dbb57550d0f5311337d70af5b9e2495",
+         "end": 7495,
+         "head_id": "9ec1b7ad-5dbb-47ac-b22e-fdc0ec49561f",
+         "start": 0
+        },
+        "role": "context_body",
+        "scope_tokens": [],
+        "text": "[desk sentence 2.1]"
+       }
+      ],
+      "target_id": "country_g20_ru",
+      "target_name": "country_g20_ru",
+      "tier": "basis",
+      "verify": {
+       "checkable_claims": 12,
+       "effective_confidence": 0.8,
+       "judge_status": "unavailable",
+       "overall_score": 1.0,
+       "score_state": "scored",
+       "supported_claims": 12
+      },
+      "via_head_id": "50a2e258-010c-4fa0-b467-a2d4e33b662e",
+      "via_ordinal": 2
+     },
+     {
+      "carry_reason": "by_mass",
+      "contextSpans": [],
+      "context_match": "assessment_of_this_record",
+      "context_origin_id": "e61d2e68-1d95-45bc-bd9a-422b485929e8",
+      "corroboration": {
+       "n_desks_sharing": 4,
+       "n_sources": 12
+      },
+      "desk": "military_posture",
+      "evidence_age_h": 8.88,
+      "finding_id": "7940f3c4-8f13-4a8d-ae84-d4a8731f84ed",
+      "order_rank": 3,
+      "ordinal": 3,
+      "produced_at": "2026-11-07T02:38:50.764126+00:00",
+      "question": "Military posture",
+      "question_source": "fallback_desk_name",
+      "salience": {
+       "cited_mass": 2.97,
+       "cited_max": 0.85,
+       "n_above": 8,
+       "n_cited": 19,
+       "n_cited_scored": 19,
+       "source": "cited_signals",
+       "version": "cited_mass.v1"
+      },
+      "severity": "high",
+      "signals": [
+       {
+        "also_cited_by": [],
+        "marker": "[91]",
+        "salience_magnitude": 0.85,
+        "signal_id": "13f5e8a9-b849-0c12-4141-ff850e17afb0",
+        "source_id": "source.middleeasteye.news",
+        "title": "[signal title 3.0]",
+        "url": "https://example.invalid/s/3/0"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[40]",
+        "salience_magnitude": 0.75,
+        "signal_id": "be04d874-99e1-2b08-6aa6-5b829f5104e2",
+        "source_id": "source.tehrantimes.all",
+        "title": "[signal title 3.1]",
+        "url": "https://example.invalid/s/3/1"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[95]",
+        "salience_magnitude": 0.5,
+        "signal_id": "dfb09b51-0b9d-5968-c9cb-d6b17a7bc376",
+        "source_id": "source.bbc.world",
+        "title": "[signal title 3.2]",
+        "url": "https://example.invalid/s/3/2"
+       }
+      ],
+      "spans": [
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 4910,
+         "body_sha256": "59b49e646e5fa3dac9042a84a7b60164c7555f1bc44af3f0c60c79ed9b2b9120",
+         "end": 583,
+         "head_id": "7940f3c4-8f13-4a8d-ae84-d4a8731f84ed",
+         "start": 93
+        },
+        "role": "bluf",
+        "scope_tokens": [],
+        "text": "[desk sentence 3.0]"
+       },
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 6768,
+         "body_sha256": "f9b3fbb6181791484f72747d6031276d1ec22eabd2a4ffbf1ddf6f1089a79d4d",
+         "end": 6768,
+         "head_id": "e61d2e68-1d95-45bc-bd9a-422b485929e8",
+         "start": 0
+        },
+        "role": "context_body",
+        "scope_tokens": [],
+        "text": "[desk sentence 3.1]"
+       }
+      ],
+      "target_id": "country_watch_ir",
+      "target_name": "country_watch_ir",
+      "tier": "basis",
+      "verify": {
+       "checkable_claims": 16,
+       "effective_confidence": 0.6,
+       "judge_status": "unavailable",
+       "overall_score": 1.0,
+       "score_state": "scored",
+       "supported_claims": 16
+      },
+      "via_head_id": "5b6e3d11-663d-4569-b524-d578277e8826",
+      "via_ordinal": 2
+     },
+     {
+      "carry_reason": "by_mass",
+      "contextSpans": [],
+      "context_match": "assessment_of_this_record",
+      "context_origin_id": "1a258535-276c-4441-a2c8-77c7ac37241d",
+      "corroboration": {
+       "n_desks_sharing": 4,
+       "n_sources": 10
+      },
+      "desk": "economic_coercion",
+      "evidence_age_h": 2.43,
+      "finding_id": "7f9c3756-fc2f-4667-a0c5-3f8e2a0e7682",
+      "order_rank": 4,
+      "ordinal": 4,
+      "produced_at": "2026-11-07T09:05:07.696652+00:00",
+      "question": "Economic coercion",
+      "question_source": "fallback_desk_name",
+      "salience": {
+       "cited_mass": 4.5,
+       "cited_max": 0.9,
+       "n_above": 13,
+       "n_cited": 31,
+       "n_cited_scored": 31,
+       "source": "cited_signals",
+       "version": "cited_mass.v1"
+      },
+      "severity": "high",
+      "signals": [
+       {
+        "also_cited_by": [],
+        "marker": "[3]",
+        "salience_magnitude": 0.7,
+        "signal_id": "606c993e-a913-3606-f4bb-8f462e1348b9",
+        "source_id": "source.telegram.org_channels",
+        "title": "[signal title 4.0]",
+        "url": "https://example.invalid/s/4/0"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[6]",
+        "salience_magnitude": 0.75,
+        "signal_id": "330c77cb-0733-f055-4975-e89fdeff327d",
+        "source_id": "source.anadolu.english",
+        "title": "[signal title 4.1]",
+        "url": "https://example.invalid/s/4/1"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[7]",
+        "salience_magnitude": 0.75,
+        "signal_id": "0039fd23-0da8-2b95-3d7e-45acaf3cf3f1",
+        "source_id": "source.middleeasteye.news",
+        "title": "[signal title 4.2]",
+        "url": "https://example.invalid/s/4/2"
+       }
+      ],
+      "spans": [
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 5984,
+         "body_sha256": "fd0ba310557f24a654740a4fb78339751b04e7bbb707958c90494816ed4c436f",
+         "end": 606,
+         "head_id": "7f9c3756-fc2f-4667-a0c5-3f8e2a0e7682",
+         "start": 105
+        },
+        "role": "bluf",
+        "scope_tokens": [],
+        "text": "[desk sentence 4.0]"
+       },
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 5813,
+         "body_sha256": "785d27388200885bc34fd354a0e4bba6a79dee99f0c1d9c8fc3c653802251551",
+         "end": 5813,
+         "head_id": "1a258535-276c-4441-a2c8-77c7ac37241d",
+         "start": 0
+        },
+        "role": "context_body",
+        "scope_tokens": [],
+        "text": "[desk sentence 4.1]"
+       }
+      ],
+      "target_id": "country_g20_sa",
+      "target_name": "country_g20_sa",
+      "tier": "basis",
+      "verify": {
+       "checkable_claims": 16,
+       "effective_confidence": 0.72,
+       "judge_status": "unavailable",
+       "overall_score": 0.9286,
+       "score_state": "scored",
+       "supported_claims": 15
+      },
+      "via_head_id": "1ee268c3-ef6b-48ad-a2ac-3606afad5d9b",
+      "via_ordinal": 1
+     },
+     {
+      "carry_reason": "by_mass",
+      "contextSpans": [],
+      "context_match": "assessment_of_this_record",
+      "context_origin_id": "51fd90fc-3e38-4260-ba89-eaaa0a4127aa",
+      "corroboration": {
+       "n_desks_sharing": 3,
+       "n_sources": 5
+      },
+      "desk": "military_posture",
+      "evidence_age_h": 8.91,
+      "finding_id": "71a4c998-ce33-47d2-a8f6-71cd8d72ccf4",
+      "order_rank": 5,
+      "ordinal": 5,
+      "produced_at": "2026-11-07T02:36:58.294814+00:00",
+      "question": "Military posture",
+      "question_source": "fallback_desk_name",
+      "salience": {
+       "cited_mass": 1.8,
+       "cited_max": 0.85,
+       "n_above": 6,
+       "n_cited": 10,
+       "n_cited_scored": 10,
+       "source": "cited_signals",
+       "version": "cited_mass.v1"
+      },
+      "severity": "high",
+      "signals": [
+       {
+        "also_cited_by": [],
+        "marker": "[4]",
+        "salience_magnitude": 0.3,
+        "signal_id": "26b63b98-bc17-ddf2-8bb0-d34af25ad6bd",
+        "source_id": "source.breakingdefense.news",
+        "title": "[signal title 5.0]",
+        "url": "https://example.invalid/s/5/0"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[8]",
+        "salience_magnitude": 0.6,
+        "signal_id": "add19504-3158-12c7-54f8-4796efdb27bc",
+        "source_id": "source.timesofisrael.news",
+        "title": "[signal title 5.1]",
+        "url": "https://example.invalid/s/5/1"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[10]",
+        "salience_magnitude": 0.45,
+        "signal_id": "df540831-7436-e0d8-d82f-79597386b4e3",
+        "source_id": "source.jpost.frontpage",
+        "title": "[signal title 5.2]",
+        "url": "https://example.invalid/s/5/2"
+       }
+      ],
+      "spans": [
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 4068,
+         "body_sha256": "791ddc985fd4e310e831a6b331afbd6bde82408da4dd857134ac668058c3546a",
+         "end": 476,
+         "head_id": "71a4c998-ce33-47d2-a8f6-71cd8d72ccf4",
+         "start": 98
+        },
+        "role": "bluf",
+        "scope_tokens": [],
+        "text": "[desk sentence 5.0]"
+       },
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 6595,
+         "body_sha256": "9f32ebe0a30b71ea2024a440b423af0f68d13ba9ad9fae896ef4cbaa8ec82470",
+         "end": 6595,
+         "head_id": "51fd90fc-3e38-4260-ba89-eaaa0a4127aa",
+         "start": 0
+        },
+        "role": "context_body",
+        "scope_tokens": [],
+        "text": "[desk sentence 5.1]"
+       }
+      ],
+      "target_id": "country_watch_il",
+      "target_name": "country_watch_il",
+      "tier": "basis",
+      "verify": {
+       "checkable_claims": 12,
+       "effective_confidence": 0.6,
+       "judge_status": "unavailable",
+       "overall_score": 1.0,
+       "score_state": "scored",
+       "supported_claims": 12
+      },
+      "via_head_id": "4ab2d409-e40f-4d6a-bf11-a5f9e45aa0fd",
+      "via_ordinal": 2
+     },
+     {
+      "carry_reason": "by_mass",
+      "contextSpans": [],
+      "context_match": "assessment_of_this_record",
+      "context_origin_id": "4f5b46f8-fdfb-47bc-9610-ce5c3649e7d7",
+      "corroboration": {
+       "n_desks_sharing": 4,
+       "n_sources": 10
+      },
+      "desk": "military_posture",
+      "evidence_age_h": 8.94,
+      "finding_id": "71e8e5fc-f0d2-41f8-a326-b0ca3369a13d",
+      "order_rank": 6,
+      "ordinal": 6,
+      "produced_at": "2026-11-07T02:35:45.477766+00:00",
+      "question": "Military posture",
+      "question_source": "fallback_desk_name",
+      "salience": {
+       "cited_mass": 1.1,
+       "cited_max": 0.8,
+       "n_above": 4,
+       "n_cited": 14,
+       "n_cited_scored": 13,
+       "source": "cited_signals",
+       "version": "cited_mass.v1"
+      },
+      "severity": "high",
+      "signals": [
+       {
+        "also_cited_by": [],
+        "marker": "[8]",
+        "salience_magnitude": 0.45,
+        "signal_id": "684b33e3-3334-894b-6c15-3b49b96e3c1c",
+        "source_id": "source.kyivindependent.news",
+        "title": "[signal title 6.0]",
+        "url": "https://example.invalid/s/6/0"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[55]",
+        "salience_magnitude": 0.55,
+        "signal_id": "724110b6-345f-4b20-0a04-a5005b7d3136",
+        "source_id": "source.aljazeera.world",
+        "title": "[signal title 6.1]",
+        "url": "https://example.invalid/s/6/1"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[54]",
+        "salience_magnitude": 0.45,
+        "signal_id": "1ed5650c-5126-b987-7f65-cd4847b78d3c",
+        "source_id": "source.ukrinform.english",
+        "title": "[signal title 6.2]",
+        "url": "https://example.invalid/s/6/2"
+       }
+      ],
+      "spans": [
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 4778,
+         "body_sha256": "216c4a7f17355ae1e28c3a28af7807847c63db5f15502f86ea75500e103405b4",
+         "end": 436,
+         "head_id": "71e8e5fc-f0d2-41f8-a326-b0ca3369a13d",
+         "start": 93
+        },
+        "role": "bluf",
+        "scope_tokens": [],
+        "text": "[desk sentence 6.0]"
+       },
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 7186,
+         "body_sha256": "bc40c9a73160c74cf0faa267a8f67c40ae5e56677ca72eda853706885feeeab0",
+         "end": 7186,
+         "head_id": "4f5b46f8-fdfb-47bc-9610-ce5c3649e7d7",
+         "start": 0
+        },
+        "role": "context_body",
+        "scope_tokens": [],
+        "text": "[desk sentence 6.1]"
+       }
+      ],
+      "target_id": "country_watch_ua",
+      "target_name": "country_watch_ua",
+      "tier": "basis",
+      "verify": {
+       "checkable_claims": 15,
+       "effective_confidence": 0.7,
+       "judge_status": "unavailable",
+       "overall_score": 1.0,
+       "score_state": "scored",
+       "supported_claims": 15
+      },
+      "via_head_id": "362d19c0-7d97-48e4-9e9d-7d10fb5a68c6",
+      "via_ordinal": 2
+     },
+     {
+      "carry_reason": "by_mass",
+      "contextSpans": [],
+      "context_match": "assessment_of_this_record",
+      "context_origin_id": "b0492691-ec39-4fef-99ae-f7f9aefa4596",
+      "corroboration": {
+       "n_desks_sharing": 3,
+       "n_sources": 9
+      },
+      "desk": "military_posture",
+      "evidence_age_h": 8.91,
+      "finding_id": "1c3eca18-4865-40e6-81b9-a97325d13a50",
+      "order_rank": 7,
+      "ordinal": 7,
+      "produced_at": "2026-11-07T02:36:24.901808+00:00",
+      "question": "Military posture",
+      "question_source": "fallback_desk_name",
+      "salience": {
+       "cited_mass": 1.0,
+       "cited_max": 0.9,
+       "n_above": 2,
+       "n_cited": 11,
+       "n_cited_scored": 11,
+       "source": "cited_signals",
+       "version": "cited_mass.v1"
+      },
+      "severity": "high",
+      "signals": [
+       {
+        "also_cited_by": [],
+        "marker": "[68]",
+        "salience_magnitude": 0.7,
+        "signal_id": "bc203787-9d30-a0c5-2a26-c738e44970cf",
+        "source_id": "source.twz.all",
+        "title": "[signal title 7.0]",
+        "url": "https://example.invalid/s/7/0"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[93]",
+        "salience_magnitude": 0.6,
+        "signal_id": "755b48fc-170e-c288-4e4e-b194c4d5534f",
+        "source_id": "source.telegram.org_channels",
+        "title": "[signal title 7.1]",
+        "url": "https://example.invalid/s/7/1"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[96]",
+        "salience_magnitude": 0.5,
+        "signal_id": "4038127b-1293-9f9b-935d-b95e5296b862",
+        "source_id": "source.anadolu.english",
+        "title": "[signal title 7.2]",
+        "url": "https://example.invalid/s/7/2"
+       }
+      ],
+      "spans": [
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 4834,
+         "body_sha256": "05161ddbe3e5a5534f6ee384528de825ab1c9bf08868703a2626ac68db94bd8c",
+         "end": 484,
+         "head_id": "1c3eca18-4865-40e6-81b9-a97325d13a50",
+         "start": 106
+        },
+        "role": "bluf",
+        "scope_tokens": [],
+        "text": "[desk sentence 7.0]"
+       },
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 5707,
+         "body_sha256": "f5fd757223fd2a359b3a0e84a74accf87e239b96674ee6b00bf9b38d9210856e",
+         "end": 5707,
+         "head_id": "b0492691-ec39-4fef-99ae-f7f9aefa4596",
+         "start": 0
+        },
+        "role": "context_body",
+        "scope_tokens": [],
+        "text": "[desk sentence 7.1]"
+       }
+      ],
+      "target_id": "country_g20_us",
+      "target_name": "country_g20_us",
+      "tier": "basis",
+      "verify": {
+       "checkable_claims": 14,
+       "effective_confidence": 0.8,
+       "judge_status": "unavailable",
+       "overall_score": 1.0,
+       "score_state": "scored",
+       "supported_claims": 14
+      },
+      "via_head_id": "954b861e-199c-4713-b88b-74ed3f7486e0",
+      "via_ordinal": 2
+     },
+     {
+      "carry_reason": "by_mass",
+      "contextSpans": [],
+      "context_match": "assessment_of_this_record",
+      "context_origin_id": "126c9bba-dfb5-4785-9020-a8d9a2fecbdc",
+      "corroboration": {
+       "n_desks_sharing": 3,
+       "n_sources": 6
+      },
+      "desk": "energy_security",
+      "evidence_age_h": 8.41,
+      "finding_id": "96264083-5648-4057-8be3-093e49d54235",
+      "order_rank": 8,
+      "ordinal": 8,
+      "produced_at": "2026-11-07T03:07:00.384380+00:00",
+      "question": "Energy security",
+      "question_source": "fallback_desk_name",
+      "salience": {
+       "cited_mass": 0.85,
+       "cited_max": 0.7,
+       "n_above": 3,
+       "n_cited": 9,
+       "n_cited_scored": 9,
+       "source": "cited_signals",
+       "version": "cited_mass.v1"
+      },
+      "severity": "high",
+      "signals": [
+       {
+        "also_cited_by": [],
+        "marker": "[5]",
+        "salience_magnitude": 0.7,
+        "signal_id": "4f9521e5-e20d-725a-c6c0-f0f574f492c2",
+        "source_id": "source.sudanwarmonitor.news",
+        "title": "[signal title 8.0]",
+        "url": "https://example.invalid/s/8/0"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[27]",
+        "salience_magnitude": 0.45,
+        "signal_id": "1c0f9b66-be4a-c998-b9cf-2d1f9c5ad17e",
+        "source_id": "source.dabanga.sudan",
+        "title": "[signal title 8.1]",
+        "url": "https://example.invalid/s/8/1"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[18]",
+        "salience_magnitude": 0.7,
+        "signal_id": "4ff2b79c-75b0-4087-0020-4da32d7d6a97",
+        "source_id": "source.sudanwarmonitor.news",
+        "title": "[signal title 8.2]",
+        "url": "https://example.invalid/s/8/2"
+       }
+      ],
+      "spans": [
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 4774,
+         "body_sha256": "b8027d25cbc8eaa59b2134cfa0e39beb9e9dda1f756f8adcfb5dede732d92a69",
+         "end": 405,
+         "head_id": "96264083-5648-4057-8be3-093e49d54235",
+         "start": 101
+        },
+        "role": "bluf",
+        "scope_tokens": [],
+        "text": "[desk sentence 8.0]"
+       },
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 8028,
+         "body_sha256": "79d63a2d78875146fad056af8a4f45bb6de0cb17c9ac7bcd05a94ab302471020",
+         "end": 8028,
+         "head_id": "126c9bba-dfb5-4785-9020-a8d9a2fecbdc",
+         "start": 0
+        },
+        "role": "context_body",
+        "scope_tokens": [],
+        "text": "[desk sentence 8.1]"
+       }
+      ],
+      "target_id": "country_watch_sd",
+      "target_name": "country_watch_sd",
+      "tier": "basis",
+      "verify": {
+       "checkable_claims": 11,
+       "effective_confidence": 0.8,
+       "judge_status": "unavailable",
+       "overall_score": 1.0,
+       "score_state": "scored",
+       "supported_claims": 11
+      },
+      "via_head_id": "869d6df5-e85a-40af-b94c-c653eeff9f46",
+      "via_ordinal": 3
+     },
+     {
+      "carry_reason": "fallback_ordinal_1",
+      "contextSpans": [],
+      "context_match": "assessment_of_this_record",
+      "context_origin_id": "c0a7e589-3508-49b3-b863-1a4f8ac4a8bf",
+      "corroboration": {
+       "n_desks_sharing": 4,
+       "n_sources": 3
+      },
+      "desk": "military_posture",
+      "evidence_age_h": 7.38,
+      "finding_id": "a3f375a5-cdb4-4f47-a5a2-b50566bda985",
+      "order_rank": 9,
+      "ordinal": 9,
+      "produced_at": "2026-11-07T04:08:37.916156+00:00",
+      "question": "Military posture",
+      "question_source": "fallback_desk_name",
+      "salience": {
+       "cited_mass": 0.55,
+       "cited_max": 0.85,
+       "n_above": 2,
+       "n_cited": 3,
+       "n_cited_scored": 3,
+       "source": "cited_signals",
+       "version": "cited_mass.v1"
+      },
+      "severity": "high",
+      "signals": [
+       {
+        "also_cited_by": [],
+        "marker": "[6]",
+        "salience_magnitude": 0.7,
+        "signal_id": "f505f007-7488-398f-4c21-4578714c75b5",
+        "source_id": "source.anadolu.english",
+        "title": "[signal title 9.0]",
+        "url": "https://example.invalid/s/9/0"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[10]",
+        "salience_magnitude": 0.5,
+        "signal_id": "d113d83b-0485-98cc-2790-bebd673aa492",
+        "source_id": "source.gdelt.files",
+        "title": "[signal title 9.1]",
+        "url": "https://example.invalid/s/9/1"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[5]",
+        "salience_magnitude": 0.85,
+        "signal_id": "ecf3f013-ced5-a4a9-3709-45172258fe6c",
+        "source_id": "source.rsshub.aljazeera.drcongo",
+        "title": "[signal title 9.2]",
+        "url": "https://example.invalid/s/9/2"
+       }
+      ],
+      "spans": [
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 3784,
+         "body_sha256": "d7cbccb2150bf31ce4c0ebbc12051262ae03c869a9863ec9759e574126851f06",
+         "end": 504,
+         "head_id": "a3f375a5-cdb4-4f47-a5a2-b50566bda985",
+         "start": 104
+        },
+        "role": "bluf",
+        "scope_tokens": [
+         "collection_denominator"
+        ],
+        "text": "[desk sentence 9.0]"
+       },
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 5925,
+         "body_sha256": "5a45e87d165178dcf2702c9d480415691de3487842ba9e84305a4eaf9f62e47f",
+         "end": 5925,
+         "head_id": "c0a7e589-3508-49b3-b863-1a4f8ac4a8bf",
+         "start": 0
+        },
+        "role": "context_body",
+        "scope_tokens": [],
+        "text": "[desk sentence 9.1]"
+       }
+      ],
+      "target_id": "country_watch_cd",
+      "target_name": "country_watch_cd",
+      "tier": "basis",
+      "verify": {
+       "checkable_claims": 11,
+       "effective_confidence": 0.55,
+       "judge_status": "unavailable",
+       "overall_score": 1.0,
+       "score_state": "scored",
+       "supported_claims": 11
+      },
+      "via_head_id": "cdcba4ae-db8b-4219-a3db-cee7743b44b7",
+      "via_ordinal": 1
+     },
+     {
+      "carry_reason": "fallback_ordinal_1",
+      "contextSpans": [],
+      "context_match": "assessment_of_this_record",
+      "context_origin_id": "2c5ad41a-751c-4be3-a2be-45f80c4d9624",
+      "corroboration": {
+       "n_desks_sharing": 5,
+       "n_sources": 6
+      },
+      "desk": "escalation",
+      "evidence_age_h": 9.0,
+      "finding_id": "a454105a-ffaf-41a3-af4d-784876d21bf3",
+      "order_rank": 10,
+      "ordinal": 10,
+      "produced_at": "2026-11-07T02:31:16.502554+00:00",
+      "question": "Escalation",
+      "question_source": "fallback_desk_name",
+      "salience": {
+       "cited_mass": 0.6,
+       "cited_max": 0.7,
+       "n_above": 2,
+       "n_cited": 9,
+       "n_cited_scored": 9,
+       "source": "cited_signals",
+       "version": "cited_mass.v1"
+      },
+      "severity": "high",
+      "signals": [
+       {
+        "also_cited_by": [],
+        "marker": "[34]",
+        "salience_magnitude": 0.35,
+        "signal_id": "0f762273-1a00-f920-7138-c08629a65bde",
+        "source_id": "source.cna.all",
+        "title": "[signal title 10.0]",
+        "url": "https://example.invalid/s/10/0"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[36]",
+        "salience_magnitude": 0.35,
+        "signal_id": "ab53ebc3-4f6f-64fc-8a6c-9d1f39941fec",
+        "source_id": "source.anadolu.english",
+        "title": "[signal title 10.1]",
+        "url": "https://example.invalid/s/10/1"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[23]",
+        "salience_magnitude": 0.7,
+        "signal_id": "b841edcb-3b26-af73-0d9c-3091ea73751f",
+        "source_id": "source.dawn.home",
+        "title": "[signal title 10.2]",
+        "url": "https://example.invalid/s/10/2"
+       }
+      ],
+      "spans": [
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 3416,
+         "body_sha256": "9282e59fbff5cb35ed40bef6d993567f5f444471c4d530a72436b590f41b27be",
+         "end": 692,
+         "head_id": "a454105a-ffaf-41a3-af4d-784876d21bf3",
+         "start": 96
+        },
+        "role": "bluf",
+        "scope_tokens": [
+         "collection_denominator"
+        ],
+        "text": "[desk sentence 10.0]"
+       },
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 5584,
+         "body_sha256": "6c2b865b128e4a76c94decc1b38a94054ed18ab5a30680011402b48af4d0e429",
+         "end": 5584,
+         "head_id": "2c5ad41a-751c-4be3-a2be-45f80c4d9624",
+         "start": 0
+        },
+        "role": "context_body",
+        "scope_tokens": [],
+        "text": "[desk sentence 10.1]"
+       }
+      ],
+      "target_id": "country_watch_kp",
+      "target_name": "country_watch_kp",
+      "tier": "basis",
+      "verify": {
+       "checkable_claims": 10,
+       "effective_confidence": 0.78,
+       "judge_status": "unavailable",
+       "overall_score": 1.0,
+       "score_state": "scored",
+       "supported_claims": 10
+      },
+      "via_head_id": "2530ad11-7a1b-4487-abf4-15c8ea61dbe5",
+      "via_ordinal": 1
+     },
+     {
+      "carry_reason": "fallback_ordinal_1",
+      "contextSpans": [],
+      "context_match": "assessment_of_this_record",
+      "context_origin_id": "3afec0f2-6234-4171-8f16-0d87b21c6743",
+      "corroboration": {
+       "n_desks_sharing": 3,
+       "n_sources": 6
+      },
+      "desk": "military_posture",
+      "evidence_age_h": 6.5,
+      "finding_id": "3dca8713-b473-4613-905a-df8d058e6474",
+      "order_rank": 11,
+      "ordinal": 11,
+      "produced_at": "2026-11-07T05:01:43.504886+00:00",
+      "question": "Military posture",
+      "question_source": "fallback_desk_name",
+      "salience": {
+       "cited_mass": 0.55,
+       "cited_max": 0.85,
+       "n_above": 2,
+       "n_cited": 6,
+       "n_cited_scored": 6,
+       "source": "cited_signals",
+       "version": "cited_mass.v1"
+      },
+      "severity": "high",
+      "signals": [
+       {
+        "also_cited_by": [],
+        "marker": "[11]",
+        "salience_magnitude": 0.85,
+        "signal_id": "5040442a-a682-ed19-6060-fd148931abdd",
+        "source_id": "source.france24.english",
+        "title": "[signal title 11.0]",
+        "url": "https://example.invalid/s/11/0"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[24]",
+        "salience_magnitude": 0.4,
+        "signal_id": "c2ebb167-af0f-7586-c6ab-8aeae5f58e4e",
+        "source_id": "source.bangkokpost.topstories",
+        "title": "[signal title 11.1]",
+        "url": "https://example.invalid/s/11/1"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[1]",
+        "salience_magnitude": 0.4,
+        "signal_id": "4c2081f2-911b-ddf5-73c9-3ebb9674a132",
+        "source_id": "source.cgtn.world",
+        "title": "[signal title 11.2]",
+        "url": "https://example.invalid/s/11/2"
+       }
+      ],
+      "spans": [
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 3502,
+         "body_sha256": "fe207e7b205c69e7d820839f8efdbefbe2340f975085e0d34bfdfa0b41eac598",
+         "end": 355,
+         "head_id": "3dca8713-b473-4613-905a-df8d058e6474",
+         "start": 101
+        },
+        "role": "bluf",
+        "scope_tokens": [
+         "collection_denominator"
+        ],
+        "text": "[desk sentence 11.0]"
+       },
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 5155,
+         "body_sha256": "ee611adff17af1e9935f403ebc652d2c5bfff932d1db168618cf2fcc57c542fc",
+         "end": 5155,
+         "head_id": "3afec0f2-6234-4171-8f16-0d87b21c6743",
+         "start": 0
+        },
+        "role": "context_body",
+        "scope_tokens": [],
+        "text": "[desk sentence 11.1]"
+       }
+      ],
+      "target_id": "country_watch_mm",
+      "target_name": "country_watch_mm",
+      "tier": "basis",
+      "verify": {
+       "checkable_claims": 11,
+       "effective_confidence": 0.7,
+       "judge_status": "unavailable",
+       "overall_score": 0.9,
+       "score_state": "scored",
+       "supported_claims": 10
+      },
+      "via_head_id": "0d08d63f-56aa-4ca1-8089-22cebfbdd2e2",
+      "via_ordinal": 1
+     },
+     {
+      "carry_reason": "by_mass",
+      "contextSpans": [],
+      "context_match": "assessment_of_this_record",
+      "context_origin_id": "232b9827-15e5-4e69-9074-8f8a6a5324ee",
+      "corroboration": {
+       "n_desks_sharing": 1,
+       "n_sources": 11
+      },
+      "desk": "economic_coercion",
+      "evidence_age_h": 2.47,
+      "finding_id": "3fdcd478-177f-4e02-9e9b-192d240f80e1",
+      "order_rank": 12,
+      "ordinal": 12,
+      "produced_at": "2026-11-07T09:01:53.709328+00:00",
+      "question": "Economic coercion",
+      "question_source": "fallback_desk_name",
+      "salience": {
+       "cited_mass": 0.45,
+       "cited_max": 0.6,
+       "n_above": 0,
+       "n_cited": 14,
+       "n_cited_scored": 14,
+       "source": "cited_signals",
+       "version": "cited_mass.v1"
+      },
+      "severity": "elevated",
+      "signals": [
+       {
+        "also_cited_by": [],
+        "marker": "[15]",
+        "salience_magnitude": 0.5,
+        "signal_id": "28103abd-93aa-0624-45fd-41d2542a5a7e",
+        "source_id": "source.dw.world",
+        "title": "[signal title 12.0]",
+        "url": "https://example.invalid/s/12/0"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[19]",
+        "salience_magnitude": 0.55,
+        "signal_id": "91107ba8-33cb-ba86-10f8-0c60efa04b7b",
+        "source_id": "source.japantimes.news",
+        "title": "[signal title 12.1]",
+        "url": "https://example.invalid/s/12/1"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[21]",
+        "salience_magnitude": 0.55,
+        "signal_id": "38e5f149-1cda-30a1-90eb-76c57547aaee",
+        "source_id": "source.cna.all",
+        "title": "[signal title 12.2]",
+        "url": "https://example.invalid/s/12/2"
+       }
+      ],
+      "spans": [
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 4632,
+         "body_sha256": "a37da7d19293b76830ae797024a0aa3936a548349410d700f658fc162bef286f",
+         "end": 659,
+         "head_id": "3fdcd478-177f-4e02-9e9b-192d240f80e1",
+         "start": 102
+        },
+        "role": "bluf",
+        "scope_tokens": [],
+        "text": "[desk sentence 12.0]"
+       },
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 6074,
+         "body_sha256": "0c8c1f7ca454c778abd4890f2f8b3a0cc993f45b11d4f6a3cc770628957c63e1",
+         "end": 6074,
+         "head_id": "232b9827-15e5-4e69-9074-8f8a6a5324ee",
+         "start": 0
+        },
+        "role": "context_body",
+        "scope_tokens": [],
+        "text": "[desk sentence 12.1]"
+       }
+      ],
+      "target_id": "country_g20_cn",
+      "target_name": "country_g20_cn",
+      "tier": "basis",
+      "verify": {
+       "checkable_claims": 13,
+       "effective_confidence": 0.75,
+       "judge_status": "unavailable",
+       "overall_score": 0.9167,
+       "score_state": "scored",
+       "supported_claims": 12
+      },
+      "via_head_id": "0e50f581-1be8-4132-8405-dc7df721fc1f",
+      "via_ordinal": 2
+     },
+     {
+      "carry_reason": "fallback_ordinal_1",
+      "contextSpans": [],
+      "context_match": "assessment_of_this_record",
+      "context_origin_id": "1269d340-10e7-4595-9c2e-2b1dc1aa64f5",
+      "corroboration": {
+       "n_desks_sharing": 4,
+       "n_sources": 5
+      },
+      "desk": "military_posture",
+      "evidence_age_h": 8.99,
+      "finding_id": "22df55b5-9e2a-4807-8b63-6357766f15aa",
+      "order_rank": 13,
+      "ordinal": 13,
+      "produced_at": "2026-11-07T02:32:31.583833+00:00",
+      "question": "Military posture",
+      "question_source": "fallback_desk_name",
+      "salience": {
+       "cited_mass": 0.65,
+       "cited_max": 0.7,
+       "n_above": 1,
+       "n_cited": 11,
+       "n_cited_scored": 11,
+       "source": "cited_signals",
+       "version": "cited_mass.v1"
+      },
+      "severity": "high",
+      "signals": [
+       {
+        "also_cited_by": [],
+        "marker": "[15]",
+        "salience_magnitude": 0.7,
+        "signal_id": "30c5c985-bd28-8731-7552-5e56c0857c69",
+        "source_id": "source.dawn.home",
+        "title": "[signal title 13.0]",
+        "url": "https://example.invalid/s/13/0"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[20]",
+        "salience_magnitude": 0.6,
+        "signal_id": "ca52a479-fc1b-0a51-71b4-f623db9c15e8",
+        "source_id": "source.telegram.org_channels",
+        "title": "[signal title 13.1]",
+        "url": "https://example.invalid/s/13/1"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[46]",
+        "salience_magnitude": 0.3,
+        "signal_id": "066688fc-4188-111d-711c-77e6f989da21",
+        "source_id": "source.twz.all",
+        "title": "[signal title 13.2]",
+        "url": "https://example.invalid/s/13/2"
+       }
+      ],
+      "spans": [
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 4557,
+         "body_sha256": "b8e2ea8e5f6b6f438be264002c05c16bd0ad9a123349169d478a434101e574b3",
+         "end": 494,
+         "head_id": "22df55b5-9e2a-4807-8b63-6357766f15aa",
+         "start": 92
+        },
+        "role": "bluf",
+        "scope_tokens": [
+         "collection_denominator"
+        ],
+        "text": "[desk sentence 13.0]"
+       },
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 5207,
+         "body_sha256": "6e5b2bb07adf027321007731d315bde289d85a918cb26ff177b0120ddd49218c",
+         "end": 5207,
+         "head_id": "1269d340-10e7-4595-9c2e-2b1dc1aa64f5",
+         "start": 0
+        },
+        "role": "context_body",
+        "scope_tokens": [],
+        "text": "[desk sentence 13.1]"
+       }
+      ],
+      "target_id": "country_watch_pk",
+      "target_name": "country_watch_pk",
+      "tier": "basis",
+      "verify": {
+       "checkable_claims": 14,
+       "effective_confidence": 0.7,
+       "judge_status": "unavailable",
+       "overall_score": 1.0,
+       "score_state": "scored",
+       "supported_claims": 14
+      },
+      "via_head_id": "9affc26f-6efb-487d-acd7-1092d750db0f",
+      "via_ordinal": 1
+     },
+     {
+      "carry_reason": "fallback_ordinal_1",
+      "contextSpans": [],
+      "context_match": "assessment_of_this_record",
+      "context_origin_id": "79ccb1f5-87dc-41d3-a6bd-67b5030cc002",
+      "corroboration": {
+       "n_desks_sharing": 4,
+       "n_sources": 5
+      },
+      "desk": "escalation",
+      "evidence_age_h": 8.94,
+      "finding_id": "d4914dad-247b-486a-9367-4ce48c47056d",
+      "order_rank": 14,
+      "ordinal": 14,
+      "produced_at": "2026-11-07T02:34:08.712602+00:00",
+      "question": "Escalation",
+      "question_source": "fallback_desk_name",
+      "salience": {
+       "cited_mass": 0.45,
+       "cited_max": 0.7,
+       "n_above": 1,
+       "n_cited": 7,
+       "n_cited_scored": 7,
+       "source": "cited_signals",
+       "version": "cited_mass.v1"
+      },
+      "severity": "high",
+      "signals": [
+       {
+        "also_cited_by": [],
+        "marker": "[14]",
+        "salience_magnitude": 0.5,
+        "signal_id": "de77b834-cd2f-6f1e-97c0-822bacce8cc4",
+        "source_id": "source.aljazeera.world",
+        "title": "[signal title 14.0]",
+        "url": "https://example.invalid/s/14/0"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[31]",
+        "salience_magnitude": 0.7,
+        "signal_id": "b21cfddc-dfab-39f5-b587-021ed0da528b",
+        "source_id": "source.aljazeera.world",
+        "title": "[signal title 14.1]",
+        "url": "https://example.invalid/s/14/1"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[39]",
+        "salience_magnitude": 0.6,
+        "signal_id": "b49d5e18-91c1-58ab-5c2f-ffbc821f9a09",
+        "source_id": "source.hindustantimes.world",
+        "title": "[signal title 14.2]",
+        "url": "https://example.invalid/s/14/2"
+       }
+      ],
+      "spans": [
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 3559,
+         "body_sha256": "900a7871ef75d2a5e695ae6691c11fc57b6651cab943ff65f3fc4ada3c3d4c68",
+         "end": 367,
+         "head_id": "d4914dad-247b-486a-9367-4ce48c47056d",
+         "start": 92
+        },
+        "role": "bluf",
+        "scope_tokens": [
+         "collection_denominator"
+        ],
+        "text": "[desk sentence 14.0]"
+       },
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 6892,
+         "body_sha256": "942b4b45ddd180411ddc601897777515481547d6baa6cf9cf2163b94fda217b5",
+         "end": 6892,
+         "head_id": "79ccb1f5-87dc-41d3-a6bd-67b5030cc002",
+         "start": 0
+        },
+        "role": "context_body",
+        "scope_tokens": [],
+        "text": "[desk sentence 14.1]"
+       }
+      ],
+      "target_id": "country_g20_id",
+      "target_name": "country_g20_id",
+      "tier": "basis",
+      "verify": {
+       "checkable_claims": 11,
+       "effective_confidence": 0.7,
+       "judge_status": "unavailable",
+       "overall_score": 1.0,
+       "score_state": "scored",
+       "supported_claims": 11
+      },
+      "via_head_id": "12b02d70-36ff-4817-9101-512187a0edad",
+      "via_ordinal": 1
+     },
+     {
+      "carry_reason": "by_mass",
+      "contextSpans": [],
+      "context_match": "assessment_of_this_record",
+      "context_origin_id": "e74d8ed3-deab-45d5-bdf7-62f212a0e4fd",
+      "corroboration": {
+       "n_desks_sharing": 4,
+       "n_sources": 10
+      },
+      "desk": "escalation",
+      "evidence_age_h": 4.48,
+      "finding_id": "1df2a346-d18f-42bd-8a21-5cfbc39e39e2",
+      "order_rank": 15,
+      "ordinal": 15,
+      "produced_at": "2026-11-07T07:01:49.487236+00:00",
+      "question": "Escalation",
+      "question_source": "fallback_desk_name",
+      "salience": {
+       "cited_mass": 0.2,
+       "cited_max": 0.6,
+       "n_above": 0,
+       "n_cited": 15,
+       "n_cited_scored": 15,
+       "source": "cited_signals",
+       "version": "cited_mass.v1"
+      },
+      "severity": "high",
+      "signals": [
+       {
+        "also_cited_by": [],
+        "marker": "[5]",
+        "salience_magnitude": 0.5,
+        "signal_id": "daf452e6-6a96-702c-1316-910e890cf5ab",
+        "source_id": "source.timesofindia.world",
+        "title": "[signal title 15.0]",
+        "url": "https://example.invalid/s/15/0"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[69]",
+        "salience_magnitude": 0.4,
+        "signal_id": "99868ead-441f-aa36-575a-fb9bab37a2a4",
+        "source_id": "source.anadolu.english",
+        "title": "[signal title 15.1]",
+        "url": "https://example.invalid/s/15/1"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[95]",
+        "salience_magnitude": 0.5,
+        "signal_id": "b2567e6e-99ed-3de8-52c7-22f40f7ba54a",
+        "source_id": "source.anadolu.english",
+        "title": "[signal title 15.2]",
+        "url": "https://example.invalid/s/15/2"
+       }
+      ],
+      "spans": [
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 4284,
+         "body_sha256": "a4b3e8adf662acadde549845c7dbe059c8b6ad7c3c458be90aed32802a14a7ed",
+         "end": 473,
+         "head_id": "1df2a346-d18f-42bd-8a21-5cfbc39e39e2",
+         "start": 102
+        },
+        "role": "bluf",
+        "scope_tokens": [],
+        "text": "[desk sentence 15.0]"
+       },
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 4656,
+         "body_sha256": "41b10b9eb17cf32a21591c4a37ee600d1da795122458d0cf0f11482593d8b6e4",
+         "end": 4656,
+         "head_id": "e74d8ed3-deab-45d5-bdf7-62f212a0e4fd",
+         "start": 0
+        },
+        "role": "context_body",
+        "scope_tokens": [],
+        "text": "[desk sentence 15.1]"
+       }
+      ],
+      "target_id": "country_g20_fr",
+      "target_name": "country_g20_fr",
+      "tier": "basis",
+      "verify": {
+       "checkable_claims": 13,
+       "effective_confidence": 0.75,
+       "judge_status": "unavailable",
+       "overall_score": 1.0,
+       "score_state": "scored",
+       "supported_claims": 13
+      },
+      "via_head_id": "e4f83a48-43ec-4f24-8a0e-f4bad5c289f8",
+      "via_ordinal": 1
+     },
+     {
+      "carry_reason": "by_mass",
+      "contextSpans": [],
+      "context_match": "assessment_of_this_record",
+      "context_origin_id": "0b7753ff-5e5a-4923-ab6c-1be8263c09ea",
+      "corroboration": {
+       "n_desks_sharing": 3,
+       "n_sources": 5
+      },
+      "desk": "escalation",
+      "evidence_age_h": 8.35,
+      "finding_id": "b7a099d6-ec37-4283-b496-2004db555ce4",
+      "order_rank": 16,
+      "ordinal": 16,
+      "produced_at": "2026-11-07T03:10:39.311827+00:00",
+      "question": "Escalation",
+      "question_source": "fallback_desk_name",
+      "salience": {
+       "cited_mass": 0.3,
+       "cited_max": 0.7,
+       "n_above": 1,
+       "n_cited": 9,
+       "n_cited_scored": 9,
+       "source": "cited_signals",
+       "version": "cited_mass.v1"
+      },
+      "severity": "elevated",
+      "signals": [
+       {
+        "also_cited_by": [],
+        "marker": "[5]",
+        "salience_magnitude": 0.45,
+        "signal_id": "f3c367aa-b8fc-c348-8c6c-39a5087f13a6",
+        "source_id": "source.sahelintelligence.news",
+        "title": "[signal title 16.0]",
+        "url": "https://example.invalid/s/16/0"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[10]",
+        "salience_magnitude": 0.55,
+        "signal_id": "365a9ddb-28bf-dbaf-3fd0-1eef584e389a",
+        "source_id": "source.rsshub.rfi.afrique",
+        "title": "[signal title 16.1]",
+        "url": "https://example.invalid/s/16/1"
+       },
+       {
+        "also_cited_by": [],
+        "marker": "[11]",
+        "salience_magnitude": 0.35,
+        "signal_id": "589947da-c130-1c49-3273-10070354ddda",
+        "source_id": "source.allafrica.headlines",
+        "title": "[signal title 16.2]",
+        "url": "https://example.invalid/s/16/2"
+       }
+      ],
+      "spans": [
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 5179,
+         "body_sha256": "38ccdcfce195f5c624f9ce4a14196cffee407c22bb7ece5e3cbd772d48760fa2",
+         "end": 490,
+         "head_id": "b7a099d6-ec37-4283-b496-2004db555ce4",
+         "start": 101
+        },
+        "role": "bluf",
+        "scope_tokens": [],
+        "text": "[desk sentence 16.0]"
+       },
+       {
+        "markers": [],
+        "origin": {
+         "body_len": 5675,
+         "body_sha256": "2dde44cf01be75148acb9b5e07012355c03708d04f91da62399b8f2c8884ccf9",
+         "end": 5675,
+         "head_id": "0b7753ff-5e5a-4923-ab6c-1be8263c09ea",
+         "start": 0
+        },
+        "role": "context_body",
+        "scope_tokens": [],
+        "text": "[desk sentence 16.1]"
+       }
+      ],
+      "target_id": "country_watch_ne",
+      "target_name": "country_watch_ne",
+      "tier": "basis",
+      "verify": {
+       "checkable_claims": 12,
+       "effective_confidence": 0.7,
+       "judge_status": "unavailable",
+       "overall_score": 1.0,
+       "score_state": "scored",
+       "supported_claims": 12
+      },
+      "via_head_id": "a6a7edcb-c85e-448d-820a-cb3342634648",
+      "via_ordinal": 2
+     }
+    ],
+    "coverage": [],
+    "drops": {
+     "counts": {
+      "below_floor": 0,
+      "candidates": 33,
+      "carried": 16,
+      "invisible_heads": null,
+      "no_head": 0,
+      "not_selected": 17,
+      "shown": 33,
+      "shown_not_carried": 17,
+      "trimmed": 0
+     },
+     "rows": []
+    },
+    "floor": {
+     "cap": 16,
+     "cap_effective": 16,
+     "displaced": [],
+     "grain": "region",
+     "groups": [
+      {
+       "best_order_rank": 8,
+       "carried": 3,
+       "group_id": "region_africa",
+       "group_name": "Region \u2014 Africa",
+       "offered": 6,
+       "reason": "in_prefix"
+      },
+      {
+       "best_order_rank": 7,
+       "carried": 1,
+       "group_id": "region_americas",
+       "group_name": "Region \u2014 Americas",
+       "offered": 6,
+       "reason": "in_prefix"
+      },
+      {
+       "best_order_rank": 2,
+       "carried": 3,
+       "group_id": "region_europe",
+       "group_name": "Region \u2014 Europe",
+       "offered": 6,
+       "reason": "in_prefix"
+      },
+      {
+       "best_order_rank": 10,
+       "carried": 5,
+       "group_id": "region_indo_pacific",
+       "group_name": "Region \u2014 Indo-Pacific",
+       "offered": 10,
+       "reason": "in_prefix"
+      },
+      {
+       "best_order_rank": 3,
+       "carried": 3,
+       "group_id": "region_mena",
+       "group_name": "Region \u2014 Middle East & North Africa",
+       "offered": 4,
+       "reason": "in_prefix"
+      },
+      {
+       "best_order_rank": 1,
+       "carried": 1,
+       "group_id": "thematic:escalation_composition",
+       "group_name": "escalation_composition (cross-region thematic)",
+       "offered": 1,
+       "reason": "in_prefix"
+      }
+     ],
+     "honoured": true,
+     "per_group": 1,
+     "promoted": [],
+     "stale_hours": 72.0,
+     "version": "subject_group_floor.v1"
+    },
+    "lead": {
+     "block_ordinals": [
+      1
+     ],
+     "kind": "earned_single",
+     "test": {
+      "bar_ratio": 1.5,
+      "bar_share": 0.15,
+      "earned": true,
+      "key": "cited_mass.v1",
+      "min_candidates": 8,
+      "min_candidates_effective": 8,
+      "n_candidates": 33,
+      "no_head": 0,
+      "ratio_12": 2.1937,
+      "top_share": 0.2986
+     }
+    },
+    "regime": "assembly",
+    "schema": "assembly.v1",
+    "tension_checked": {
+     "blocks": 16,
+     "pairs_examined": 392,
+     "pairs_found": 48,
+     "pairs_found_carried": 12,
+     "pairs_found_uncarried": 36,
+     "scope": "shown_and_dropped",
+     "scope_note": "BLUF-grain; ambivalent pairs declined"
+    },
+    "tensions": [],
+    "tier": "world"
+   },
+   "citations": [],
+   "meta": true
+  }
+ },
+ "derived_from": [
+  "8bf6055c-89ac-4ce5-b145-ca81785e1b1a",
+  "50a2e258-010c-4fa0-b467-a2d4e33b662e",
+  "5b6e3d11-663d-4569-b524-d578277e8826",
+  "1ee268c3-ef6b-48ad-a2ac-3606afad5d9b",
+  "4ab2d409-e40f-4d6a-bf11-a5f9e45aa0fd",
+  "362d19c0-7d97-48e4-9e9d-7d10fb5a68c6",
+  "954b861e-199c-4713-b88b-74ed3f7486e0",
+  "869d6df5-e85a-40af-b94c-c653eeff9f46",
+  "cdcba4ae-db8b-4219-a3db-cee7743b44b7",
+  "2530ad11-7a1b-4487-abf4-15c8ea61dbe5",
+  "0d08d63f-56aa-4ca1-8089-22cebfbdd2e2",
+  "0e50f581-1be8-4132-8405-dc7df721fc1f",
+  "9affc26f-6efb-487d-acd7-1092d750db0f",
+  "12b02d70-36ff-4817-9101-512187a0edad",
+  "e4f83a48-43ec-4f24-8a0e-f4bad5c289f8",
+  "a6a7edcb-c85e-448d-820a-cb3342634648",
+  "d3dda026-20cb-43b3-99cf-62e886264f46",
+  "6194a743-26cd-4cfe-aaff-0d2bd6aeae3b",
+  "21e8b70e-7033-47f5-bf6e-1b092671306e",
+  "389caec2-0eaa-45dd-9ef1-983ba843a6c4",
+  "1798c470-f931-4028-bdf0-289663b927b3",
+  "cc65fcd3-77e2-4ce6-9c72-b2a78c96d8ec",
+  "f2745ae1-5e3f-48e9-bd90-f8bf561b014e",
+  "ce02203b-a621-44b1-ba17-c4356d34dfec",
+  "4ce222ed-3887-4cca-9a50-66f3a6eb037a",
+  "73b0b082-c210-4b28-97dd-bde85be7ebe5",
+  "3f21ca4e-affd-438b-babf-39a1e8584dd7",
+  "03b246e7-558a-41b3-9298-cb1597b70d2d",
+  "fcc92f82-cb15-414f-9832-e5f709c3f745",
+  "59877fc0-d493-4f54-992b-4ef1e9c7fe48",
+  "92ef2ae7-5cd5-430b-946c-282f497f6d84",
+  "c3904392-7fa0-43ad-879f-7ac188b6e8cc",
+  "f012c0a7-252a-4451-b6b2-e41e1c85eb29"
+ ],
+ "id": "e30e67d3-7842-49d9-96e4-3c95e35df8cd",
+ "produced_at": "2026-11-07T12:21:03.632243+00:00",
+ "severity": "high",
+ "target_id": null,
+ "title": "[world read title]",
+ "verification": {
+  "aligned_by_id": 118,
+  "aligned_positionally": 0,
+  "branch_scores": {
+   "absence": {
+    "checkable": 4,
+    "score": 1.0,
+    "supported": 4
+   },
+   "assembly": {
+    "checkable": 39,
+    "score": 1.0,
+    "supported": 39
+   },
+   "citation_support": {
+    "checkable": 115,
+    "score": 1.0,
+    "supported": 115
+   },
+   "synthesis": {
+    "checkable": 1,
+    "score": 1.0,
+    "supported": 1
+   }
+  },
+  "branch_versions": {
+   "absence": "absence.v5",
+   "assembly": "assembly_arms.v1",
+   "citation_support": "citsupp.v6",
+   "synthesis": "synthesis.v0"
+  },
+  "checkable_claims": 39,
+  "claim_verdicts_truncated": true,
+  "confidence_ceiling": 0.6,
+  "counters": {
+   "absence_slice_candidates": 2,
+   "absence_slice_off_scope_rows_excluded": 45,
+   "absence_slice_route_excluded": 1,
+   "absence_slice_route_excluded_continuity_claim": 1,
+   "absence_slice_verified": 2,
+   "assembly_arms_reads_audited": 1,
+   "assembly_attribution_blocks_checked": 16,
+   "assembly_carried_origins_bridged": 15,
+   "assembly_coverage_units_checked": 33,
+   "assembly_drops_carried": 16,
+   "assembly_drops_not_selected": 17,
+   "assembly_drops_shown": 33,
+   "assembly_drops_shown_not_carried": 17,
+   "assembly_floor_checked": 1,
+   "assembly_headline_regraded_to_arms": 1,
+   "assembly_quote_sha_unverifiable": 10,
+   "assembly_quote_spans_checked": 16,
+   "assembly_quote_spans_ok": 16,
+   "assembly_scope_bounded_sentences": 5,
+   "assembly_scope_spans_checked": 16,
+   "composition_integrity_absence_claims_seen": 4,
+   "composition_integrity_absence_scope_laundered": 1
+  },
+  "faithfulness_score": 1.0,
+  "judge_attempts": 2,
+  "judge_http_statuses": [
+   "200",
+   "200"
+  ],
+  "judge_llm_ref": "llm.verify.innoai_gemma.openai_compat",
+  "judge_pipeline_version": "2026-10-03/2",
+  "judge_route": "configured",
+  "judge_status": "llm",
+  "judge_trigger": "sampled",
+  "judge_unavailable_reason": null,
+  "miscount_claims": 0,
+  "overall_score": 0.6,
+  "pre_escalation_judge_status": null,
+  "pre_escalation_overall_score": null,
+  "provisional": false,
+  "provisional_score_ceiling": null,
+  "score_state": "scored",
+  "score_state_reason": null,
+  "supported_claims": 39,
+  "unmatched_claims": 0,
+  "unsupported_spans": []
+ }
+}

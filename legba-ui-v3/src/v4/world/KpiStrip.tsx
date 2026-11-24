@@ -1,17 +1,29 @@
 /**
  * The World — rails · KPI strip.
  *
- * A horizontal row of compact stat cards over the substrate read API. Counts
- * are intentionally coarse (the substrate has no count endpoint): we read a
- * capped page and show its length, suffixing `+` when the page is saturated so
- * the operator knows the true figure is at least that. Where the shared world
- * store already carries a live count (set by the map/feed) we prefer it.
+ * A horizontal row of compact stat cards over the substrate read API.
+ *
+ * WEIGHT (W11-F262, U-8). A count needs rows, never bodies.
+ *
+ * WHAT THE "24h" CARDS COUNT (W11-F271). "Signals 24h" and "Findings 24h"
+ * used to print the length of the newest-500 page of `/signals` and
+ * `/findings` — no time bound, so on any real day both read "500+" and the
+ * label was not true. They now read `GET /v3/counts?window_hours=24`
+ * (registry/window_counts_api.py): two server-side `count(*)` over the same
+ * filters the list routes apply (canonical signals by `fetched_at`; rows of
+ * kind `finding` by `produced_at`), one ~100-byte answer. The map's live
+ * store counts are counts of PLACED marks, not of a day, so these two cards
+ * no longer prefer them. A registry without the route (404) leaves the card
+ * unread ("—"), never a number that is not a 24-hour count.
+ *   - situations: the route's own `state` filter, per active state;
+ *   - sources: `/registry/sources?state=active` — the route's own state
+ *     filter, so the client no longer downloads paused/retired rows to drop.
  */
 import { useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { apiGet, ApiError } from '@/lib/api'
-import { useWorldState } from './worldState'
 import { cn } from '@/lib/cn'
+import { SOURCE_ROSTER_ROUTE } from '@/lib/deskNames'
 
 /**
  * Track the last non-trivial change in a numeric KPI across polls — the "which
@@ -29,34 +41,84 @@ function useDelta(value: number | null): number | null {
   return ref.current.delta
 }
 
-/** Page cap used for the "length-or-more" counts. */
+/** Page cap for the situation reads (the route pages; a `next_cursor` = `+`). */
 const PAGE_LIMIT = 500
 
-interface Page<T> {
-  data: T[]
+/** The window the two "24h" cards count over, in hours. */
+export const KPI_WINDOW_HOURS = 24
+
+/** The strip's reads, exported for the weight guard test (W11-F262, W11-F271). */
+export const KPI_READS = {
+  counts: `/v3/counts?window_hours=${KPI_WINDOW_HOURS}`,
+  // RA-1: the reader's source roster (the card counts `state === 'active'`)
+  sources: SOURCE_ROSTER_ROUTE,
+} as const
+
+/** `GET /v3/counts` (registry/window_counts_api.py). */
+export interface WindowCounts {
+  window_hours: number
+  since: string
+  signals: number
+  findings: number
 }
 
-interface SituationRow {
-  id: string
-  title: string
-  state: 'active' | 'escalating' | 'resolved'
+/** The window counts; `null` when the route is absent (404) or answers without
+ *  both numbers: unknown, never 0. */
+async function getWindowCounts(): Promise<WindowCounts | null> {
+  try {
+    const res = await apiGet<Partial<WindowCounts> | null>(KPI_READS.counts)
+    const ok = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n)
+    return res && ok(res.signals) && ok(res.findings) ? (res as WindowCounts) : null
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return null
+    throw e
+  }
+}
+
+/** How often the strip re-reads its counts (a count strip, not a feed). */
+export const KPI_REFETCH_MS = 60_000
+
+/** The situation states the strip counts as "active" — the route's own
+ *  `state` filter values (`substrate_reads_api.SituationState`). */
+const ACTIVE_SITUATION_STATES = ['active', 'escalating'] as const
+
+/** One `/situations` page — the route PAGES (`{data, next_cursor}`); it is not
+ *  a plain list. */
+interface SituationsPage {
+  data: { id: string }[]
+  next_cursor?: string | null
+}
+
+/**
+ * The active-situation count, read with the route's own `state` filter.
+ *
+ * C2 — this used to read `/situations` as a plain LIST and filter a `state`
+ * field the rows do not carry (they carry `status`), so the tile said "0
+ * active situations" over a register with active rows. Now each active state
+ * is asked for by name; a page with a `next_cursor` is a lower bound (`+`).
+ * `null` when the route is absent (404): unknown, never 0.
+ */
+async function getActiveSituations(): Promise<{ n: number; capped: boolean } | null> {
+  try {
+    const pages = await Promise.all(
+      ACTIVE_SITUATION_STATES.map((s) =>
+        apiGet<SituationsPage>(`/situations?state=${s}&limit=${PAGE_LIMIT}`),
+      ),
+    )
+    return {
+      n: pages.reduce((acc, p) => acc + (p.data ?? []).length, 0),
+      capped: pages.some((p) => !!p.next_cursor),
+    }
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return null
+    throw e
+  }
 }
 
 interface SourceRow {
   descriptor_id: string
   state: string
   name: string
-}
-
-/** Tolerant fetch: 404 (endpoint absent in a slim deploy) → empty page. */
-async function getPage<T>(path: string): Promise<T[]> {
-  try {
-    const res = await apiGet<Page<T>>(path)
-    return res.data ?? []
-  } catch (e) {
-    if (e instanceof ApiError && e.status === 404) return []
-    throw e
-  }
 }
 
 async function getList<T>(path: string): Promise<T[]> {
@@ -70,57 +132,36 @@ async function getList<T>(path: string): Promise<T[]> {
 }
 
 export default function KpiStrip() {
-  // Live counts the map/feed may already have pushed into the world store.
-  const liveSignalCount = useWorldState((s) => s.counts.signals)
-  const liveFindingCount = useWorldState((s) => s.counts.findings)
-
-  // Always fetch a fallback count — the map's live count can legitimately be 0
-  // (e.g. findings the map couldn't place), and a real page count is better.
-  const signals = useQuery({
-    queryKey: ['world-kpi', 'signals'],
-    queryFn: () => getPage<{ id: string }>(`/signals?limit=${PAGE_LIMIT}`),
-    refetchInterval: 30_000,
-  })
-
-  const findings = useQuery({
-    queryKey: ['world-kpi', 'findings'],
-    queryFn: () => getPage<{ id: string }>(`/findings?limit=${PAGE_LIMIT}`),
-    refetchInterval: 30_000,
+  const counts = useQuery({
+    queryKey: ['world-kpi', 'counts', KPI_WINDOW_HOURS],
+    queryFn: getWindowCounts,
+    refetchInterval: KPI_REFETCH_MS,
   })
 
   const situations = useQuery({
-    queryKey: ['world-kpi', 'situations'],
-    queryFn: () => getList<SituationRow>('/situations'),
-    refetchInterval: 30_000,
+    queryKey: ['world-kpi', 'situations', 'active'],
+    queryFn: getActiveSituations,
+    refetchInterval: KPI_REFETCH_MS,
   })
 
   const sources = useQuery({
     queryKey: ['world-kpi', 'sources'],
-    queryFn: () => getList<SourceRow>('/registry/sources'),
-    refetchInterval: 30_000,
+    queryFn: () => getList<SourceRow>(KPI_READS.sources),
+    refetchInterval: KPI_REFETCH_MS,
   })
 
-  const signalsValue =
-    liveSignalCount != null && liveSignalCount > 0
-      ? exact(liveSignalCount)
-      : formatPage(signals.data, signals.isLoading)
-  const findingsValue =
-    liveFindingCount != null && liveFindingCount > 0
-      ? exact(liveFindingCount)
-      : formatPage(findings.data, findings.isLoading)
+  const windowCounts = counts.data ?? null
+  const signalsValue = windowCounts ? exact(windowCounts.signals) : LOADING
+  const findingsValue = windowCounts ? exact(windowCounts.findings) : LOADING
 
-  const activeSituations = (situations.data ?? []).filter(
-    (s) => s.state === 'active' || s.state === 'escalating',
-  ).length
+  const activeSituations = situations.data ?? null
   const activeSources = (sources.data ?? []).filter((s) => s.state === 'active').length
 
   // Numeric current values for the band-change deltas (null while loading).
-  const signalsNum =
-    liveSignalCount != null && liveSignalCount > 0 ? liveSignalCount : nOrNull(signals.data, signals.isLoading)
-  const findingsNum =
-    liveFindingCount != null && liveFindingCount > 0 ? liveFindingCount : nOrNull(findings.data, findings.isLoading)
-  const situationsNum = situations.isLoading ? null : activeSituations
-  const sourcesNum = sources.isLoading ? null : activeSources
+  const signalsNum = windowCounts ? windowCounts.signals : null
+  const findingsNum = windowCounts ? windowCounts.findings : null
+  const situationsNum = activeSituations ? activeSituations.n : null
+  const sourcesNum = sources.isLoading || sources.isError ? null : activeSources
 
   const signalsDelta = useDelta(signalsNum)
   const findingsDelta = useDelta(findingsNum)
@@ -132,17 +173,24 @@ export default function KpiStrip() {
       className="flex shrink-0 items-stretch gap-2 border-b border-slate-800 bg-surface-300 px-3 py-2"
       data-testid="world-kpi-strip"
     >
-      <KpiCard label="Signals 24h" value={signalsValue} delta={signalsDelta} loading={signalLoading(signals.isLoading, liveSignalCount)} />
-      <KpiCard label="Findings 24h" value={findingsValue} delta={findingsDelta} loading={signalLoading(findings.isLoading, liveFindingCount)} />
+      <KpiCard label={`Signals ${KPI_WINDOW_HOURS}h`} value={signalsValue} delta={signalsDelta} loading={counts.isLoading} />
+      <KpiCard label={`Findings ${KPI_WINDOW_HOURS}h`} value={findingsValue} delta={findingsDelta} loading={counts.isLoading} />
       <KpiCard
         label="Active situations"
-        value={situations.isLoading ? LOADING : exact(activeSituations)}
+        value={
+          !activeSituations
+            ? LOADING
+            : activeSituations.capped
+              ? { text: `${activeSituations.n.toLocaleString()}+`, capped: true }
+              : exact(activeSituations.n)
+        }
         delta={situationsDelta}
         loading={situations.isLoading}
       />
       <KpiCard
         label="Sources active"
-        value={sources.isLoading ? LOADING : exact(activeSources)}
+        // a failed read is '—', never a false zero (RA-1: a refused read drew 0)
+        value={sources.isLoading || sources.isError ? LOADING : exact(activeSources)}
         delta={sourcesDelta}
         loading={sources.isLoading}
       />
@@ -150,22 +198,12 @@ export default function KpiStrip() {
   )
 }
 
-/** Page length as a number (null while loading) — for the delta arithmetic. */
-function nOrNull(rows: { id: string }[] | undefined, loading: boolean): number | null {
-  if (loading || rows == null) return null
-  return rows.length
-}
-
-function signalLoading(isLoading: boolean, live: number | undefined): boolean {
-  return live == null && isLoading
-}
-
 /** A KPI's display text plus whether it's an honest page-cap, not a live count. */
 interface KpiValue {
   text: string
-  /** True when `text` is `${PAGE_LIMIT}+` — a display cap (the query limit),
-   *  never a real total. `KpiCard` surfaces this via a tooltip so the "+"
-   *  reads as what it is instead of looking like a suspiciously round count. */
+  /** True when `text` is `N+` — a page cap (the query limit), never a real
+   *  total. `KpiCard` surfaces this via a tooltip so the "+" reads as what it
+   *  is instead of looking like a suspiciously round count. */
   capped: boolean
 }
 
@@ -173,20 +211,6 @@ const LOADING: KpiValue = { text: '—', capped: false }
 
 function exact(n: number): KpiValue {
   return { text: n.toLocaleString(), capped: false }
-}
-
-/**
- * Page length, suffixed `+` when the page hit `PAGE_LIMIT` (the true count is
- * higher — the substrate has no cheap count endpoint for this read, see the
- * module doc). Marked `capped` so the card can say so out loud rather than
- * leaving "500+" to read as an oddly-precise number.
- */
-function formatPage(rows: { id: string }[] | undefined, loading: boolean): KpiValue {
-  if (loading || rows == null) return LOADING
-  const n = rows.length
-  return n >= PAGE_LIMIT
-    ? { text: `${n.toLocaleString()}+`, capped: true }
-    : { text: n.toLocaleString(), capped: false }
 }
 
 function KpiCard({
@@ -214,7 +238,7 @@ function KpiCard({
           )}
           title={
             value.capped
-              ? `${PAGE_LIMIT.toLocaleString()}+ is a display cap (the query limit) — the true count is higher, not a live total`
+              ? `${value.text} is a display cap (the query limit) — the true count is higher, not a live total`
               : undefined
           }
           data-testid={value.capped ? 'world-kpi-capped' : undefined}
@@ -224,7 +248,7 @@ function KpiCard({
         {delta != null && delta !== 0 && (
           <span
             className={cn(
-              'text-[11px] font-medium tabular-nums leading-none',
+              'text-label font-medium tabular-nums leading-none',
               delta > 0 ? 'text-accent-ok' : 'text-accent-warning',
             )}
             title={`${delta > 0 ? '+' : ''}${delta} since last update`}
@@ -235,7 +259,7 @@ function KpiCard({
           </span>
         )}
       </div>
-      <span className="mt-1 text-[10px] uppercase tracking-wide text-slate-500">
+      <span className="mt-1 text-label uppercase tracking-wide text-ink-3">
         {label}
       </span>
     </div>

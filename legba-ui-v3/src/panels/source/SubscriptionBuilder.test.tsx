@@ -12,6 +12,7 @@ import type { ReactElement } from 'react'
 import SubscriptionBuilderPanel from './SubscriptionBuilder'
 import type { PanelRegistration } from '@/types'
 import type { SourceDescriptorOut } from './sourceTypes'
+import { pickScopeOption } from '@/test/pickScope'
 
 function reg(): PanelRegistration {
   return {
@@ -170,10 +171,7 @@ function mockFetch() {
  *  The explicit-mode source_id box is now a registry dropdown, so the option
  *  must land before we can select it. */
 async function pickSource(value: string) {
-  const sel = (await screen.findByTestId('subbuilder-source-id')) as HTMLSelectElement
-  await waitFor(() => expect([...sel.options].some((o) => o.value === value)).toBe(true))
-  fireEvent.change(sel, { target: { value } })
-  await waitFor(() => expect(sel.value).toBe(value))
+  await pickScopeOption('subbuilder-source-id', value)
 }
 
 describe('SubscriptionBuilderPanel', () => {

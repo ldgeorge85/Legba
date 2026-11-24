@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:lens_right": {
+      "source": "analyst_lens_right.yaml",
+      "state": "draft"
+    }
+  }
+}

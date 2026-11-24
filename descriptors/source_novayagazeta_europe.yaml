@@ -1,0 +1,81 @@
+# X-1 source expansion (2026-11-14) — draft SourceDescriptor. Ships DRAFT;
+# the reference host walks it to CONFIGURED (descriptors/LIFECYCLE.md), never
+# active — activation is the owner's call per source.
+#
+# Novaya Gazeta Europe — the independent Russian-language newsroom founded in
+# 2022 by Novaya Gazeta journalists in exile (Riga). The first
+# Russian-language reporting feed in the tree (the Meduza head is English).
+# Checked 2026-11-14 by the source-expansion review (one GET, generic client
+# identity): HTTP 200, application/xml, 100 items, newest 2026-11-14 15:52
+# UTC, oldest 2026-11-10 — about 20+ items a day. Hourly polling keeps well
+# inside a 100-item, four-day window.
+#
+# Class: reporting (independent, exile). Language: ru. Region: Russia — the
+# declared RU is the publisher-origin FALLBACK only, applied when the in-body
+# geocoder resolves no country (data/sources/baseline.py).
+#
+# robots.txt allows the feed path for `*`.
+# Credibility: novayagazeta.eu 0.78 / wire.
+#
+# First poll: the default first-poll age cap (30 days) — not an archive wanted
+# whole.
+
+identity:
+  id: source.novayagazeta_europe.news
+  name: Novaya Gazeta Europe (Russian)
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: x1_source_expansion
+  created: "2026-11-14T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [RU]
+  languages: [ru]
+  tags: [news, russia, independent, exile_media, russian_language]
+  source_class: reporting
+  license_class: cc_nc            # CC BY-NC-SA 4.0 — non-commercial
+  attribution: "Novaya Gazeta Europe (novayagazeta.eu), CC BY-NC-SA 4.0"
+  access_class: public            # free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "11 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 60
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://novayagazeta.eu/feed/rss"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

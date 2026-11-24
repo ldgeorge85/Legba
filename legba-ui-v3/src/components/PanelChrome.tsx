@@ -13,6 +13,14 @@ import type { ReactNode } from 'react'
 import { usePanelTier } from '@/components/PanelTierContext'
 import { usePanelEmbedded } from '@/components/PanelEmbedContext'
 import { useDebugMode } from '@/lib/debugMode'
+import { dropCachedGets } from '@/lib/queryCache'
+
+/** An explicit refresh asks the registry again — never the api layer's 30 s
+ *  GET cache (X4 READPATH, `lib/queryCache`). */
+function refreshFresh(onRefresh: () => void | Promise<unknown>): void {
+  dropCachedGets()
+  void onRefresh()
+}
 
 export interface PanelChromeProps {
   registration: PanelRegistration
@@ -77,7 +85,7 @@ export function PanelChrome({
             {onRefresh && (
               <button
                 onClick={() => {
-                  void onRefresh()
+                  refreshFresh(onRefresh)
                 }}
                 className="inline-flex items-center justify-center text-ink-2 hover:text-ink-1 p-1 rounded border border-line hover:border-line-strong"
                 title="Refresh"
@@ -118,7 +126,7 @@ export function PanelChrome({
           {onRefresh && (
             <button
               onClick={() => {
-                void onRefresh()
+                refreshFresh(onRefresh)
               }}
               className="inline-flex items-center justify-center text-ink-2 hover:text-ink-1 p-1 rounded border border-line hover:border-line-strong"
               title="Refresh"

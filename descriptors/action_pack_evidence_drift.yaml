@@ -1,0 +1,111 @@
+# evidence_drift action pack (lane D-1 — source drift).
+#
+# A page the platform read can change afterwards: a death toll revised, a
+# headline rewritten, a story retracted, the page gone. The platform keeps
+# every version it fetched (fetch_versions), classifies the change between
+# consecutive versions (identical_text, cosmetic, appended, minor_edit,
+# title_changed, substantive_edit, retracted_or_replaced, gone) and flags what
+# relied on a version that a substantive change superseded
+# (evidence_drift_flags). This pack lets an agent see that and act on it:
+#
+#   evidence_versions(record_id | address)     — the versions and the class
+#                                                between consecutive ones
+#   evidence_diff(record_id | address, ...)    — the changed passages side by
+#                                                side (bounded)
+#   request_evidence_reread(address, note?)    — one intake request to re-read
+#                                                the page (keeps the version,
+#                                                writes no record); refuses
+#                                                unless LEGBA_INTAKE_AGENT_REQUESTS
+#   request_rederive(flag_id, note?)           — records that a flagged
+#                                                dependant should be re-derived
+#                                                with the changed text (acted on
+#                                                by a later lane; nothing re-runs)
+#   review_drift_flag(flag_id, outcome, note)  — reviewed, or resolved as
+#                                                unchanged_in_substance /
+#                                                dependant_corrected /
+#                                                dependant_withdrawn (the last
+#                                                two also record a re-derive
+#                                                request per output derived
+#                                                from the dependant — D-2)
+#   evidence_drift_assessment(drift_id |      — D-2: what KIND of change it was
+#     flag_id | record_id | address)            (type, acknowledged, scope,
+#                                                timing, summary,
+#                                                history_rewrite) and each
+#                                                flag's claim effect
+#   drift_flags(state?, closed_by?, ...)       — D-2: flags in review order;
+#                                                closed_by=system lists the
+#                                                assessor's tracked auto-closes
+#   reopen_drift_flag(flag_id, note)           — D-2: re-open an auto-closed
+#                                                flag (a new open flag row)
+#
+# The principal on every write is the CALLING analyst (analyst::<id>, from the
+# run's own provenance identity), never an argument.
+#
+# FOUR-SURFACE convergence (tools must be pack tools): this `tools` list ==
+# EVIDENCE_DRIFT_TOOLS == register_evidence_drift_tools
+# (src/legba/data/analysts/agency/evidence_drift_tools.py) == every tool a
+# bound analyst can dispatch through it. No analyst grants this pack until an
+# operator adds the grant.
+#
+# `pipeline` (request_evidence_reread): the page pipeline the re-read runs
+# under; empty = LEGBA_INTAKE_DRIFT_PIPELINE, else the instance's default page
+# pipeline (source.page.default, I-2).
+#
+# Registered via scripts/bringup_register_action_packs.py.
+
+identity:
+  id: evidence_drift
+  name: Evidence Drift (what a source changed after it was read)
+  schema_uri: legba/action_pack/1.0.0
+  version: "<content-hash stamped at register time>"
+  abstraction_level: L1
+  state: active
+  owner: d1_source_drift
+  created: "2026-11-14T00:00:00Z"
+
+tools:
+  - name: evidence_versions
+    config: {}
+  - name: evidence_diff
+    config: {}
+  - name: request_evidence_reread
+    config:
+      pipeline: ""
+  - name: request_rederive
+    config: {}
+  - name: review_drift_flag
+    config: {}
+  - name: evidence_drift_assessment
+    config: {}
+  - name: drift_flags
+    config: {}
+  - name: reopen_drift_flag
+    config: {}
+
+prompt_fragments:
+  - >-
+    A page you cite may have changed since it was read. evidence_versions
+    (record_id=... or address=...) lists every version the platform holds and
+    what changed between them; evidence_diff shows the changed passages side by
+    side. When a cited page changed in substance, say so and cite the version
+    you mean by its date. To have the page read again, call
+    request_evidence_reread(address=...); to ask that a finding built on the
+    old text be re-derived, call request_rederive(flag_id=...). When you have
+    checked a flagged dependant, record it with review_drift_flag.
+    evidence_drift_assessment says what kind of change it was (for example a
+    name corrected, a figure revised, a claim removed, attribution changed),
+    whether the page acknowledged it, and whether the text a flag cites
+    survived; drift_flags lists flags with the most serious first, and
+    drift_flags(state="resolved", closed_by="system") the ones the assessor
+    closed itself; reopen_drift_flag re-opens one of those with a note.
+
+rules:
+  - "The text you were given is the text as first read. If evidence_versions shows a later substantive change, do not present the old wording as the source's current position."
+  - "A re-read request is not a fetch: nothing new is readable in this run."
+  - "Resolve a flag as unchanged_in_substance only when the cited claim still stands in the new text; say which sentence carries it."
+  - "An assessment describes what changed, never why. Do not say or suggest why a source changed a page, what it intended, or that it acted in bad faith; report the change and whether the page acknowledged it."
+
+governor:
+  budget_account: evidence_drift
+  max_invocations_per_hour: 120
+  api_rate_per_minute: 30

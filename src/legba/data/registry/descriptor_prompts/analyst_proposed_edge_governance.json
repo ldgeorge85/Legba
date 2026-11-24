@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:proposed_edge_governance": {
+      "source": "analyst_proposed_edge_governance.yaml",
+      "state": "active"
+    }
+  }
+}

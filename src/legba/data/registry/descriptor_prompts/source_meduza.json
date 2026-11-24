@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.meduza.english": {
+      "source": "source_meduza.yaml",
+      "state": "draft"
+    }
+  }
+}

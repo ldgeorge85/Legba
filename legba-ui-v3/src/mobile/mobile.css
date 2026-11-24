@@ -3,7 +3,8 @@
  * Tokens come from `globals.css` (imported by the entry, not redefined here):
  * `--surf-*`, `--ink-*`, `--line-*`, `--sev-*`. Duplicating them would create
  * exactly the drift the token system exists to prevent, so every colour below
- * is a var reference and the light/dark flip comes for free.
+ * is a var reference. The phone is dark only (`m.html` declares
+ * `color-scheme: dark`, M-0a).
  *
  * Two rules shape everything here:
  *   1. TAP TARGETS ARE 44 px. Every interactive element clears Apple's and
@@ -15,9 +16,12 @@
 
 .m-app {
   min-height: 100vh;
+  min-height: 100dvh;
   background: var(--surf-base);
   color: var(--ink-1);
-  /* The consult bar is fixed; keep the last row clear of it. */
+  /* The consult bar is fixed; keep the last row clear of it. M-0a — and the
+     top of the page clear of a notch / status bar (`viewport-fit=cover`). */
+  padding-top: env(safe-area-inset-top, 0px);
   padding-bottom: 4.5rem;
   font-size: 15px;
   line-height: 1.5;
@@ -26,7 +30,9 @@
 .m-screen {
   max-width: 40rem;
   margin: 0 auto;
-  padding: 0.75rem 0.875rem 1.5rem;
+  /* M-0a — the side gutters never fall under a landscape notch. */
+  padding: 0.75rem max(0.875rem, env(safe-area-inset-right, 0px)) 1.5rem
+    max(0.875rem, env(safe-area-inset-left, 0px));
 }
 
 /* ── masthead ─────────────────────────────────────────────────────────── */
@@ -61,6 +67,15 @@
   margin: 0.375rem 0 0;
   font-size: 0.8125rem;
   color: var(--sev-medium);
+}
+
+.m-desktop {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--ink-3);
+  font-size: 0.8125rem;
+  text-decoration: underline;
 }
 
 .m-back {
@@ -140,7 +155,7 @@
   border-radius: 0.75rem;
   background: var(--surf-3);
   color: var(--ink-2);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
 }
 
@@ -153,7 +168,11 @@
   gap: 0.5rem;
 }
 
-.m-row {
+.m-card {
+  /* NOT `.m-row`: Tailwind reads `m-row` as the margin utility `m-{row}` (the
+     `row` spacing step is `var(--row-h)`), which put a 40 px margin on every
+     navigator card and pushed the list 27 px past a 390 px screen (X4/D4). */
+  margin: 0;
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
@@ -168,7 +187,7 @@
   cursor: pointer;
 }
 
-.m-row:active {
+.m-card:active {
   background: var(--surf-2);
 }
 
@@ -307,7 +326,7 @@
   border-radius: 0.25rem;
   background: var(--surf-3);
   color: var(--ink-3);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
 }
 
@@ -324,12 +343,38 @@
   color: var(--ink-3);
 }
 
-/* Citation chips come from the shared CitedProse; give them a phone-sized
-   hit area without touching the workstation's own rule. */
-.m-record [data-testid='citation-chip'],
-.m-record [data-testid='citation-unresolved'] {
-  min-height: 32px;
-  padding: 0 0.375rem;
+/* Citation chips come from the shared CitedProse. M-0a — a phone-sized TOUCH
+   AREA without a phone-sized chip: the chip keeps its inline size (so the
+   prose keeps its line rhythm) and an invisible ::after, centred on it, takes
+   the tap over at least 44 × 44 px. Scoped to the phone; the workstation's
+   chip is untouched. (Before: a 32 px min-height that broke the line and still
+   left a 27 × 32 target.) */
+.m-app [data-testid='citation-chip'] {
+  position: relative;
+}
+
+.m-app [data-testid='citation-chip']::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: max(100%, 44px);
+  height: max(100%, 44px);
+  transform: translate(-50%, -50%);
+}
+
+/* The chip's card opens on tap (focus). On a phone it is a sheet-wide card
+   pinned in the viewport, not a 288 px popover hanging off a chip that may sit
+   at the right edge of the screen. */
+.m-app [data-testid='citation-card'] {
+  position: fixed;
+  left: max(0.875rem, env(safe-area-inset-left, 0px));
+  right: max(0.875rem, env(safe-area-inset-right, 0px));
+  top: auto;
+  bottom: calc(5rem + env(safe-area-inset-bottom, 0px));
+  width: auto;
+  max-width: 36rem;
+  margin: 0 auto;
 }
 
 /* ── sections ─────────────────────────────────────────────────────────── */
@@ -435,140 +480,5 @@
   font-size: 0.8125rem;
 }
 
-/* ── the consult sheet ────────────────────────────────────────────────── */
-
-.m-sheet {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 40;
-  background: var(--surf-2);
-  border-top: 1px solid var(--line-2);
-  /* Clear the iOS home indicator. */
-  padding-bottom: env(safe-area-inset-bottom, 0);
-}
-
-.m-sheet-bar {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  width: 100%;
-  min-height: 52px;
-  padding: 0 0.875rem;
-  background: none;
-  border: 0;
-  color: var(--ink-1);
-  cursor: pointer;
-  text-align: left;
-}
-
-.m-sheet-label {
-  font-weight: 600;
-  font-size: 0.875rem;
-}
-
-.m-sheet-pin {
-  flex: 1;
-  min-width: 0;
-  font-size: 0.75rem;
-  color: var(--ink-3);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.m-sheet-open .m-sheet-body {
-  display: flex;
-  flex-direction: column;
-  max-height: 60vh;
-}
-
-.m-sheet-scroll {
-  flex: 1;
-  overflow-y: auto;
-  padding: 0 0.875rem 0.75rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.m-turn {
-  padding: 0.5rem 0.625rem;
-  border-radius: 0.5rem;
-  font-size: 0.8125rem;
-  white-space: pre-wrap;
-}
-
-.m-turn-user {
-  background: var(--surf-3);
-  align-self: flex-end;
-  max-width: 85%;
-}
-
-.m-turn-assistant {
-  background: var(--surf-1);
-  border: 1px solid var(--line-1);
-}
-
-.m-turn-pending {
-  background: var(--surf-1);
-  opacity: 0.7;
-}
-
-.m-model-row {
-  display: flex;
-  align-items: center;
-  gap: 0.375rem;
-  padding: 0.375rem 0.875rem 0;
-}
-
-.m-model-select {
-  min-height: 32px;
-  padding: 0.125rem 0.375rem;
-  background: var(--surf-1);
-  border: 1px solid var(--line-1);
-  border-radius: 0.375rem;
-  color: var(--ink-1);
-  font-size: 0.8125rem;
-  font-family: inherit;
-}
-
-.m-sheet-compose {
-  display: flex;
-  gap: 0.5rem;
-  padding: 0.625rem 0.875rem 0.875rem;
-  border-top: 1px solid var(--line-1);
-}
-
-.m-input {
-  flex: 1;
-  min-height: 44px;
-  padding: 0.5rem 0.625rem;
-  background: var(--surf-1);
-  border: 1px solid var(--line-1);
-  border-radius: 0.5rem;
-  color: var(--ink-1);
-  /* 16px keeps iOS Safari from zooming the viewport on focus. */
-  font-size: 16px;
-  font-family: inherit;
-  resize: none;
-}
-
-.m-send {
-  min-width: 64px;
-  min-height: 44px;
-  padding: 0 0.875rem;
-  background: var(--accent);
-  border: 0;
-  border-radius: 0.5rem;
-  color: #fff;
-  font-size: 0.875rem;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.m-send:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
+/* M-3g: the Consult sheet, its turns and its composer moved to the phone
+   shell's Consult screen (`shell/phone.css`, "Consult: the screen"). */

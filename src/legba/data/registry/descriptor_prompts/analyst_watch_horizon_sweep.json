@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:watch_horizon_sweep": {
+      "source": "analyst_watch_horizon_sweep.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:relationship_reifier": {
+      "source": "analyst_relationship_reifier.yaml",
+      "state": "active"
+    }
+  }
+}

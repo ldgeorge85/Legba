@@ -19,6 +19,7 @@
  *   - analyst  → GET /registry/descriptors/analyst/{id} (analyst descriptor)
  */
 import { useQuery } from '@tanstack/react-query'
+import { useBelowAdmin } from '@/auth/roles'
 import {
   contentionFences,
   contentionPages,
@@ -39,6 +40,7 @@ import {
   type AbsenceResponse,
 } from '@/lib/absenceModel'
 import type { Selection, SelectionKind } from '@/state/selection'
+import { placeOfId, SERIES_SOURCES } from '@/v4/globe/chokepoints'
 
 /** A forward/related reference rendered as a RecordLink in the Inspector. */
 export interface Ref {
@@ -116,6 +118,7 @@ async function fetchFindingReport(root: {
   const params = new URLSearchParams({ limit: '100' })
   if (root.target_id) params.set('target_id', root.target_id)
   if (root.analyst_id) params.set('analyst_id', root.analyst_id)
+  params.set('fields', 'full') // the report body is the row's data + body
   try {
     const resp = await apiGet<{ data: FindingsBodyRow[] }>(`/findings?${params.toString()}`)
     const match = resp.data.find((r) => r.id === root.id)
@@ -564,6 +567,32 @@ async function resolveContention(sel: Selection): Promise<InspectorDetail> {
   }
 }
 
+/**
+ * A PLACE (U-7): a named place a series is measured at. Resolved locally from
+ * the map's gazetteer — the place is geography, not a stored row — with the
+ * series the map reads there named, so the sheet says what the glyph counts.
+ */
+async function resolvePlace(sel: Selection): Promise<InspectorDetail> {
+  const p = placeOfId(sel.id)
+  if (!p) return rawDetail(sel)
+  const series = SERIES_SOURCES.map((s) => `${s.label} (${s.unit}), as a share of its 30-day baseline`)
+  return {
+    kind: 'place',
+    id: sel.id,
+    label: p.name,
+    core: { kind: 'place', id: sel.id, name: p.name, position: `${p.lat.toFixed(1)}°, ${p.lon.toFixed(1)}°` },
+    body: {
+      name: p.name,
+      latitude: p.lat,
+      longitude: p.lon,
+      measured_here: series.join('; ') || 'no series is declared for this place',
+      note: 'A place, not a record: the map draws its latest value and the share of its 30-day baseline.',
+    },
+    refs: [],
+    related: [],
+  }
+}
+
 const RESOLVERS: Record<SelectionKind, (sel: Selection) => Promise<InspectorDetail>> = {
   finding: resolveWalkable,
   situation: resolveWalkable,
@@ -578,9 +607,28 @@ const RESOLVERS: Record<SelectionKind, (sel: Selection) => Promise<InspectorDeta
   journal_entry: resolveJournalEntry,
   absence: resolveAbsence,
   contention: resolveContention,
+  place: resolvePlace,
 }
 
-async function resolveDetail(sel: Selection): Promise<InspectorDetail> {
+/** The descriptor kinds whose detail is the registry's whole descriptor (admin). */
+const DESCRIPTOR_KINDS = new Set<SelectionKind>(['source', 'target', 'analyst'])
+
+/**
+ * RA-1: a descriptor's whole body (prompts, acquisition, credentials by
+ * reference, the owner) is an admin's read. Below admin the Inspector shows
+ * the selection and says why its configuration is not drawn — no request.
+ */
+export function readerDescriptorDetail(sel: Selection): InspectorDetail {
+  const raw = rawDetail(sel)
+  return {
+    ...raw,
+    body: { ...raw.body, configuration: DESCRIPTOR_NEEDS_ADMIN },
+  }
+}
+export const DESCRIPTOR_NEEDS_ADMIN = 'Its configuration (the descriptor) is read by an admin; your account sees its reads, not how it is set up.'
+
+async function resolveDetail(sel: Selection, belowAdmin = false): Promise<InspectorDetail> {
+  if (belowAdmin && DESCRIPTOR_KINDS.has(sel.kind)) return readerDescriptorDetail(sel)
   const resolver = WALKABLE.has(sel.kind) ? resolveWalkable : RESOLVERS[sel.kind]
   if (!resolver) return rawDetail(sel)
   try {
@@ -607,11 +655,12 @@ export interface UseInspectorDetailResult {
  * empty state — the world-assessment one-pager).
  */
 export function useInspectorDetail(selection: Selection | null): UseInspectorDetailResult {
+  const belowAdmin = useBelowAdmin()
   const q = useQuery<InspectorDetail>({
     enabled: selection != null,
     // instanceKey participates in the key so a coerced kind re-fetches.
-    queryKey: ['inspector-detail', selection?.kind, selection?.id, selection?.instanceKey],
-    queryFn: () => resolveDetail(selection as Selection),
+    queryKey: ['inspector-detail', selection?.kind, selection?.id, selection?.instanceKey, belowAdmin],
+    queryFn: () => resolveDetail(selection as Selection, belowAdmin),
     staleTime: 30_000,
   })
   return {

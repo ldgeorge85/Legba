@@ -45,7 +45,7 @@ import yaml
 
 from legba.data.analysts.agency.agency import AgencyOutcome
 from legba.data.analysts.agency.tools import ToolResult
-from legba.data.analysts.handler_options import (
+from legba.data.option_catalog.handler_options import (
     known_kind_option_names,
     resolve_kind_options,
 )
@@ -55,6 +55,7 @@ from legba.data.analysts.inquiry import (
     CROSSROADS_ANALYST_ID,
     CROSSROADS_ENTRY_KIND,
     ENTRY_KIND,
+    HYPOTHESIS_WITHOUT_HORIZON_FLAG,
     HYPOTHESIS_WITHOUT_TEST_FLAG,
     INQUIRY_KIND,
     INQUIRY_STATE_PACK_ID,
@@ -67,6 +68,7 @@ from legba.data.analysts.inquiry import (
     QUESTION_NOT_SELF_CONTAINED_FLAG,
     _LEDGER_MAX_WRITES_PER_RUN,
     entry_kind_for_analyst,
+    parse_horizon,
     plan_ledger_writes,
     render_state_block,
     render_user_prompt,
@@ -77,6 +79,10 @@ from legba.data.analysts.inquiry import (
 )
 
 _REPO = Path(__file__).resolve().parents[2]
+
+#: A horizon every fixture hypothesis can carry — far enough out that no
+#: ``now`` a run passes is ever past it.
+_HORIZON = "2099-12-31"
 _PILOT = _REPO / "descriptors" / "analyst_inquiry_pilot.yaml"
 
 
@@ -426,9 +432,12 @@ def test_a_hypothesis_without_a_resolution_test_is_refused() -> None:
     writes, _closes, counters = plan_ledger_writes(
         {
             "hypotheses": [
-                {"text": "the campaign is degrading throughput"},          # no test
-                {"text": "diesel cracks widen", "resolution_test": "crack > 40"},
-                {"text": "blank test", "resolution_test": "   "},          # blank
+                {"text": "the campaign is degrading throughput",
+                 "resolves_by": _HORIZON},                                 # no test
+                {"text": "diesel cracks widen", "resolution_test": "crack > 40",
+                 "resolves_by": _HORIZON},
+                {"text": "blank test", "resolution_test": "   ",
+                 "resolves_by": _HORIZON},                                 # blank
             ]
         },
         [],
@@ -495,7 +504,7 @@ def test_a_close_needs_a_real_terminal_status() -> None:
 def test_the_per_run_cap_bites_after_the_refusals_not_before() -> None:
     parsed = {
         "hypotheses": [
-            {"text": f"h{i}", "resolution_test": "t"}
+            {"text": f"h{i}", "resolution_test": "t", "resolves_by": _HORIZON}
             for i in range(_LEDGER_MAX_WRITES_PER_RUN + 4)
         ]
     }
@@ -508,6 +517,93 @@ def test_a_non_mapping_reply_writes_nothing_and_never_raises() -> None:
         writes, closes, counters = plan_ledger_writes(parsed, [])
         assert (writes, closes) == ([], [])
         assert counters["refused_no_test"] == 0
+        assert counters["refused_no_horizon"] == 0
+
+
+# ---------------------------------------------------------------------------
+# The horizon rule (SW-10) — a hypothesis that can never resolve is un-mintable
+# ---------------------------------------------------------------------------
+
+
+def test_a_hypothesis_without_a_horizon_is_refused_by_name() -> None:
+    """2026-09-29: every open ledger hypothesis carried resolves_by NULL, so the
+    weekly yield could never score one. No horizon, an unreadable one, or one
+    already past: refused, counted as ``refused_no_horizon``, never written."""
+    now = datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc)
+    writes, _closes, counters = plan_ledger_writes(
+        {
+            "hypotheses": [
+                {"text": "no horizon", "resolution_test": "t"},
+                {"text": "blank horizon", "resolution_test": "t", "resolves_by": "  "},
+                {"text": "junk horizon", "resolution_test": "t",
+                 "resolves_by": "end of Q4"},
+                {"text": "past horizon", "resolution_test": "t",
+                 "resolves_by": "2026-10-01"},
+                {"text": "lands", "resolution_test": "t",
+                 "resolves_by": "2026-12-31"},
+            ]
+        },
+        [],
+        now=now,
+    )
+    assert [w["text"] for w in writes] == ["lands"]
+    assert counters["refused_no_horizon"] == 4
+    assert counters["refused_no_test"] == 0
+    assert counters["hypotheses"] == 1
+
+
+def test_a_hypothesis_with_test_and_horizon_lands_with_a_utc_horizon() -> None:
+    writes, _closes, counters = plan_ledger_writes(
+        {"hypotheses": [
+            {"text": "a", "resolution_test": "t", "resolves_by": "2026-12-31"},
+            {"text": "b", "resolution_test": "t",
+             "resolves_by": "2026-11-15T09:30:00Z"},
+        ]},
+        [],
+        now=datetime(2026, 10, 3, tzinfo=timezone.utc),
+    )
+    assert counters["refused_no_horizon"] == 0
+    # a bare date is read as UTC midnight, never the host's zone
+    assert writes[0]["resolves_by"] == "2026-12-31T00:00:00+00:00"
+    assert writes[1]["resolves_by"] == "2026-11-15T09:30:00+00:00"
+    assert all(w["kind"] == "hypothesis" and w["resolution_test"] for w in writes)
+
+
+def test_the_horizon_rule_binds_hypotheses_only() -> None:
+    writes, _closes, counters = plan_ledger_writes(
+        {
+            "questions": [{"text": "Does Ryazan refinery throughput recover by "
+                                   "October 2026?"}],
+            "observations": [{"text": "banked, no horizon"}],
+        },
+        [],
+        now=datetime(2026, 10, 3, tzinfo=timezone.utc),
+    )
+    assert [w["kind"] for w in writes] == ["question", "observation"]
+    assert counters["refused_no_horizon"] == 0
+
+
+def test_parse_horizon_reads_naive_as_utc_and_refuses_junk() -> None:
+    assert parse_horizon(None) is None
+    assert parse_horizon("") is None
+    assert parse_horizon("soon") is None
+    assert parse_horizon("2026-12-31T05:00:00") == datetime(
+        2026, 12, 31, 5, tzinfo=timezone.utc,
+    )
+    assert parse_horizon("2026-12-31T05:00:00+02:00") == datetime(
+        2026, 12, 31, 3, tzinfo=timezone.utc,
+    )
+
+
+def test_the_kind_flag_and_the_pack_refusal_share_one_name() -> None:
+    """The run's honesty flag and the pack handler's error token are the SAME
+    string, so one grep finds a refused mint whichever layer refused it."""
+    from legba.data.analysts.agency.inquiry_state import (
+        HYPOTHESIS_NO_HORIZON_REFUSAL,
+    )
+
+    assert HYPOTHESIS_WITHOUT_HORIZON_FLAG == HYPOTHESIS_NO_HORIZON_REFUSAL
+    assert HYPOTHESIS_WITHOUT_HORIZON_FLAG == "hypothesis_refused_no_resolves_by"
 
 
 # ---------------------------------------------------------------------------
@@ -550,7 +646,7 @@ async def test_full_arc_reads_the_ledger_at_plan_and_writes_it_at_reflect() -> N
         "h1", "hypothesis", "Refinery outages bite European diesel",
         test="Two consecutive weekly reads print a widening crack",
     )
-    ledger = _FakePack(INQUIRY_STATE_PACK_ID, {LEDGER_READ_TOOL: {"rows": [carried]}})
+    ledger = _FakePack(INQUIRY_STATE_PACK_ID, {LEDGER_READ_TOOL: {"entries": [carried]}})
     instruments = _FakePack("journal_read", {
         "get_calibration": {
             "available": True, "forecast_unproven": True, "calibration_thin": True,
@@ -565,8 +661,10 @@ async def test_full_arc_reads_the_ledger_at_plan_and_writes_it_at_reflect() -> N
         # the LEDGER coda: one good hypothesis, one testless (refused), one
         # deictic question (refused), one close of the carried row
         '{"hypotheses": [{"text": "Storage draws mask the outage",'
-        ' "resolution_test": "Weekly stocks fall three weeks running"},'
-        ' {"text": "Everything gets worse"}],'
+        ' "resolution_test": "Weekly stocks fall three weeks running",'
+        ' "resolves_by": "2099-12-31"},'
+        ' {"text": "Everything gets worse", "resolves_by": "2099-12-31"},'
+        ' {"text": "Stocks rebuild", "resolution_test": "Stocks rise"}],'
         ' "questions": [{"text": "Is that attack the cause?"}],'
         ' "close": [{"id": "h1", "status": "confirmed", "reason": "the read '
         'settled it", "cited_refs": ["%s"]}]}' % ref,
@@ -603,6 +701,8 @@ async def test_full_arc_reads_the_ledger_at_plan_and_writes_it_at_reflect() -> N
     assert len(written) == 1
     assert written[0]["kind"] == "hypothesis"
     assert written[0]["resolution_test"] == "Weekly stocks fall three weeks running"
+    assert written[0]["resolves_by"] == "2099-12-31T00:00:00+00:00"
+    assert all("Stocks rebuild" not in str(a) for a in written)
     assert all("Everything gets worse" not in str(a) for a in written)
     assert all(a.get("kind") != "question" for a in written)
 
@@ -618,14 +718,15 @@ async def test_full_arc_reads_the_ledger_at_plan_and_writes_it_at_reflect() -> N
     # and both refusals raise their own deterministic flag.
     assert set(payload.honesty_flags) == {
         "forecast_unproven", "calibration_thin",
-        HYPOTHESIS_WITHOUT_TEST_FLAG, QUESTION_NOT_SELF_CONTAINED_FLAG,
+        HYPOTHESIS_WITHOUT_TEST_FLAG, HYPOTHESIS_WITHOUT_HORIZON_FLAG,
+        QUESTION_NOT_SELF_CONTAINED_FLAG,
     }
     assert instruments.args_for("get_calibration") == [{}]
 
     # The row's own metadata says what this cycle did to the state.
     assert payload.data["ledger"] == {
         "carried": 1, "written": 1, "closed": 1,
-        "refused_no_test": 1, "refused_deictic": 1,
+        "refused_no_test": 1, "refused_no_horizon": 1, "refused_deictic": 1,
     }
     assert payload.data["target_scope"] == ["country_watch_ua"]
 
@@ -649,7 +750,7 @@ async def test_gather_routes_each_tool_to_the_pack_that_owns_it() -> None:
     assert "get_source_health" not in _GATHER_READ_TOOLS  # -> the instruments one
     assert {LEDGER_READ_TOOL, "get_source_health"} <= set(ROUTED_PACK_TOOLS)
 
-    ledger = _FakePack(INQUIRY_STATE_PACK_ID, {LEDGER_READ_TOOL: {"rows": []}})
+    ledger = _FakePack(INQUIRY_STATE_PACK_ID, {LEDGER_READ_TOOL: {"entries": []}})
     instruments = _FakePack("journal_read", {"get_source_health": {"summary": {}}})
     read_binding = _FakePack("substrate_read", {"search_corpus": {"rows": []}})
     scripted = [
@@ -691,7 +792,7 @@ async def test_a_question_is_dispatched_through_the_existing_faucet() -> None:
     `open_question` shape (question / counter / derived_from) carries it, and
     the returned row id becomes the ledger row's `dispatched_to`."""
     ref = uuid4()
-    ledger = _FakePack(INQUIRY_STATE_PACK_ID, {LEDGER_READ_TOOL: {"rows": []}})
+    ledger = _FakePack(INQUIRY_STATE_PACK_ID, {LEDGER_READ_TOOL: {"entries": []}})
     instruments = _FakePack("journal_read")
     faucet = _FakePack("propose_facts", {OPEN_QUESTION_TOOL: {"hypothesis_id": "q-77"}})
     read_binding = _FakePack("substrate_read")
@@ -734,7 +835,7 @@ async def test_without_a_write_pack_the_question_is_banked_and_nothing_spends() 
     made, because there is nothing wired to make one — so no rung of this run
     can spend."""
     ref = uuid4()
-    ledger = _FakePack(INQUIRY_STATE_PACK_ID, {LEDGER_READ_TOOL: {"rows": []}})
+    ledger = _FakePack(INQUIRY_STATE_PACK_ID, {LEDGER_READ_TOOL: {"entries": []}})
     instruments = _FakePack("journal_read")
     read_binding = _FakePack("substrate_read")
     bindings = _pack_bindings(ledger, instruments)       # no faucet

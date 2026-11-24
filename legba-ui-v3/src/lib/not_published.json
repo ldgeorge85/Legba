@@ -1,0 +1,75 @@
+{
+  "_generated": "scripts/gen_not_published.py from docs/SEAMS.md and the eval routes' declared unmeasured classes - do not edit by hand",
+  "schema": "legba/not_published/1",
+  "seams": [
+    {
+      "id": "seam-46",
+      "seam": 46,
+      "title": "Provenance-badge `fallback` signal",
+      "summary": "The backend half. The UI classifies a displayed number `live`, `fallback` or `absent`, but `fallback` is only returned when a route passes an explicit degradation flag, and most routes do not carry one yet.",
+      "guard": "The UI never fabricates a fallback state: with no explicit signal it never reports `fallback`.",
+      "source": "docs/SEAMS.md #46"
+    },
+    {
+      "id": "seam-55",
+      "seam": 55,
+      "title": "Correctness grader reference dependency",
+      "summary": "Nothing — the grader shipped whole, including the independent reference builder it depends on. The row stays because the dependency is the interesting part: the grader reads references and can never write one.",
+      "guard": "It fails loud and it fails empty — it never grades against a substitute.",
+      "source": "docs/SEAMS.md #55"
+    },
+    {
+      "id": "seam-60",
+      "seam": 60,
+      "title": "Sampled layer-classification audit",
+      "summary": "The measurement of how often a curated `source_layers` row files a source under the wrong layer. `layer_divergence` counts per layer and compares a country's gap to its own baseline; every one of those numbers inherits the map's classification error, and a wrong layer is a DIRECTIONAL error — it does not blur the gap, it moves it one way — so an un-audited map cannot bound the error on a fired finding.",
+      "guard": "Nothing is half-built and nothing claims to be audited: `deterministic_handlers/layer_divergence.py:CLASSIFICATION_AUDIT_NOTE` is stamped verbatim onto `data.classification_audit` of EVERY finding and receipt the unit writes, naming this seam, so no reader of a divergence number can mistake an un-audited map for an audited one.",
+      "source": "docs/SEAMS.md #60"
+    },
+    {
+      "id": "seam-61",
+      "seam": 61,
+      "title": "`not_collected` for SOURCES on the typed-absence route",
+      "summary": "The half of `not_collected` that asks \"does any source cover this subject for this desk at all\". `GET /v3/absence` emits the kind only for a bounded UNIT with no read on record.",
+      "guard": "Nothing is fabricated and nothing over-claims: every emitted source item is a source the route OBSERVED producing in scope, its proof names the `roster_days` window it was derived over, and the two source kinds are omitted entirely — and named in `not_measured` with the reason — for a desk with no `scope.geo` to resolve a roster from.",
+      "source": "docs/SEAMS.md #61"
+    }
+  ],
+  "route_classes": [
+    {
+      "id": "grader_unmeasured",
+      "route": "/v3/eval/grader_roster",
+      "source": "src/legba/data/registry/grader_roster_api.py:RosterTotals.desks_unmeasured",
+      "text": "Desks whose latest row has a NULL correctness share — the reference decided nothing they said. Excluded from both means. `desks_graded + desks_unmeasured` is every desk in `desks[]`.",
+      "live": "grader_roster.unmeasured"
+    },
+    {
+      "id": "forecast_skill",
+      "route": "/v3/eval/calibration",
+      "source": "src/legba/data/registry/v3_api.py:CalibrationScoreboard",
+      "text": "`brier` / `brier_exogenous` is the EXOGENOUS-only headline — the only number that measures calibration against reality. The acute-forecast pilot lives in its OWN keys and is NEVER pooled into the headline. `forecast_unproven` / `calibration_thin` are the deterministic honesty verdict the UI gates on: a thin exogenous sample or a degenerate pilot reads as a first-class honest state (`INSUFFICIENT` / `withheld`), never a bare positive number. `available` is false before any calibration finding exists — a distinct \"no pilot yet\" state, NOT a failed pilot.",
+      "live": "calibration.forecast_status"
+    },
+    {
+      "id": "band_no_brier",
+      "route": "/v3/eval/calibration",
+      "source": "src/legba/data/registry/v3_api.py:BandCalibrationSection",
+      "text": "bands are ordinal risk categories, not probabilities — this section carries persistence/reversal RATES with their sample sizes and NO Brier / Brier-skill key of any kind (`no_brier` + `honesty_note` state that explicitly). Rates are `None` inside `horizons` when the scored denominator is zero — an honest empty state, never a fabricated number. `available` is false before the tracker's first finding exists.",
+      "live": null
+    },
+    {
+      "id": "goldset_tiny_n",
+      "route": "/v3/eval/correctness",
+      "source": "src/legba/data/registry/v3_api.py:UnitCorrectnessRow",
+      "text": "`correctness` is reported even when `sufficient` is False, because it is the only judge-independent signal that exists and hiding it is how it stayed invisible for a week. It NEVER travels alone — `n_scored`, `mix` and `status` are always beside it, so a reader sees \"one verdict, 'correct'\", not \"1.00\".",
+      "live": "correctness.below_floor"
+    },
+    {
+      "id": "external_truth",
+      "route": "/v3/eval/correctness",
+      "source": "src/legba/data/provenance/external_truth.py:HONESTY_NOTE",
+      "text": "Standing external truth is WEB-GROUNDED and judge-independent: it grades the read's claims against sources outside this pipeline, and it is never pooled with faithfulness, calibration or the operator gold set. NOT_FOUND is a statement about the SEARCH, never about the world — it is excluded from numerator and denominator both, and decided_rate publishes how much of the read the instrument actually reached. Grading the assembly grades the DESKS: the composition tier authors nothing under assembly.v1, so its construction error is 1.0 by arithmetic. The three populations are never summed; the headline is a pair. Below the n floor a stratum publishes null and its n, never a number, and a week whose two grader families disagreed publishes a sentence instead of a rate.",
+      "live": "correctness.external_truth"
+    }
+  ]
+}

@@ -69,7 +69,7 @@ def test_coverage_floor_thresholds_are_declared_handler_options():
     no-op (the ``gauge_*`` precedent)."""
     from dataclasses import fields
 
-    from legba.data.analysts.handler_options import HANDLER_OPTIONS
+    from legba.data.option_catalog.handler_options import HANDLER_OPTIONS
 
     declared = {
         o.name[len(cfs.OPTION_PREFIX):]
@@ -642,9 +642,14 @@ async def test_seeds_silently_then_fires_once_then_never_refires(
     assert r2.finding.data["counts_by_class"][ats.TRIGGER_COVERAGE_FLOOR][
         "new_breaches"
     ] == 1
-    assert any(
-        "Iran" in getattr(p, "summary", "") for p in dispatcher.payloads
-    )
+    # L-1: raised at ``low`` (cfs.SEVERITY); the page rule pages coverage_floor
+    # from ``medium`` (the ntfy floor it always met), so it is logged, not pushed.
+    assert dispatcher.payloads == []
+    async with pg_pool.acquire() as conn:
+        ev = await conn.fetchrow(
+            "SELECT summary, decision FROM alert_events WHERE kind = 'coverage_floor' "
+            "ORDER BY raised_at DESC LIMIT 1")
+    assert "Iran" in ev["summary"] and ev["decision"] == "logged"
 
     r3 = await _run(pg_pool)
     async with pg_pool.acquire() as conn:

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.japantimes.news": {
+      "source": "source_japantimes.yaml",
+      "state": "draft"
+    }
+  }
+}

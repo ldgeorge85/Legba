@@ -1,0 +1,235 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# deploy/compose.test.yml — the TEST SUBSTRATE, isolated from production (X1-A4).
+#
+# WHY: until this file the suite ran `--network host` against the PRODUCTION
+# Postgres server (database `legba_pivot_test` beside `legba`), the PRODUCTION
+# NATS (test streams leaked into the live JetStream: LEGBA_JOBS_TEST_*,
+# LEGBA_JOBS_BOOTWIRE_*, e2e_outputs_*), the production Redis and Qdrant, and a
+# loose `legba-test-age-w1` container started by hand on 5544. A test that
+# forgot its cleanup wrote into the live bus; a suite run competed with the
+# analysts for the live Postgres.
+#
+# SHAPE — ONE network namespace. Every service here joins the `pg` service's
+# network namespace (`network_mode: service:pg`), and scripts/run_tests_in_container.sh
+# runs the test container with `--network container:legba-test-pg-1`. Inside
+# that namespace each service listens on its CANONICAL port (Postgres 5432,
+# NATS 4222, Redis 6379, Qdrant 6333, the journal AGE fixture 5544), so the
+# ~45 hardcoded `127.0.0.1:5432` / `nats://127.0.0.1:4222` addresses across
+# tests/ reach the TEST services with no test edit — and the production stack's
+# loopback ports (8090 registry, 6090 runtime, 3500 daprd, 8093 ntfy) are not
+# reachable from the test container at all. Isolation by construction, not by
+# a per-test convention someone can forget.
+#
+# HOST PORTS — published on the anchor for operator inspection only, on their
+# OWN ports so they can never be confused with production:
+#   Postgres 15432 · NATS 14222 (monitor 18222) · Redis 16379 · Qdrant 16333
+#   · journal AGE 15544 · test daprd HTTP 13500
+#   e.g.  psql postgresql://legba:legba@127.0.0.1:15432/legba_pivot_test
+#
+# DISPOSABLE — no named volumes (nothing here can collide with a `legba_*`
+# volume; see deploy/compose.isolation.yml for why that matters), Postgres and
+# the AGE fixture on tmpfs with fsync off: the data lives exactly as long as
+# the container. `docker compose -p legba-test -f deploy/compose.test.yml down`
+# is a full reset.
+#
+# USAGE — the runner brings it up on demand; by hand:
+#   docker compose -p legba-test -f deploy/compose.test.yml up -d --wait
+#   docker compose -p legba-test -f deploy/compose.test.yml down
+#
+# Postgres is the SAME image digest as production (PostgreSQL 18.1 + AGE 1.7.0)
+# so a migration that passes here passes there.
+
+name: legba-test
+
+services:
+  pg:
+    image: apache/age@sha256:4241e2d8bb86a6b2ea44e9ad06c73856e12b209de295124603a599dd7feb70eb
+    environment:
+      POSTGRES_USER: legba
+      POSTGRES_PASSWORD: legba
+      POSTGRES_DB: legba
+    command:
+      - "postgres"
+      # apache/age preloads AGE through its default CMD; overriding the command
+      # drops it unless re-asserted (same note as docker-compose.yml).
+      - "-c"
+      - "shared_preload_libraries=age"
+      # A disposable test database: durability buys nothing here.
+      - "-c"
+      - "fsync=off"
+      - "-c"
+      - "synchronous_commit=off"
+      - "-c"
+      - "full_page_writes=off"
+      - "-c"
+      - "shared_buffers=512MB"
+      - "-c"
+      - "max_connections=300"
+      # N-V: THE TEST-SERVER MARKER. tests/_pg_test_server_guard.py refuses
+      # every Postgres server whose fresh sessions do not read
+      # current_setting('legba.test_stack') = 'on' (plus fsync=off from the
+      # command line, plus no production-sized database). Only a command-line
+      # flag like this one sets it for every session; the live server never
+      # carries it, so a host-side pytest that reaches the LIVE server on
+      # 127.0.0.1:5432 is refused before it creates or migrates anything.
+      - "-c"
+      - "legba.test_stack=on"
+    shm_size: 512m
+    mem_limit: 4g
+    tmpfs:
+      - /var/lib/postgresql:size=4g
+    ports:
+      - "127.0.0.1:15432:5432"   # Postgres
+      - "127.0.0.1:14222:4222"   # NATS (joins this namespace)
+      - "127.0.0.1:18222:8222"   # NATS monitoring
+      - "127.0.0.1:16379:6379"   # Redis
+      - "127.0.0.1:16333:6333"   # Qdrant
+      - "127.0.0.1:15544:5544"   # journal_w1/w2/w4 AGE fixture
+      - "127.0.0.1:13500:3500"   # test daprd HTTP (outbound health probe)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U legba -h 127.0.0.1 -p 5432"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  nats:
+    image: nats:2-alpine
+    network_mode: "service:pg"
+    command: ["--jetstream", "--store_dir", "/data", "-m", "8222"]
+    tmpfs:
+      - /data:size=1g
+    mem_limit: 1g
+    depends_on: [pg]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8222/healthz || exit 1"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    network_mode: "service:pg"
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    mem_limit: 384m
+    depends_on: [pg]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -p 6379 ping | grep -q PONG"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  qdrant:
+    image: qdrant/qdrant:v1.16.3
+    network_mode: "service:pg"
+    tmpfs:
+      - /qdrant/storage:size=1g
+    mem_limit: 1g
+    depends_on: [pg]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/6333'"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # --- Dapr: placement + scheduler + a daprd sidecar, all in the namespace ---
+  # Until X1-A4 the actor tests reached the PRODUCTION sidecar on 3500 (its
+  # outbound health answered every DaprClient constructed in a test) and the
+  # app-channel tests skipped because the live runtime held 6090. Here daprd's
+  # app channel is 127.0.0.1:6090 — the port the test process itself serves —
+  # and its state store is the TEST Postgres. Non-default healthz/metrics ports
+  # because three Dapr binaries share one namespace (all default to 8080/9090).
+  dapr-placement:
+    image: daprio/dapr:1.17.9
+    network_mode: "service:pg"
+    entrypoint: ["/placement"]
+    command: ["--port", "50005", "--healthz-port", "58080", "--metrics-port", "59090"]
+    mem_limit: 256m
+    depends_on: [pg]
+
+  dapr-scheduler:
+    image: daprio/dapr:1.17.9
+    network_mode: "service:pg"
+    entrypoint: ["/scheduler"]
+    command: ["--port", "50006", "--healthz-port", "58081", "--metrics-port", "59091",
+              "--etcd-data-dir", "/var/lib/dapr-scheduler-data"]
+    tmpfs:
+      - /var/lib/dapr-scheduler-data:size=256m,uid=65532,gid=65532,mode=0700
+    mem_limit: 512m
+    depends_on: [pg]
+
+  daprd:
+    image: daprio/dapr:1.17.9
+    network_mode: "service:pg"
+    entrypoint: ["/daprd"]
+    environment:
+      # The production statestore.yaml reads this through the env secret
+      # store. dbname=legba: the actor e2e tests clear their own dapr_state
+      # rows in the `legba` database of the Postgres on 127.0.0.1:5432.
+      LEGBA_DAPR_PG_CONNSTRING: "host=127.0.0.1 port=5432 user=legba password=legba dbname=legba sslmode=disable"
+      LEGBA_NATS_TOKEN: ""
+    command:
+      - "-app-id"
+      - "legba-runtime"
+      - "-app-channel-address"
+      - "127.0.0.1"
+      - "-app-port"
+      - "6090"
+      - "-dapr-http-port"
+      - "3500"
+      - "-dapr-grpc-port"
+      - "50001"
+      - "-metrics-port"
+      - "59092"
+      - "-placement-host-address"
+      - "127.0.0.1:50005"
+      - "-scheduler-host-address"
+      - "127.0.0.1:50006"
+      - "-resources-path"
+      - "/dapr/components"
+      - "-config"
+      - "/dapr/components/configuration.yaml"
+      - "-log-level"
+      - "warn"
+    volumes:
+      - ../dapr/components/statestore.yaml:/dapr/components/statestore.yaml:ro
+      - ../dapr/components/secretstore.yaml:/dapr/components/secretstore.yaml:ro
+      - ../dapr/components/configuration.yaml:/dapr/components/configuration.yaml:ro
+      - ./test-dapr/pubsub.yaml:/dapr/components/pubsub.yaml:ro
+    mem_limit: 512m
+    depends_on:
+      pg:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      dapr-placement:
+        condition: service_started
+      dapr-scheduler:
+        condition: service_started
+    # No compose healthcheck: the image is distroless (no shell, no curl).
+    # scripts/run_tests_in_container.sh polls the outbound probe through the
+    # published 13500 instead (components loaded; independent of the app
+    # channel, which only comes up while a test serves 6090).
+
+  # The journal_w1/w2/w4 disposable Postgres+AGE fixture (their conftests
+  # default to 127.0.0.1:5544, database legba_w1). Replaces the hand-started
+  # `legba-test-age-w1` container the runner used to create on the host.
+  age-w1:
+    image: apache/age@sha256:4241e2d8bb86a6b2ea44e9ad06c73856e12b209de295124603a599dd7feb70eb
+    network_mode: "service:pg"
+    environment:
+      POSTGRES_USER: legba
+      POSTGRES_PASSWORD: legba
+      POSTGRES_DB: legba_w1
+    command: ["postgres", "-p", "5544", "-c", "shared_preload_libraries=age", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off", "-c", "legba.test_stack=on"]
+    shm_size: 256m
+    mem_limit: 1g
+    tmpfs:
+      - /var/lib/postgresql:size=1g
+    depends_on: [pg]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U legba -h 127.0.0.1 -p 5544"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

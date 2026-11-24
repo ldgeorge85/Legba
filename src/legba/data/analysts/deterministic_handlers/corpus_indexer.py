@@ -44,8 +44,10 @@ Per tick (mirrors ``signal_summarizer`` / ``entity_resolution`` idempotency):
   * Project each row via :func:`legba.data.opensearch.signal_to_doc` (``_id`` =
     the signal id, so a re-index OVERWRITES in place).
   * ``ensure_index`` (idempotent) then ``bulk_index`` the batch.
-  * VERSION-GUARDED stamp of ``indexed_at = now()`` in ONE bulk UPDATE — but only
-    for rows whose ``updated_at`` still matches the value snapshotted at SELECT, so
+  * VERSION-GUARDED stamp of ``indexed_at = now()`` in ONE bulk UPDATE — only for
+    docs the bulk call accepted (or rejected as documents: a poison doc must not
+    wedge the sweep; a doc that failed on the cluster's state stays un-stamped
+    for retry) — and only for rows whose ``updated_at`` still matches the value snapshotted at SELECT, so
     a row a concurrent content writer re-dirtied mid-I/O is left un-stamped and
     re-indexed next tick (closes the lost-update race — see ``_STAMP_BULK_SQL``).
     Un-raced rows drain out of the partial index and are never re-scanned.
@@ -60,6 +62,9 @@ Output ``data`` keys (the cadence receipt the operator reads):
     examined        int — rows pulled this run
     indexed         int — rows successfully indexed into the corpus this run
     failures        int — examined rows the bulk request could not index
+    retry_pending   int — rows the bulk call failed on the CLUSTER's state (403
+                          cluster block / flood stage, 408, 429, 5xx): left
+                          un-stamped, re-indexed next tick
     requeued_dirty  int — rows whose version (updated_at) MOVED between our SELECT
                           and our stamp — some concurrent writer touched them
                           mid-window (a summarizer re-dirty, or any other updated_at
@@ -165,12 +170,15 @@ async def _sweep_batch(pool: Any, *, store: Any, index: str, batch_limit: int) -
     in ``ensure_index`` / ``bulk_index`` RAISES to the caller BEFORE the stamp, so
     the batch is left un-stamped and retried next tick (the ``_id`` overwrite makes
     the retry idempotent). Per-doc mapping errors are counted (not re-raised) and
-    the row is still stamped (a poison doc must not wedge the sweep)."""
+    the row is still stamped (a poison doc must not wedge the sweep); per-doc
+    failures on the cluster's state (403 block / 429 / 5xx) leave the row
+    un-stamped for the next tick."""
     counters = {
         "examined": 0,
         "indexed": 0,
         "failures": 0,
         "requeued_dirty": 0,
+        "retry_pending": 0,
         "skipped_no_store": 0,
     }
 
@@ -184,22 +192,42 @@ async def _sweep_batch(pool: Any, *, store: Any, index: str, batch_limit: int) -
     await store.ensure_index(index, CORPUS_INDEX_MAPPING)
 
     docs = [signal_to_doc(r) for r in rows]
-    indexed = await store.bulk_index(index, docs)
-    counters["indexed"] = int(indexed)
-    counters["failures"] = len(rows) - int(indexed)
+    report = await store.bulk_index_report(index, docs)
+    retry = report["retryable"]
+    counters["indexed"] = len(report["accepted"])
+    counters["failures"] = len(rows) - counters["indexed"]
+    counters["retry_pending"] = len(retry)
+    if counters["failures"]:
+        # One line per batch. 2026-11-06: through a flood-stage block every item
+        # came back 403 and the whole batch was stamped anyway — 652 signals
+        # marked indexed that never reached the corpus.
+        logger.warning(
+            "corpus_indexer.bulk_errors examined=%d indexed=%d errors=%d "
+            "retry_pending=%d rejected=%d",
+            len(rows), counters["indexed"], counters["failures"], len(retry),
+            len(report["rejected"]),
+        )
+
+    # Stamp only what the bulk call accepted, plus docs it REJECTED as
+    # documents (a poison doc must not wedge the sweep). A doc that failed on
+    # the cluster's state (403 block / 429 / 5xx) stays un-stamped and is
+    # re-selected next tick.
+    stamp_rows = [r for r in rows if str(r["id"]) not in retry]
+    if not stamp_rows:
+        return counters
 
     # VERSION-GUARDED stamp: pass the id + the updated_at snapshotted at SELECT as
     # PARALLEL arrays (same order). A row a concurrent content writer re-dirtied in
     # our I/O window has a moved updated_at → the guard skips it → indexed_at stays
     # NULL → re-indexed next tick with the fresh content. See _STAMP_BULK_SQL.
-    ids = [r["id"] for r in rows]
-    seen_updated_at = [r["updated_at"] for r in rows]
+    ids = [r["id"] for r in stamp_rows]
+    seen_updated_at = [r["updated_at"] for r in stamp_rows]
     async with pool.acquire() as conn:
         status = await conn.execute(_STAMP_BULK_SQL, ids, seen_updated_at)
     stamped = _parse_update_count(status)
     # Rows left un-stamped were re-dirtied mid-window; they re-index next tick.
     # Surface the count so the race is OBSERVABLE, never a silent stale doc.
-    counters["requeued_dirty"] = max(0, len(rows) - stamped)
+    counters["requeued_dirty"] = max(0, len(stamp_rows) - stamped)
 
     return counters
 
@@ -240,6 +268,7 @@ async def handle(
         "indexed": 0,
         "failures": 0,
         "requeued_dirty": 0,
+        "retry_pending": 0,
         "skipped_no_store": 0,
     }
     pool = getattr(deps, "pg_pool", None) if deps is not None else None

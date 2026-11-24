@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:mexico_news": {
+      "source": "target_mexico_news.yaml",
+      "state": "active"
+    }
+  }
+}

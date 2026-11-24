@@ -46,6 +46,15 @@ CONSUMPTION_CONTEXT_PERIPHERY = "composition_periphery"
 CONSUMPTION_CONTEXT_JOURNAL = "journal_slice"
 """A row of the journal's rendered priming slice (post-selection)."""
 
+CONSUMPTION_CONTEXT_JOURNAL_GATHERED = "journal_gathered"
+"""N-T (2026-11-13) — a row a journal-family entry READ through a GATHER tool:
+its memory (``get_journal_delta``'s prior entry, open consolidation and recent
+entries) and every other read tool's returned ids. Before this the ids were
+collected and dropped, so a consolidation written over entries later withdrawn
+(0b0d85a0 over the 07:49 correction's rows) could not be found from its rows:
+``SELECT consumer_id FROM output_consumption WHERE consumed_id = ANY(<withdrawn>)
+AND context = 'journal_gathered'``."""
+
 CONSUMPTION_CONTEXT_QUESTION = "question_addressed"
 """A STANDING QUESTION (``hypotheses`` row) this output was written to answer.
 
@@ -125,6 +134,7 @@ __all__ = [
     "CONSUMPTION_CONTEXT_BASIS",
     "CONSUMPTION_CONTEXT_JOURNAL",
     "CONSUMPTION_CONTEXT_PERIPHERY",
+    "CONSUMPTION_CONTEXT_JOURNAL_GATHERED",
     "CONSUMPTION_CONTEXT_QUESTION",
     "record_output_consumption",
 ]

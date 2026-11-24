@@ -18,6 +18,11 @@ Public surface:
     typed errors.
   * :class:`NlpServiceUnavailable` / :class:`NlpServiceAuthError` — typed
     exceptions for handler-level routing.
+  * :class:`GatewayNlpClient` — the same contract on the innoai gateway's
+    ``/relations`` · ``/entities`` · ``/classify`` routes (W11-F107), chosen by
+    the component's ``provider``, with ``translate`` on the gateway chat model
+    (W11-F109); :class:`NlpServiceUnsupported` (an ``NlpServiceUnavailable``)
+    for the methods it has no route for.
 """
 
 from __future__ import annotations
@@ -27,9 +32,12 @@ from .client import (
     NlpServiceClient,
     NlpServiceUnavailable,
 )
+from .gateway import GatewayNlpClient, NlpServiceUnsupported
 
 __all__ = [
+    "GatewayNlpClient",
     "NlpServiceAuthError",
     "NlpServiceClient",
     "NlpServiceUnavailable",
+    "NlpServiceUnsupported",
 ]

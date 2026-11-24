@@ -119,23 +119,52 @@ FINAL_SENTINEL = "<<<FINAL>>>"
 #: The metadata lines a sentinel final may carry between the sentinel and the
 #: markdown body. Short and FIRST, so a cap-truncated answer loses the tail of
 #: the prose and never the metadata.
+#:
+#: ``watch_candidates`` (CONSULT_REVIEW_2026-09-28 §B.4) makes the answer's
+#: "what would change my mind" section machine-readable: the same items the
+#: prose closes with, semicolon-separated, so a later lane can turn them into
+#: ``claim_watch`` rows instead of a reader re-reading the prose for them. It
+#: parses through the same list branch as ``unanswered_aspects`` — a header
+#: line is a header line — and nothing is minted from it here.
 _FINAL_HEADER_RE = re.compile(
-    r"^\s*(uncertainty|cited_refs|unanswered_aspects)\s*:\s*(.*)$",
+    r"^\s*(uncertainty|cited_refs|unanswered_aspects|watch_candidates)\s*:\s*(.*)$",
     re.IGNORECASE,
 )
 
 
-def _sentinel_lead(line: str) -> str | None:
-    """If ``line`` opens with the FINAL sentinel, return whatever trails it on
-    that line (usually ``""``); otherwise None.
+#: Every form of the sentinel a model actually emits (W11 SWEEP-2): the
+#: documented ``<<<FINAL>>>``, and the drifted ones the live turns carry —
+#: ``<<<FINAL>>`` (10-04, two persisted answers leaked their whole header block
+#: because the strict prefix test missed it), one or no closing bracket, inner
+#: spaces, any case. Never a longer word (``<<<FINALLY``).
+_SENTINEL_RE = re.compile(r"<{2,3}\s*FINAL\s*>{0,3}(?![A-Za-z0-9_])", re.IGNORECASE)
 
-    Tolerant of decoration a model may wrap around it — backticks, bold stars,
-    a heading marker — because the sentinel is a routing token, not content.
+#: The same marker ENDING a line of narration ("…compose the final answer.
+#: <<<FINAL>>>") — the mid-text form. Only at the end of the line: a marker
+#: quoted mid-sentence is a quotation, not the frame.
+_SENTINEL_TAIL_RE = re.compile(
+    r"(?:^|\s)<{2,3}\s*FINAL\s*>{0,3}$", re.IGNORECASE,
+)
+
+
+def _sentinel_lead(line: str) -> str | None:
+    """If ``line`` opens the FINAL frame, return whatever trails the sentinel
+    on that line (usually ``""``); otherwise None.
+
+    THE ONE EXTRACTION POINT for the frame's marker: every caller that finds,
+    strips or routes on the sentinel reaches it through here. Tolerant of
+    decoration a model may wrap around it — backticks, bold stars, a heading
+    marker, surrounding whitespace — and of the drifted spellings
+    :data:`_SENTINEL_RE` names, because the sentinel is a routing token, not
+    content: a form this misses is a form that lands in the persisted answer.
     """
     stripped = line.strip().lstrip("#>*_` \t")
-    if not stripped.upper().startswith(FINAL_SENTINEL):
-        return None
-    return stripped[len(FINAL_SENTINEL):].lstrip(" \t:*`")
+    match = _SENTINEL_RE.match(stripped)
+    if match is not None:
+        return stripped[match.end():].lstrip(" \t:*`>")
+    if _SENTINEL_TAIL_RE.search(line.rstrip().rstrip("*_` \t")):
+        return ""
+    return None
 
 
 def _sentinel_line_index(lines: list[str]) -> tuple[int, str] | None:
@@ -208,6 +237,162 @@ def _parse_header_list(raw: str) -> list[str]:
     return [part.strip() for part in text.split(separator) if part.strip()]
 
 
+#: The most ``cited_refs`` a FINAL header may carry (W11-F160). Turn
+#: ``91b6260c`` wrote ~101 distinct ids and then looped the same line until the
+#: 32,768-token output cap: 969 ids, 102 unique, cut mid-uuid, no answer under
+#: it. The prompt asks for at most this many; the parser enforces it.
+CITED_REFS_MAX = 30
+
+#: A cut-off uuid prefix — what a cap-truncated ``cited_refs`` line ends in.
+_UUID_FRAGMENT_RE = re.compile(r"^[0-9a-fA-F]{1,8}(?:-[0-9a-fA-F]{0,12}){0,4}$")
+
+
+def _parse_cited_refs_header(raw: str) -> list[str]:
+    """``cited_refs`` header tokens as an ordered, unique, bounded list.
+
+    The degenerate-repetition guard (W11-F160): stop at the FIRST repeated id
+    (a model that starts re-listing ids is looping, and nothing after the
+    repeat is a new choice), drop a trailing cut-off uuid fragment, and keep
+    at most :data:`CITED_REFS_MAX` ids. Tokens are returned exactly as written,
+    so a normal header (no repeats, under the cap) parses byte-identically to
+    :func:`_parse_header_list`; a non-uuid label is kept for the malformed-ref
+    seam downstream.
+    """
+    tokens = _parse_header_list(raw)
+    out: list[str] = []
+    seen: set[str] = set()
+    had_uuid = False
+    for pos, token in enumerate(tokens):
+        if len(seen) >= CITED_REFS_MAX:
+            break
+        bare = strip_ref_wrappers(token)
+        if not bare:
+            out.append(token)  # pure decoration; the ref seam drops it
+            continue
+        hits = _TOKEN_UUID_RE.findall(bare)
+        had_uuid = had_uuid or bool(hits)
+        if not hits:
+            if pos == len(tokens) - 1 and had_uuid and _UUID_FRAGMENT_RE.match(bare):
+                break  # a uuid list cut mid-uuid, not a short label
+            hits = [bare]
+        fresh = {h.lower(): h for h in hits if h.lower() not in seen}
+        if len(fresh) == len({h.lower() for h in hits}) and (
+            len(seen) + len(fresh) <= CITED_REFS_MAX
+        ):
+            seen.update(fresh)
+            out.append(token)
+            continue
+        # A repeat (or a multi-id token straddling the cap): keep its new ids
+        # up to the cap, one bare id each, then stop.
+        for key, hit in list(fresh.items())[: CITED_REFS_MAX - len(seen)]:
+            seen.add(key)
+            out.append(hit)
+        break
+    return out
+
+
+def _read_header(payload: dict[str, Any], key: str, value: str) -> None:
+    """Store one FINAL header line's value on ``payload``."""
+    if key == "uncertainty":
+        try:
+            payload["uncertainty"] = float(value.strip())
+        except (TypeError, ValueError):
+            pass  # _build_consult_response applies its own default
+    elif key == "cited_refs":
+        payload[key] = _parse_cited_refs_header(value)
+    else:
+        payload[key] = _parse_header_list(value)
+
+
+# ---------------------------------------------------------------------------
+# THE REF PARSE SEAM (2026-09-28 consult review §B.3)
+# ---------------------------------------------------------------------------
+#
+# THE DEFECT. A ``cited_refs:`` header reaches ``_coerce_uuid_list`` as a list
+# of tokens and each one goes through a bare ``UUID()`` inside a
+# ``try/except: continue``. Every token the core plane decorates — and it
+# decorates constantly; the 2026-09-28 core run wrote every citation in
+# ``【…】`` — fails that constructor and is dropped with no record anywhere.
+# Two different things were being thrown away in the same silence:
+#
+#   * a REAL id the model wrapped in a bracket (``【a1b2…】``, ``[a1b2…]``,
+#     ``(a1b2…)``). This is a parse failure of OURS and the id is recoverable.
+#   * a FABRICATED non-uuid label (``sit-001``, the same run's first tool
+#     call). This is a fact about the answer and the operator must see it.
+#
+# So: strip the wrappers, recover what is recoverable, and hand back what is
+# not as a MALFORMED list the caller carries on the response rather than
+# dropping. Bounded and de-duplicated, because it is model-authored text.
+
+#: Bracket / quote pairs a model wraps a bare id in. The full-width four are
+#: the same set ``provenance.citation_markers`` normalizes in prose; they turn
+#: up in the header line for exactly the same reason.
+_REF_WRAPPERS = "[]()【】［］〔〕〖〗<>\"'`*«»“”‘’ \t"
+
+#: A bare uuid anywhere inside a token. The recovery of last resort: a model
+#: that writes ``cited_refs: 【a…】【b…】`` produces ONE comma-free token
+#: holding two real ids, and splitting on the bracket glyphs would be a second
+#: dialect of the same rule. Only well-formed uuids are ever recovered, so this
+#: can add a citation the model actually wrote and can never invent one.
+_TOKEN_UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+
+#: How much of a malformed token to keep, and how many. Model-authored text on
+#: a response the panel renders: bounded at the seam, never at the reader.
+MALFORMED_REF_MAX_LEN = 40
+MALFORMED_REF_MAX_ITEMS = 20
+
+
+def strip_ref_wrappers(token: Any) -> str:
+    """One header/JSON ref token with its decoration removed.
+
+    Idempotent, and a no-op on an already-bare uuid.
+    """
+    return str(token).strip().strip(_REF_WRAPPERS)
+
+
+def split_ref_tokens(raw: Any) -> tuple[list[str], list[str]]:
+    """``(uuid strings, malformed tokens)`` for one ``cited_refs`` value.
+
+    Order-preserving and de-duplicated on both sides. The uuids come back as
+    the model wrote them (case included); the CALLER canonicalizes by
+    constructing a ``UUID``, because that is where the failure has somewhere to
+    go. A token that is neither a uuid nor a wrapper around one is malformed
+    and is REPORTED — never dropped, which is the whole point of this seam.
+    """
+    if not isinstance(raw, (list, tuple)):
+        # A non-list ``cited_refs`` is not a citation list and never was: the
+        # loop has always returned nothing for it, and widening that here would
+        # be a second change hiding inside this one.
+        return [], []
+    items: list[Any] = list(raw)
+    found: list[str] = []
+    seen: set[str] = set()
+    malformed: list[str] = []
+    bad_seen: set[str] = set()
+    for item in items:
+        text = strip_ref_wrappers(item)
+        if not text:
+            continue
+        hits = _TOKEN_UUID_RE.findall(text)
+        if hits:
+            for hit in hits:
+                key = hit.lower()
+                if key not in seen:
+                    seen.add(key)
+                    found.append(hit)
+            continue
+        if len(malformed) >= MALFORMED_REF_MAX_ITEMS:
+            continue
+        clipped = text[:MALFORMED_REF_MAX_LEN]
+        if clipped not in bad_seen:
+            bad_seen.add(clipped)
+            malformed.append(clipped)
+    return found, malformed
+
+
 def _parse_sentinel_final(raw: str) -> dict[str, Any] | None:
     r"""Parse the plain-markdown FINAL reply into the loop's final-payload shape.
 
@@ -217,6 +402,7 @@ def _parse_sentinel_final(raw: str) -> dict[str, Any] | None:
         uncertainty: 0.35
         cited_refs: <uuid>, <uuid>
         unanswered_aspects: one gap; another gap
+        watch_candidates: an indicator that would change this; another
 
         ## Bottom line
         ...markdown...
@@ -264,21 +450,21 @@ def _parse_sentinel_final(raw: str) -> dict[str, Any] | None:
     body_lines: list[str] = [trailing] if trailing else []
     if not body_lines:
         # Header block: consecutive `key: value` lines, any order, all
-        # optional. The first line that is not one begins the answer.
+        # optional. The first line that is not one begins the answer. Blank
+        # lines are skipped only when a header NOT yet read follows them, so a
+        # stray blank between two headers cannot push one into the answer.
+        seen_keys: set[str] = set()
         while idx < len(lines):
-            match = _FINAL_HEADER_RE.match(lines[idx])
-            if match is None:
+            nxt = idx
+            while nxt < len(lines) and not lines[nxt].strip():
+                nxt += 1
+            match = _FINAL_HEADER_RE.match(lines[nxt]) if nxt < len(lines) else None
+            if match is None or (nxt > idx and match.group(1).lower() in seen_keys):
                 break
             key = match.group(1).lower()
-            value = match.group(2)
-            if key == "uncertainty":
-                try:
-                    payload["uncertainty"] = float(value.strip())
-                except (TypeError, ValueError):
-                    pass  # _build_consult_response applies its own default
-            else:
-                payload[key] = _parse_header_list(value)
-            idx += 1
+            seen_keys.add(key)
+            _read_header(payload, key, match.group(2))
+            idx = nxt + 1
 
     body = "\n".join([*body_lines, *lines[idx:]]).strip()
     if not body:
@@ -331,25 +517,21 @@ def _lift_leading_headers(payload: dict[str, Any], body: str) -> str:
     """
     lines = body.splitlines()
     consumed = 0
-    for line in lines[:_SALVAGE_HEADER_SCAN_LINES]:
+    seen_keys: set[str] = set()
+    for i, line in enumerate(lines[:_SALVAGE_HEADER_SCAN_LINES]):
         if not line.strip():
-            if consumed:
-                break
-            consumed += 1
             continue
         match = _FINAL_HEADER_RE.match(line)
         if match is None:
             break
         key = match.group(1).lower()
-        value = match.group(2)
-        if key == "uncertainty":
-            try:
-                payload["uncertainty"] = float(value.strip())
-            except (TypeError, ValueError):
-                pass
-        else:
-            payload[key] = _parse_header_list(value)
-        consumed += 1
+        # Past a blank line only a header NOT yet read is still a header (the
+        # same rule as the sentinel block, W11-F160).
+        if i > consumed and key in seen_keys:
+            break
+        seen_keys.add(key)
+        _read_header(payload, key, match.group(2))
+        consumed = i + 1
     return "\n".join(lines[consumed:]).strip() if consumed else body
 
 
@@ -383,8 +565,11 @@ def final_payload_from_text(raw: str) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "final": True, "uncertainty": SALVAGE_UNCERTAINTY,
     }
-    body = _lift_leading_headers(payload, text)
-    payload["answer"] = body or text or (raw or "").strip()
+    # W11-F160: the answer is the BODY. A reply that was only a sentinel and
+    # header lines has no answer, and its header text must never be stored as
+    # one (turn 91b6260c) — the caller reads the empty answer as "not
+    # synthesized" and offers re-synthesis from the evidence.
+    payload["answer"] = _lift_leading_headers(payload, text)
     return payload
 
 
@@ -436,7 +621,9 @@ def _unescape_json_str(s: str) -> str:
 # Keys that mark the END of a nested ``"answer"`` value when the inner envelope
 # is malformed and ``json.loads`` cannot parse it. ``final`` is deliberately NOT
 # here: in a final-envelope it precedes ``answer``, so it never marks the tail.
-_NESTED_TAIL_KEYS = ("uncertainty", "cited_refs", "unanswered_aspects")
+_NESTED_TAIL_KEYS = (
+    "uncertainty", "cited_refs", "unanswered_aspects", "watch_candidates",
+)
 
 
 def _unwrap_double_envelope(answer: str) -> str:
@@ -512,6 +699,8 @@ def _unwrap_double_envelope(answer: str) -> str:
 
 __all__ = [
     "FINAL_SENTINEL",
+    "MALFORMED_REF_MAX_ITEMS",
+    "MALFORMED_REF_MAX_LEN",
     "SALVAGE_UNCERTAINTY",
     "_extract_json",
     "_parse_header_list",
@@ -522,4 +711,6 @@ __all__ = [
     "_unescape_json_str",
     "_unwrap_double_envelope",
     "final_payload_from_text",
+    "split_ref_tokens",
+    "strip_ref_wrappers",
 ]

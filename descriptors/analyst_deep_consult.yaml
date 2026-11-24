@@ -47,9 +47,21 @@ method:
     # logs past it).
     primary:
       factory_kind: stack_ref
-      raw: llm.anthropic.opus_4_7
+      raw: llm.primary.openai_compat   # 2026-10-03 DEC-17a: the free core plane is the default (shared resolver with consult); Opus/Fable by explicit pick
       expected_family: llm_provider
     max_tokens: 32768
+    # T-1 (2026-11-14): the plan stage and the analyze stage's consult loop
+    # (rounds + synthesis) think on the core plane; candidate extraction and
+    # the repair call do not (data/analysts/consult_thinking.py).
+    thinking: "on"
+  # W11-F133 — consult 6cd91190 (2026-10-29): the actor's default transient
+  # retry (3 attempts) re-ran a whole consult from scratch on the same request
+  # id after its forced final died on a network error — 19 more rounds, 162
+  # tool calls, re-spent unasked. An operator consult runs ONCE; a failure goes
+  # back to the operator, never into a silent second run.
+  retry:
+    transient:
+      max_attempts: 1
   budget_tokens_per_day: 0
 
 cadence:

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.dabanga.sudan": {
+      "source": "source_dabangasudan.yaml",
+      "state": "draft"
+    }
+  }
+}

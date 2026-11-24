@@ -29,7 +29,6 @@ import asyncio
 import json
 import logging
 import os
-import signal as signalmod
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -40,6 +39,10 @@ from dapr.actor import ActorRuntime
 from dapr.ext.fastapi import DaprActor
 from fastapi import FastAPI
 
+from legba.shared.registry_principal import check_service_principal, service_auth_headers
+
+from .actor_deactivation import mount_idempotent_deactivation
+from .runtime_healthz import mount_runtime_healthz  # roll 86: before DaprActor(app)
 from .actor_turn import (
     HealBreaker,
     TurnBudgetExceeded,
@@ -47,7 +50,7 @@ from .actor_turn import (
     heal_breaker_trips,
     heal_timeout_seconds,
 )
-from .actor_turn_witness import mount_actor_turn_witness
+from .actor_turn_witness import log_heal_deadline, mount_actor_turn_witness
 from .dapr_actors import AnalystActor, TargetActor
 
 logger = logging.getLogger(__name__)
@@ -265,11 +268,9 @@ async def execute_reconcile_action(
                 timeout=heal_timeout_seconds(),
             )
         except TurnBudgetExceeded:
-            count = brk.record_timeout(action.actor_id)
-            logger.warning(
-                "action_executor.deadline kind=%s method=%s actor_id=%s "
-                "consecutive=%d — skipped, retried next resync",
-                action.kind.name, method, action.actor_id, count,
+            log_heal_deadline(  # SW-8: + heal_phase / held_by / in_turn_op
+                logger, action.kind.name, method, action.actor_id,
+                brk.record_timeout(action.actor_id),
             )
             return False
         brk.record_success(action.actor_id)
@@ -499,18 +500,13 @@ def build_dapr_host_app(
         logger.info("dapr_host.shutdown")
 
     app = FastAPI(title="Legba Runtime (Dapr)", version="0.1.0", lifespan=lifespan)
+    mount_idempotent_deactivation(app)   # N-U: before DaprActor, so it matches first
+    mount_runtime_healthz(app, {})       # before DaprActor: its own /healthz would win
     # DaprActor mounts the magic actor endpoints daprd will hit.
     DaprActor(app)
     # Each of those is a turn; witnessing the boundary is what lets the trigger
     # plane tell a fire absorbed by a busy actor from a fire that was lost.
     mount_actor_turn_witness(app)
-
-    @app.get("/healthz")
-    async def healthz() -> dict[str, Any]:
-        return {
-            "status": "ok",
-            "actor_types": list(ActorRuntime.get_registered_actor_types()),
-        }
 
     # Mount L-193 A2A skill router when the caller supplied the wiring.
     if (
@@ -776,6 +772,7 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
     )
     from .leader import LeaderLease, assert_singleton_safe
     from .registry_client import RegistryHTTPClient
+    from .vocabulary_runtime import install_tag_vocabulary
     from .source_actor import SourceActorInterface
     from .state import ActorStateStore
 
@@ -791,6 +788,8 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
     # ---------- substrate connections ----------------------------------
     pg_store = PostgresStore(PostgresConfig.from_env())
     await pg_store.connect()
+    from .thinking_fallback_alert import install_thinking_fallback_alerts  # T-2
+    install_thinking_fallback_alerts(pg_store.pool)
     nats_store = NatsStore(NatsConfig.from_env())
     await nats_store.connect()
 
@@ -804,7 +803,8 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
     state_store = ActorStateStore(pg_store.pool)
     await state_store.ensure_schema()
 
-    registry_client = RegistryHTTPClient()  # reads LEGBA_REGISTRY_API_URL etc.
+    check_service_principal("runtime")  # X2-B1: loud when the fleet has no service token
+    registry_client = install_tag_vocabulary(RegistryHTTPClient())  # TAG-1: + tag vocabulary cache
 
     # ---------- desired-state lookups ----------------------------------
     #
@@ -866,14 +866,14 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
         base_url = os.environ.get(
             "LEGBA_REGISTRY_API_URL", "http://localhost:8090",
         ).rstrip("/")
-        token = os.environ.get("LEGBA_REGISTRY_API_TOKEN") or "dev"
+        auth = service_auth_headers()  # X2-B1: the fleet's principal
         rows: list[dict[str, Any]] = []
         async with httpx.AsyncClient(timeout=15) as c:
             for family in ("target", "analyst", "source"):
                 r = await c.get(
                     f"{base_url}/api/v1/registry/descriptors",
                     params={"family": family, "head_only": "true", "limit": 500},
-                    headers={"Authorization": f"Bearer {token}"},
+                    headers=auth,
                 )
                 r.raise_for_status()
                 rows.extend(r.json())
@@ -952,13 +952,12 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
         base_url = os.environ.get(
             "LEGBA_REGISTRY_API_URL", "http://localhost:8090",
         ).rstrip("/")
-        token = os.environ.get("LEGBA_REGISTRY_API_TOKEN") or "dev"
         try:
             async with httpx.AsyncClient(timeout=15) as c:
                 r = await c.get(
                     f"{base_url}/api/v1/registry/descriptors/analyst/"
                     f"{descriptor_id}/typed",
-                    headers={"Authorization": f"Bearer {token}"},
+                    headers=service_auth_headers(),  # X2-B1
                 )
                 r.raise_for_status()
                 body = r.json()
@@ -1059,11 +1058,12 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
         registered_cache_labels,
     )
     from .nlp_client_factory import (
-        DEFAULT_NLP_COMPONENT_ID,
         LazyNlpClient,
         NlpClientFactoryError,
+        resolve_nlp_component_id,
     )
     from .pipeline import PipelineRunner, build_filter_handler
+    from .enrichment_timing import timed_stage
     from .qdrant_factory import QdrantFactoryError
     from .search_handler_factory import (
         resolve_pack_search_fallback_bindings,
@@ -1230,7 +1230,9 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
     _lazy_nlp_client = LazyNlpClient(
         registry_client=registry_client,
         secrets_resolve=_secrets_resolve,
-        component_id=DEFAULT_NLP_COMPONENT_ID,
+        # W11-F107: LEGBA_NLP_COMPONENT_ID picks the component (nlp.innoai.gateway
+        # for the gateway); unset = nlp.local.legba_models, as before.
+        component_id=resolve_nlp_component_id(),
     )
 
     # W-1 / #235 Qdrant client + hosted embedding service — LAZILY resolved.
@@ -1699,29 +1701,29 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
         # build — for consult it is mandatory (fail loud, never a silent
         # ungoverned bypass: that silent-bypass shape is exactly how the
         # review found the agency plane orphaned).
-        consult_agency_binding = None
+        consult_agency_binding = consult_provider_bindings = None
         if ad.identity.kind == "consult_on_demand":
             from ..data.analysts.agency.binding import (
                 AgencyToolBinding,
                 GLOBAL_SCOPE,
                 fetch_action_pack,
             )
-            from ..data.analysts.agency.substrate_read import (
-                SUBSTRATE_READ_PACK_ID,
-            )
+            from ..data.analysts.consult_bakeoff import consult_read_pack_for
             from .source_first_runtime import AGENCY_HOLDER
 
             agency = AGENCY_HOLDER.get("agency")
             base_ctx = AGENCY_HOLDER.get("tool_context")
-            pack = await fetch_action_pack(registry_client, SUBSTRATE_READ_PACK_ID)
+            # X3/G0: a bake-off descriptor reads through its own pack (B / C arm).
+            consult_read_pack = consult_read_pack_for(ad)
+            pack = await fetch_action_pack(registry_client, consult_read_pack)
             if agency is None or base_ctx is None or pack is None:
                 logger.error(
                     "analyst_deps_resolver.consult_agency_unavailable "
-                    "actor_id=%s agency=%s ctx=%s pack=%s — register the "
-                    "substrate_read action pack (bringup_register_action_packs) "
+                    "actor_id=%s agency=%s ctx=%s pack=%s(%s) — register the "
+                    "read action pack (bringup_register_action_packs) "
                     "and bring up the agency plane before binding consult",
                     actor_id, agency is not None, base_ctx is not None,
-                    pack is not None,
+                    consult_read_pack, pack is not None,
                 )
                 return None
             from ..data.analysts.agency.tools import ToolContext
@@ -1744,11 +1746,13 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                 # read-only pack is allowed by construction (documented in
                 # the pack descriptor). Target-bound packs (escalate etc.)
                 # resolve their allow leg per run instead.
-                target_allows=[ActionPackRef(pack_id=SUBSTRATE_READ_PACK_ID)],
+                target_allows=[ActionPackRef(pack_id=consult_read_pack)],
                 scope=GLOBAL_SCOPE,
                 requested_by=f"analyst::{ad.identity.id}",
                 budget_account=ad.identity.id,
             )
+            from .consult_bindings import build_provider_bindings  # C-1b, C-2a §7
+            consult_provider_bindings = await build_provider_bindings(consult_agency_binding, registry_client=registry_client, analyst=ad)
 
         # S5: the agentic inline_target GATHER binding. Built iff the analyst is
         # an inline_target assessor AND it grants `substrate_read` via
@@ -2047,8 +2051,11 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                 embedding_service=embedding_service,  # L-114 — grounding embedder
                 qdrant_client=qdrant_client,  # S5-T3 — vector:world_context RAG
                 nlp_client=_lazy_nlp_client,  # reenrich_ner — NER-backfill sweep source
+                # W11-F118 reenrich_pending: the factory below, looked up at call time.
+                source_enrichment_factory=lambda sd: _source_enrichment_factory(sd),
                 tools_registry=tools_registry,      # L-175
                 consult_agency_binding=consult_agency_binding,
+                consult_provider_bindings=consult_provider_bindings,  # C-1b, C-2a §7
                 # S5: the GATHER binding is passed so the runner engages the
                 # bounded tool-call phase. Default-off (None) when not granted.
                 inline_target_agency_binding=gather_binding,
@@ -2170,43 +2177,25 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
         #   * the ``LEGBA_VERIFY_LLM_JUDGE`` flag gates the judge ON (the verify
         #     seam's OWN helper is reused so the flag semantics are IDENTICAL).
         # SOFT-FAIL: any resolution error → verify_judge=None + a warning; the
-        # floor still runs (labelled 'judge-unavailable'). NEVER raises into deps
-        # build. The handler is built through the SAME cached _llm_handler_factory
-        # → build_llm_handler_from_stack_component path every other LLM uses, so
-        # it is an LLMProviderHandler exposing chat_complete (verify.py's
-        # contract). No route / flag off → None → the floor stands. The resolved
-        # ref rides along as ``verify_judge_ref`` so the critique row can stamp
-        # ``judge_llm_ref`` (which model judged — provenance, forever).
+        # floor still runs. NEVER raises into deps build. Rung 1 is built through
+        # the SAME cached _llm_handler_factory as before (same ref in → same
+        # client out); the ref and the route class (configured|fallback_verify|
+        # fallback_primary) ride along for the critique row. JUDGE-2: the block
+        # moved to ``judge_fallback_chain.wire_judge_chain``, which wraps that
+        # client in the FAILURE chain (``method.llm.judge_chain``; later rungs
+        # built lazily on a route-gone 401/402/403/404).
         verify_judge: Any = None
         verify_judge_ref: str = ""
-        # W-3d — the coarse route CLASS (configured|fallback_verify|
-        # fallback_primary) riding along with the ref so the critique row can
-        # stamp ``judge_route`` (the UI badge's configured-vs-fell-back signal).
         verify_judge_route: str = ""
         judge_route = resolve_judge_route(ad)
         if judge_route is not None and _llm_judge_enabled():
-            try:
-                verify_judge = await _llm_handler_factory(judge_route.component_id)
-                verify_judge_ref = judge_route.component_id
-                verify_judge_route = judge_route.route_class
-                logger.info(
-                    "analyst_deps_resolver.verify_judge_wired actor_id=%s "
-                    "analyst=%s judge_ref=%s source=%s route=%s",
-                    actor_id, ad.identity.id,
-                    judge_route.component_id, judge_route.source,
-                    verify_judge_route,
-                )
-            except Exception as exc:  # noqa: BLE001 — soft-fail, floor still runs
-                verify_judge = None
-                verify_judge_ref = ""
-                verify_judge_route = ""
-                logger.warning(
-                    "analyst_deps_resolver.verify_judge_resolve_failed "
-                    "actor_id=%s analyst=%s component_id=%s source=%s err=%s — "
-                    "the faithfulness verify degrades to its deterministic floor",
-                    actor_id, ad.identity.id, judge_route.component_id,
-                    judge_route.source, exc,
-                )
+            from .judge_fallback_chain import wire_judge_chain
+
+            verify_judge, verify_judge_ref, verify_judge_route = await wire_judge_chain(
+                judge_route, getattr(ad.method, "llm", None) or {},
+                llm_handler_factory=_llm_handler_factory,
+                actor_id=actor_id, analyst_id=str(ad.identity.id),
+            )
 
         return _AnalystDeps(
             descriptor=ad,
@@ -2244,17 +2233,23 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
     # reminders owned by RETIRED actor_state rows (provably-orphan; never a
     # live actor) via the idempotent daprd sidecar reminder DELETE.
     from .reminder_gc import (
+        ReminderAbsenceMemo,
         build_sidecar_reminder_deleter,
         sweep_orphan_reminders,
     )
 
     _reminder_deleter = build_sidecar_reminder_deleter()
+    # W11-F268: a reminder daprd already answered 404 for, on an unchanged
+    # retired row, is re-asked once a day, not on every 5-minute resync.
+    _reminder_absence_memo = ReminderAbsenceMemo()
 
     async def _reminder_gc_sweep() -> Any:
         return await sweep_orphan_reminders(
             state_store=state_store,
             delete_reminder=_reminder_deleter,
             alert_publish=nats_store.publish_json,
+            pg_pool=pg_store.pool,  # L-1: the sweep also raises on the alert log
+            absence_memo=_reminder_absence_memo,
         )
 
     # Task #236 RIDER: ``action_pack`` descriptors have no actor lifecycle
@@ -2416,12 +2411,10 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                 embedding_service=source_embedding_service,
                 secrets_resolve=_secrets_resolve,
                 # PIECE 2: the fact_extractor 'llm' backend routes through the
-                # analyst LLM plane; the relation backend ignores both. AGE
-                # edges (emit_graph_edges) ride the PostgresStore cypher() port.
+                # analyst LLM plane; the relation backend ignores both.
                 llm_handler_factory=_llm_handler_factory,
-                graph_store=pg_store,
             )
-            built.append((stage.kind, handler))
+            built.append((stage.kind, timed_stage(stage.kind, handler, sd.identity.id)))
 
         def _ctx_factory(filter_id: str) -> FilterContext:
             return FilterContext(
@@ -2430,9 +2423,13 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                 filter_id=filter_id,
                 scope_geo=list(getattr(sd.scope, "geo", []) or []),
                 scope_languages=list(getattr(sd.scope, "languages", []) or []),
+                source_class=getattr(sd.scope, "source_class", None),
             )
 
         runner = PipelineRunner(stages=built, ctx_factory=_ctx_factory)
+        # W11-F118: the stage never raises, so the pending sweep reads these to
+        # tell a re-enriched row from a silently degraded one.
+        state: dict[str, Any] = {"handlers": [h for _, h in built], "fallbacks": 0}
 
         async def _stage(signal: Any, ctx: Any):
             async def _gen():
@@ -2446,10 +2443,12 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                     "source_enrichment.stage_error source=%s err=%s",
                     sd.identity.id, exc,
                 )
+                state["fallbacks"] += 1
                 return signal
             # Enrichment is annotate-only + best-effort: a filter error or
             # empty yield must NOT drop the signal (unlike ingestion_filters).
             # Fall back to the unenriched signal so acquisition never loses data.
+            state["fallbacks"] += out is None
             sig = out if out is not None else signal
             # Promote payload enrichment → the indexed structured-filter
             # columns. The geocode/ner/language_detect handlers annotate
@@ -2459,21 +2458,10 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
             # columns. Lift them across so a signal about Germany lands
             # geo=['DE'] and routes to country_g20_de.
             try:
-                pl = sig.payload if isinstance(sig.payload, dict) else {}
-                geo_block = pl.get("geo")
-                if isinstance(geo_block, dict):
-                    iso2 = geo_block.get("country_iso2")
-                    if iso2 and iso2 not in sig.geo:
-                        sig.geo.append(iso2)
-                lang = pl.get("language")
-                if lang and not sig.language:
-                    sig.language = lang
-                ents = pl.get("entities")
-                if isinstance(ents, list):
-                    for e in ents:
-                        cls = e.get("class") if isinstance(e, dict) else None
-                        if cls and cls not in sig.entity_classes:
-                            sig.entity_classes.append(cls)
+                # Lane N-O: every code the geo block files it under (an
+                # issuer's declared state + the subject), primary first.
+                from ..data.filters._geo_precedence import promote_payload_columns
+                promote_payload_columns(sig)
             except Exception as exc:                            # pragma: no cover
                 logger.debug(
                     "source_enrichment.promote_skip source=%s err=%s",
@@ -2481,6 +2469,7 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                 )
             return sig
 
+        _stage.enrichment_state = state  # type: ignore[attr-defined]
         return _stage
 
     source_first: Any | None
@@ -2720,7 +2709,9 @@ def main() -> None:
         # + the subscriber identity the fan-out delivers to.
         from dapr.actor import ActorRuntime
         from .dapr_actors import AnalystActor, TargetActor
+        from .loop_lag_monitor import start_loop_lag_monitor_from_env
         from .source_actor import SourceActor
+        lag_monitor = await start_loop_lag_monitor_from_env()   # N-V
         await ActorRuntime.register_actor(TargetActor)
         await ActorRuntime.register_actor(AnalystActor)
         if SourceActor is not None:
@@ -2742,6 +2733,8 @@ def main() -> None:
         h = handles_holder.get("h")
         if h is not None:
             await h.stop()
+        if lag_monitor is not None:
+            await lag_monitor.stop()
         logger.info("dapr_host.shutdown")
 
     # Build a fresh app with the production lifespan (not the
@@ -2751,6 +2744,8 @@ def main() -> None:
         version="0.1.0",
         lifespan=production_lifespan,
     )
+    mount_idempotent_deactivation(app)   # N-U: before DaprActor, so it matches first
+    mount_runtime_healthz(app, handles_holder)  # before DaprActor: its own /healthz would win
     DaprActor(app)
     mount_actor_turn_witness(app)
 
@@ -2766,6 +2761,7 @@ def main() -> None:
     if _a2a_trusted is not None:
         from ..data.outputs.a2a_skill import (
             A2ASkillRegistry,
+            fetch_latest_analyst_outputs,
             register_a2a_skill_route,
         )
         from ..data.registry.signing import load_default_identity
@@ -2787,21 +2783,14 @@ def main() -> None:
             h = handles_holder.get("h")
             if h is None:
                 return []
-            query = """
-                SELECT id, kind, title, body, data, produced_at,
-                       target_id, analyst_id, analyst_version, schema_uri
-                  FROM analyst_outputs
-                 WHERE analyst_id = ANY($1::text[])
-            """
-            args: list[Any] = [list(analyst_ids)]
-            if target_filter is not None:
-                args.append(target_filter)
-                query += f" AND target_id = ${len(args)}"
-            args.append(limit)
-            query += f" ORDER BY produced_at DESC LIMIT ${len(args)}"
-            async with h.pg_store.pool.acquire() as conn:
-                rows = await conn.fetch(query, *args)
-            return [dict(r) for r in rows]
+            # W11-F68a: JSON-safe rows (UUID / datetime reduced) — the shared
+            # fetcher lives beside the route that serialises them.
+            return await fetch_latest_analyst_outputs(
+                h.pg_store.pool,
+                analyst_ids=analyst_ids,
+                limit=limit,
+                target_filter=target_filter,
+            )
 
         register_a2a_skill_route(
             app,
@@ -2856,50 +2845,21 @@ def main() -> None:
                 },
             )
 
-    @app.get("/healthz")
-    async def healthz() -> dict[str, Any]:
-        from dapr.actor import ActorRuntime
-        from .leader import leader_election_enabled, replica_count
+    from .shutdown_drain import install_shutdown_signal_handlers, runtime_drain_seconds
 
-        h = handles_holder.get("h")
-        lease = getattr(h, "leader_lease", None) if h is not None else None
-        is_leader = bool(getattr(lease, "is_leader", False)) if lease is not None else None
-        # Singleton loops run only on the leader; report reconcile_running as
-        # True only when this replica IS the leader and its loop is live.
-        reconcile_running = (
-            h is not None
-            and is_leader is True
-            and not h.reconcile_loop._stopped
-        )
-        return {
-            "status": "ok",
-            "actor_types": list(ActorRuntime.get_registered_actor_types()),
-            "reconcile_running": reconcile_running,
-            "leader": is_leader,
-            "leader_election": "on" if leader_election_enabled() else "off",
-            "replica_count": replica_count(),
-        }
-
+    drain_seconds = runtime_drain_seconds()  # W11-F84 — None: stop at the first signal
     cfg = uvicorn.Config(
         app,
         host=os.getenv("LEGBA_RUNTIME_HTTP_HOST", "0.0.0.0"),
         port=port,
         log_level=os.getenv("LEGBA_LOG_LEVEL", "info").lower(),
         log_config=None,
+        timeout_graceful_shutdown=drain_seconds,
     )
     server = uvicorn.Server(cfg)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-
-    def _signal_handler(*_: Any) -> None:
-        logger.info("legba-runtime-dapr received shutdown signal")
-        loop.call_soon_threadsafe(loop.stop)
-
-    for sig in (signalmod.SIGINT, signalmod.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, _signal_handler)
-        except NotImplementedError:  # pragma: no cover — Windows
-            pass
+    install_shutdown_signal_handlers(loop, drain_seconds=drain_seconds)
 
     try:
         loop.run_until_complete(server.serve())

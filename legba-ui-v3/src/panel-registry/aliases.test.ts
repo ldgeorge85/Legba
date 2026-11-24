@@ -27,39 +27,74 @@ import {
   rewriteSerializedLayout,
 } from './aliases'
 import { PANEL_REGISTRY } from './registry'
+import { landedRetirements } from './kindPlan'
+import { SUBJECT_TABS } from '@/lib/subjectPage'
 import type { PanelKind } from '@/types'
+import { PROVENANCE_TABS } from '@/panels/merged/Provenance'
+import { REGISTRY_TABS } from '@/panels/merged/Registry'
+import { STATUS_TABS } from '@/panels/merged/Status'
+import { LEDGERS_TABS } from '@/panels/merged/Ledgers'
+import { REGISTER_TABS } from '@/panels/merged/Register'
+import { OPTIMIZER_TABS } from '@/panels/merged/Optimizer'
+import { WALL_TABS } from '@/panels/merged/Wall'
+
+const ids = (tabs: readonly { id: string }[]) => tabs.map((t) => t.id)
 
 /**
- * The tab ids each tabbed survivor actually renders. Mirrors the `TABS`
- * constants in the merged wrappers (and Entities); an alias naming a tab that
- * is not in this map is a defect, not a matter of taste.
+ * The tab ids each tabbed survivor actually renders. The UI-B1/merges wrappers
+ * EXPORT their `TABS`, so those rows are read from the components themselves
+ * (no hand-kept mirror to drift); the U-3 rows mirror their wrappers' private
+ * constants. An alias naming a tab that is not in this map is a defect, not a
+ * matter of taste.
  */
 const SURVIVOR_TABS: Partial<Record<PanelKind, readonly string[]>> = {
   'system.timeline': ['events', 'validity'],
-  'system.provenance': ['why', 'lineage', 'flow', 'trajectory', 'narratives'],
+  'system.provenance': ids(PROVENANCE_TABS),
   'system.alerts_watches': ['watches', 'triggers', 'deliveries'],
   'system.consult': ['chat', 'deep'],
   'system.entities': ['list', 'graph', 'structure'],
+  'system.registry': ids(REGISTRY_TABS),
+  'system.status': ids(STATUS_TABS),
+  'system.ledgers': ids(LEDGERS_TABS),
+  'system.register': ids(REGISTER_TABS),
+  'system.optimizer': ids(OPTIMIZER_TABS),
+  'system.wall': ids(WALL_TABS),
+  'subject.page': ids(SUBJECT_TABS),
 }
 
+/** The U-3/GLASS-2 twelve (three of them re-pointed by UI-B1/merges). */
+const U3_RETIRED = [
+  'system.alert_center',
+  'system.deep_consult',
+  'system.entity_graph',
+  'system.escalations',
+  'system.lineage',
+  'system.narratives',
+  'system.notable_structure',
+  'system.situations',
+  'system.watchlist',
+  'v4.flow',
+  'v4.timeline',
+  'v4.why',
+]
+
 describe('the alias table', () => {
-  it('retires exactly the twelve U-3/GLASS-2 merge originals', () => {
-    expect(Object.keys(KIND_ALIASES).sort()).toEqual(
-      [
-        'system.alert_center',
-        'system.deep_consult',
-        'system.entity_graph',
-        'system.escalations',
-        'system.lineage',
-        'system.narratives',
-        'system.notable_structure',
-        'system.situations',
-        'system.watchlist',
-        'v4.flow',
-        'v4.timeline',
-        'v4.why',
-      ].sort(),
-    )
+  it('retires exactly the twelve U-3/GLASS-2 originals and the Table B rows landed so far', () => {
+    expect(Object.keys(KIND_ALIASES).sort()).toEqual([...U3_RETIRED, ...landedRetirements()].sort())
+    // + UI-B1/merges' twenty (W8) + UI-B3's eight per-subject reads (W11)
+    expect(Object.keys(KIND_ALIASES)).toHaveLength(12 + 20 + 8)
+  })
+
+  it('the three re-pointed rows land where UI-D1 Table B says ("re-pointed, not new")', () => {
+    expect(resolveKind('v4.flow')).toEqual({ kind: 'system.registry', tab: 'canvas' })
+    expect(resolveKind('system.situations')).toEqual({ kind: 'system.register', tab: 'situations' })
+    expect(resolveKind('system.narratives')).toEqual({ kind: 'system.register', tab: 'narratives' })
+  })
+
+  it('every TABBED survivor names each of its tabs once (no duplicate tab ids)', () => {
+    for (const [kind, tabs] of Object.entries(SURVIVOR_TABS)) {
+      expect(new Set(tabs).size, kind).toBe(tabs!.length)
+    }
   })
 
   it('every alias points at a LIVE registered kind', () => {
@@ -90,11 +125,22 @@ describe('the alias table', () => {
   })
 
   it('every retired surface claims a DISTINCT tab of its survivor (no two ids land on the same read)', () => {
-    const seen = new Set<string>()
+    // ONE declared exception (UI-D1 Table B: "`source.detail` → the Sources
+    // family + the Inspector drill"): the Registry's Sources tab mounts the
+    // source list AND the per-source detail together, so both retired ids
+    // land on it. Any other shared slot is a lost surface.
+    const SHARED_SLOTS: Record<string, string> = { 'source.detail': 'registry.sources' }
+    const seen = new Map<string, string>()
     for (const [retired, alias] of Object.entries(KIND_ALIASES)) {
       const slot = `${alias.kind}#${alias.tab ?? ''}`
-      expect(seen.has(slot), `${retired} duplicates ${slot}`).toBe(false)
-      seen.add(slot)
+      const holder = seen.get(slot)
+      if (holder) {
+        expect(SHARED_SLOTS[retired] === holder || SHARED_SLOTS[holder] === retired, `${retired} duplicates ${slot}`).toBe(
+          true,
+        )
+        continue
+      }
+      seen.set(slot, retired)
     }
   })
 
@@ -220,13 +266,15 @@ describe('rewriteSerializedLayout — the fromJSON pre-pass', () => {
     )
   })
 
-  it('COLLAPSES DUPLICATES — v4.why + system.lineage + v4.flow become ONE Provenance tile', () => {
+  it('COLLAPSES DUPLICATES — v4.why + system.lineage + source.fanout become ONE Provenance tile', () => {
     // The design's worked example (§6.2 step 2): three retired ids that all
     // resolve to the same survivor must not produce three identical tiles.
-    const out = rewriteSerializedLayout(layoutOf(['v4.why', 'system.lineage', 'v4.flow']))
+    // (`v4.flow` was the third id until UI-B1/merges re-pointed it onto the
+    // Registry's Canvas; the Fan-out Explorer took its place on Provenance.)
+    const out = rewriteSerializedLayout(layoutOf(['v4.why', 'system.lineage', 'source.fanout']))
     expect(viewsOf(out.layout)).toEqual(['system.provenance'])
     expect(out.rewritten).toEqual(['v4.why'])
-    expect(out.collapsed).toEqual(['system.lineage', 'v4.flow'])
+    expect(out.collapsed).toEqual(['system.lineage', 'source.fanout'])
     expect(Object.keys((out.layout as unknown as { panels: object }).panels)).toEqual([
       'system.provenance',
     ])
@@ -321,10 +369,85 @@ describe('rewriteSerializedLayout — the fromJSON pre-pass', () => {
     expect(children[0].data.views).toEqual(['system.provenance'])
   })
 
-  it('keeps a BOUND panel id (<kind>:<record>) intact', () => {
-    const out = rewriteSerializedLayout(layoutOf(['target.findings:country_g20_ua']))
-    expect(viewsOf(out.layout)).toEqual(['target.findings:country_g20_ua'])
+  it('keeps a BOUND panel id (<kind>:<record>) of a live kind intact', () => {
+    const out = rewriteSerializedLayout(layoutOf(['target.map:country_g20_ua']))
+    expect(viewsOf(out.layout)).toEqual(['target.map:country_g20_ua'])
     expect(out.dropped).toEqual([])
+  })
+
+  /** A bound tile exactly as `App.addBound` serializes it. */
+  function boundLayout(views: string[]): SerializedDockview {
+    const panels: Record<string, unknown> = {}
+    for (const id of views) {
+      const [kind, record] = id.split(':')
+      panels[id] = {
+        id,
+        contentComponent: 'default',
+        title: `${kind} · ${record}`,
+        params: {
+          mode: 'personal',
+          registration: {
+            id,
+            panel_id: kind.replace(/[.]/g, '_'),
+            descriptor_id: record,
+            layout_slot: kind,
+            title: `${kind} · ${record}`,
+            binding: { target_id: record },
+          },
+        },
+      }
+    }
+    return {
+      grid: { root: { type: 'leaf', data: { id: 'group-1', views, activeView: views[0] } }, height: 600, width: 800, orientation: 'HORIZONTAL' },
+      panels,
+    } as unknown as SerializedDockview
+  }
+
+  it('UI-B3 — a RETIRED bound tile becomes the subject page on its tab, registration and all', () => {
+    const out = rewriteSerializedLayout(boundLayout(['target.findings:lane_hormuz']))
+    expect(viewsOf(out.layout)).toEqual(['subject.page:lane_hormuz'])
+    expect(out.rewritten).toEqual(['target.findings:lane_hormuz'])
+    const panel = (out.layout as unknown as { panels: Record<string, { title: string; params: Record<string, unknown> }> })
+      .panels['subject.page:lane_hormuz']
+    expect(panel.params.tab).toBe('evidence')
+    const reg = panel.params.registration as Record<string, unknown>
+    expect(reg).toMatchObject({
+      id: 'subject.page:lane_hormuz',
+      panel_id: 'subject_page',
+      layout_slot: 'subject.page',
+      descriptor_id: 'lane_hormuz',
+      binding: { target_id: 'lane_hormuz' },
+    })
+    expect(panel.title).toBe(`${PANEL_REGISTRY['subject.page'].definition.defaultTitle} · lane_hormuz`)
+  })
+
+  it('UI-B3 — one subject\'s several retired tiles collapse onto ONE page; another subject keeps its own', () => {
+    const out = rewriteSerializedLayout(
+      boundLayout(['target.overview:country_g20_br', 'target.claims:country_g20_br', 'target.desk_brief_page:lane_hormuz']),
+    )
+    expect(viewsOf(out.layout)).toEqual(['subject.page:country_g20_br', 'subject.page:lane_hormuz'])
+    expect(out.collapsed).toEqual(['target.claims:country_g20_br'])
+    const panels = (out.layout as unknown as { panels: Record<string, { params: Record<string, unknown> }> }).panels
+    // The first tile wins its tab; the brief lands on its own.
+    expect(panels['subject.page:country_g20_br'].params.tab).toBe('runtime')
+    expect(panels['subject.page:lane_hormuz'].params.tab).toBe('brief')
+  })
+
+  it('UI-B3 — each of the eight retired per-subject ids resolves onto its subject page tab', () => {
+    const expected: Record<string, string> = {
+      'target.overview': 'runtime',
+      'target.signals': 'signals',
+      'target.findings': 'evidence',
+      'target.claims': 'claims',
+      'target.situations': 'situations',
+      'target.sources': 'sources',
+      'target.graph': 'graph',
+      'target.desk_brief_page': 'brief',
+    }
+    for (const [retired, tab] of Object.entries(expected)) {
+      expect(resolveKind(retired), retired).toEqual({ kind: 'subject.page', tab })
+      expect(resolveRetiredPanelId(retired.replace(/[.]/g, '_')), retired).toEqual({ kind: 'subject.page', tab })
+    }
   })
 
   it('tolerates a layout with no panels map at all (passes it straight through)', () => {

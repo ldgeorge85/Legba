@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.ukmod.govuk": {
+      "source": "source_ukmod_govuk.yaml",
+      "state": "draft"
+    }
+  }
+}

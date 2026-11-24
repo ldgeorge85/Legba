@@ -1,0 +1,8 @@
+FREQ,REF_AREA,UNIT_MEASURE,UNIT_MULT,TIME_FORMAT,COMPILATION,DECIMALS,SOURCE_REF,SUPP_INFO_BREAKS,TITLE,TIME_PERIOD,OBS_VALUE,OBS_STATUS,OBS_CONF,OBS_PRE_BREAK
+D,XM,368,0,,"From 2020 onwards: fictional steering rate; earlier: another fictional rate, fixed.",4,Fictional Central Bank,, Central bank policy rates - Euro area - Daily - End of period,2026-03-02,1.75,A,F,
+D,XM,368,0,,"From 2020 onwards: fictional steering rate; earlier: another fictional rate, fixed.",4,Fictional Central Bank,, Central bank policy rates - Euro area - Daily - End of period,2026-03-03,1.5,A,F,
+D,CL,368,0,,From 2001 onwards: fictional policy rate.,4,Fictional Central Bank,"A fictional note, with a comma.", Central bank policy rates - Chile - Daily - End of period,2026-03-02,NaN,M,F,
+D,CL,368,0,,From 2001 onwards: fictional policy rate.,4,Fictional Central Bank,"A fictional note, with a comma.", Central bank policy rates - Chile - Daily - End of period,2026-03-03,4.25,A,F,
+D,US,368,0,,From 1985 onwards: fictional mid-point of a target range.,4,Fictional Reserve,, Central bank policy rates - United States - Daily - End of period,2026-03-01,2.125,A,F,
+D,US,368,0,,From 1985 onwards: fictional mid-point of a target range.,4,Fictional Reserve,, Central bank policy rates - United States - Daily - End of period,2026-03-02,2.125,A,F,
+D,US,368,0,,From 1985 onwards: fictional mid-point of a target range.,4,Fictional Reserve,, Central bank policy rates - United States - Daily - End of period,2026-03-03,1.875,A,F,

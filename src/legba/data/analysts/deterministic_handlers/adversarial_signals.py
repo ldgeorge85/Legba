@@ -346,11 +346,12 @@ async def _flag_signals(
             for sid in signal_ids:
                 try:
                     uid = UUID(sid)
+                    # COALESCE: jsonb_set on a NULL data is NULL (W10-F3).
                     result = await conn.execute(
                         """
                         UPDATE signals SET
                             data = jsonb_set(
-                                data,
+                                COALESCE(data, '{}'::jsonb),
                                 '{adversarial_flags}',
                                 COALESCE(data->'adversarial_flags', '[]'::jsonb) || $1::jsonb,
                                 true

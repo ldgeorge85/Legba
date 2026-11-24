@@ -14,7 +14,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
 ]
 dependencies = [
-    "pydantic>=2.0",
+    "pydantic>=2.11",  # Field(exclude_if=...) — the hash-neutral scope.classifications (W10 TAX-2)
     # The `http2` extra pulls `h2`. Wave O lane o1 measured Akamai-fronted
     # syndication (usnews.com, the Reuters wire) TARPITTING HTTP/1.1 — the
     # request is accepted and never answered, so the fetcher burns its whole
@@ -89,12 +89,19 @@ dependencies = [
     # L-138 Common Crawl CC-NEWS source — WARC streaming + anonymous S3.
     "warcio>=1.7",
     "aiobotocore>=2.7",
+    # N-K evidence-archive at-rest codec (legba.data.archive_codec); listed in
+    # Dockerfile.runtime too (the project installs --no-deps there).
+    "zstandard>=0.22",
     # L-131 GDELT BigQuery source. Lazy-imported so missing dep doesn't
     # break module import; required at runtime when the kind is registered.
     "google-cloud-bigquery>=3.20",
     # L-136 Telegram channel source. Lazy-imported as well.
     "telethon>=1.36",
-    "fastapi>=0.115",
+    # PINNED to the version the registry/runtime images run (pip show in
+    # legba-legba-registry-1, 2026-10-03). A floor let a fresh image build
+    # resolve a newer FastAPI than the one the suite was green on. The three
+    # Dockerfiles carry the same pin; bump all four in lockstep.
+    "fastapi==0.142.2",
     "uvicorn[standard]>=0.32",
     # Defense-in-depth rate limiting on the expensive registry endpoints
     # (consult / deep_consult) — keyed on the bearer principal. The wiring
@@ -103,7 +110,7 @@ dependencies = [
     "slowapi>=0.1.9",
     "jinja2>=3.1",
     "python-multipart>=0.0.9",
-    "mcp>=1.0",
+    "mcp>=1.0,<2",  # 2.x renamed the Server/Tool API (list_tools, inputSchema); the 10-24 image rebuild pulled 2.3.0 unpinned — a 2.x migration is its own lane
     "pyyaml>=6.0",
     # L-104 / L-242 Starlark predicate DSL. starlark-pyo3 wraps the Rust
     # `starlark-rust` evaluator (the same one used by Buck2). Settled choice
@@ -167,6 +174,10 @@ legba-dapr-workflow-worker = "legba.runtime.dapr_workflow.worker:main"
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    # W11-F119: the release the test image pins (scripts/run_tests_in_container.sh
+    # PYTEST_RANDOMLY_VERSION). A seed's module order is the plugin's own, so a
+    # host replay of a nightly seed matches only on one version; bump together.
+    "pytest-randomly==5.0.0",
 ]
 data = [
     "asyncpg>=0.29",
@@ -174,7 +185,7 @@ data = [
     "opensearch-py[async]>=2.4",
     "redis[hiredis]>=5.0",
     "nats-py>=2.7",
-    "pydantic>=2.0",
+    "pydantic>=2.11",  # Field(exclude_if=...) — the hash-neutral scope.classifications (W10 TAX-2)
     "python-dotenv>=1.0",
 ]
 # L-140 — IntelMQ collector bridge. Heavy (~50 transitive packages: parsers
@@ -203,6 +214,10 @@ packages = ["src/legba"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# W9 SPLIT-2: the default profile's prompt package (legba_geopolitics — the six
+# lean lenses) lives outside src/; the images copy it into site-packages, a
+# checkout imports it from here.
+pythonpath = ["profiles/geopolitics/prompts"]
 asyncio_mode = "auto"
 markers = [
     "integration: tests that require external services (Redis, Postgres, Qdrant)",

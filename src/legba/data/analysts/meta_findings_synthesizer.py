@@ -52,6 +52,7 @@ second-order claim, not a verbose first-order one. Default
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import json
 import logging
@@ -62,6 +63,7 @@ from uuid import UUID
 import asyncpg
 
 from .. import critic_fold
+from .. import head_integrity as _head
 from ..provenance.consumption import (
     CONSUMPTION_CONTEXT_BASIS,
     CONSUMPTION_CONTEXT_PERIPHERY,
@@ -202,7 +204,7 @@ DEFAULT_MAX_TOKENS: int = 768
 1024 / cross_target_raw's 1536 because the output is a single second-order
 synthesis claim, not a new finding from raw text."""
 
-DEFAULT_TEMPERATURE: float = 0.2
+DEFAULT_TEMPERATURE: float = HOUSE_TEMPERATURE
 """Same as the sibling LLM kinds — synthesis still wants determinism."""
 
 MAX_INPUT_FINDINGS: int = 15
@@ -458,6 +460,11 @@ def _resolve_split_floor(descriptor: Any) -> float:
 # The moved-name re-exports above stay exactly as they are — those exist for
 # back-compat and are a different obligation.
 from . import composition_slice as _slice  # noqa: F401 — D-5 cascade surface
+from . import composition_stale_reads as _stale_reads
+from . import off_roster_activity as _off_roster
+from . import thematic_theme as _theme
+from .thematic_theme import thematic_terms  # noqa: F401 — re-exported surface
+from .. import carried_state as _carried
 from . import region_rollup as _rollup  # noqa: F401 — D-5 cascade surface
 from .composition_slice import (  # noqa: F401 — re-exported surface
     COUNTRY_COMPOSITION_ANALYST_ID,
@@ -477,6 +484,7 @@ from .composition_slice import (  # noqa: F401 — re-exported surface
     _assemble_world_region_slice,
     _DESK_ROSTER_SQL,
     _is_region_target,
+    is_region_target,
     _REGION_MEMBERS_SQL,
     _REGION_ROSTER_SQL,
     _render_desk_coverage_block,
@@ -515,8 +523,15 @@ from .assembly_payload import (  # noqa: F401 — re-exported surface
     legacy_regime_stamp,
     now_iso as assembly_now_iso,
     order_key as assembly_order_key,
+    select_carried as assembly_select_carried,
 )
-from .contrary_tension import merge_contrary_tension
+from .contrary_tension import merge_contrary_tension  # noqa: F401
+from .assembly_floor import FloorSelection, floor_select  # noqa: F401
+from .assembly_world import WorldCarryPlan, plan_world_carry, world_order_key
+from .composition_assemble import (  # noqa: F401 — re-exported surface
+    DeterministicRead,
+    assemble_deterministic_read,
+)
 from .assembly_render import assembly_title, render_assembly_body  # noqa: F401
 from .assembly_salience import (  # noqa: F401
     assembly_any_enabled,
@@ -1629,6 +1644,7 @@ async def read_other_analyst_findings(
     include_meta: bool = False,
     dedupe_heads: bool = False,
     include_superseded: bool = False,
+    text_pattern: str | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch ``analyst_outputs`` rows where ``kind='finding'`` for a set
     of source analysts.
@@ -1716,8 +1732,9 @@ async def read_other_analyst_findings(
         "f.analyst_id = ANY($1::TEXT[])",
         "f.produced_at > NOW() - make_interval(hours => $2)",
     ]
+    _meta_clause = "(f.data -> 'data' ->> 'meta') IS DISTINCT FROM 'true'"
     if not include_meta:
-        where.append("(f.data -> 'data' ->> 'meta') IS DISTINCT FROM 'true'")
+        where.append(_meta_clause)
 
     # P4 content-audit fix (2026-07-01): COMPOSITION reads (per-country target
     # scope, or the world include_meta read) must fold to exactly ONE HEAD per
@@ -1751,8 +1768,14 @@ async def read_other_analyst_findings(
         or include_meta
         or dedupe_heads
     )
-    if dedupe_composition and not include_superseded:
-        where.append("f.superseded_by IS NULL")
+    # HEAD INTEGRITY (lane N-A): a head closed BY a failed parse is still live,
+    # and on the floored path the fold to one row per key runs BEFORE the floor
+    # (``head_integrity.live_head_select``) so an older open orphan can never
+    # stand in for a newer head. The text theme is applied after that fold.
+    live_fold = dedupe_composition and not include_superseded and verify_floor is not None
+    post: list[str] = []
+    if dedupe_composition and not include_superseded and not live_fold:
+        where.append(_head.live_head_predicate("f"))
 
     if target_id is not None:
         params.append(str(target_id))
@@ -1764,6 +1787,11 @@ async def read_other_analyst_findings(
         # silently dropping the filter and reading every country.
         params.append([str(t) for t in target_ids])
         where.append(f"f.target_id = ANY(${len(params)}::TEXT[])")
+    if text_pattern is not None:
+        # A theme-filtered thematic (``thematic_theme``): a case-insensitive ARE
+        # over title + body, so the LIMIT below holds on-theme heads only.
+        params.append(str(text_pattern))
+        (post if live_fold else where).append(f"(f.title || ' ' || f.body) ~* ${len(params)}")
 
     _cols = (
         "f.id, f.kind, f.title, f.body, f.confidence, f.severity, f.data, "
@@ -1790,14 +1818,15 @@ async def read_other_analyst_findings(
         # H17 — SET-BASED. The gather's own predicates (unit set, window, target
         # scope, head-fold) bound the outer CTE; ONE `DISTINCT ON` pass then
         # reads the critiques naming those ids through the expression index.
-        # The floor and the DISTINCT ON stay OUTSIDE the CTE: the head this
-        # gather wants is the newest row that PASSES, which is not in general the
-        # newest row.
+        # The floor stays OUTSIDE the CTE. The head fold runs INSIDE it (the
+        # newest row per key, ``live_fold``) except for the floor-fallback gather,
+        # which wants the newest row that PASSES — not in general the newest row.
         #
         # Drop coerce-fallback rows even when they score as vacuously faithful.
-        where.append(
+        _coerce_clause = (
             "(f.data -> 'tags' ?| array['unstructured','coerce_failed']) IS NOT TRUE"
         )
+        where.append(_coerce_clause)
         fold = critic_fold.latest_critique_cte(
             "v",
             "(cr.data->>'overall_score')::real AS faithfulness_score,\n"
@@ -1805,15 +1834,20 @@ async def read_other_analyst_findings(
             " AS claim_verdicts",
             "SELECT id::text FROM f",
         )
-        prelude = (
-            f"WITH f AS MATERIALIZED ("
-            f" SELECT {_cols}"
-            f" FROM analyst_outputs f WHERE {' AND '.join(where)}"
-            f"), {fold}"
+        _gated = (_meta_clause, _coerce_clause)  # read f.data: only on LIVE rows
+        inner = (
+            _head.live_head_select(
+                _cols, [c for c in where if c not in _gated],
+                gated=[c for c in where if c in _gated],
+            ) if live_fold
+            else f"SELECT {_cols} FROM analyst_outputs f WHERE {' AND '.join(where)}"
         )
+        prelude = f"WITH f AS MATERIALIZED ( {inner}), {fold}"
         source = "f JOIN v ON v.fid = f.id::text"
         params.append(float(verify_floor))
-        fold_where = f"WHERE LEAST(f.confidence, v.faithfulness_score) >= ${len(params)}"
+        fold_where = "WHERE " + " AND ".join(
+            [f"LEAST(f.confidence, v.faithfulness_score) >= ${len(params)}", *post]
+        )
         select_extra = (
             ", LEAST(f.confidence, v.faithfulness_score) AS effective_confidence,"
             " v.faithfulness_score AS faithfulness_score,"
@@ -2593,6 +2627,10 @@ async def _run(
         if periphery_rows
         else tiered_pool
     )
+    # W11-F14 THE CARRY RULE (``legba.data.carried_state``): a head READ_SLICE
+    # stamped carried, unsupported leaves the basis — the coverage ledger names
+    # it as that typed absence; it is never rendered, so never banded.
+    basis_inputs, _carried_rows = _carried.partition_carried(basis_inputs)
     _tier_floor: float | None = None
     for _row in tiered_pool:
         _tf = _row.get(_EVIDENCE_FLOOR_KEY)
@@ -2713,10 +2751,33 @@ async def _run(
         options, options.get("analyst_id")
     )
     _assembly_trimmed: list[Mapping[str, Any]] = []
+    # The assembly tier, resolved ONCE (the leaf reads it; the floor keys on it).
+    _tier = (
+        TIER_COUNTRY if (target_scoped and not region_scoped)
+        else TIER_THEMATIC if thematic_composition
+        else TIER_WORLD
+    )
+    _floor: FloorSelection | None = None
+    _carry_plan: WorldCarryPlan | None = None
     if _assembling and sliced:
         _kept = {id(r) for r in sliced}
         _assembly_trimmed = [r for r in basis_inputs if id(r) not in _kept]
-        sliced = sorted(sliced, key=assembly_order_key)
+        # W4 F-3 — the per-subject-group FLOOR on the world read. The pure
+        # ``order_key`` sort on every other tier (a region run keeps it:
+        # ``rollup_ordinal_index`` relies on it); on a grouped world read the
+        # PUBLISHED order is the floor's selection followed by the rest, so
+        # ``derived_from`` and the drop ledger rank one order (``assembly_floor``).
+        # W1 — the world read ranks mass-first and plans its carry across the
+        # whole selection (dedup + restraint-shift floor): ``assembly_world``.
+        _world_read = world_composition and not region_scoped
+        _floor = floor_select(
+            sliced, tier=_tier, apply_floor=_world_read,
+            key=world_order_key if _world_read else assembly_order_key,
+        )
+        if _world_read:
+            _carry_plan = plan_world_carry(_floor)
+            _floor = _carry_plan.selection
+        sliced = list(_floor.order)
         derived_from = [
             u for r in sliced if (u := _coerce_uuid(r.get("id"))) is not None
         ]
@@ -2784,6 +2845,9 @@ async def _run(
                     "verification withholding, NOT an absence of reads."
                 )
                 empty_title = "All reads below the verification floor"
+        if _carried_rows:  # W11-F14 — heads exist; what they state is carried
+            empty_data["carried_unsupported"] = [r[_carried.CARRIED_ROW_KEY] for r in _carried_rows]
+            empty_title, empty_body = _carried.empty_slice_text(len(_carried_rows), _empty_window)
         empty_title, empty_body = _gate_empty_stamp(
             empty_data, _gate_ledger, title=empty_title, body=empty_body,
             window_text=_empty_window,
@@ -2997,7 +3061,7 @@ async def _run(
         contributing_analysts=contributing_analysts,
         is_composition=is_composition,
         periphery_sel=periphery_sel,
-        periphery_rows=periphery_rows,
+        periphery_rows=periphery_rows + _carried_rows,
         tier_floor=_tier_floor,
         prior_row=prior_row,
         register_situations=register_situations,
@@ -3066,126 +3130,45 @@ async def _run(
     ]
 
     # --- ASSEMBLE (D-2) — the deterministic path, INSTEAD of the model -----
-    # Under the assembly the composition tier does not write prose about its
-    # inputs; it CARRIES their words. Selection is the only remaining
-    # discretionary act and it is a strict prefix of a total order, so there is
-    # nothing left for a model to decide at this tier — the interpretive voice
-    # moves to the Assessment channel (D-6), which is a separate row with its
-    # own badge and its own population.
-    #
-    # The prompt above is still RENDERED and simply not sent. That is
-    # deliberate for the flag-gated build: it keeps the nine block renderers,
-    # their splice order and the prompt receipts exercised on both arms while
-    # both arms are live, so ``test_composer_prompt_block_equivalence`` stays a
-    # real proof rather than a proof about a path nobody takes. It costs CPU
-    # over rows already in memory and no tokens. Once the flag is default-on,
-    # short-circuiting it is a one-line follow-on.
+    # The whole section lives in ``composition_assemble`` (the size-gate seam
+    # this file's gate entry named): the REGION rollup (D-5 §4.1) and the
+    # D-2 assembly, one call, zero tokens. The prompt above is still RENDERED
+    # and simply not sent — see that module's banner for why.
     _assembly_payload: dict[str, Any] | None = None
     _rollup_payload: dict[str, Any] | None = None
-    # D-5 §4.1 — the REGION tier stops writing and starts adding up. No LLM, no
-    # prompt, no judge: it CARRIES its member country assemblies' lead blocks
-    # forward unchanged and states the arithmetic of the membership. Checked
-    # BEFORE the assembly branch because a region run satisfies both.
-    if _assembling and region_scoped:
-        _rollup_payload, finding, _rollup_steps = _rollup.assemble_region_rollup(
-            sliced,
-            region_id=options.get("target_id"),
+    if _assembling:
+        _det = await assemble_deterministic_read(
+            sliced=sliced,
+            options=options,
+            inputs=inputs,
+            tier=_tier,
+            region_scoped=region_scoped,
             horizon_hours=_horizon_hours,
-            as_of=assembly_now_iso(),
-            # Option WINS over LEGBA_ROLLUP_MASS_FLOOR — the house `_coerce`
-            # idiom. Default 0.0, which is byte-identical to carrying any block
-            # that has mass at all.
-            mass_floor=_rollup.rollup_mass_floor(options),
-            coerce=_coerce_finding,
-            contributing_analysts=contributing_analysts,
-        )
-        usage = {"prompt_tokens": 0, "completion_tokens": 0}
-        steps.extend(_rollup_steps)
-    elif _assembling:
-        _assembly_payload = build_assembly(
-            # The spec's tier enum is country | world | thematic and has no
-            # REGION value, deliberately: §4 retires the region generative path
-            # outright and the world assembler carries country blocks forward.
-            # Until D-5 lands, a region run is the multi-country, world-shaped
-            # read it has always been, so it assembles as `world` rather than
-            # inventing a fourth tier the reader and the arms would have to
-            # learn and then unlearn.
-            tier=(
-                TIER_COUNTRY if (target_scoped and not region_scoped)
-                else TIER_THEMATIC if thematic_composition
-                else TIER_WORLD
-            ),
-            as_of=assembly_now_iso(),
-            candidates=sliced,
-            carried=sliced[:BLOCK_CAP],
             periphery=periphery_sel,
             trimmed=_assembly_trimmed,
-            coverage=_head_ledger,
-            coverage_roster=_ledger_roster,
-            magnitudes=assembly_magnitudes(sliced),
-            also_cited_by=assembly_shared_signals(sliced),
-            questions=options.get(DESK_QUESTIONS_OPTION),
-            # Amendment 7f — THE PARAMETER THAT WAS NEVER PASSED. It has
-            # been on `build_assembly` since D-2 and every caller left it
-            # `None`, so `target_name` has been the slug on every block and
-            # every drop row of every live record — which is how the voice
-            # came to write "Pakistan" for `country_watch_kp` and be failed
-            # for it. `composition_slice` resolves the map once, on the
-            # slice it already reads; absent (a legacy slice, a direct
-            # caller, a tier that stamps none) this is `{}` and the payload
-            # is byte-for-byte the one that shipped.
-            target_names=_slice.unit_names_of(inputs),
-            invisible_heads=options.get("invisible_heads"),
+            head_ledger=_head_ledger,
+            ledger_roster=_ledger_roster,
             lead_test_v2=_lead_test_v2,
-            # STEP E — the COUNTRY VOICE, world tier only; `unit_names_of` idiom.
-            context_heads=_slice.country_assessment_context_of(inputs),
-        )
-        # 7a — the CONTRARY leg of the tension rule. Splices LIVE,
-        # polarity-derived contradictions for the blocks this payload carries.
-        # No pool, no rows, or an unapplied migration 0221 each return the
-        # payload UNCHANGED — today's body, byte for byte.
-        _assembly_payload = await merge_contrary_tension(_assembly_payload, pg)
-        finding = _coerce_finding(
-            json.dumps({
-                "title": assembly_title(_assembly_payload),
-                "body": render_assembly_body(_assembly_payload),
-                "confidence": assembly_confidence(_assembly_payload),
-                "tags": assembly_tags(_assembly_payload),
-            }),
-            fallback_title="Assembled read",
             contributing_analysts=contributing_analysts,
+            coerce=_coerce_finding,
+            pg=pg,
+            floor=_floor,
+            carry_plan=_carry_plan.ledger if _carry_plan is not None else None,
         )
-        # `_coerce_finding` stamps ``data.raw_llm_response`` — "the LLM's raw
-        # JSON for audit". On this path NO LLM RAN, and the value would be an
-        # 8,000-char copy of the body we just rendered under a field name that
-        # says a model wrote it. A field whose NAME is false is the small
-        # dishonesty this whole program is about, so it is dropped rather than
-        # filled. The audit trail loses nothing: the assembly is reproducible
-        # from `data.assembly` by construction, which is strictly more than a
-        # raw response ever gave.
-        finding.data.pop("raw_llm_response", None)
-        usage = {"prompt_tokens": 0, "completion_tokens": 0}
-        steps.append({
-            "phase": "assemble",
-            "kind": "assembly.v1",
-            "blocks": len(_assembly_payload["blocks"]),
-            "candidates": len(sliced),
-            "dropped": _assembly_payload["drops"]["counts"]["shown_not_carried"],
-            "lead": _assembly_payload["lead"]["kind"],
-            "earned": _assembly_payload["lead"]["test"]["earned"],
-        })
-        steps.append({
-            "phase": "reflect",
-            "kind": "coerce_finding",
-            "confidence": finding.confidence,
-            "evidence_count": len(finding.evidence),
-            "structured": "unstructured" not in finding.tags,
-        })
+        _assembly_payload = _det.assembly_payload
+        _rollup_payload = _det.rollup_payload
+        finding = _det.finding
+        usage = _det.usage
+        steps.extend(_det.steps)
+        if _det.order is not None:  # N-T: the floor was withdrawn pre-publication
+            sliced = list(_det.order)
+            derived_from = [u for r in sliced if (u := _coerce_uuid(r.get("id"))) is not None]
 
     # --- REASON+ACT ----------------------------------------------------
     # ZERO LLM CALLS on either deterministic arm — the D-5 acceptance bar for
     # the region surface, and it is this one condition, not a promise.
     if not _assembling:
+        _theme.refuse_theme_prose(inputs)   # SEAMS #75: no theme prompt is built
         try:
             content, usage = await _reason_via_llm(
                 llm,
@@ -3555,6 +3538,9 @@ async def _run(
         _head_ages = head_ages_stamp(sliced, horizon_hours=_horizon_hours)
         if _head_ages is not None:
             finding.data["head_ages"] = _head_ages
+            # W11 — a quoted read older than its unit's cadence × the multiple is
+            # marked stale (head_ages + coverage) and counted; never re-selected.
+            _stale_reads.mark_stale_reads(finding.data, sliced)
             steps.append({
                 "phase": "head_ages",
                 "kind": "stamp_window",
@@ -3917,7 +3903,7 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
     # world / legacy switch below stays byte-for-byte. A region ``target_filter``
     # is a FRAME id; resolve it to the member country desks and read THEIR
     # country_composition heads as a target-id SET (multi-country, world-shaped).
-    if _is_region_target(target_filter):
+    if await is_region_target(conn, target_filter):  # W10 SPLIT-3: the frame family, flag on
         member_ids = await _resolve_region_member_target_ids(conn, str(target_filter))
         # C-TIER: flag ON ⇒ the basis bar is the SPLIT floor (env floor when
         # pinned, else the 0.50 scorecard lockstep) and the member heads the
@@ -3998,6 +3984,10 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
             else _resolve_verify_floor(descriptor)
         )
         _desks = thematic_desks(descriptor)   # S2-T5: dyad desk allow-list (None ⇒ all desks)
+        # A THEME (``thematic_theme``): only the heads whose title or lead carries
+        # a declared term, across every listed unit. None ⇒ every head, as shipped.
+        _terms = thematic_terms(descriptor)
+        _read = _theme.theme_basis_reader if _terms else (lambda r, _t: r)
         rows = await _attach_freshness(
             conn,
             await _assemble_thematic_unit_slice(
@@ -4007,11 +3997,15 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
                 limit=limit,
                 verify_floor=_floor,
                 desk_ids=_desks,
-                basis_reader=read_other_analyst_findings,
+                basis_reader=_read(read_other_analyst_findings, _terms),
             ),
         )
+        if _terms:
+            _theme.quiet_theme_coverage(rows)
+        await _stale_reads.stamp_unit_cadence(conn, rows)  # lane N-A: the age bar
+        _carried.stamp_head_age_bar(rows)                  # on every live basis head
         if _tiered:
-            periphery = await read_periphery_findings(
+            periphery = await _read(read_periphery_findings, _terms)(
                 conn,
                 analyst_ids=ids,
                 time_window_hours=time_window_hours,
@@ -4083,6 +4077,8 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
                 basis_reader=read_other_analyst_findings,
             ),
         )
+        if _reads_countries:   # W5: countries with no unit, loud this week (aperture)
+            _off_roster.stamp_off_roster(rows, await _off_roster.read_off_roster_activity(conn))
         if _tiered:
             periphery = await read_periphery_findings(
                 conn,
@@ -4215,6 +4211,12 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
             situation_target_id=target_id,
             ledger_target_id=target_id,
         )
+        # W11 — each unit's cadence rides the rows too (``composition_stale_reads``).
+        await _stale_reads.stamp_unit_cadence(conn, rows)
+        # W11-F14 THE CARRY RULE — a basis head whose status no read re-evidenced
+        # inside N of its unit's windows is stamped (``carried_state``).
+        await _carried.stamp_carried_state(conn, rows)
+        _carried.stamp_head_age_bar(rows)  # lane N-A: the same bar on every live basis head
         # FRAME-1: the horizon rides the rows to the DB-less ``_run`` (see
         # ``_stamp_horizon``). Stamped LAST so every row — basis, periphery,
         # fallback and continuity — carries it.
@@ -4313,6 +4315,7 @@ __all__ = [
     "_extract_ref_markers",
     "_defuse_child_ref_markers",
     "_is_region_target",
+    "is_region_target",
     "_gather_continuity_rows",
     "_render_continuity_block",
     "_render_contested_block",
@@ -4342,4 +4345,5 @@ __all__ = [
     "run_method",
     "thematic_dimension",
     "thematic_desks",
+    "thematic_terms",
 ]

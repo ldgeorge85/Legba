@@ -238,7 +238,7 @@ function PickerState({ icon: Icon, text }: { icon: typeof Activity; text: string
  *  (NULL-target) sweep, a keyword full-text filter, and an analyst-set filter —
  *  all server facets on GET /findings. */
 function findingsPickerUrl(opts: { orphans: boolean; q: string; analyst: string }): string {
-  const params = new URLSearchParams({ limit: '40' })
+  const params = new URLSearchParams({ limit: '40', fields: 'summary' })
   if (opts.orphans) params.set('target_id_null', 'true')
   if (opts.q) params.set('q', opts.q)
   if (opts.analyst) params.set('analyst_id_in', opts.analyst)

@@ -35,11 +35,13 @@ import {
   citationKindLabel,
   citationLabel,
   citationsByMarker,
+  claimSentenceBefore,
   isGroundingCitation,
   normalizeCitationMarkers,
   tokenizeProse,
   type Citation,
 } from '@/lib/citationsModel'
+import { requestCrossFraming } from '@/lib/crossFramingLink'
 import {
   CLAIM_VERDICT_ABSENCE_EXPLAIN,
   claimVerdictForMarker,
@@ -103,8 +105,20 @@ export interface CitedProseProps {
    * The report/inspector pass their own (scroll-to-evidence).
    */
   onCiteClick?: (citation: Citation) => void
+  /**
+   * W2 — the desk this prose is a read of. When set, each resolved chip's
+   * hover/focus card carries a "cross-framing ▸" action that opens the
+   * Cross-framing panel (`analysis.cross_framing`) on the claim the chip
+   * closes (`claimSentenceBefore`). Absent → no action: a surface that cannot
+   * name its desk never guesses one. `block` variant only.
+   */
+  crossFramingTargetId?: string | null
   className?: string
 }
+
+/** What a chip's cross-framing action needs: the claim it closes. `null`
+ *  when the surface named no desk, so the card renders no action. */
+type FrameClaim = ((claimText: string | null) => void) | null
 
 /** Default chip action — scroll to the on-page evidence row if present, else
  *  drive the shared selection (open the record in the Inspector). */
@@ -143,8 +157,8 @@ function CardVerdictLine({ verdict }: { verdict: ClaimVerdict }) {
     // than a second nested tooltip.
     return (
       <span data-testid="citation-card-verdict" data-verdict={verdict.kind}>
-        <span className="mt-1.5 block text-[10px] italic text-ink-3">{verdict.label}</span>
-        <span className="mt-0.5 block text-[10px] leading-snug text-ink-3">
+        <span className="mt-1.5 block text-label italic text-ink-3">{verdict.label}</span>
+        <span className="mt-0.5 block text-label leading-snug text-ink-3">
           {CLAIM_VERDICT_ABSENCE_EXPLAIN}
         </span>
       </span>
@@ -157,7 +171,7 @@ function CardVerdictLine({ verdict }: { verdict: ClaimVerdict }) {
     // absence of one.
     return (
       <span
-        className={`mt-1.5 block text-[10px] ${
+        className={`mt-1.5 block text-label ${
           verdict.kind === 'supported' ? 'text-accent-ok' : 'text-ink-2'
         }`}
         data-testid="citation-card-verdict"
@@ -178,7 +192,7 @@ function CardVerdictLine({ verdict }: { verdict: ClaimVerdict }) {
   const firstSpan = verdict.spans[0]
   return (
     <span
-      className="mt-1.5 block text-[10px]"
+      className="mt-1.5 block text-label"
       data-testid="citation-card-verdict"
       data-verdict={verdict.kind}
     >
@@ -198,23 +212,38 @@ function CardVerdictLine({ verdict }: { verdict: ClaimVerdict }) {
 }
 
 /** The hover/focus card body for a resolved citation. */
-function CitationCard({ c, verdict }: { c: Citation; verdict: ClaimVerdict }) {
+function CitationCard({
+  c,
+  verdict,
+  onFrame,
+}: {
+  c: Citation
+  verdict: ClaimVerdict
+  /** The cross-framing action, or `null` (no desk named → no action). */
+  onFrame?: (() => void) | null
+}) {
   const hasCredibility = typeof c.effectiveConfidence === 'number'
+  // With an action the card must take the pointer (and bridge the 4px gap
+  // under the chip with a transparent strip, so moving onto it keeps the
+  // group hover); without one it stays the inert tooltip it always was.
+  const interactive = onFrame
+    ? "pointer-events-auto before:absolute before:-top-1.5 before:left-0 before:h-1.5 before:w-full before:content-['']"
+    : 'pointer-events-none'
   return (
     <span
-      className="pointer-events-none absolute left-0 top-full z-50 mt-1 hidden w-72 rounded-lg border border-line bg-surf-3 p-2.5 text-left align-top shadow-xl group-hover/cite:block group-focus-within/cite:block"
+      className={`${interactive} absolute left-0 top-full z-50 mt-1 hidden w-72 rounded-lg border border-line bg-surf-3 p-2.5 text-left align-top shadow-xl group-hover/cite:block group-focus-within/cite:block`}
       data-testid="citation-card"
-      role="tooltip"
+      role={onFrame ? 'dialog' : 'tooltip'}
     >
       <span className="mb-1 flex items-center gap-1.5">
-        <span className="rounded bg-surf-2 px-1 font-mono text-[10px] text-accent-info">
+        <span className="rounded bg-surf-2 px-1 font-mono text-label text-accent-info">
           {citationLabel(c.marker)}
         </span>
         {/* Kind-labeled for EVERY kind. This read `refKind === 'finding' ?
             'sub-claim' : 'signal'`, so all five desk grounding blocks were
             captioned "signal" — the prior read on top of a dead signal
             drill, and the other four never reached this card at all. */}
-        <span className="text-[10px] uppercase tracking-wide text-ink-3">
+        <span className="text-label uppercase tracking-wide text-ink-3">
           {citationKindLabel(c)}
         </span>
       </span>
@@ -222,7 +251,7 @@ function CitationCard({ c, verdict }: { c: Citation; verdict: ClaimVerdict }) {
         <span className="block text-[12px] font-medium leading-snug text-ink-1">{c.title}</span>
       )}
       {c.source && (
-        <span className="mt-0.5 block truncate text-[10px] text-ink-3" title={c.source}>
+        <span className="mt-0.5 block truncate text-label text-ink-3" title={c.source}>
           {c.source}
         </span>
       )}
@@ -232,7 +261,7 @@ function CitationCard({ c, verdict }: { c: Citation; verdict: ClaimVerdict }) {
           nowhere to go. The stale-tense marker is the backend's own string,
           printed verbatim; absent fields print nothing rather than a guess. */}
       {c.observation && (
-        <span className="mt-1 block text-[10px] leading-snug text-ink-2" data-testid="citation-observation">
+        <span className="mt-1 block text-label leading-snug text-ink-2" data-testid="citation-observation">
           {c.observation.value && (
             <span className="font-mono text-ink-1">
               {c.observation.value}
@@ -259,11 +288,11 @@ function CitationCard({ c, verdict }: { c: Citation; verdict: ClaimVerdict }) {
         </span>
       )}
       {c.evidenceText ? (
-        <span className="mt-1.5 block max-h-24 overflow-hidden text-[11px] italic leading-snug text-ink-2">
+        <span className="mt-1.5 block max-h-24 overflow-hidden text-label italic leading-snug text-ink-2">
           “{c.evidenceText.length > 240 ? `${c.evidenceText.slice(0, 240)}…` : c.evidenceText}”
         </span>
       ) : (
-        <span className="mt-1.5 block text-[10px] italic text-ink-3">
+        <span className="mt-1.5 block text-label italic text-ink-3">
           cited passage not recorded
         </span>
       )}
@@ -275,7 +304,21 @@ function CitationCard({ c, verdict }: { c: Citation; verdict: ClaimVerdict }) {
             input={{ effectiveConfidence: c.effectiveConfidence, citationCount: 1 }}
           />
         ) : (
-          <span className="text-[10px] italic text-ink-3">credibility not recorded</span>
+          <span className="text-label italic text-ink-3">credibility not recorded</span>
+        )}
+        {onFrame && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onFrame()
+            }}
+            className="shrink-0 text-label text-accent-info underline"
+            data-testid="citation-card-cross-framing"
+            title="put this claim against the desk's other bounded units, and see which of them are silent"
+          >
+            cross-framing ▸
+          </button>
         )}
       </span>
     </span>
@@ -291,6 +334,7 @@ function CitationChip({
   verdict,
   foldChips,
   onClick,
+  onFrame = null,
 }: {
   c: Citation
   verdict: ClaimVerdict
@@ -299,6 +343,7 @@ function CitationChip({
    *  surface asked, and the record states no fold reason. */
   foldChips: ClaimFoldChip[] | null
   onClick: () => void
+  onFrame?: (() => void) | null
 }) {
   return (
     <span className="group/cite relative inline-block align-baseline">
@@ -325,7 +370,7 @@ function CitationChip({
         data-cite-kind={c.refKind}
         data-grounding={isGroundingCitation(c) ? 'true' : undefined}
         data-drills={citationDrill(c) ? 'true' : 'false'}
-        className="mx-0.5 inline-flex items-center rounded bg-surf-3 px-1 align-super text-[10px] font-medium leading-none text-accent-info hover:bg-surf-1 hover:underline"
+        className="mx-0.5 inline-flex items-center rounded bg-surf-3 px-1 align-super text-label font-medium leading-none text-accent-info hover:bg-surf-1 hover:underline"
       >
         {citationLabel(c.marker)}
       </button>
@@ -333,7 +378,7 @@ function CitationChip({
           than a hover away. Outside the button so the ordinal drill-down is
           untouched: the tag is read, never clicked. */}
       {foldChips && <ClaimTag citation={c} chips={foldChips} />}
-      <CitationCard c={c} verdict={verdict} />
+      <CitationCard c={c} verdict={verdict} onFrame={onFrame} />
     </span>
   )
 }
@@ -342,7 +387,7 @@ function CitationChip({
 function UnresolvedChip({ marker }: { marker: string }) {
   return (
     <span
-      className="mx-0.5 inline-flex items-center gap-0.5 rounded border border-dashed border-amber-700/60 bg-amber-950/20 px-1 align-super text-[10px] leading-none text-amber-300/90"
+      className="mx-0.5 inline-flex items-center gap-0.5 rounded border border-dashed border-amber-700/60 bg-amber-950/20 px-1 align-super text-label leading-none text-amber-300/90"
       title="Unresolved citation — this marker has no backing evidence in the record (shown, never fabricated)"
       data-testid="citation-unresolved"
       data-marker={marker}
@@ -364,6 +409,7 @@ function linkChildren(
   onCite: (c: Citation) => void,
   verdictFor: (marker: string) => ClaimVerdict,
   foldFor: (c: Citation, verdict: ClaimVerdict) => ClaimFoldChip[] | null,
+  frame: FrameClaim = null,
 ): ReactNode {
   return Children.map(children, (child, i) => {
     if (typeof child === 'string') {
@@ -372,6 +418,7 @@ function linkChildren(
       return tokens.map((tok, j) => {
         if (tok.kind === 'marker') {
           const verdict = verdictFor(tok.citation.marker)
+          const claimText = frame ? claimSentenceBefore(tokens, j) : null
           return (
             <CitationChip
               key={`c-${i}-${j}`}
@@ -379,6 +426,7 @@ function linkChildren(
               verdict={verdict}
               foldChips={foldFor(tok.citation, verdict)}
               onClick={() => onCite(tok.citation)}
+              onFrame={frame ? () => frame(claimText) : null}
             />
           )
         }
@@ -395,7 +443,7 @@ function linkChildren(
           ...child,
           props: {
             ...props,
-            children: linkChildren(props.children, byMarker, onCite, verdictFor, foldFor),
+            children: linkChildren(props.children, byMarker, onCite, verdictFor, foldFor, frame),
           },
         }
       }
@@ -411,12 +459,13 @@ function citedComponents(
   onCite: (c: Citation) => void,
   verdictFor: (marker: string) => ClaimVerdict,
   foldFor: (c: Citation, verdict: ClaimVerdict) => ClaimFoldChip[] | null,
+  frame: FrameClaim = null,
 ): Components {
   const base = MD_COMPONENTS
   const wrap = (key: keyof Components) => {
     const Original = base[key] as ((p: { children?: ReactNode }) => ReactNode) | undefined
     return (props: { children?: ReactNode }) => {
-      const linked = linkChildren(props.children, byMarker, onCite, verdictFor, foldFor)
+      const linked = linkChildren(props.children, byMarker, onCite, verdictFor, foldFor, frame)
       return Original ? Original({ ...props, children: linked }) : <>{linked}</>
     }
   }
@@ -442,6 +491,7 @@ export default function CitedProse({
   contentions = null,
   variant = 'block',
   onCiteClick,
+  crossFramingTargetId = null,
   className,
 }: CitedProseProps) {
   // Unwrap a JSON envelope, then normalize full-width 【N】/［N］ ordinal brackets
@@ -499,7 +549,7 @@ export default function CitedProse({
             return (
               <span
                 key={i}
-                className="mx-0.5 rounded bg-surf-3 px-1 align-super text-[9px] text-accent-info"
+                className="mx-0.5 rounded bg-surf-3 px-1 align-super text-label text-accent-info"
                 title={tok.citation.title ?? tok.citation.source ?? `evidence ${tok.citation.marker}`}
                 data-testid="cited-prose-inline-chip"
                 data-marker={tok.citation.marker}
@@ -515,7 +565,15 @@ export default function CitedProse({
     )
   }
 
-  const components = citedComponents(byMarker, onCite, verdictFor, foldFor)
+  const frame: FrameClaim = crossFramingTargetId
+    ? (claimText) =>
+        requestCrossFraming({
+          targetId: crossFramingTargetId,
+          claimText,
+          origin: 'cited-prose',
+        })
+    : null
+  const components = citedComponents(byMarker, onCite, verdictFor, foldFor, frame)
   return (
     // `report-prose` gives the reading columns a 45–75ch measure + 16px/1.7
     // off-white type scale (S7-T6); the caller's className still layers on top.

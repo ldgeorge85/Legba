@@ -181,7 +181,11 @@ def test_substrate_reads_findings_route_folds_both_critiques_set_based():
     src = inspect.getsource(substrate_reads_api.build_substrate_reads_router)
     assert "LEFT JOIN LATERAL" not in src
     assert src.count("_FAITHFULNESS_VERIFICATION_CTE") == 2
-    assert src.count("_CRITIC_SCORE_CTE") == 1
+    # P-5: the full row's statement moved to substrate_reads_folds.full_row_sql
+    assert src.count("_full_row_sql(") == 1
+    full = inspect.getsource(substrate_reads_folds.full_row_sql)
+    assert full.count("{CRITIC_SCORE_CTE}") == 1 and full.count("{STRUCTURAL_BADGE_CTE}") == 1
+    assert "LATERAL" not in full
 
 
 def test_backlog_drain_reads_situation_members_once():

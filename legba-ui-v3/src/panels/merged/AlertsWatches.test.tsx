@@ -44,7 +44,7 @@ function stubFetch() {
       let body: unknown = { data: [] }
       if (u.includes('/v3/watchlist')) body = []
       else if (u.includes('/v3/system/escalations')) body = EMPTY_ESCALATIONS
-      else if (u.includes('/registry/descriptors')) body = []
+      else if ((u.includes('/registry/descriptors') || u.includes('/v3/roster'))) body = []
       return Promise.resolve({ ok: true, json: async () => body })
     }),
   )

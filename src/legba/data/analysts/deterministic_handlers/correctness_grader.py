@@ -93,12 +93,17 @@ from ...correctness_reference_currency import (  # noqa: F401 — re-exported
     reference_age_days,
     reference_grace_days,
 )
+from ... import subject as SUBJECT
 from ...provenance.models import FindingPayload
+from ...subject_homonyms import rule_for_target
 from ....runtime.analyst_method import AnalystMethodResult
 from . import _correctness_adjudicate as ADJ
 from . import _correctness_grade as GRADE
+from . import _correctness_keyed as KEYED
 from . import _correctness_packet as PACKET
+from . import _correctness_receipt as RECEIPT
 from . import _correctness_segment as SEG
+from . import _reference_roster as ROSTER
 from . import fact_contention_pass as _pass
 from ._correctness_calibration import CalibrationRefusal, resolve_calibration
 from ._correctness_rubric import RUBRIC_NAME, RUBRIC_SHA256
@@ -117,7 +122,11 @@ SUB_HANDLER_NAME = "correctness_grader"
 #: The stamp travels on ``unit_correctness.families.pipeline_version``, which is
 #: what makes the two populations separable in a query instead of only in a
 #: commit message.
-GRADER_PIPELINE_VERSION = "2026-09-20/1"
+#:
+#: BUMPED 2026-10-08 by the ``off_subject`` exclusion (B6, W11-F13): a span whose
+#: named subject is a homonym of the target's ("Khyber Pakhtunkhwa" on the North
+#: Korea desk) leaves the denominator, counted under its own reason.
+GRADER_PIPELINE_VERSION = "2026-10-08/1"
 
 #: The kill switch. Default OFF; read HERE (not only in the deps builder) so an
 #: operator can disarm the instrument with an env change and a recreate, without
@@ -171,9 +180,6 @@ COMPOSITION_ANALYST_IDS: tuple[str, ...] = (
     COMPOSITION_ANALYST_ID,
     COUNTRY_ASSESSMENT_ANALYST_ID,
 )
-
-#: The eighth desk (present on 8 of 32 targets; the watch countries carry it).
-PROLIFERATION = "proliferation_watch"
 
 #: The head window, carried from R4 (``r4_common.WINDOW_DAYS``): a desk head
 #: older than this is not the current read of the window the reference covers.
@@ -533,7 +539,7 @@ def _stamp(value: Any) -> str:
 
 async def freeze_heads(
     conn: Any, target_id: str, as_of: datetime, *, window_days: int,
-    dimensions: Sequence[str],
+    dimensions: Sequence[str], expected_units: Sequence[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Every floor-0 desk head and the floor-1 heads, as of the stamp.
 
@@ -548,6 +554,12 @@ async def freeze_heads(
     A registered unit with NO head is returned in the ``missing`` list and never
     padded: an absent read is a fact about the product, and inferring a claim
     from its silence is exactly what the desk-grain arm refused to do.
+
+    INST-1: ``expected_units`` (the target's own units, from its head's tags —
+    ``_reference_roster.expected_units``) is what "registered" means; a lane
+    is not missing seven country units, and the floor-1 composition is
+    expected only on a scored subject. ``None`` keeps the pin's rule: every
+    dimension and the composition.
     """
     desk_rows = await conn.fetch(
         _DESK_HEADS_SQL, target_id, list(dimensions), as_of, int(window_days)
@@ -568,7 +580,9 @@ async def freeze_heads(
     # a fabricated gap in the product, which is precisely the inference the
     # desk-grain arm refuses to make in the other direction. A head that exists
     # is graded; a head that does not exist yet is not a hole.
-    expected = set(dimensions) | {COMPOSITION_ANALYST_ID}
+    expected = set(dimensions if expected_units is None else expected_units)
+    if expected_units is None or ROSTER.on_scored_leg(expected_units):
+        expected.add(COMPOSITION_ANALYST_ID)
     return heads, sorted(expected - present)
 
 
@@ -957,7 +971,8 @@ async def grade_target(
     result["reference_age_days"] = ref_age
 
     heads, missing = await freeze_heads(
-        conn, target_id, as_of, window_days=window_days, dimensions=dimensions
+        conn, target_id, as_of, window_days=window_days, dimensions=dimensions,
+        expected_units=await ROSTER.expected_units(conn, target_id, dimensions),
     )
     if missing:
         result["warnings"].append(
@@ -982,7 +997,9 @@ async def grade_target(
         result["status"] = "already_graded"
         return result
 
-    segmented = SEG.segment_all(heads, segmenter, judge, dimension_names)
+    segmented = SEG.segment_all(
+        heads, segmenter, judge, dimension_names, rule_for_target(target_id),
+    )
     result["exclusions"] = segmented["totals"]
     claims = _cap_claims(
         segmented["claims"], max_claims_per_unit, max_claims_per_run, result
@@ -996,9 +1013,19 @@ async def grade_target(
         return result
     result["n_claims"] = len(claims)
 
-    country = target_id[-2:].upper()
+    country = SUBJECT.item_code((await SUBJECT.load_subject(conn, target_id)).code)
+    # INST-1 — the subject this number is ABOUT rides the outcome (the packet
+    # the families see is unchanged: its bytes are the instrument's identity).
+    result["subject"] = dict(zip(
+        ("id", "code", "name", "kind"),
+        (await SUBJECT.load_subject(conn, target_id)).as_tuple(),
+    ))
     reference = PACKET.reduce_reference(reference_raw, country)
-    if not reference["ref_developments"]:
+    # INST-1 — a KEYED reference (``reference_deterministic``) is graded
+    # exactly, by key, with no model (``_correctness_keyed``); a complete list
+    # with nothing on it is still a reference ("nothing listed in the window").
+    keyed = KEYED.is_keyed(reference_raw)
+    if not reference["ref_developments"] and not keyed:
         result["status"] = "reference_empty"
         result["warnings"].append(
             f"{target_id}: the reference carries no ref_developments — every "
@@ -1019,7 +1046,10 @@ async def grade_target(
         return result
     result["packet_sha256"] = PACKET.packet_sha256(packet)
 
-    by_family, ledger = await _grade_claims(
+    by_family, ledger = KEYED.grade_claims(
+        claims, reference_raw, ceiling_usd=ceiling_usd, spent_usd=spent_usd,
+        pipeline_version=GRADER_PIPELINE_VERSION, rubric=RUBRIC_NAME,
+    ) if keyed else await _grade_claims(
         packet["items"], llms,
         ceiling_usd=ceiling_usd, spent_usd=spent_usd,
         system_message=GRADE.build_system_message(),
@@ -1051,7 +1081,9 @@ async def grade_target(
         unit_score = ADJ.score_unit(
             unit_rows, analyst_id=analyst_id, grain=grain
         )
-        families, unit_cost = _family_block(by_family, unit_claim_ids, ledger)
+        families, unit_cost = (KEYED.family_block if keyed else _family_block)(
+            by_family, unit_claim_ids, ledger
+        )
         written = await _persist_unit(
             conn,
             analyst_id=analyst_id, target_id=target_id,
@@ -1111,145 +1143,11 @@ def _cap_claims(
 
 
 # ---------------------------------------------------------------------------
-# The receipt
+# The receipt — ``_correctness_receipt`` (moved there whole by INST-1; the
+# grader's surface re-exports it so callers and tests address it as before)
 # ---------------------------------------------------------------------------
 
-
-def build_receipt(
-    *,
-    as_of: datetime,
-    enabled: bool,
-    targets: Sequence[str],
-    per_target: Sequence[Mapping[str, Any]],
-    calibration: Mapping[str, Any] | None,
-    refusal: Mapping[str, Any] | None,
-    ceiling_usd: float,
-    spent_before: float,
-    warnings: Sequence[str],
-    grace_days: int = DEFAULT_REFERENCE_GRACE_DAYS,
-    deferred: Sequence[str] = (),
-) -> FindingPayload:
-    """The sweep's own row — a counting-not-repairing receipt.
-
-    It NEVER gates and NEVER alerts. It carries the caveat on its own face so a
-    reader who sees only this row sees the limits with the numbers.
-    """
-    written = sum(int(t.get("n_units_written") or 0) for t in per_target)
-    cost = round(sum(float(t.get("cost_usd") or 0.0) for t in per_target), 6)
-    if not enabled:
-        headline = f"correctness grading DISABLED ({ENABLED_ENV} is off)"
-    elif refusal:
-        headline = f"REFUSED — {refusal.get('reason')}"
-    elif written:
-        headline = (
-            f"graded {written} unit(s) across {len(per_target)} target(s) "
-            f"for ${cost:.4f}"
-        )
-    else:
-        statuses = sorted({str(t.get("status")) for t in per_target})
-        headline = f"wrote no unit numbers ({', '.join(statuses) or 'no targets'})"
-
-    body = [
-        f"Correctness grader — {headline}.",
-        f"  as_of={as_of.isoformat()} rubric={RUBRIC_NAME} "
-        f"sha={RUBRIC_SHA256[:16]}… pipeline={GRADER_PIPELINE_VERSION}",
-        f"  ceiling=${ceiling_usd:.2f}/day spent_before=${spent_before:.4f} "
-        f"targets={list(targets)}",
-        f"  reference grace={grace_days}d ({REFERENCE_GRACE_ENV}) — a "
-        "reference stays current until window_end + grace, or until a newer "
-        "one supersedes it",
-    ]
-    if refusal:
-        body.append(f"  REFUSED: {refusal.get('detail')}")
-    if calibration:
-        body.append(
-            f"  calibration: pooled={calibration.get('pooled')} "
-            f"packet={str(calibration.get('packet_sha'))[:16]}… "
-            f"n_atoms={calibration.get('n_atoms')}"
-        )
-    for target in per_target[:_RECEIPT_UNIT_CAP]:
-        age = target.get("reference_age_days")
-        body.append(
-            f"  - [{target.get('status')}] {target.get('target_id')}: "
-            f"{target.get('n_units_written')} unit(s), "
-            f"{target.get('n_claims')} claim(s), "
-            f"${float(target.get('cost_usd') or 0.0):.4f}"
-            + ("" if age is None else f", reference_age={float(age):.2f}d")
-        )
-        for unit in (target.get("units") or [])[:_RECEIPT_UNIT_CAP]:
-            share = unit.get("correctness_share")
-            coverage = unit.get("coverage_share")
-            body.append(
-                f"      {unit.get('analyst_id')}: correctness="
-                + ("—" if share is None else f"{float(share) * 100:.1f}%")
-                + f" (n={unit.get('correctness_n')})  coverage="
-                + ("—" if coverage is None else f"{float(coverage) * 100:.1f}%")
-                + f" (n={unit.get('coverage_n')})"
-            )
-    prior_relative = sum(
-        n for target in per_target
-        for reason, n in (
-            (target.get("exclusions") or {}).get("excluded_by_reason") or {}
-        ).items()
-        if str(reason).startswith(f"{SEG.PRIOR_RELATIVE_REASON}:")
-    )
-    if prior_relative:
-        body.append(
-            f"  prior-relative spans excluded: {prior_relative} — claims about "
-            "this read's relation to its OWN previous read. The reference "
-            "carries no prior read, so grading them measured nothing "
-            "(see per_target[].exclusions.excluded_by_reason)."
-        )
-    if deferred:
-        body.append(
-            f"  deferred ({len(deferred)}): {list(deferred)} — the turn "
-            f"budget or the daily ceiling stopped the sweep before they ran; "
-            "the least-recently-graded-first rotation puts them at the head "
-            "of the next sweep's queue"
-        )
-    for warning in list(warnings)[:_RECEIPT_WARNING_CAP]:
-        body.append(f"  WARNING: {warning}")
-
-    return FindingPayload(
-        title=f"Correctness grader — {headline}"[:2048],
-        body="\n".join(body)[:65536],
-        confidence=1.0,
-        evidence=[],
-        tags=["deterministic", SUB_HANDLER_NAME, "correctness_measurement",
-              "severity:low"],
-        data={
-            "sub_handler": SUB_HANDLER_NAME,
-            "pipeline_version": GRADER_PIPELINE_VERSION,
-            "enabled": bool(enabled),
-            "as_of": as_of.isoformat(),
-            "rubric": RUBRIC_NAME,
-            "rubric_sha256": RUBRIC_SHA256,
-            "ceiling_usd": ceiling_usd,
-            "ceiling_env": GRADE.CEILING_ENV,
-            "reference_grace_days": grace_days,
-            "reference_grace_env": REFERENCE_GRACE_ENV,
-            "spent_before_run_usd": round(spent_before, 6),
-            "run_cost_usd": cost,
-            "targets": list(targets),
-            "deferred_targets": list(deferred),
-            "n_units_written": written,
-            "calibration": dict(calibration) if calibration else None,
-            "refusal": dict(refusal) if refusal else None,
-            "per_target": [dict(t) for t in per_target],
-            "n_prior_relative_excluded": prior_relative,
-            "warnings": list(warnings),
-            "caveat": (
-                "Correctness here is correctness AGAINST ONE REFERENCE, not "
-                "against the world: a claim the reference does not mention is "
-                "`silent`, which is why every share is published beside its "
-                "coverage. A `silent` claim carries ONE family's label by "
-                "design (the cost triage), and at a $0 ceiling every claim "
-                "does — see n_single_family. The producer family (F0) grades "
-                "reads its own model wrote; that is disclosed, and "
-                "VERDICT_P1v4 measured it not to be the outlier."
-            ),
-        },
-    )
+build_receipt = RECEIPT.build_receipt
 
 
 def _zero_usage() -> dict[str, int]:
@@ -1315,9 +1213,10 @@ async def handle(
         )
 
     from ...provenance import verify
-    from . import scorecard_banding as banding
 
-    dimensions = tuple(banding.DIMENSIONS) + (PROLIFERATION,)
+    # The scored dimensions + the units narrowed within the scored legs
+    # (ROSTER-2) + the profile's reference legs (INST-1), roster order.
+    dimensions = ROSTER.reference_units()
     dimension_names = frozenset(dimensions)
 
     extras = dict(getattr(deps, "extras", None) or {})
@@ -1481,7 +1380,6 @@ __all__ = [
     "F3_DEPS_EXTRA_KEY",
     "GRADER_PIPELINE_VERSION",
     "PASS_BUDGET_ENV",
-    "PROLIFERATION",
     "REFERENCE_GRACE_ENV",
     "STATUS_NO_REFERENCE",
     "STATUS_REFERENCE_STALE",

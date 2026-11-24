@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:receipt_anchor": {
+      "source": "analyst_receipt_anchor.yaml",
+      "state": "draft"
+    }
+  }
+}

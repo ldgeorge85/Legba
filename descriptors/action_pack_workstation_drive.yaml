@@ -1,0 +1,100 @@
+# C-1b — workstation_drive action pack: consult PRESENTS A CASE (design C-1a §1).
+#
+# The nine workstation actions a consult turn may present when the operator
+# arms it ("Present as a case", ConsultRequest.present_case — decision D1):
+# open a panel, arrange the wall, scope it, focus a record, point the map, set
+# the shared clock, run a mission, narrate, seal. The words each action may use
+# (panel kinds, stances, presets, layers, missions, spans) are a CLOSED
+# vocabulary: src/legba/data/workstation_vocabulary.py, exported to the UI as
+# legba-ui-v3/src/lib/workstationVocabulary.json; the argument grammar is
+# src/legba/data/analysts/consult_case_schema.py.
+#
+# READ-ONLY BY CONSTRUCTION. No tool here writes: the handlers
+# (analysts/agency/workstation_drive.py) are pure canonicalizers that touch no
+# store, and a guard test asserts set(pack.tools) ∩ tool_rounds.WRITE_TOOLS = ∅.
+# The executor that moves the wall lives in the workstation and writes only UI
+# stores. C-2's write plane is a separate pack; this one never grows a write.
+#
+# Universally applicable BY DESIGN (no applies_to_tags, no predicate): like
+# substrate_read, the global consult surface has no target in context, so the
+# runtime binds it with the synthetic global scope and a self-allow for THIS
+# pack only (runtime/consult_bindings.py). The grant leg stays real: an analyst
+# without `action_packs: [{pack_id: workstation_drive}]` is denied at
+# resolution. Bound ONLY on the chat consult (consult_default): deep consult,
+# the inline assessors and the MCP consult tool have no shell to drive and do
+# not bind it — a grant there would be inert.
+#
+# Every action carries 1..8 cites, and every cited id must have been RETURNED
+# BY A READ TOOL IN AN EARLIER ROUND (or pinned by the operator); the case gate
+# (analysts/consult_case.py) refuses anything else as `ref_not_read`, stamps
+# `rests_on` itself, and ledgers every refusal as a governor BLOCK.
+#
+# Governor: the actions cost no tokens; the rounds around them are bounded by
+# the consult round cap (20 for a case turn, 30 max) and the spend guard.
+# `max_invocations_per_run` is the per-case cap (30 admitted actions),
+# enforced by the case gate from the run's own count.
+#
+# Registered via scripts/bringup_register_action_packs.py. DRAFT until the
+# operator registers it after the roll (validated through the runtime parser
+# first: ActionPack.model_validate on this body).
+
+identity:
+  id: workstation_drive
+  name: Workstation Drive (consult presents a case)
+  schema_uri: legba/action_pack/1.0.0
+  version: "<content-hash stamped at register time>"
+  abstraction_level: L1
+  state: active
+  owner: c1_case
+  created: "2026-10-03T00:00:00Z"
+
+tools:
+  - name: open_panel
+    config: {}
+  - name: arrange
+    config: {}
+  - name: set_scope
+    config: {}
+  - name: focus
+    config: {}
+  - name: map
+    config: {}
+  - name: timeline
+    config: {}
+  - name: run_mission
+    config: {}
+  - name: narrate
+    config: {}
+  - name: done
+    config: {}
+  # Q-1 — one console view, driven by id through its declared contract
+  # (legba-ui-v3/src/panel-registry/contracts.ts → src/legba/data/
+  # panel_action_catalog.json). View changes only; the catalogue loader
+  # refuses any action id outside panel_actions.VIEW_ACTION_IDS.
+  - name: panel_action
+    config: {}
+
+prompt_fragments:
+  - >-
+    This turn PRESENTS A CASE: besides answering, you drive the operator's
+    workstation through ordered actions — open_panel, arrange, set_scope,
+    focus, map, timeline, run_mission, narrate — and seal the case with done
+    before your final answer. Read first, then act: an action may only name
+    records a read tool returned in an EARLIER round, and every action but
+    done cites 1 to 8 of them.
+  - >-
+    Actions run in the order you emit them, after the round's reads. Build the
+    case as a short walk the operator can follow: scope the wall, set the clock,
+    point the map, focus the record that matters, and narrate each step in one
+    plain sentence. Six to twelve actions is a good case; never more than 30.
+
+rules:
+  - "Never cite, focus, scope or fit an id no read tool returned to you in an earlier round."
+  - "The map's time is the shared window: set it with timeline, never through map."
+  - "No coordinates, no invented panel kinds: use only the enumerated values."
+
+governor:
+  budget_account: workstation_drive
+  max_invocations_per_hour: 600
+  api_rate_per_minute: 60
+  max_invocations_per_run: 30

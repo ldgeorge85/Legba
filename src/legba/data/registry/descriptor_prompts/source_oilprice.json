@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.oilprice.news": {
+      "source": "source_oilprice.yaml",
+      "state": "draft"
+    }
+  }
+}

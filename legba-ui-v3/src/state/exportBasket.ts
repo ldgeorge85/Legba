@@ -250,7 +250,7 @@ export interface DeskBriefFetchers {
 async function fetchCompositionRow(targetId: string): Promise<ReadFindingRow | null> {
   const resp = await apiGet<{ data: ReadFindingRow[] }>(
     `/findings?target_id=${encodeURIComponent(targetId)}` +
-      `&analyst_id=${COUNTRY_COMPOSITION_ANALYST}&limit=1`,
+      `&analyst_id=${COUNTRY_COMPOSITION_ANALYST}&limit=1&fields=full`,
   )
   return resp.data[0] ?? null
 }
@@ -282,7 +282,7 @@ async function fetchSituationEventRows(situationId: string): Promise<DeskBriefEv
   return resp.data
 }
 
-const defaultDeskBriefFetchers: DeskBriefFetchers = {
+export const defaultDeskBriefFetchers: DeskBriefFetchers = {
   fetchComposition: fetchCompositionRow,
   fetchOpenSituations: fetchOpenSituationRows,
   fetchSituationEvents: fetchSituationEventRows,
@@ -293,26 +293,60 @@ const defaultDeskBriefFetchers: DeskBriefFetchers = {
  * the export route verbatim and printed after every basket item. `null` when
  * there is nothing open, so a quiet desk's brief grows no empty section.
  */
+/**
+ * The client-side ceiling on the situations appendix, under the export
+ * route's `APPENDIX_MAX_CHARS` (40,000 after W11-F78; it was 20,000, and a
+ * G20 desk's 20 situations × 20 events ran to 23,000, so the route answered
+ * 422 and the Brief tab could not render for any country desk). The brief
+ * stops adding situations before the ceiling and SAYS how many it withheld —
+ * never a silent cut, never a refused document.
+ */
+export const DESK_BRIEF_APPENDIX_MAX_CHARS = 30_000
+
+function situationBlock(s: DeskBriefSituation): string[] {
+  const lines = [`### ${s.name}`, '']
+  lines.push(
+    `- status: ${s.status} · category: ${s.category} · ` +
+      `intensity: ${s.intensityScore.toFixed(2)} · situation id: ${s.id}`,
+  )
+  if (s.events.length === 0) {
+    lines.push('- tracked events: none linked yet')
+  } else {
+    lines.push(`- tracked events (${s.events.length}):`)
+    for (const e of s.events) {
+      lines.push(`  - ${e.title} — ${e.lifecycleState} (event id: ${e.id})`)
+    }
+  }
+  lines.push('')
+  return lines
+}
+
 export function buildDeskBriefAppendix(situations: DeskBriefSituation[]): string | null {
   if (situations.length === 0) return null
-  const lines = ['## Open situations & tracked events', '']
+  const head = ['## Open situations & tracked events', '']
+  let body: string[] = []
+  let used = head.join('\n').length
+  let withheld = 0
   for (const s of situations) {
-    lines.push(`### ${s.name}`, '')
-    lines.push(
-      `- status: ${s.status} · category: ${s.category} · ` +
-        `intensity: ${s.intensityScore.toFixed(2)} · situation id: ${s.id}`,
-    )
-    if (s.events.length === 0) {
-      lines.push('- tracked events: none linked yet')
-    } else {
-      lines.push(`- tracked events (${s.events.length}):`)
-      for (const e of s.events) {
-        lines.push(`  - ${e.title} — ${e.lifecycleState} (event id: ${e.id})`)
-      }
+    const block = situationBlock(s)
+    const size = block.join('\n').length + 1
+    // Leave room for the withheld line itself.
+    if (used + size > DESK_BRIEF_APPENDIX_MAX_CHARS - 160) {
+      withheld += 1
+      continue
     }
-    lines.push('')
+    body = body.concat(block)
+    used += size
   }
-  return lines.join('\n').trimEnd()
+  if (withheld > 0) {
+    body.push(
+      `- ${withheld} more open situation${withheld === 1 ? '' : 's'} withheld from ` +
+        `this brief (appendix size cap ${DESK_BRIEF_APPENDIX_MAX_CHARS.toLocaleString('en-US')} chars) — ` +
+        'open the desk for the full list',
+      '',
+    )
+  }
+  return head.concat(body).join('\n').trimEnd()
 }
 
 /** The `appendix` field a desk brief hands the export route (k5b). */

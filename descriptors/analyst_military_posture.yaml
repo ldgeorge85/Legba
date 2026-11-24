@@ -94,6 +94,21 @@ method:
   # clears it).
   options:
     judge_sample_rate: 1.0
+    # Lane N-B — the WATERMARK slice (data/slice_coverage.py): this desk reads
+    # everything fetched since its last successful run (not the newest 120
+    # rows, which covered ~6 h of an ~11 h cycle), salience-selected on
+    # overflow, and its finding records the in-window signals it did not read
+    # (data.slice_coverage). narrative_coordination does NOT carry it: its
+    # 72 h window IS its synchrony measurement.
+    slice_since_watermark: true
+    # X4 LEVEL (W11-F36) — a war footing or a declared alert is a STANDING
+    # posture no change-shaped signpost re-evidences; these two ids measure it
+    # as a LEVEL and read "observed_at_level" on a report from this window
+    # (data/carried_state.py counts that as re-evidence). The bar text after
+    # "=" is the reference the prompt names verbatim (a test pins the two).
+    level_indicators:
+      - "forces-in-active-operations=bar:a signal in this window reports this country's forces in a strike, an engagement or a deployed armed operation; a past campaign recalled does not count"
+      - "heightened-posture-in-force=bar:a signal in this window reports the declared measure still in force"
   # Inline, topic-scoped system prompt — the unit carries its bounded question
   # VERBATIM in the descriptor (no Python; no prompt_module set). Drives the
   # cited-prose JSON FindingPayload so the [N] markers + the verify gate work.
@@ -276,6 +291,31 @@ method:
     signals do not support; if the evidence is thin, LOWER your confidence rather
     than inventing specifics.
 
+    EVERY SENTENCE THAT STATES A FACT CARRIES ITS MARKER. The verification
+    pass reads your body one sentence at a time, and a sentence that states
+    anything about the world and carries no [N] marker is scored as an
+    uncited claim — in any section, and in the BLUF above all, because the
+    BLUF is the sentence a reader takes away. Three consequences. (1) THE
+    BLUF IS A CITED SENTENCE: it ends with the [N] marker(s) of the signals
+    that carry the facts it names, like any other claim ('**BLUF:** <the
+    verdict, naming who is doing what> [N][N].'). A BLUF that names nothing
+    is the bare category label the verdict rule bans, so there is no uncited
+    form of it worth writing (a BLUF that is itself a scoped negative
+    follows the exception below). (2) EVERY SENTENCE IN '## What changed'
+    AND IN '## Why it matters' ends with the marker(s) of the signals it
+    reports or reasons from — analysis is not exempt, because the grader
+    cannot tell your inference from a fact you left unsourced, and a
+    sentence that rests on nothing you can cite is a sentence to cut. ('##
+    What would change this read' and '## Indicators' look forward and need
+    none.) (3) Write each marker in ASCII brackets at the end of the
+    sentence, [N] or [N][N] — never in full-width brackets and never as a
+    bare number. A scoped negative, written in the house form ("no <X>
+    appears in this desk's collection through <date>"), has nothing to cite
+    and carries no marker; keep it scoped and keep the "no" at its head.
+    Before you emit, re-read the body once as a grader would, and for every
+    sentence without a marker either add the signal it rests on or cut it: a
+    fact you cannot point to is a fact you may not state.
+
     Respond with STRICT JSON ONLY — no prose outside the JSON, no code fence —
     matching exactly this shape:
     {
@@ -287,7 +327,9 @@ method:
       "indicators": [
         {"id": "major-arms-acquisition", "statement": "Signed contract or delivery of a major new weapons platform or system", "status": "not_observed", "horizon_date": "<as-of + 14 days>", "first_seen": "<as-of date>", "citations": []},
         {"id": "large-scale-exercise", "statement": "Announced or observed large-scale military exercise or war-game", "status": "triggered", "horizon_date": "<as-of + 7 days>", "first_seen": "<as-of date>", "citations": [3]},
-        {"id": "readiness-level-change", "statement": "Declared change to the standing readiness/alert level or reserve structure", "status": "not_observed", "horizon_date": "<as-of + 30 days>", "first_seen": "<as-of date>", "citations": []}
+        {"id": "readiness-level-change", "statement": "Declared change to the standing readiness/alert level or reserve structure", "status": "not_observed", "horizon_date": "<as-of + 30 days>", "first_seen": "<as-of date>", "citations": []},
+        {"id": "forces-in-active-operations", "statement": "This country's armed forces are conducting combat or armed security operations", "status": "not_observed", "shape": "level", "reference": "bar:a signal in this window reports this country's forces in a strike, an engagement or a deployed armed operation; a past campaign recalled does not count", "horizon_date": "<as-of + 7 days>", "first_seen": "<as-of date>", "citations": []},
+        {"id": "heightened-posture-in-force", "statement": "A declared heightened readiness, mobilization, martial law or emergency deployment is in force", "status": "not_observed", "shape": "level", "reference": "bar:a signal in this window reports the declared measure still in force", "horizon_date": "<as-of + 7 days>", "first_seen": "<as-of date>", "citations": []}
       ]
     }
 
@@ -298,8 +340,9 @@ method:
     STRUCTURED, machine-checkable COUNTERPART of your '## Indicators' prose (a
     JSON field, not a section to render: never paste its keys — "status",
     "horizon_date", "first_seen", the id slug — into the prose).
-    It is REQUIRED and MUST be NON-EMPTY: always output 3-6 entries in the EXACT
-    SHAPE of the three example objects shown in the schema above (real
+    It is REQUIRED and MUST be NON-EMPTY: always output 3-6 signpost entries in
+    the EXACT SHAPE of the first three example objects shown in the schema
+    above, plus both level indicators (real
     desk-specific signposts — do NOT copy the example text, do NOT leave the array
     empty, do NOT omit the field). Set each "status" to "not_observed"
     (pre-registered, not yet seen), "triggered" (already firing in the slice), or
@@ -317,10 +360,23 @@ method:
     placeholders — always compute real dates from this run's as-of date,
     never copy a literal from an example. Write both dates in the
     schema's `YYYY-MM-DD` form; the human-date rule applies to prose only.
+    LEVEL INDICATORS — the entries whose "shape" is "level" measure a
+    STANDING CONDITION against the bar named in their "reference", not a new
+    event, and they are ALWAYS in the array. Each run, set a level indicator
+    to "observed_at_level" when a signal in THIS window's slice reports the
+    condition at that bar, and cite that signal's [N] in "citations";
+    otherwise set it to "not_observed". A level is observed again every
+    window or it is not observed: your PRIOR READ, the situation register and
+    any HISTORICAL SERIES line are memory, not a report, and an
+    "observed_at_level" that cites only them is set back to "not_observed".
+    Never mark a level indicator "triggered", never use "observed_at_level"
+    on any other indicator, and copy "shape" and "reference" exactly as
+    written in the schema.
     CANONICAL IDS — REUSE, do NOT re-mint: this unit's FIXED posture
     vocabulary is major-arms-acquisition, large-scale-exercise,
     readiness-level-change, force-basing-change, defense-budget-shift, and
-    doctrine-revision. REUSE these exact id slugs verbatim every run (only
+    doctrine-revision, and its level indicators forces-in-active-operations
+    and heightened-posture-in-force. REUSE these exact id slugs verbatim every run (only
     change "status" / "citations" / "first_seen" as the situation evolves)
     so the tracker can diff the SAME indicator run-over-run; a re-minted
     slug is invisible to the diff. You MAY keep each statement
@@ -477,7 +533,10 @@ method:
     least one cited [N] index via "refs". When nothing is genuinely unresolved,
     emit "open_questions": [] or omit the field entirely — NEVER invent
     questions to fill the quota.
+  gather:
+    thinking: "off"   # T-2: tool rounds (if a target ever binds a read pack) stay on the plain alias
   llm:
+    thinking: "on"   # T-2: the synthesis call thinks (the desk's one call per run)
     # Model-card sampling (gpt-oss ships generation_config temperature=1.0; the vLLM
     # client always sends temperature, so the card default can never apply on its own).
     # Fleet-wide per the 2026-07-24 sampling audit + A/B (+0.055 faith at 1.0).

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:theme_cyber": {
+      "source": "target_theme_cyber.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:hybrid_threat_composition": {
+      "source": "analyst_hybrid_threat_composition.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -47,6 +47,14 @@ THE EXCLUSIONS, and why each is named rather than merely applied:
     never on the negation: "no new disruptions" is a world absence claim, ANNEX
     C v4 rule 3 makes it a claim, and it stays gradeable.
 
+  * ``off_subject:<code>`` (B6, W11-F13) — the span's named subject is a
+    HOMONYM of the target's subject ("Khyber Pakhtunkhwa" on the North Korea
+    desk): it names a homonym form and, with those cut out, not the subject
+    (:mod:`legba.data.subject_homonyms`). A reference about the subject cannot
+    bear on a claim about another place, so the span is never graded into the
+    subject's correctness — it is COUNTED under its own reason on the receipt,
+    never pooled into the share.
+
 Every excluded span is returned WITH its reason and its text. An exclusion
 nobody can audit is an exclusion nobody should trust.
 """
@@ -56,6 +64,10 @@ from __future__ import annotations
 import hashlib
 import re
 from typing import Any, Callable, Mapping, Sequence
+
+# B6: the homonym exclusion's reason (``off_subject:<code>``) is the critic's
+# span reason, spelled once.
+from ...subject_homonyms import OFF_SUBJECT_REASON, HomonymRule
 
 #: Grain names and their id prefixes. DISTINCT by construction — the whole
 #: reason the two grains can be scored side by side without ever pooling.
@@ -453,11 +465,14 @@ def segment_head(
     segmenter: Callable[[str], Sequence[str]],
     judge: Callable[[str], bool],
     dimension_names: frozenset[str],
+    homonym_rule: HomonymRule | None = None,
 ) -> dict[str, Any]:
     """One head -> ``(atoms, excluded spans)``, each with its reason and position.
 
     EVERY span the shipped segmenter produced is accounted for: kept as an atom,
     or excluded with the rule that excluded it. The ledger IS the audit.
+    ``homonym_rule`` (the target subject's, B6) adds the ``off_subject``
+    exclusion, LAST — after every shape rule; ``None`` = byte-identical.
     """
     body = head.get("grader_body") or ""
     spans = list(segmenter(body))
@@ -475,6 +490,8 @@ def segment_head(
             })
             continue
         why = exclusion_reason(span, dimension_names)
+        if not why and homonym_rule is not None and homonym_rule.homonym_only(span):
+            why = f"{OFF_SUBJECT_REASON}:{homonym_rule.code}"
         if why:
             row = {"span_index": index, "reason": why, "text": span}
             if why.startswith(f"{PRIOR_RELATIVE_REASON}:"):
@@ -526,10 +543,12 @@ def segment_all(
     segmenter: Callable[[str], Sequence[str]],
     judge: Callable[[str], bool],
     dimension_names: frozenset[str],
+    homonym_rule: HomonymRule | None = None,
 ) -> dict[str, Any]:
     """Every head's atoms and exclusions, with the totals a number rests on."""
     per_head = [
-        segment_head(h, segmenter, judge, dimension_names) for h in heads
+        segment_head(h, segmenter, judge, dimension_names, homonym_rule)
+        for h in heads
     ]
     atoms = [a for h in per_head for a in h["atoms"]]
     seen: dict[str, dict[str, Any]] = {}
@@ -569,6 +588,7 @@ __all__ = [
     "GRAIN_DESK",
     "GRAIN_PREFIX",
     "MIN_ASSERTION_CHARS",
+    "OFF_SUBJECT_REASON",
     "PRIOR_RELATIVE_DETAIL",
     "PRIOR_RELATIVE_REASON",
     "PRIOR_RELATIVE_RES",

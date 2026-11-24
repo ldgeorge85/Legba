@@ -191,6 +191,19 @@ async def resolve_deep_consult_stage_deps(
         pg_pool=pg_store.pool,
     )
 
+    # Q-2 — the settle-point judge's by-id resolver (``consult_judging`` asks
+    # for ``consult_judge_ref()`` and the chain's rungs). Built lazily, one
+    # handler per component id, through the same factory as ``llm`` above; a
+    # route that cannot be built is a ``not_judged`` label, never an error.
+    judge_handlers: dict[str, Any] = {}
+
+    async def _judge_resolver(ref: str) -> Any:
+        if ref not in judge_handlers:
+            judge_handlers[ref] = await build_llm_handler_from_stack_component(
+                ref, registry_client=registry_client, secrets_resolve=_secrets_resolve,
+            )
+        return judge_handlers[ref]
+
     return DeepConsultStageDeps(
         llm=llm,
         substrate=substrate,
@@ -198,6 +211,7 @@ async def resolve_deep_consult_stage_deps(
         budget=budget,
         publish_fn=_publish,
         agency_binding=agency_binding,
+        judge_resolver=_judge_resolver,
     )
 
 

@@ -233,10 +233,15 @@ async def _stamp_journal_contradicted_flag(
 
 
 async def _resolve_journal_citation_bridge(
-    conn: asyncpg.Connection, ordered_refs: list[str]
+    conn: asyncpg.Connection, ordered_refs: list[str],
+    *, text_chars: int | None = _JOURNAL_EVIDENCE_TEXT_CHARS,
 ) -> list[dict[str, Any]]:
     """Resolve a journal entry's cited substrate uuids into the standard
     citations bridge the faithfulness verify binds ``[N]`` markers against.
+
+    ``text_chars`` caps each ``source_text`` (the judge's context bound);
+    ``None`` carries it whole — the consult grounding NUMBER check (Q-2) reads
+    the whole row, since a number stated past the cap is not "unstated".
 
     ``ordered_refs[N-1]`` is the uuid behind marker ``[N]`` (the contract from
     ``build_journal_verify_inputs``). Each ref may point at an
@@ -271,7 +276,7 @@ async def _resolve_journal_citation_bridge(
         resolved[str(r["id"]).lower()] = {
             "title": str(r["title"] or "")[:300],
             "source": str(r["analyst_id"] or "substrate"),
-            "source_text": str(r["body"] or "")[:_JOURNAL_EVIDENCE_TEXT_CHARS],
+            "source_text": str(r["body"] or "")[:text_chars],
         }
     # 2) signals (the priming slice's citable ids)
     still = [uu for u, uu in zip(ordered_refs, uuids) if u.lower() not in resolved]
@@ -299,7 +304,7 @@ async def _resolve_journal_citation_bridge(
         resolved[str(r["id"]).lower()] = {
             "title": title[:300],
             "source": str(r["canonical_url"] or "signal")[:300],
-            "source_text": body_txt[:_JOURNAL_EVIDENCE_TEXT_CHARS],
+            "source_text": body_txt[:text_chars],
         }
     # 3) the remaining legitimate journal ref kinds (mirrors the UI chip
     #    resolver journal_api._REF_TABLES): situations / facts / nexuses /
@@ -324,7 +329,7 @@ async def _resolve_journal_citation_bridge(
             resolved[str(r["id"]).lower()] = {
                 "title": str(r["label"] or "")[:300],
                 "source": "substrate",
-                "source_text": str(r["text"] or "")[:_JOURNAL_EVIDENCE_TEXT_CHARS],
+                "source_text": str(r["text"] or "")[:text_chars],
             }
 
     for i, u in enumerate(ordered_refs, start=1):
@@ -344,6 +349,39 @@ async def _resolve_journal_citation_bridge(
             entry["source_text"] = ""
         entries.append(entry)
     return entries
+
+
+#: B6 — a claim about ANOTHER subject is no evidence about this one; 0.0 is under
+#: every composition floor (admission is ``>= floor``).
+OFF_SUBJECT_CEILING = 0.0
+
+
+def _flag_off_subject_claims(
+    report: Any, *, title: str, body: str, target_id: str | None,
+) -> int:
+    """B6 (W11-F13): flag each claim whose named subject is a HOMONYM of the
+    desk's subject ("Khyber Pakhtunkhwa" on the North Korea desk) as
+    ``off_subject`` — an additive span + ledger row + ``off_subject_claims``
+    counter — and cap the finding through the T7 ceiling idiom (``gate_score``
+    only lowers). No profile homonyms → not applicable BY NAME (SEAMS #67)."""
+    from ..data.gazetteer import NotApplicable, applicable
+    from ..data.provenance.verify import ClaimVerdict, UnsupportedSpan, _segment_claims
+    from ..data.subject_homonyms import OFF_SUBJECT_REASON, off_subject_claims, rule_for_target
+
+    na = applicable("off_subject")
+    if isinstance(na, NotApplicable):
+        report.bump(na.counter)
+        return 0
+    rule = rule_for_target(target_id)
+    off = off_subject_claims([title, *_segment_claims(body)], rule) if rule else []
+    for claim in off:
+        report.unsupported_spans.append(UnsupportedSpan(text=claim, reason=OFF_SUBJECT_REASON))
+        report.claim_verdicts.append(ClaimVerdict.failed(claim, OFF_SUBJECT_REASON))
+    if off:
+        report.bump("off_subject_claims", len(off))
+        ceiling = report.confidence_ceiling
+        report.confidence_ceiling = min(OFF_SUBJECT_CEILING, 1.0 if ceiling is None else ceiling)
+    return len(off)
 
 
 async def verify_inline_target_finding(
@@ -539,6 +577,11 @@ async def verify_inline_target_finding(
             )
             judge_sampling = None
 
+    # JUDGE-2: one FAILURE-CHAIN session per verify pass (a plain handler passes
+    # through unchanged) — a route-gone 401/402/403/404 moves to the next rung.
+    from .judge_fallback_chain import judge_stamps, open_session
+
+    judge_session = open_session(deps.verify_judge)
     try:
         outcome = await verify_with_floor_escalation(
             # D4b — FLOOR-TRIGGERED JUDGING. The composition floor may only
@@ -554,7 +597,7 @@ async def verify_inline_target_finding(
             floor_confidence=floor_confidence,
             body=body,
             citations=citations,
-            judge_llm=deps.verify_judge,
+            judge_llm=judge_session,
             finding_confidence=finding_confidence,
             indicators=indicators,
             title=title,
@@ -618,6 +661,9 @@ async def verify_inline_target_finding(
         )
         return None
 
+    # B6 (W11-F13) — SUBJECT RELEVANCE, before the verdict is persisted.
+    _flag_off_subject_claims(report, title=title, body=body, target_id=target_id)
+
     # Identity of the analyzed analyst (the finding's producer) + the judge.
     analyzed_analyst_id = str(deps.descriptor.identity.id)
     analyzed_analyst_version = str(deps.descriptor.identity.version)
@@ -632,6 +678,13 @@ async def verify_inline_target_finding(
     # the host resolved alongside the ref — the badge's configured-vs-fell-back
     # signal. "" = floor-only (no judge wired), same contract as the ref.
     judge_route = str(getattr(deps, "verify_judge_route", "") or "")
+    # JUDGE-2: a LATER chain rung that answered restamps the three (its model
+    # id, its ref, ``chain:<ref>``); a floor reached after the judge was ASKED
+    # carries ``unverified_reason``. Rung 1 answering → byte-identical stamps.
+    judge_model, judge_llm_ref, judge_route, chain_extras = judge_stamps(
+        judge=deps.verify_judge, session=judge_session, judge_model=judge_model,
+        judge_llm_ref=judge_llm_ref, judge_route=judge_route, report=report,
+    )
 
     payload = build_faithfulness_critique_payload(
         report,
@@ -654,6 +707,18 @@ async def verify_inline_target_finding(
         pre_escalation_overall_score=outcome.pre_escalation_overall_score,
         pre_escalation_judge_status=outcome.pre_escalation_judge_status,
     )
+    if chain_extras:  # sparse: absent on every pass rung 1 answered
+        payload.setdefault("data", {}).setdefault("verification", {}).update(chain_extras)
+    # X4 / ESC (W11-F52) - the uncited-sentence share, measured on the BODY the
+    # floor itself reads (so it is the same number on the judge path and the
+    # floor path). UNITS only: the field is read per analyzed unit per day by
+    # ``GET /v3/system/judge-stats`` (``uncited_by_unit_day``).
+    if kind == "inline_target":
+        from ..data.provenance.uncited_share import uncited_share_fields
+
+        payload.setdefault("data", {}).setdefault("verification", {}).update(
+            uncited_share_fields(body)
+        )
 
     # The verify pass IS the critic here — stamp the analyst_ctx with this
     # analyst's identity (the verify is an in-run side-write, not a separate
@@ -705,6 +770,188 @@ async def verify_inline_target_finding(
     # decision belongs to the seam, exactly like judge_llm_ref/judge_route), so
     # the trigger is folded on here rather than smuggled onto the report.
     return {**report.as_dict(), "judge_trigger": outcome.trigger}
+
+
+async def _resolve_journal_ref_texts(
+    conn: asyncpg.Connection, refs: list[str]
+) -> dict[str, dict[str, str]]:
+    """``{ref: {title, text, publisher}}`` for every cited ref that is a SOURCE
+    (a signal, or an ``analyst_outputs`` row the journal cited) — the FULL text,
+    not the judge's 4,000-char bridge, because a number check over a truncated
+    capture would flag what the source does say. Read-only; a failed read
+    degrades to ``{}`` (the deterministic checks then have nothing to check
+    against and flag nothing — never a fabricated flag)."""
+    uuids: list[UUID] = []
+    for r in refs:
+        try:
+            uuids.append(UUID(str(r)))
+        except (ValueError, AttributeError):
+            continue
+    out: dict[str, dict[str, str]] = {}
+    if not uuids:
+        return out
+    try:
+        for r in await conn.fetch(
+            "SELECT id, source_id, payload FROM signals WHERE id = ANY($1::uuid[])", uuids,
+        ):
+            p = r["payload"]
+            if isinstance(p, str):
+                try:
+                    p = json.loads(p)
+                except (ValueError, TypeError):
+                    p = {}
+            p = p if isinstance(p, Mapping) else {}
+            parts = [
+                str(p[k]) for k in ("title", "distilled_body", "summary", "body", "archived_text")
+                if isinstance(p.get(k), str) and p[k].strip()
+            ]
+            out[str(r["id"]).lower()] = {
+                "title": str(p.get("title") or ""),
+                "text": "\n".join(dict.fromkeys(parts)),
+                "publisher": str(r["source_id"] or ""),
+            }
+        for r in await conn.fetch(
+            "SELECT id, analyst_id, title, body FROM analyst_outputs WHERE id = ANY($1::uuid[])",
+            [u for u in uuids if str(u) not in out],
+        ):
+            out[str(r["id"]).lower()] = {
+                "title": str(r["title"] or ""),
+                "text": f"{r['title'] or ''}\n{r['body'] or ''}",
+                "publisher": str(r["analyst_id"] or ""),
+            }
+    except Exception as exc:  # noqa: BLE001 — degrade, never break the run
+        logger.warning("actor_critic.journal_prepublish.ref_texts_failed err=%s", exc)
+    return out
+
+
+async def verify_journal_before_publish(
+    conn: asyncpg.Connection,
+    *,
+    deps: "_AnalystDeps",
+    output_kind: Any,
+    payload: Any,
+    run_id: Any,
+    options: Mapping[str, Any],
+    declares_verify: bool,
+    trace_steps: list[dict[str, Any]] | None = None,
+) -> tuple[UUID | None, dict[str, Any] | None, Any]:
+    """Lane N-D — the journal verify, moved IN FRONT of the write.
+
+    Lane N-G — the EVIDENCE GATE runs first, for every journal-family row
+    whether or not its descriptor declares a verify: a draft with model control
+    text, no cited refs, or fewer than 80 % of its refs resolving to a stored
+    row is not published as written. The declared "No entry this window" row
+    (``journal_evidence.declared_unavailable_payload``, flag
+    ``evidence_unavailable``) publishes instead, the draft goes onto
+    ``trace_steps`` (the run's ``intermediate_steps``), and no judge call is
+    spent on it.
+
+    Returns ``(entry_id, verification_block, payload_to_publish)``. For any
+    output that is not a journal-tier entry with a declared verify, returns
+    ``(None, None, payload)`` untouched and the caller writes as before.
+
+    For a journal entry: mint the row id, run the ONE existing verify pass
+    (:func:`verify_inline_target_finding` — same floor, same judge call, same
+    critique row keyed on the entry id; the post-write call no longer fires for
+    journals, so the call is re-ordered, not multiplied), then apply the
+    verdict and the deterministic span checks to the payload
+    (``journal_prepublish.apply_prepublish_verdict``) so the row that publishes
+    already carries its marks and flags.
+
+    Known cost of the re-order, stated: the verify's V-B scoped-absence fold
+    reads this run's retained input slice from ``analyst_traces``, which the
+    receipt chain writes AFTER the output row; on a journal it now degrades to
+    ``absence_slice_unavailable`` (counted) instead of judging scoped-absence
+    claims against the slice.
+    """
+    from ..data.provenance.kinds import OutputKind
+
+    if not (
+        output_kind == OutputKind.JOURNAL
+        and deps.descriptor.identity.kind in ("journal_assessor", "inquiry")
+    ):
+        return None, None, payload
+    from uuid import uuid4
+
+    from ..data import journal_evidence as je
+
+    refs = [str(r).lower() for r in (getattr(payload, "cited_substrate_refs", None) or [])]
+    entry_kind = getattr(payload, "entry_kind", "entry")
+    if entry_kind in je.GATED_ENTRY_KINDS:
+        # N-H: the gate judges structured refs UNION every inline citation form.
+        gate_refs = je.collect_refs(refs, getattr(payload, "body", ""))
+        verdict = je.evaluate_publish_gate(
+            body=getattr(payload, "body", ""),
+            refs=gate_refs,
+            resolved=await je.resolve_ref_existence(conn, gate_refs),
+            entry_kind=entry_kind,
+        )
+        if verdict.withhold:
+            logger.warning(
+                "actor_critic.journal_evidence_gate.withheld analyst_id=%s run_id=%s "
+                "reason=%s resolved=%s/%d control=%s",
+                getattr(deps.descriptor.identity, "id", None), run_id, verdict.reason,
+                verdict.refs_resolved, verdict.refs_total, list(verdict.control_text),
+            )
+            if trace_steps is not None:
+                trace_steps.append(je.withheld_draft_step(payload, verdict))
+            return uuid4(), None, je.declared_unavailable_payload(payload, verdict)
+    if not declares_verify:
+        return None, None, payload
+
+    from ..data.analysts.journal_prepublish import apply_prepublish_verdict
+    from ..data.analysts.journal_reflect import _reflect_claims
+
+    from ..data.provenance.budget import record_judge_calls_budget
+    from ..data.run_accounting import llm_call_watermark, llm_calls_since
+
+    entry_id = uuid4()
+    # The post-receipt judge meter in dapr_actors reads calls made AFTER the
+    # receipt flush; this judge call now precedes it, so it is metered HERE
+    # (budget_ledger, `judge:` dimension) and rides the receipt's own llm_calls.
+    watermark = llm_call_watermark()
+    block = await verify_inline_target_finding(
+        conn,
+        deps=deps,
+        finding_id=entry_id,
+        finding_payload=payload,
+        run_id=run_id,
+        target_id=options.get("target_id"),
+        judge_sample_rate=options.get("judge_sample_rate"),
+        judge_sample_always=options.get("judge_sample_always"),
+    )
+    try:
+        judge_calls = llm_calls_since(watermark)
+        for call in judge_calls:
+            call["leg"] = "verify_judge"
+        if judge_calls:
+            await record_judge_calls_budget(
+                conn, analyst_id=deps.descriptor.identity.id, calls=judge_calls,
+            )
+    except Exception as exc:  # noqa: BLE001 — accounting never fails a run
+        logger.warning("actor_critic.journal_prepublish.judge_meter_failed err=%s", exc)
+    try:
+        texts = await _resolve_journal_ref_texts(conn, refs)
+        payload, summary = apply_prepublish_verdict(
+            payload,
+            unsupported_spans=(block or {}).get("unsupported_spans") or [],
+            ref_texts=texts,
+            judge_status=(block or {}).get("judge_status"),
+            reflect=_reflect_claims,
+        )
+        logger.info(
+            "actor_critic.journal_prepublish entry_id=%s judge=%s marked=%s "
+            "unsupported=%d numbers=%d duplicates=%d overstated=%d",
+            entry_id, summary.get("judge_status"), summary.get("marked"),
+            len(summary["unsupported"]), len(summary["number_unsupported"]),
+            len(summary["duplicate_citation"]), len(summary["outcome_overstated"]),
+        )
+    except Exception as exc:  # noqa: BLE001 — marking must never lose the entry
+        logger.warning(
+            "actor_critic.journal_prepublish.apply_failed entry_id=%s err=%s",
+            entry_id, exc,
+        )
+    return entry_id, block, payload
 
 
 async def verify_structural_claims_finding(

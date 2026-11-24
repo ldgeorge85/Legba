@@ -44,10 +44,11 @@ The analysis plane begins where a matched signal reaches a desk's analysts. It h
    graded against independently built references, and an external web audit of published claims (§10).
 
 Those four are the mechanics. The **product** they assemble is a bottom-up reasoning spine (§4):
-nine bounded units answer one narrow question each over a desk's slice; a deterministic record quotes their
+bounded units answer one narrow question each over a desk's slice; a deterministic record quotes their
 verified conclusions upward; an interpretive voice reads that record and only that record; a
 deterministic banded scorecard writes one honest verdict per desk; and an alert loop watches the
-verified state for transitions worth an operator's attention. Every claim on the spine is cited to
+verified state for transitions worth a person's attention. ("Desk" is the example instance's word for a
+target: one scoped subject a set of analysts work.) Every claim on the spine is cited to
 source, scored for groundedness, and drillable through a receipt chain to the original signal.
 
 ---
@@ -108,7 +109,7 @@ accumulation and cadence gates rather than per signal. Two independent guards en
 **policy guard** treats any method kind other than the deterministic, forecaster and compile kinds as
 LLM-bearing: its effective accumulation threshold is floored to a minimum batch, so even a declared
 threshold of one cannot make an LLM fan out one call per signal, and its severity gate is disabled
-unless the operator explicitly opts in. The **dispatch guard** makes the deterministic runner raise if
+unless the trigger policy explicitly opts in (`allow_llm_severity_wake`). The **dispatch guard** makes the deterministic runner raise if
 handed an LLM-bearing method kind at all.
 
 ### 2.5 The engine
@@ -160,7 +161,8 @@ a descriptor registration; adding an *analyst* is usually just a descriptor.
 **Output kinds.** `provenance/kinds.py` defines the closed set the write path routes on — finding,
 situation, hypothesis, prediction, alert, meta-finding, critique, fact, nexus, prompt-module candidate,
 journal, scorecard, situation update, and event. Journal rows land off the fact-finding-nexus chain
-(§8); event rows are the v3 surface, gated off (`DATA_MODEL_V3.md`).
+(§8); event rows are written only behind `LEGBA_EVENTS`, off by default (`DATA_MODEL.md`, "Events,
+temporal and graph").
 
 ### 3.1 The archetype: how a descriptor becomes a runnable analyst
 
@@ -180,7 +182,7 @@ global run. One field flips a kind between per-desk and global, and adding a des
 target with the right coverage tag — no code change, and no per-desk descriptor.
 
 **The builder** resolves the stack reference into a live chat handler, resolves the effective system
-prompt, applies any operator-promoted champion prompt (§10.8), installs the grounding hook when the
+prompt, applies any champion prompt a person promoted (§10.8), installs the grounding hook when the
 descriptor opts in, and constructs the runner.
 
 **The run-time envelope** is deterministic around a single model call, so the optimizer can replay a
@@ -205,6 +207,25 @@ spine's one rule: **authority climbs only as far as the verification underneath 
 The exemplar domain is geopolitics over the country desks, but nothing in the machinery is
 desk-specific: the fan-out predicate and the unit prompts are configuration.
 
+**Taxonomy is registered, bound neutrally, and projected per case — never schema.** Three layers.
+The *measurement* vocabulary (typed-absence kinds, statuses, lifecycle states, origin classes, the
+grader axes) is the platform's own and no case redefines it, so measurements stay comparable across
+instances. A case's *classification* axes are registered per profile as namespaced vocabulary
+families (`<profile>.<axis>`, with `parent` links for hierarchy), and where two profiles' values mean
+the same thing a `<profile>.crosswalk` family maps one to the other — a crosswalk, not a merged
+taxonomy. The *binding* on the substrate is neutral and namespaced: a tag is `<family>:<value>`,
+checked against the registered families when the row is written (`data/tags.py`) — `bound` when the
+family is loaded and knows the value, `unclassified` (the raw string kept) when it does not, and a
+bare un-namespaced string is `src:<value>`, provenance rather than classification. Facts, situations,
+events and entity profiles carry the result as `data.classifications`; a signal's own tags keep their
+raw form and are compared under that namespace, so a publisher category can never satisfy a
+target-tag predicate (`DATA_MODEL.md`, *Classifications*). The case-bearing *columns* follow the
+same rule (`data/case_columns.py`): `situations.category` / `events.category` hold a registered
+classification or `unclassified`, `events.event_type` the `event_type` family, and
+`entity_profiles.entity_type` the `entity_class` family — and a subject (desk) id is never a
+category: it is the row's `data.subject_id` (`DATA_MODEL.md`, *The case-bearing columns*). A case's *view* of the substrate is a
+projection over those classifications, resolved at read time, not a column on the row.
+
 ### 4.1 The bounded units
 
 **Reads:** one desk's recent raw-signal slice, plus a grounding preamble of accumulated facts, signed
@@ -216,7 +237,7 @@ optional open-questions array (§7). **Measured** by the mandatory faithfulness 
 the correctness grader. **Cadence:** twice a day, staggered across the clock on distinct hour pairs so
 no hour stacks the whole fan-out into one budget bucket.
 
-Each of the **nine bounded units** is a topic-scoped `inline_target` descriptor answering **one narrow
+Each of the **bounded units** is a topic-scoped `inline_target` descriptor answering **one narrow
 question**. `leadership_transition`, `energy_security`, `escalation`, `narrative_coordination`,
 `internal_stability`, `military_posture` and `economic_coercion` fan out across every desk carrying a
 country coverage tag. `proliferation_watch` is the same shape with a narrower predicate — the
@@ -263,6 +284,32 @@ lineage, so the weak leg is visible rather than laundered. A **correctness gate*
 unit whose latest correctness row is missing, weak, or from a single grader family: it is *quoted*
 rather than composed over — out of the load-bearing basis but still visible and lineage-linked, because
 a desk silently vanishing would make a record over three units look identical to one over eight.
+
+**A carried status expires.** A unit's prior read is in its own prompt, and "remains
+unchanged" is the cheapest sentence it can write: the semiconductor flow read "degraded, held by border
+seizures" for 45 days off one seizure, every indicator `not_observed` for the last two weeks of it. So a
+read that states a status — a standing severity above `low` — with none of its own indicators
+`triggered` is **carried, unsupported** once the newest read of that unit on that subject whose
+indicators did trigger is older than N of the unit's own cadence windows (`LEGBA_CARRY_EXPIRY_WINDOWS`,
+default 3), or none exists in 90 days (`data/carried_state.py`, the one rule). The record lifts such a
+head out of its basis and its coverage ledger names it `carried_unsupported`, with the last evidencing
+read's date and age — never a band, never a gap. The composition floor's fallback marks a promoted superseded
+read `fallback: true` with its age and refuses one older than the same bar, emitting the same typed
+absence instead. `GET /v3/absence?scope=` carries the ninth kind for a unit read on its own desk, which is
+how a flow or lane unit that no composition consumes gets it too. A read with no indicator block, or a
+unit with no declared cooldown, is not measured — never passed.
+
+**A standing condition is measured as a level.** A change-shaped indicator ("a new sanction",
+"a pipeline attack") fires once; a status that is a standing condition — energy security under a
+sanctions regime, a military on a war footing — is never re-evidenced by one, so the rule above withheld
+it for good. A unit the profile marks `structural` declares LEVEL indicators
+(`method.options.level_indicators`), each against a reference its prompt names verbatim (a declared bar,
+or a collections series and a bar on it); a level indicator reads `observed_at_level` when a signal in the
+run's own window reports the condition at that bar, and that re-evidences the status. One cited only to
+desk memory — the unit's prior read, the situation register, a historical series line — is set back to
+`not_observed` before the read is written and named in `data.level_indicator_demotions`
+(`data/indicator_shape.py`). A level observation is not an I&W firing: the indicator tracker keeps its
+three-status scale and skips it.
 
 Each carried block also states **how many sources are actually behind it**. The attribution line already
 printed an outlet count; a block resting on ONE source after wire folding now carries `[single-source]`
@@ -349,6 +396,19 @@ Because a rollup carries no faithfulness verdict, it can never be admitted throu
 join. That is a trap rather than a preference, and the fix is to remove the dependency: the world tier
 reads the country records directly.
 
+**Frames are registered, not spelled.** A region is one kind of *frame*: a subject group a
+composition reads over — the rollup walks one frame's members, the world read floors on one block per
+frame and names every frame that produced nothing. Frames are entries of the platform's `frame`
+vocabulary family. Each entry carries a `parent` link to its kind (itself an entry) and a member rule
+in its aliases: `tag:<t>` binds every active subject whose scope carries that tag, `analyst:<id>` binds
+a cross-group lane. A kind's members are the union of its descendants', found by walking the parent
+links; a frame's own subject is never its member. The instance seeds its frames through the descriptor
+walker (`descriptors/vocabulary_frame.yaml`); the family is the platform's, the values are the
+instance's. *Why:* the alternative is an id-prefix test and a tag convention in code, which no
+instance but the first can reuse. Until the family is switched on (`LEGBA_FRAME_FAMILY`), and whenever
+it cannot be loaded, the composition reads frames by the legacy convention, and the two resolve the same
+members on this instance's topology — a test holds them equal frame by frame.
+
 ### 4.5 The world tier
 
 **Reads:** the verified country records, plus the thematic composition as the one legal cited
@@ -420,10 +480,17 @@ the card bands a row the prose never cited.
 Two deterministic analysts turn the units' structured output into a forward-looking watch layer, at no
 model cost.
 
-**`indicator_tracker`** reads the two most recent indicator-bearing findings per unit stream, diffs each
-pre-registered indicator slug run over run, and writes a finding when a status **flips** — above all
-when a signpost moves from not-observed to triggered. It marks the run trace-only when nothing flipped,
-so an idempotent re-run never repeats a feed row. Cadence: a half-hourly heartbeat.
+**`indicator_tracker`** follows each pre-registered indicator through its unit stream, run over run, and
+reports when its status **flips** — above all when a signpost moves from not-observed to triggered. A
+per-stream watermark means each source run is walked once. Every consecutive-run change is recorded as
+a `raw` flip for the audit; a change counts — a `debounced` flip, the only grade that is fed, escalated
+or served by the `debounced_flips` reader — only once the new status has held for two consecutive runs
+or one cadence of the unit (`hysteresis_runs` / `hysteresis_hours`, [TUNABLES](TUNABLES.md) §3), so an
+indicator toggling every run reads as raw noise, not as a stream of changes. Each flip is written once
+(`indicator_flips`, unique per indicator, transition and evidence run) and the summary finding carries
+only the debounced flips that run inserted: a run that inserted none is trace-only, so an idempotent
+re-run never repeats a feed row. Flips found on a stream's first sweep are history, recorded as
+`backfill` and never fed. Cadence: a half-hourly heartbeat.
 
 **`collection_gap`** reads the banded scorecard rows and the source-request backlog and ranks the
 starved desk × dimension cells, naming why, how persistently, and which source classes would plausibly
@@ -517,8 +584,11 @@ every six hours.
 | `composition_lineage_sweep` | resolves and repairs record lineage after supersession |
 | `signal_summarizer` / `signal_embedder` / `corpus_indexer` | the corpus legs: full-body summaries, vector embeddings, and the search index |
 | `reenrich_ner` / `reenrich_translation` | forward-only re-enrichment of signals the earlier coverage gates skipped |
-| `corpus_retention` / `signals_retention` / `analyst_traces_retention` | thin shims over one shared sweep engine driven by the retention config table; the seeded policies disable the sweep, because deleting substrate data is an operator decision |
+| `reenrich_pending` | re-runs a row's own source enrichment chain over the signals the source actor wrote unenriched during an NLP-plane outage (`payload.enrichment_pending`), oldest first; the marker is removed on success and kept on failure |
+| `verify_backfill` | writes the faithfulness critique the critic would have written for cited findings left with none (their run was cut by a runtime recreate between the finding and its verify leg), oldest first, every 30 min; stamped `judge_trigger = 'verify_backfill'`, and a judge that does not answer writes nothing |
+| `corpus_retention` / `signals_retention` / `analyst_traces_retention` | thin shims over one shared sweep engine driven by the retention config table; the seeded policies disable the sweep, because deleting substrate data is a deliberate decision for whoever runs the instance |
 | `evidence_archiver` | fetches and content-addresses verified-cited evidence (`ACQUISITION.md` §6) |
+| `archive_retention` | expires the stored bytes of archive rows no output, fact or event cites once past 45 days; off unless `LEGBA_ARCHIVE_RETENTION`, descriptor in draft |
 | `research_measurement` | the research program's counters — pure SQL arithmetic over the research signals, each rate beside its n |
 
 ### 5.4 The alert loop
@@ -536,7 +606,7 @@ level, and never twice.**
 | verified finding | a new high- or critical-severity finding cleared verification | superseded and structurally exempt rows excluded; a late-verify window means a verdict landing after the scan still alerts next pass rather than slipping through |
 | contention flip | a contested-claim group's status or surfaced winner changed | gated on the same verified bar through a citing finding |
 | baseline deviation | a desk's count exceeds its own statistical band *and* an absolute floor | rising-edge only — one alert per excursion, silently re-armed on the falling edge — and the floor is what keeps a quiet desk from producing noise |
-| watchlist hit | an operator standing watch on an entity, topic or place matches | the entity leg is alias- and fold-resolved, so an unresolvable watch matches nothing rather than degrading to a text scan; a new watch never pages history |
+| watchlist hit | a person's standing watch on an entity, topic or place matches | the entity leg is alias- and fold-resolved, so an unresolvable watch matches nothing rather than degrading to a text scan; a new watch never pages history |
 | geo convergence | distinct source *families* converge on one place | degree cells are fed only by point-trustworthy geography and everything else bins at country granularity, so centroids cannot manufacture a convergence; several distinct families are required, so one outlet re-covering a story cannot fire it |
 | production deficit | a producing loop delivered nothing against its own cadence and trailing history | the first class whose subject is Legba rather than the world; judgment is shared with the production-gauge route, so a threshold cannot mean one thing on the table and another on the phone |
 | situation escalation | a verified escalation lands on the trajectory ledger past an intensity floor | the first class whose subject is a frame; fires once per ledger row |
@@ -653,6 +723,27 @@ becomes one bearing edge. **It is a pointer, and only a pointer** — the edge w
 destination question's status or content. What the link buys is that a reader can see what has been
 said about the question since, not that the system has decided the matter.
 
+### 7.2a Consult watches
+
+A consult answer's "what would change my mind" items are a third faucet: each candidate carrying a
+resolution test and a future horizon is minted as an open question (`consult_watch_mint`) for
+`claim_watch` to match new reporting against. Two rules keep that faucet from flooding or steering:
+
+- **The fold is semantic.** The model re-phrases a re-asked question, so an exact-text key alone
+  minted a second row for the same watch. A candidate now folds onto an open consult watch on the
+  same desk whose horizon is within ±3 days when the two are the same claim: identical *claim
+  cores* (the indicator with its watch framing — "detection of", "indicator observed", an "(e.g.,
+  ...)" example — stripped, a negation never stripped), or claim-core embeddings at cosine ≥ 0.86 on
+  the platform's own embedder. The cores matter: on the raw texts the embedder scored the duplicate
+  pair (0.71) no higher than two different claims sharing the framing (0.71). One batched embed call
+  per turn; an embedder that is down never refuses a watch — the candidate is minted and stamped
+  `fold_check: unavailable`.
+- **Consult watches stay out of the scheduled desks' reads.** A person's ad-hoc question
+  must not steer what the scheduled units read, and the researcher's backlog drain would claim a
+  watch out of `claim_watch`'s open set. The desk STANDING OPEN QUESTIONS block and the R-1 backlog
+  exclude `created_by='consult'` rows unless `LEGBA_DESK_GROUNDING_INCLUDES_CONSULT_WATCHES` is on
+  (default off). `claim_watch` still watches them — that is what they were minted for.
+
 ### 7.3 The watcher
 
 **`claim_watch`** asks the complementary question: not *go answer this* but *has anything arrived that
@@ -702,7 +793,7 @@ corrected-or-closed metric; its read route computes the headline with the matche
 byte-equality drift guard so route and receipt cannot diverge, and carries a hard-false verified field so
 no reader mistakes it for a settled number. The closing half — inject a confirmed match into the
 producer's next run, let supersession correct the record, close the flag — does not exist in the tree;
-its precision bar has been met, so building it is a held operator decision rather than an unmet
+its precision bar has been met, so building it is a held decision rather than an unmet
 measurement (`SEAMS.md`).
 
 ### 7.4 Forward lineage
@@ -741,16 +832,21 @@ selects its entry kind from its own analyst id, with no mode flag:
 | chronicle | the verified tower top | a detached third-person public-record entry, every factual assertion cited | weekly |
 | lens ×4 | the verified tower top through **one declared falsifiable prior** each — trend, base rate, capability, intent | an interpretive read that asserts no new fact | weekly, staggered |
 | lens diff | the four faculty reads | where they agree, split or outlie — it never merges them | weekly, after the four |
+| profile lens ×N | the verified tower top through one prior a PROFILE declares — its prose in the profile's prompt package, its id in the profile's `<profile>.lens` vocabulary family (the geopolitics exemplar: six political-lean lenses, `geopolitics.lens`, `legba_geopolitics.lens_*`) | an interpretive read that asserts no new fact | daily (the exemplar's), outside the diff's roster |
 
 A lens's declared prior lives in its persona module, so the descriptor's content hash *is* the prior's
-version: re-authoring a prior is a descriptor change with a visible hash change. A partial-unique index
+version: re-authoring a prior is a descriptor change with a visible hash change. The five lenses above
+are the platform's; the last row is a profile's. A profile adds lenses of its own on the same tier, with the same machinery: their
+persona modules in the profile's prompt package, their ids in its `<profile>.lens` vocabulary family
+([PROFILES.md](PROFILES.md) "A profile's lenses"). The geopolitics exemplar adds six political-lean
+lenses this way, daily, outside the diff's roster; the diff reads the four faculties only. A partial-unique index
 guarantees at most one open consolidation.
 
 **The stateful voice — a second kind on the same table.** Every tier above is *stateless*: it reads
 today and forgets. An **inquiry** is not. It is its own analyst kind, writing the same journal row
 (entry kind `inquiry`, or `crossroads` for the one fixed-mandate descriptor) through the same staged arc
 and the same faithfulness gate, and it adds two things. First, a **brief**: free text on the descriptor,
-under two thousand characters, rendered into the prompt verbatim, so an operator re-aims a standing
+under two thousand characters, rendered into the prompt verbatim, so a person re-aims a standing
 investigation with a descriptor PUT and no code edit. Second, a **ledger** — hypotheses, questions,
 expectations and observations, carried across cycles, read at plan as the run's own state and written at
 reflect. Three rules make that state honest rather than decorative: a hypothesis is refused unless it
@@ -787,7 +883,7 @@ directly. Everything outward — a correction, a change, or a revision of its ow
 protected sections auto-reject — goes to a human-gated queue, never a live table, and the accept path
 claims the proposal before applying so a replayed accept never double-applies. Its only un-gated effect
 is its own continuity: it reads its own last entry and current consolidation into its next run. It can
-write its own next breath but cannot rewrite its own rules without the operator. Routing an accepted
+write its own next breath but cannot rewrite its own rules without a person accepting the change. Routing an accepted
 reflection back outward is designed, not live.
 
 ## 9. Action-pack agency
@@ -812,15 +908,19 @@ intersection
 analyst.action_packs  ∩  target.allowed_action_packs  ∩  pack.applicability
 ```
 
-and then only if the governor admits the call under budget. Each leg fails independently, so an operator
+and then only if the governor admits the call under budget. Each leg fails independently, so an admin
 can see which rail denied a call. The applicability gate **fails closed** — an un-evaluable predicate
 denies, because a hard gate must never fail open — and per-binding governor overrides are
 **tightening-only**, so an override can never loosen a pack's own cap.
 
 **The one entry point** runs the whole fail-closed pipeline per call: resolve the three-way allow-list;
-check the tool is named in the pack and has a registered handler; govern against the per-pack caps and
-the global envelope; **record** an invocation row before dispatch, so the next call's window sees it;
-dispatch; and settle the row's true outcome, cost, units and duration. Every decision, admit or block,
+check the tool is named in the pack and has a registered handler; **check its arguments** against the
+same grammar rendered to the model — a key shaped like a tool's own output (`result`, `status`, `count`
+and the like, written into the call's *input*) is refused first and alone, then any other undeclared key,
+missing required key or type/enum mismatch, each refusal handed back to the model as `tool_blocked` so a
+blocked call is a correction the model can act on rather than a silent no-op; govern against the per-pack
+caps and the global envelope; **record** an invocation row before dispatch, so the next call's window sees
+it; dispatch; and settle the row's true outcome, cost, units and duration. Every decision, admit or block,
 writes a governor event and publishes it. Governor checks are pre-call and conservative — this call's
 forward-looking estimate is added, so a call that *would* cross a cap is blocked before it runs, and a
 breach names the cap dimension, the limit and the observed value. When a per-analyst or fleet-wide budget
@@ -834,7 +934,7 @@ is hit, the actor auto-demotes rather than failing.
 | `web_access` | web search and page fetch, read-only by contract | consult, the researcher, the auditor, the reference builders |
 | `research` | one tool that lands ordinary evidence from the open web | the researcher only |
 | `escalate_finding` | the escalation emit | the units and the desk record |
-| `propose_facts` | propose a fact, request a source, open a question — all propose-and-gate | operator-gated |
+| `propose_facts` | propose a fact, request a source, open a question — all propose-and-gate | human-gated |
 | `media_processing` / `incident_response` / `discovery` | the async media job, the incident emit, source discovery | granted by descriptor |
 
 A lens holds **only** the journal read pack: substrate read is deliberately omitted, because a lens
@@ -846,7 +946,7 @@ research money cap could not live there. Its tool searches through the same reso
 transport as web search, then writes one signal row per kept hit — tagged with its retrieval origin,
 capped at a credibility ceiling so it contributes no mass and can never crown a read, sourced to a
 deliberately unregistered synthetic id per provider at the honest authority floor, and archived at one of
-two depths the operator-owned host-licence ledger decides. Robots rules are honoured before every page
+two depths the admin-curated host-licence ledger decides. Robots rules are honoured before every page
 fetch, fail-closed on an unreachable robots file. A three-state flag gates the program: off means the
 tool refuses loudly and the pre-research path is byte-identical; the middle state writes, archives and
 measures rows while excluding them from every desk's reactive slice by one clause — the
@@ -858,6 +958,13 @@ pack's **post-verify** gate — severity read from a first-class column rather t
 and the score gated on the verify-demoted confidence rather than the model's own asserted number, so a
 finding the verify pass floored cannot alert on its pre-verify figure and a high-severity tag alone is
 not enough. Escalation lands on the bus; the external delivery edge past it is a declared follow-up.
+
+**A consult answer's citations are counted, not trusted.** The provenance census classifies every cited
+id by the row it actually resolves to — never by which tool returned it — and floors the answer's
+uncertainty the fewer of them resolve, so a thinly grounded answer cannot report a confident number.
+An answer whose citations resolve to nothing at all, while still asserting a claim, carries a provenance
+hold: a banner the reader sees before the prose rather than a confident answer that reads exactly like a
+grounded one.
 
 ## 10. Measurement
 
@@ -896,7 +1003,10 @@ unsupported span, and the score is the fraction of checkable claims supported. A
 judge**, flag-gated, refines the per-claim verdicts. Flag off or judge unreachable **degrades to the
 floor**, labelled as such and published provisionally under a ceiling — never a fabricated number. A
 body whose claims fail to segment publishes an explicit unassessable state and no score, never a
-perfect one.
+perfect one. A unit read whose every resolved citation is its own memory — the prior read or the
+window ledger — publishes **carried, ungraded**: the judge could only check the carry against what the
+desk already said, so no score is published, the gate number is capped at the floor, and the row is
+counted beside every faithfulness mean rather than inside it.
 
 **The judge route is opt-in, then repointable.** The ladder begins with a gate: an analyst whose model
 block carries neither a judge nor a verify key gets **no judge route at all**, so nothing downstream can
@@ -911,16 +1021,32 @@ distinct reasons, curated-anchor and facts-reconciled, so calibration can tell t
 finding naming only other countries, and an absence a row of the analyst's own retained slice reports.
 Soft is the unsupported-inference and overclaim family — an uncited fact claim, a claim the judge could
 not ground, hedge laundering, a clause resting only on periphery evidence, a claim whose only support is
-the product's own register, double-counted lineage, an uncited triggered indicator, an unscoped absence,
+the product's own register, double-counted lineage, an uncited triggered indicator, an unscoped absence, a
+**carried dated or numeric anchor with no live citation in the current window** (`carried_unsupported`),
 and the demotions below. An unknown reason classifies soft, conservatively. A drift guard parses the
 module, collects every reason literal it can emit, and asserts the table covers exactly that set in both
 directions.
+
+**The guards' tables belong to the profile.** The officeholder groups and offices, the desk-slug and
+other-country sets the cross-target check reads, the absence slice's claim-scope countries, and the
+machine-coded title shape are profile data. They come from the profile's gazetteer through one loader
+([PROFILES.md](PROFILES.md) "The gazetteer"), not from code. A guard whose tables the profile does not
+declare is **not applicable**, by name: it is never a pass. The verdict carries a
+`gazetteer_not_applicable_<guard>` counter on the report and is logged once per process
+([SEAMS.md](SEAMS.md) #67). On a profile whose subjects are not countries, that is the honest result. A
+country gazetteer would either fail every finding or pass every finding, and neither says anything.
 
 **A hard fail has to earn it.** Several classes demote an *unearned* hard fail while leaving the claim
 failed: a contradicted verdict with no verbatim quote, a quote that restates rather than refutes, a
 quote lifted from the prior read the claim explicitly diffs against, and a quote resolving to an analyst
 finding the claim never cited. *Why:* a desk changing its mind on fresh reporting is the behaviour the
 platform exists to produce, not a fault.
+
+**The carried-anchor rule** answers a different way memory corrupts a fresh read: a dated or numeric claim
+carried forward from a desk's own prior read or its window ledger, rather than re-sourced from a signal in
+this window, is a checkable claim wearing the shape of one already checked — the carried-anchor backstop
+requires a live citation inside the carried window before that claim is graded supported, at both the unit
+and the composition tier, and fires `carried_unsupported` when none is found.
 
 **The scoped-absence backstop** addresses what faithfulness is structurally blind to: a thin-collection
 desk stating an absence as a **world fact** when what it established is that its own sources carried
@@ -955,7 +1081,7 @@ hours, fanning one bounded grade per ungraded finding row.
 A **heterogeneity guard** requires the judge model to differ from the analysed model unless the analysed
 descriptor explicitly opts in, because a model grading its own output is correlated noise rather than
 signal; the kind raises rather than landing a self-graded row. A missing rubric is also a hard failure,
-so the gap surfaces. Rubrics are operator-authored content — the same manual quality procedures an
+so the gap surfaces. Rubrics are human-authored content — the same manual quality procedures an
 analyst would apply by hand, encoded for the critic to apply at scale.
 
 ### 10.4 The correctness grader
@@ -999,7 +1125,7 @@ close the loop on itself. The thin-dimension list is the contract between them: 
 marked thin makes every claim on it likelier to read as silent, so low coverage there is the reference
 under-claiming rather than the desk over-claiming. A separate daily analyst builds the
 attention-measurement labels on a different grain and in a different table, stamped with a machine label
-prefix both downstream readers exclude, so machine rows cannot leak into the operator gold axis.
+prefix both downstream readers exclude, so machine rows cannot leak into the human gold axis.
 
 ### 10.6 The external audit
 
@@ -1075,7 +1201,7 @@ the count of new words is written to every row, so counter-query quality is a nu
 rather than an anxiety to assert.
 
 **One sentence making two claims takes no negation.** A contrastive conjunction is the cheapest
-signal of that shape, and the rule is there because the lane's own sampled audit caught the failure
+signal of that shape, and the rule is there because a sampled audit of the pass caught the failure
 live: a military-posture read saying a capability was "operational" was read as a statement about a
 chokepoint, and the counter-query came back asking whether it was closed. Such a claim is not lost;
 it goes to the model leg, behind the same gate.
@@ -1093,7 +1219,7 @@ the expected reading of a normal day.
 and off — the descriptor ships it false, and while it is false the ladder is truncated to the free
 rung in code, so adding a metered rung by descriptor edit cannot spend anything on its own. With it
 on, a metered query is still refused unless the pack declares a daily cost cap, and every
-escalation and every refusal is counted where an operator reads them.
+escalation and every refusal is counted where an admin reads them.
 
 **A counter-ref this platform cites is a page this platform holds.** Every ref went through the
 audit's own fences — robots consulted before the call, a non-2xx refused, the text extracted, the
@@ -1153,7 +1279,7 @@ pilot rows; all return a receipt.
 | `calibration_tracking` | resolved hypotheses | a **segregated** score — exogenous, graded against facts that arrived *after* the claim, kept apart from a self-consistency score from a status transition, with an insufficient-exogenous flag rather than letting one masquerade as the other | daily |
 | `band_calibration_tracker` | scorecard band *transitions* | one resolvable claim per transition, graded at fixed horizons under a pinned resolution spec | daily |
 | `forecast_scoreboard` | the binary-forecast pilot table | issued forward forecasts, exogenous resolutions, and a trace-only receipt | weekly |
-| `unit_correctness_scorer` | the operator gold set, the diagnostic reference labels, and the faithfulness critiques | per-unit faithfulness beside two correctness axes that are **never pooled** — different sources, distinct fields, so an all-unresolvable week reads honestly empty rather than averaging to a number | daily |
+| `unit_correctness_scorer` | the human gold set, the diagnostic reference labels, and the faithfulness critiques | per-unit faithfulness beside two correctness axes that are **never pooled** — different sources, distinct fields, so an all-unresolvable week reads honestly empty rather than averaging to a number | daily |
 
 **Band calibration's honesty line is structural, not editorial.** Bands are **not probabilities**, so no
 proper score exists or *can* exist for this harness: the claims table has no probability column by
@@ -1169,7 +1295,7 @@ probability vector **abstains** — zero rows — and the producer never bypasse
 persisted product is the pilot rows plus a trace-only receipt, never a finding or prediction on any trust
 surface, and the numbers surface solely on the calibration scoreboard.
 
-**The forecast ledger is sealed three ways.** First, the resolution test is **frozen as text at
+**The acute pilot's rows are sealed three ways.** First, the resolution test is **frozen as text at
 mint**: every `acute_forecasts` row carries `resolution_test` — the event class, the exogenous
 column/join the resolver counts on, the threshold and the window — so a row's falsifiable contract is
 readable without the code that issued it (pre-column rows carry the same rule prefixed `retro:`).
@@ -1185,7 +1311,27 @@ bytes, `pending` (retried next tick) when a calendar is unreachable. Verificatio
 **not** built in-tree (SEAMS #58): to verify a stored proof offline, pull `root_hash` + `proof` from
 `receipt_anchors` for the day, write the proof bytes to a file (`proof.ots`), recompute the root over
 that day's chain heads, and run `ots verify proof.ots <root-bytes>` — a confirmed Bitcoin attestation
-proves the head set existed before the stamped time, nothing more.
+proves the head set existed before the stamped time, nothing more. From migration 0262 the
+handler also stores the ordered leaves of the tree each day anchors (`data/anchor_proof.py`), so one
+leaf's inclusion — a forecast seal's — is proven by its sibling path to that root
+(`GET /v3/ledger/seal-proof`, folded in the console's browser); the days before 0262 kept their root
+only ([LEDGER.md](LEDGER.md), "The seal").
+
+**The administrative audit log is a hash chain too** (migration 0248). Every `descriptor_audit_log`
+row — each registry register, update, retire, promote, rollback — carries `chain_seq`, `prev_hash` and
+`row_hash` (SHA-256 over canonical JSON of the row's signed content, its Ed25519 signature,
+`signer_did`, `id`, its position and the previous row's hash), written in the insert's own transaction;
+a trigger makes a chained row undeletable and its chain columns insert-only, and its content can change
+only after a chained `redact` event naming it (the token scrub now redacts this way instead of
+re-signing). The daily anchor folds the chain head in as its last leaf, and `scripts/audit_chain.py
+verify` walks the chain and reports the first break and every row's signature status (`verified`,
+`signature not verified` — kept and chained as written, never re-signed — or `redacted`). Threat model,
+in three sentences: a holder of the database and the signing key can still rewrite, truncate or extend
+the log and recompute every hash and signature, and can disable the trigger. What they cannot do is make
+the rewritten chain agree with a head that the daily anchor has already submitted outside the platform,
+so any rewrite of history older than the last anchor is detectable by anyone holding that day's anchor,
+and short of a full recompute an edited, deleted, inserted or reordered row breaks the chain at that
+row, which `verify` names.
 
 **The gold set** grows a real correctness sample at sustainable cost: a small weekly stratified sample of
 verified-only finding heads, one per unit for coverage, the fill chosen by rendezvous hashing so it is
@@ -1209,7 +1355,7 @@ The optimizer returns as a **scoped, measured experiment**, never an always-on m
 insufficiently paired, or non-positive delta is honest-null and can never promote — the measurement gate
 stamps the candidate not promotable at write time. **The delta is the deliverable**, not the prompt.
 
-**Promotion is human-gated end to end**; there is no auto-promotion path. An operator flips a candidate's
+**Promotion is human-gated end to end**; there is no auto-promotion path. A person flips a candidate's
 gate, and the live inference path admits the evolved prompt **only** when the measured delta is
 promotable — so even a hand-flipped gate on a degenerate candidate resolves to the baseline.
 
@@ -1237,13 +1383,16 @@ guessed retro label. The Inspector and the scorecard panel show it as a small ch
 |---|---|---|---|
 | `scorecard_banding` | `scorecard_banding/2026-09.1` | 2026-09-24 | confidence/faithfulness floors, the band ladder, the severity→band map; `banding_semantics` / `damping_semantics` still answer WHICH contract, this answers WHICH revision |
 | `situation_clustering` | `situation_clustering/2026-09.1` | 2026-09-24 | member-recency half-life, corroboration density scale, status/dormancy floors, persistence factor |
-| `calibration_tracking` | `calibration_tracking/2026-09.1` | 2026-09-24 | bin count, rolling window, drift threshold, exogenous/self-consistency split, sample floors |
+| `calibration_tracking` | `calibration_tracking/2026-11.1` | 2026-11-11 | signed hypothesis confidence (was the absolute balance), each Brier with its own n, staleness, the collection-volume predictor excluded, one named n threshold; plus the 2026-09.1 surface: bin count, rolling window, drift threshold, exogenous/self-consistency split, sample floors |
 | `band_calibration_tracker` | `band_calibration_tracker/2026-09.1` | 2026-09-24 | resolution spec, the 14/28-day horizons, claimable directions, outcome vocabulary |
 | `correctness_calibration` | `correctness_calibration/2026-09.1` | 2026-09-24 | draw size, the seeded draw, the superset-coverage gate |
 | `forecast_acute` | `forecast_acute/2026-09.1` | 2026-09-24 | event class + sources, the rate model, epsilon/degeneracy clamps, resolver grace |
-| `indicator_tracker` | `indicator_tracker/2026-09.1` | 2026-09-24 | the 30-day diff lookback, the two-most-recent-runs join per `(target_id, source analyst_id)`, the rule that a newly-introduced indicator id is NOT a flip, and the activation predicate |
+| `indicator_tracker` | `indicator_tracker/2026-10.1` | 2026-10-09 | the 30-day lookback, the watermarked once-only walk of every run per `(target_id, source analyst_id)` (was: the two most recent runs, re-diffed every tick — `indicator_tracker/2026-09.1`, 2026-09-24), the id-then-statement join, the rule that a newly-introduced indicator id is NOT a flip, the hysteresis rule (a change counts once the new status held for N runs or M hours, against the last held status; raw changes recorded, never fed), and the activation predicate |
 | `desk_baseline` | `desk_baseline/2026-09.1` | 2026-09-24 | the estimator (trailing mean, median readout, the `sqrt(mean)` Poisson floor under `robust_sigma`), `MIN_ACTIVE_DAYS`, and the trigger constants it imports (`DEFAULT_BASELINE_DAYS`, `DEFAULT_N_SIGMA`, `MIN_CURRENT_*`) |
-| `inquiry_yield` | `inquiry_yield/2026-09.1` | 2026-09-24 | the 7-day window, which ledger fields feed each counter, the "anticipated" (cited_refs vs. a later finding's derived_from) and "blind spot" (dispatched target with no read) cross-reference rules |
+| `series_change` | `series_change/2026-11.3` | 2026-11-14 | (11.3: `series_rules` gives a rate or exchange-rate family a rule by NAME — `policy_rate`, every change an event, or `fx_move`, a move of 2% or more between the last value before the current window and the newest — and a series so named is judged ONLY by it; level_rules and step_series read as in 11.2) (11.2: a series named by `level_rules` — `<glob><op><level>`, an event when a value enters or leaves the level — or by `step_series` — every change larger than `step_min` between consecutive values is an event — is judged ONLY by those rules, each event citing its two observations; every other series keeps the band rule below unchanged) the rule over LIVE series (`observations`, origin `live`): values read as of the run (latest vintage per day), windows anchored on the newest HELD day (a provider lag is not a collapse), current = mean of the newest `current_days` (7) values, baseline = the `baseline_days` (28) before them with missing days absent never zero, desk_baseline's estimator verbatim (`n_sigma` 2.0, absolute floor `min_current` 5), fewer than `min_baseline_points` (14) baseline values = insufficient, never cited |
+| `kev_digest` | `kev_digest/2026-11.1` | 2026-11-14 | the KEV digest's rule: entries of the register feed (`source.cisa.kev`) created after the previous digest's `data.watermark` (the first digest reaches back `initial_lookback_hours`, 72), canonical rows only, a CVE id the previous digest listed dropped, one line per entry copying the record's fields (CVE id, vendor / product, name, date added, due date, the known-ransomware-use flag as the feed gives it), a quiet run trace-only |
+| `due_and_absent` | `due_and_absent/2026-11.1` | 2026-11-14 | the due-and-absent rule: only rows carrying an explicit date are expectations — a sealed forecast question open past `due_at + grace_hours` with no active resolution and no yes / no / void proposal; an acute forecast ungraded `acute_grace_hours` (24) after its window; a calendar row past its end (start, for a point event) + `scheduled_tolerance_hours` (48) with no canonical signal since its start carrying `scheduled_min_key_hits` (2) of its declared subject keys (no keys = not checkable, never reported); an inquiry ledger row open past `resolves_by`; a live series whose next period is past newest + period + its source's declared `lag_days` + `series_tolerance` (day 3, week 3, month 7, quarter 14, year 30). A line only on a state change (newly overdue, resolved late, voided) against the previous finding's `data.ledger`; each says "no row or signal matching it has been collected", never that something did not happen, and names the sources that would carry it with their poll class in the window (silent / failing / partly failing / polling clean, plus watchdog source-health episodes); a failed read is UNMEASURED and carries its rows; a quiet run trace-only |
+| `inquiry_yield` | `inquiry_yield/2026-10.1` | 2026-09-24 | the 7-day window, which ledger fields feed each counter, the "anticipated" (cited_refs vs. a later finding's derived_from) and "blind spot" (dispatched target with no read) cross-reference rules | 2026-10.1: the findings read pages over the whole week (keyset pages of 5,000, ceiling 250,000) instead of one `LIMIT 5000` — a 09.1 receipt read only the week's first 5,000 findings (~40% of a normal week) and warned `findings_capped`, so its "anticipated" count could undercount |
 | `layer_divergence` | `layer_divergence/2026-09.1` | 2026-09-24 | the log-ratio's continuity constant, the median/MAD rolling baseline and its 1.4826 scale, the MAD floor, the two-day consecutive rule, the severity ladder, and the (layer, day) wire fold — a diff across any of these is an instrument revision, never a country changing |
 | `crossroads_detectors` | `crossroads_detectors/2026-09.2` | 2026-09-24 | the four detectors' thresholds: a pattern needs the same entity or commodity across three desks' verified findings, a drift is three consecutive cycles one way on the scorecard band ladder while cited mass holds, a contradiction is opposite polarity on one subject with no contention held by the arbiter, a silence is a roster unit with no read for its cadence or a country no lens entry named | 2026-09.2 (same day): the scope line withholds a count for a read that FAILED (`findings UNMEASURED (list_findings read failed)`), so a failed read can no longer be mistaken for a measured zero
 
@@ -1427,14 +1576,52 @@ The model proposes the hypothesis *set* and scores each matrix cell on the stand
 one batched call per topic through the analyst provider plane, budget-gated. When the budget is exhausted
 or the model is unavailable the run falls back **per cell** to a transparent lexical and polarity scorer,
 and each hypothesis row records which path ran — so a reader can always tell a semantically scored matrix
-from a keyword-scored one. Diagnosticity weights each item by its spread across the hypotheses, so
-evidence consistent with *every* hypothesis weighs nothing; that is the core of the method. The evidence
+from a keyword-scored one. Diagnosticity divides each item's support by how many live hypotheses it is
+consistent with, so evidence consistent with *every* hypothesis banks a fraction in each — a likelihood-ratio
+proxy — while refutations keep the spread-weighted subtraction (the rule is switchable per analyst,
+`diagnosticity_mode: shared|off`); that is the core of the method. The evidence
 base is scoped to the topic's **resolved-entity set** — exact membership over canonical names rather than
 a substring match, so a country name no longer false-matches an unrelated organisation. Status transitions
 fire on the diagnosticity-weighted integer balance passing a threshold in either direction.
 
+**The diagnosticity rule in detail.** The code is `competing_hypotheses.py` (`build_ach_matrix`,
+`_status_for`); the knob is declared in `option_catalog/handler_options_catalog.py`
+(`ANALYST_KIND_OPTIONS["competing_hypotheses"]`). Per evidence item `e`, count how many **live**
+hypotheses it is consistent with (`consistent_with(e) = #{h : cell(e,h) > 0}`). Its weight toward each
+of them is divided by that count:
+
+- cell > 0 → `+1 / consistent_with(e)`: evidence consistent with all N rows contributes `1/N` to each
+  (nearly nothing); evidence consistent with one row contributes fully;
+- cell < 0 → `-diagnosticity(e)`, the spread of the row (`(max - min) / 4`): a refutation is already
+  diagnostic, since it can only land where the row spreads;
+- cell = 0 → `0`.
+
+The integer balance is `round(Σ)`; `CONFIRM_K`/`REFUTE_K` and `_status_for` apply to it unchanged.
+`diagnosticity_mode: shared|off` (default `shared`) selects the rule; `off` reproduces the older
+spread-only scoring byte-for-byte, so the two can be compared on a live topic. In the spread-only
+scoring an item that scored +2 for two rival hypotheses banked its full spread into **both** balances,
+so evidence compatible with two competing theses carried both over the confirm threshold.
+
+Each `hypotheses` row's `diagnostic_evidence[0]` carries `diagnosticity_mode` and
+`evidence_diagnosticity: {<evidence_ref>: {consistent_with: N, weight: w}}` (`<evidence_ref>` is the
+evidence id, else the item's index), so a page can show *why* a row moved. Which evidence a row cites
+(`supporting_signals`/`refuting_signals`) is not affected by the mode.
+
+A worked example: three hypotheses (`A`, `B`, `C`) and seven evidence items. Five are consistent with
+`A` **and** `B` (+2/+2) but not `C` (-1); two are consistent with `A` alone (+2) and refute the other
+two (-1).
+
+| mode | A | B | C | result |
+|---|---|---|---|---|
+| `off` | +5 | +2 | -5 | `B` crosses the confirm threshold on evidence it shares with `A` |
+| `shared` | +4 | +1 | -5 | `B` reads `active` |
+
+Under `shared`, the five shared items bank `1/2` each in `A` and `B` (2.5 in total); the two unique items
+bank `+1` each in `A` and `-0.75` (their spread) each in the other two. `A` = 2.5 + 2 = 4.5 → 4; `B` =
+2.5 − 1.5 = 1 → `active`; `C` = −3.75 − 1.5 = −5.25 → −5 (`refuted`).
+
 Resolution runs the **exogenous** resolver first — grading each open hypothesis against facts produced
-*after* it — before the status-transition fallback, and an operator label outranks both. The exogenous
+*after* it — before the status-transition fallback, and a person's label outranks both. The exogenous
 resolver is a coarse directional heuristic and **abstains on undirected theses**, because status-quo
 claims were auto-grading true and inflating the headline rate. No proven-forecast-accuracy claim is made.
 
@@ -1442,19 +1629,21 @@ claims were auto-grading true and inflating the headline rate. No proven-forecas
 
 The knowledge graph is **relational**. Vertices are entity profiles; the operative edge set is the nexus
 table and the id-keyed edge store; provenance edges link signals to entities; proposed relationships
-accrue as candidates. Graph compute runs in process rather than in a graph engine. A separate graph
-extension exists inside the same database with its labels registered, but it has never held a production
-row and both read legs degrade to empty; the path route returns an explicit unpopulated error rather than
-a confident "no path" over an empty graph. `AGE_PROBE_REPORT.md` carries the measurements and
-`DATA_MODEL_V3.md` the engine decision.
+accrue as candidates. Graph compute runs in process (networkx) rather than in a graph engine. There is no
+graph database: the Apache AGE graph the platform once carried never held a production row and was
+dropped by migration `20261115T1829_drop_empty_age_graph`. An optional rebuilt projection, `graph_arcs`
+(off by default), names every cross-layer join in one table, and the mining analysts read its world plane
+when it is on (`DATA_MODEL.md`, "The cross-layer graph projection"). `history/AGE_PROBE_REPORT.md` is the
+earlier measurement of the graph engine on this workload.
 
 **Structural balance** classifies every triad of connected entities by the product of its edge signs.
 Three positives, or one positive and two negatives, is balanced — a stable bloc, or a shared adversary
 creating an alliance. An odd number of negatives is unbalanced: a structurally unstable configuration
 that gives analytical lead time on a realignment. The balance score is tracked over time, and graph
 entropy over the relationship-type distribution surfaces when the landscape is actively reorganising.
-Relationship edges carry temporal properties and their changes are event-sourced, producing the
-time series those metrics read. Advanced temporal-graph analytics are designed for and not running at
+Relationship edges carry validity intervals, and with the edge transition ledger switched on
+(`LEGBA_EDGE_TRANSITION_LEDGER`, off by default) every mint and polarity flip is also recorded as an
+event, which is the time series those metrics read. Advanced temporal-graph analytics are designed for and not running at
 current scale.
 
 ### 12.5 Knowledge grounding
@@ -1492,11 +1681,23 @@ citation ids), and it is enabled per unit, staggered and review-gated.
 
 ### 12.6 Forecasting
 
-Forecasting is the most-hedged surface here, deliberately: a declared experimental seam that ships a
-methodologically real harness and makes **no validated skill claim**.
+Forecasting is the most-hedged surface here, deliberately. Two separate instruments exist, and neither
+makes a validated skill claim.
+
+**The forecast ledger** ([LEDGER.md](LEDGER.md)) holds *exogenous* questions: each sealed question names
+what resolves it (an authority, a document, a series or a reported event) and when, and every issuer's
+probability on it is recorded, or recorded as absent. The `forecast_resolver` analyst (deterministic, no
+model) reads the sealed questions at or past their due date and *proposes* an outcome with the evidence
+spans and clauses it rests on, or says it cannot decide. A series-threshold question settles by rule;
+every other kind closes only when a person confirms the proposal or overrides it (a contributor may
+confirm, reject or record a judgement; correcting a decided outcome is an admin's act), each act a new
+row. The scorecard is kept against the world by date. The ledger is the only place a forecast exists as product: never as a
+free-text claim.
+
+**The acute pilot**, below, scores the platform's own rare-event hazard calls.
 
 The forecast-as-claim leg is retired, because a numeric forecast is a *claim* and the rule is measure and
-verify before a forecast ships as product. What remains is a **rare-event** model over a frozen class of
+verify before a forecast ships as product. The pilot is a **rare-event** model over a frozen class of
 upstream event sources, treated as a Poisson process with a rate estimated from the historical record,
 forecasting the tail probability of at least one severe hazard in a forward window — a sharp binary
 question.
@@ -1515,15 +1716,23 @@ than graded — kept and counted as drained work, never scored.
 **What it is currently testing.** The first seeding honestly surfaced that a country-week binary is
 geography-dominated: a handful of active regions carry almost all the base rate, so a naive geographic
 prior is hard to beat. The harness **detects that degeneracy and withholds the skill claim** rather than
-reporting a flattering number. The machinery is real and running and the skill is unproven; it will be
-claimed only once the score clears its reference over a sufficient record, or the task is sharpened to
-one where geography is not the dominant signal. Until then Legba declines to call itself a forecaster.
+reporting a flattering number. The machinery is real and the skill is unproven; skill is claimed only
+once the score clears its reference over a sufficient record, or the task is sharpened to one where
+geography is not the dominant signal. Until then Legba declines to call itself a forecaster.
 
 ### 12.7 Provenance
 
 Every analytical product traces back to raw signals. An output stamps the substrate ids it read, so a walk
-backtracks a world read to its country records, their units, each unit's cited signals, and each signal's
-immutable acquisition provenance. Combined with the per-analyst receipt chain, the platform can answer
+backtracks a composed read to the records it rests on, their units, each unit's cited signals, and each
+signal's immutable acquisition provenance. A new finding's citations are also stored as rows (one per
+sentence and one per supporting record, pinned to the stored version the material was read from), so
+"what does this sentence rest on" is a join (`DATA_MODEL.md`, "Citations as rows").
+
+**The held record** is a separate layer over the same evidence: statements a desk's row-shaped shadow
+output proposed, kept as versioned records with a hash-chained status log (held, not held, contested,
+superseded, withdrawn) and typed support links. It is fed from one shadow feed behind
+`LEGBA_HELD_RECORD_SHADOW` (off by default), read only through its API, and not shown to readers; its
+rules and what is not built are in `DATA_MODEL.md`, "The held record". Combined with the per-analyst receipt chain, the platform can answer
 *why do we believe this?* at every level — which is the foundation of analytical accountability rather
 than a nicety. The journal is the one explicit exception (§8), and a bearing edge is a pointer rather
 than lineage (§7).

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.guardian.world": {
+      "source": "source_guardian_world.yaml",
+      "state": "draft"
+    }
+  }
+}

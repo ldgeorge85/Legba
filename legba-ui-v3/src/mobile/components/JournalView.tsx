@@ -20,8 +20,8 @@
  */
 
 import CitedProse from '@/components/CitedProse'
-import { longStamp, score } from '@/v4/read/readFormat'
-import { stripJournalRefMarkers } from '@/lib/proseText'
+import { longStamp } from '@/v4/read/readFormat'
+import { feedPreview, stripJournalRefMarkers } from '@/lib/proseText'
 import type { JournalEntry } from '@/lib/api'
 
 export interface JournalViewProps {
@@ -36,13 +36,13 @@ export default function JournalView({ entry, onBack }: JournalViewProps) {
         <button type="button" className="m-back" onClick={onBack} data-testid="journal-back">
           ‹ Reports
         </button>
-        <h1 className="m-title">{entry.title || 'Consolidation'}</h1>
+        {/* M-0a — the title is plain words (a stored title can carry `**`);
+            the verify score and the machine honesty flags left the header. */}
+        <h1 className="m-title" data-testid="journal-title">
+          {feedPreview(entry.title) || 'Consolidation'}
+        </h1>
         <p className="m-sub">
           Journal · {longStamp(entry.produced_at) ?? entry.produced_at}
-        </p>
-        <p className="m-verify">
-          verify {score(entry.verify_score)}
-          {entry.honesty_flags.length > 0 ? ` · ${entry.honesty_flags.join(', ')}` : ''}
         </p>
       </header>
       <div className="m-record">

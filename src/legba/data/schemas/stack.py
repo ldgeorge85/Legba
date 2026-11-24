@@ -115,6 +115,44 @@ class LLMProviderConfig(BaseModel):
     # safety: the ai1 saturation watch sees the queue, this keeps one legba
     # process from BEING the queue.
     max_concurrent: Number | None = None
+    # -- thinking (lane T-1, 2026-11-14) -------------------------------------
+    # The alias that serves THIS component's model with thinking on (the core
+    # plane: ``fast`` → ``deep``, one model, "deep is just thinking on"). A
+    # call that passes ``thinking=True`` names this alias instead of
+    # ``model_name`` — resolved in ONE place, ``stack/llm/thinking.py``; absent
+    # = the component cannot think and a thinking call is refused loudly.
+    # Registry data, not code: no call site names an alias.
+    thinking_model_name: Text | None = None
+    # The reasoning-token budget the owner's gateway may accept. Its name and
+    # value are NOT known yet (SEAMS #88): both ship unset and nothing is sent.
+    # When BOTH are set, a thinking call sends ``{<param>: <tokens>}``; a
+    # thinking-off call never does. Never a ``max_tokens`` (no output caps on
+    # the core plane).
+    reasoning_budget_param: Text | None = None
+    reasoning_budget_tokens: Number | None = None
+
+    @model_validator(mode="after")
+    def _thinking_fields_are_whole(self) -> "LLMProviderConfig":
+        """A thinking alias is non-empty; the budget pair is both-or-neither."""
+        alias = self.thinking_model_name
+        if alias is not None and not str(alias.raw or "").strip():
+            raise ValueError("thinking_model_name, when set, must name an alias")
+        param, tokens = self.reasoning_budget_param, self.reasoning_budget_tokens
+        if (param is None) != (tokens is None):
+            raise ValueError(
+                "reasoning_budget_param and reasoning_budget_tokens are set together "
+                "or not at all"
+            )
+        if param is not None and not str(param.raw or "").strip():
+            raise ValueError("reasoning_budget_param, when set, must name a parameter")
+        if tokens is not None:
+            try:
+                ok = int(tokens.raw) >= 1
+            except (TypeError, ValueError):
+                ok = False
+            if not ok:
+                raise ValueError("reasoning_budget_tokens, when set, must be a positive integer")
+        return self
 
     @model_validator(mode="after")
     def _require_one_auth_mode(self) -> "LLMProviderConfig":
@@ -209,13 +247,18 @@ class EmbeddingService(StackComponentBase):
 
 
 class NLPServiceConfig(BaseModel):
-    """Hosted NLP inference service config (Legba-models).
+    """Hosted NLP inference service config (Legba-models, or the innoai gateway).
 
     Endpoints expected: ``GET /health``, ``POST /translate``, ``POST /classify``,
     ``POST /extract``, ``POST /summarize``. Auth is HTTP Basic when the
     service is fronted by Caddy (production HTTPS path); the internal docker
     path has no auth — credentials are still resolved but the client treats
     a missing secret value as anonymous access.
+
+    ``provider: innoai_gateway`` (W11-F107) points the same contract at the
+    gateway's ``/relations`` · ``/entities`` · ``/classify`` routes with a
+    Bearer ``api_key``; summarization is not covered there, and translation
+    runs on the gateway chat model named by ``translate_model`` (W11-F109).
     """
 
     model_config = ConfigDict(strict=True, extra="forbid")
@@ -242,6 +285,96 @@ class NLPServiceConfig(BaseModel):
     health_path: Text = Field(
         default_factory=lambda: Property.Text.of("/health")
     )
+    # -- W11-F107: the innoai gateway as an NLP provider (2026-10-23) ---------
+    # Every field below is OPTIONAL with a None default, so a component row
+    # written before they existed (the live ``nlp.local.legba_models``)
+    # validates and dumps byte-identically; the client factory applies the
+    # effective defaults. ``provider`` absent = ``legba_models`` (the
+    # NlpServiceClient, unchanged); ``innoai_gateway`` = the GatewayNlpClient.
+    provider: Text | None = None
+    # Bearer credential (a vault ref, like LLMProviderConfig.api_key). Auth is
+    # a switch: Basic (api_user + api_pass) for legba-models, Bearer for the
+    # gateway — never both on one component (validated below).
+    api_key: Secret | None = None
+    entities_path: Text | None = None      # client default "/entities"
+    relations_path: Text | None = None     # client default "/relations"
+    # Relation labels extract() asks for; absent = the labels DERIVED from the
+    # graph's relationship types (W11-F113: DEFAULT_RELATION_LABELS in
+    # nlp_service/gateway_relations.py — every RELATIONSHIP_TYPE less
+    # CoOccursWith, in the write path's row-predicate form).
+    relation_labels: TypedList | None = None
+    # Entity classes entities() asks for; absent = the ENTITY_CLASSES taxonomy
+    # less the ``entity`` catch-all (DEFAULT_ENTITY_LABELS).
+    entity_labels: TypedList | None = None
+    # W11-F109: the gateway chat alias translate() asks (one completion per
+    # chunk). innoai_gateway only; absent = "fast" (the client factory applies
+    # it), an explicit blank = translation off (NlpServiceUnsupported, the
+    # backfill sweeps report skipped_no_nlp).
+    translate_model: Text | None = None
+    # W11-F113: fact quality on /relations. innoai_gateway only; absent = the
+    # client defaults. relation_confidence: the triple's confidence from its
+    # head/tail scores — "min" (default: a relation is only as sure as its
+    # weaker end), "mean", or "none" (no confidence; the fact path's 0.5
+    # floor). relation_threshold: sent as `threshold` and applied client-side
+    # to that score; default 0.5, 0 = off.
+    relation_confidence: Text | None = None
+    relation_threshold: Number | None = None
+
+    @model_validator(mode="after")
+    def _require_consistent_auth_mode(self) -> "NLPServiceConfig":
+        """Fail loud on a provider/auth mismatch: the gateway is Bearer-only
+        (``api_key`` required, no Basic pair); legba-models is Basic-or-anon
+        (an ``api_key`` there would be silently ignored, so it is refused)."""
+        provider = self.provider.raw if self.provider is not None else "legba_models"
+        if provider not in ("legba_models", "innoai_gateway"):
+            raise ValueError(
+                f"NLPServiceConfig.provider must be 'legba_models' or "
+                f"'innoai_gateway' (got {provider!r})"
+            )
+        has_basic = self.api_user is not None or self.api_pass is not None
+        if provider == "innoai_gateway":
+            if self.api_key is None:
+                raise ValueError(
+                    "NLPServiceConfig provider 'innoai_gateway' requires api_key (Bearer)"
+                )
+            if has_basic:
+                raise ValueError(
+                    "NLPServiceConfig provider 'innoai_gateway' is Bearer-only: "
+                    "drop api_user/api_pass"
+                )
+        else:
+            if self.api_key is not None:
+                raise ValueError(
+                    "NLPServiceConfig provider 'legba_models' authenticates with "
+                    "api_user/api_pass (HTTP Basic); api_key is for 'innoai_gateway'"
+                )
+            if self.translate_model is not None:
+                raise ValueError(
+                    "NLPServiceConfig translate_model is for provider "
+                    "'innoai_gateway' (legba-models translates on translate_path)"
+                )
+            for name in ("relation_confidence", "relation_threshold"):
+                if getattr(self, name) is not None:
+                    raise ValueError(
+                        f"NLPServiceConfig {name} is for provider 'innoai_gateway' "
+                        "(legba-models' /extract has no such knob)"
+                    )
+        if self.relation_confidence is not None and (
+            str(self.relation_confidence.raw).strip().casefold()
+            not in ("min", "mean", "none")
+        ):
+            raise ValueError(
+                "NLPServiceConfig relation_confidence must be 'min', 'mean' or "
+                f"'none' (got {self.relation_confidence.raw!r})"
+            )
+        if self.relation_threshold is not None and not (
+            0 <= self.relation_threshold.raw <= 1
+        ):
+            raise ValueError(
+                "NLPServiceConfig relation_threshold must be in [0, 1] "
+                f"(got {self.relation_threshold.raw!r})"
+            )
+        return self
 
 
 class NLPService(StackComponentBase):

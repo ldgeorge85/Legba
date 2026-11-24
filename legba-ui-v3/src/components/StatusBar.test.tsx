@@ -23,6 +23,7 @@ import type { ReactElement } from 'react'
 import { StatusBar } from './StatusBar'
 import { PreferencesProvider } from '@/components/density/PreferencesProvider'
 import { COVERAGE_FIGURE_PANEL } from '@/lib/coverageFooter'
+import { JUDGE_DEFAULT_WINDOW_DAYS } from '@/lib/judgeStats'
 import { emptyMembers, resetScope, useScope } from '@/state/scope'
 
 const FIRING = [
@@ -261,5 +262,19 @@ describe('the honesty footer — a scope with no absence read', () => {
       expect(screen.getByTestId('coverage-absence')).toHaveAttribute('data-unmeasured', 'false'),
     )
     expect(screen.getByTestId('coverage-absence')).toHaveTextContent('1 typed')
+  })
+})
+
+describe('the honesty footer — one judge figure per screen (C2)', () => {
+  it('reads the judge mean on the Judge Stats panel’s own window, and names it a mean', async () => {
+    stubFetch()
+    render(bar())
+    await waitFor(() =>
+      expect(screen.getByTestId('coverage-judge')).toHaveTextContent('mean faithfulness'),
+    )
+    const urls = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0]))
+    const judgeUrl = urls.find((u) => u.includes('/v3/system/judge-stats'))
+    // The SAME query the panel opens on, so the two cannot print two means.
+    expect(judgeUrl).toContain(`days=${JUDGE_DEFAULT_WINDOW_DAYS}`)
   })
 })

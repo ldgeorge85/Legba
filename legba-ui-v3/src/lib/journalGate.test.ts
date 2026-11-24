@@ -74,12 +74,21 @@ describe('proposalEffect — correction', () => {
     expect(e.summary).toContain('INCOMPLETE')
   })
 
-  it('recognises the routed correction sub-kinds', () => {
-    for (const op of ['merge_entities', 'correct_situation']) {
-      const e = proposalEffect('correction', { op, a: 1 })
-      expect(e.unrecognized).toBe(false)
-      expect(e.summary).toContain('existing')
-    }
+  it('describes merge_entities as the write plane merge, and flags an incomplete one', () => {
+    const e = proposalEffect('correction', { op: 'merge_entities', from: 'Acme Corp', into: 'Acme' })
+    expect(e.unrecognized).toBe(false)
+    expect(e.summary).toContain('Merges “Acme Corp” into “Acme”')
+    expect(e.summary).toContain('unmerged from Consult')
+    expect(e.fields.map((f) => f.key)).toEqual(['from (loser)', 'into (keeper)'])
+    const half = proposalEffect('correction', { op: 'merge_entities', from: 'Acme Corp' })
+    expect(half.unrecognized).toBe(true)
+    expect(half.summary).toContain('INCOMPLETE')
+  })
+
+  it('says a correct_situation is never applied', () => {
+    const e = proposalEffect('correction', { op: 'correct_situation', situation_id: 's', patch: {} })
+    expect(e.unrecognized).toBe(true)
+    expect(e.summary).toContain('NOT APPLIED')
   })
 })
 

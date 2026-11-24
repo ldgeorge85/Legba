@@ -36,15 +36,19 @@ import {
   STRUCTURAL_VERIFIED_EXPLAIN,
   UNVERIFIED_EXPLAIN,
   FAITHFULNESS_EXPLAIN,
+  FALLBACK_JUDGE_EXPLAIN,
+  JUDGE_UNAVAILABLE_EXPLAIN,
   buildVerdict,
+  fallbackJudgeLine,
   judgeStatusLabel,
+  unverifiedLine,
   type ConfidenceLevel,
   type Verdict,
   type VerdictInput,
 } from '@/lib/verdictModel'
 
 const CHIP =
-  'inline-flex items-center gap-1 rounded border border-line bg-surf-2 px-1.5 py-0.5 text-[10px] leading-none text-ink-2'
+  'inline-flex items-center gap-1 rounded border border-line bg-surf-2 px-1.5 py-0.5 text-label leading-none text-ink-2'
 
 /** Muted tonal accent per confidence level (a thin dot only — no filled chip,
  *  so it never reads as a severity color). `unassessed` gets a hollow ring.
@@ -122,7 +126,11 @@ export function VerdictBadge({
       : `${FAITHFULNESS_EXPLAIN} Faithfulness ${pct(v.faithfulness)} over ${
           v.citationCount
         } citation${v.citationCount === 1 ? '' : 's'} (${judgeStatusLabel(v.judgeStatus)}).`
-  const confidenceText = `${CONFIDENCE_EXPLAIN} ${confidenceDetail}`
+  // JUDGE-2 — a fallback rung's verdict names who judged (and a weak rung says so).
+  const fallbackDetail = v.fallbackJudge
+    ? ` ${FALLBACK_JUDGE_EXPLAIN} ${fallbackJudgeLine(v.fallbackJudge)}.`
+    : ''
+  const confidenceText = `${CONFIDENCE_EXPLAIN} ${confidenceDetail}${fallbackDetail}`
 
   return (
     <span
@@ -165,6 +173,18 @@ export function VerdictBadge({
               : confidenceLabel(v.confidence)}
         </span>
       </InfoTip>
+      {v.unverified && (
+        // JUDGE-2 — the judge was ASKED and did not answer: say so, with the
+        // time and the status, beside whatever score the floor produced.
+        <InfoTip
+          text={`${JUDGE_UNAVAILABLE_EXPLAIN} ${unverifiedLine(v.unverified)}.`}
+          className={`${CHIP} italic text-ink-3`}
+          testId="verdict-unverified"
+          interactiveParent={interactiveParent}
+        >
+          {unverifiedLine(v.unverified)}
+        </InfoTip>
+      )}
       {showLegend && <VerdictLegend />}
     </span>
   )
@@ -199,33 +219,33 @@ export function VerdictLegend({ className }: { className?: string }) {
             className="absolute left-0 top-5 z-50 w-72 rounded-lg border border-line-strong bg-surf-3 p-3 text-left shadow-xl"
             data-testid="verdict-legend-popover"
           >
-            <div className="mb-1 text-[11px] font-semibold text-ink-1">
+            <div className="mb-1 text-label font-semibold text-ink-1">
               Verdict vocabulary (ICD-203)
             </div>
-            <div className="mb-1 text-[10px] leading-relaxed text-ink-2">
+            <div className="mb-1 text-label leading-relaxed text-ink-2">
               Two independent axes — a claim's{' '}
               <span className="text-ink-1">likelihood</span> (how probable) is
               never conflated with the{' '}
               <span className="text-ink-1">confidence</span> we place in it
               (how well the evidence backs it).
             </div>
-            <div className="mt-2 text-[10px] uppercase tracking-wide text-ink-3">
+            <div className="mt-2 text-label uppercase tracking-wide text-ink-3">
               L · likelihood
             </div>
             <ul className="mt-0.5 space-y-0.5">
               {LIKELIHOOD_LEGEND.map((row) => (
-                <li key={row.band} className="flex justify-between gap-2 text-[10px] text-ink-2">
+                <li key={row.band} className="flex justify-between gap-2 text-label text-ink-2">
                   <span>{row.band}</span>
                   <span className="font-mono text-ink-3">{row.range}</span>
                 </li>
               ))}
             </ul>
-            <div className="mt-2 text-[10px] uppercase tracking-wide text-ink-3">
+            <div className="mt-2 text-label uppercase tracking-wide text-ink-3">
               C · confidence
             </div>
             <ul className="mt-0.5 space-y-0.5">
               {CONFIDENCE_LEGEND.map((row) => (
-                <li key={row.level} className="text-[10px] text-ink-2">
+                <li key={row.level} className="text-label text-ink-2">
                   <span className="font-medium text-ink-1">{confidenceLabel(row.level)}</span>
                   <span className="text-ink-3"> — {row.meaning}</span>
                 </li>

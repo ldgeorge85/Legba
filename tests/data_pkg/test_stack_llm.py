@@ -191,8 +191,12 @@ async def _install_mock_transport(handler: LLMProviderHandler, handler_fn):
 
 
 def test_subprovider_registry_complete():
-    """All three concrete providers are registered in `LLM_HANDLERS`."""
-    assert set(LLM_HANDLERS) == {"anthropic", "vllm", "openai"}
+    """The three chat providers and the W11-F108 decision client are
+    registered in `LLM_HANDLERS`."""
+    from legba.data.stack.llm import DecisionProviderHandler
+
+    assert set(LLM_HANDLERS) == {"anthropic", "vllm", "openai", "decide"}
+    assert resolve_handler("decide") is DecisionProviderHandler
     assert resolve_handler("anthropic") is AnthropicProviderHandler
     assert resolve_handler("vllm") is VLLMProviderHandler
     assert resolve_handler("openai") is OpenAIProviderHandler
@@ -229,9 +233,9 @@ def test_estimate_cost_anthropic_opus_basic():
         model="claude-opus-4-7",
     )
     cost = estimate_cost("claude-opus-4-7", usage, AnthropicProviderHandler.PRICE_TABLE)
-    # 1M @ $15 + 0.5M @ $75 + 0.1M @ $1.50 + 0.05M @ $18.75
-    # = 15 + 37.5 + 0.15 + 0.9375
-    expected = 15.0 + 37.5 + 0.15 + 0.9375
+    # List price (2026-11-05): 1M @ $5 + 0.5M @ $25 + 0.1M @ $0.50 + 0.05M @ $6.25
+    # = 5 + 12.5 + 0.05 + 0.3125
+    expected = 5.0 + 12.5 + 0.05 + 0.3125
     assert cost == pytest.approx(expected, rel=1e-4)
 
 
@@ -242,7 +246,40 @@ def test_estimate_cost_prefix_match():
     cost = estimate_cost(
         "claude-opus-4-7-20260301", usage, AnthropicProviderHandler.PRICE_TABLE,
     )
-    assert cost == pytest.approx(15.0)
+    assert cost == pytest.approx(5.0)
+
+
+def test_estimate_cost_longest_prefix_wins_opus_5_5():
+    """W11-F136(b): ``claude-opus-5-5`` (and its revisions) price at its OWN
+    row ($4 / $20), never under the shorter ``claude-opus-5`` key ($5 / $25),
+    whatever order the table lists them in. Also the list prices of 2026-11-05."""
+    from legba.data.provenance.budget import _lookup_price
+    from legba.data.stack.llm.base import ModelPrice, longest_prefix_price
+
+    table = AnthropicProviderHandler.PRICE_TABLE
+    usage = LLMUsage(prompt_tokens=1_000_000, completion_tokens=1_000_000,
+                     cache_read_tokens=1_000_000, cache_write_tokens=1_000_000)
+    assert estimate_cost("claude-opus-5-5", usage, table) == pytest.approx(4 + 20 + 0.20 + 5.0)
+    assert estimate_cost("claude-opus-5-5-20261101", usage, table) == pytest.approx(29.2)
+    assert estimate_cost("claude-opus-5", usage, table) == pytest.approx(5 + 25 + 0.50 + 6.25)
+    assert estimate_cost("claude-opus-5-20260901", usage, table) == pytest.approx(36.75)
+    for opus in ("claude-opus-4-8", "claude-opus-4-7"):
+        p = table[opus]
+        assert (p.input_per_m, p.output_per_m, p.cache_read_per_m, p.cache_write_per_m) == (5.0, 25.0, 0.50, 6.25)
+    f = table["claude-fable-5"]
+    assert (f.input_per_m, f.output_per_m, f.cache_read_per_m, f.cache_write_per_m) == (10.0, 50.0, 0.25, 12.5)
+    assert estimate_cost("claude-fable-5-1", usage, table) == pytest.approx(10 + 50 + 0.25 + 12.5)
+
+    # Order-independence: the short key FIRST must still lose to the long one.
+    short_first = {
+        "claude-opus-5": ModelPrice(input_per_m=5.0, output_per_m=25.0),
+        "claude-opus-5-5": ModelPrice(input_per_m=4.0, output_per_m=20.0),
+    }
+    assert longest_prefix_price("claude-opus-5-5-x", short_first).input_per_m == 4.0
+    assert longest_prefix_price("claude-opus-5-x", short_first).input_per_m == 5.0
+    assert longest_prefix_price("claude-sonnet-5", short_first) is None
+    # The ledger's own lookup resolves the same way.
+    assert _lookup_price("claude-opus-5-5-x", short_first).input_per_m == 4.0
 
 
 def test_estimate_cost_unknown_model_zero():
@@ -994,7 +1031,7 @@ async def test_anthropic_chat_complete_request_shape():
     body = req["json"]
     assert body["model"] == "claude-opus-4-7"
     assert body["system"] == "You are an assistant."
-    assert body["max_tokens"] == 512
+    assert body["max_tokens"] == 128_000  # the model's maximum, not the caller's 512
     assert body["messages"] == [{"role": "user", "content": "Hello"}]
     assert "stream" in body
 
@@ -1167,6 +1204,47 @@ async def test_anthropic_streams_tool_use_via_input_json_deltas():
 
 
 @pytest.mark.asyncio
+async def test_anthropic_stream_tells_an_installed_sink_when_a_tool_call_starts():
+    """W11-F132: a consult round cut mid-stream must tell a tool round's
+    preamble from an answer. The accumulator marks the sink at the first
+    ``tool_use`` block; a text-only generation never marks it."""
+    from legba.data.stack.llm.stream_observer import TextDeltaSink, capture_text_deltas
+
+    h = AnthropicProviderHandler()
+    ctx = _make_ctx(handler_kind="anthropic", model="claude-opus-4-8")
+    await h.on_configure(ctx)
+    tool_events: list[dict[str, Any]] = [
+        _ANTHROPIC_SSE_OK[0],
+        {"type": "content_block_start", "index": 0,
+         "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0,
+         "delta": {"type": "text_delta", "text": "Let me search."}},
+        {"type": "content_block_start", "index": 1,
+         "content_block": {"type": "tool_use", "id": "toolu_02",
+                           "name": "search_signals", "input": {}}},
+        {"type": "content_block_delta", "index": 1,
+         "delta": {"type": "input_json_delta", "partial_json": "{}"}},
+        {"type": "message_delta",
+         "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+         "usage": {"output_tokens": 10}},
+        {"type": "message_stop"},
+    ]
+    await _install_mock_transport(h, lambda request: _sse_response(tool_events))
+    tool_sink = TextDeltaSink()
+    with capture_text_deltas(tool_sink):
+        await h.chat_complete(messages=[{"role": "user", "content": "Search."}])
+    assert tool_sink.text == "Let me search."
+    assert tool_sink.tool_use_started is True
+
+    await _install_mock_transport(h, lambda request: _sse_response(_ANTHROPIC_SSE_OK))
+    text_sink = TextDeltaSink()
+    with capture_text_deltas(text_sink):
+        await h.chat_complete(messages=[{"role": "user", "content": "Hello"}])
+    assert text_sink.text == "Hello streamed."
+    assert text_sink.tool_use_started is False
+
+
+@pytest.mark.asyncio
 async def test_anthropic_mid_stream_failure_returns_partial_with_error_state(caplog):
     """A stream that dies after partial content is handled HONESTLY: the
     partial text comes back under an explicit finish_reason='error' (plus a
@@ -1295,11 +1373,13 @@ async def test_anthropic_non_sse_json_body_still_parses():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_clamps_max_tokens_over_documented_ceiling(caplog):
-    """A max_tokens above Anthropic's documented per-request output ceiling
-    is clamped on the wire and logged loudly — once per model, not per call."""
-    import logging as _logging
-
+@pytest.mark.parametrize("asked", [None, 2048, 32_768, 200_000])
+async def test_anthropic_sends_the_models_maximum_output_never_the_callers(asked):
+    """Roll-86 follow-up — no output caps. The Messages API requires
+    ``max_tokens``, so every call sends the model's documented maximum
+    (``MAX_OUTPUT_TOKENS_BY_PREFIX``, the one declared place); whatever the
+    caller asked for (a descriptor's 32768, the deep plan's old 2048 clamp, an
+    over-ceiling 200k, nothing) never reaches the wire."""
     h = AnthropicProviderHandler()
     ctx = _make_ctx(handler_kind="anthropic", model="claude-opus-4-8")
     await h.on_configure(ctx)
@@ -1311,40 +1391,9 @@ async def test_anthropic_clamps_max_tokens_over_documented_ceiling(caplog):
         return _sse_response(_ANTHROPIC_SSE_OK)
 
     await _install_mock_transport(h, handler)
-    with caplog.at_level(
-        _logging.WARNING, logger="legba.data.stack.llm.anthropic",
-    ):
-        await h.chat_complete(
-            messages=[{"role": "user", "content": "q"}], max_tokens=200_000,
-        )
-        await h.chat_complete(
-            messages=[{"role": "user", "content": "q"}], max_tokens=200_000,
-        )
-    assert captured[0]["max_tokens"] == 128_000
-    assert captured[1]["max_tokens"] == 128_000
-    clamp_logs = [r for r in caplog.records if "CLAMPED" in r.message]
-    assert len(clamp_logs) == 1                        # once per model
-
-
-@pytest.mark.asyncio
-async def test_anthropic_in_budget_max_tokens_not_clamped():
-    """The deployed 32768 consult budget passes through untouched — it sits
-    well under the Opus line's 128k documented ceiling."""
-    h = AnthropicProviderHandler()
-    ctx = _make_ctx(handler_kind="anthropic", model="claude-opus-4-8")
-    await h.on_configure(ctx)
-
-    captured: list[dict[str, Any]] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured.append(json.loads(request.content))
-        return _sse_response(_ANTHROPIC_SSE_OK)
-
-    await _install_mock_transport(h, handler)
-    await h.chat_complete(
-        messages=[{"role": "user", "content": "q"}], max_tokens=32_768,
-    )
-    assert captured[0]["max_tokens"] == 32_768
+    await h.chat_complete(messages=[{"role": "user", "content": "q"}], max_tokens=asked)
+    assert captured[0]["max_tokens"] == 128_000 == h.model_max_output_tokens()
+    assert h.model_max_output_tokens("claude-haiku-3-5") == 8_192
 
 
 # ---------------------------------------------------------------------------
@@ -1408,7 +1457,7 @@ async def test_openai_chat_complete_request_shape():
     assert body["messages"][0]["role"] == "system"
     assert body["messages"][0]["content"] == "System prompt."
     assert body["messages"][1]["role"] == "user"
-    assert body["max_tokens"] == 256
+    assert "max_tokens" not in body  # no output cap: not required, never sent
     assert body["temperature"] == 0.4
     assert body["model"] == "gpt-4.1"
 
@@ -1441,8 +1490,8 @@ async def test_openai_reasoning_model_uses_max_completion_tokens():
         temperature=0.7,  # reasoning model should ignore this
     )
     body = captured[0]
-    assert "max_completion_tokens" in body
-    assert body["max_completion_tokens"] == 2000
+    # no output cap: neither field is required, so neither is sent
+    assert "max_completion_tokens" not in body
     assert "max_tokens" not in body
     assert body["reasoning_effort"] == "high"
     # temperature dropped because reasoning models reject it
@@ -1768,8 +1817,11 @@ async def test_integration_openai_smoke():
 def test_vllm_max_tokens_env_opt_in(monkeypatch):
     """Default: max_tokens is OMITTED (self-hosted server budget governs).
     LEGBA_LLM_SEND_MAX_TOKENS=1 includes it (hosted-API truncation guard).
-    Per-call send_max_tokens kwarg keeps working independently of the env."""
+    Per-call send_max_tokens kwarg keeps working independently of the env.
+    Roll-86 follow-up: what is sent is the model's maximum output (the
+    component's declared ``max_tokens``), never the caller's 2048."""
     h = VLLMProviderHandler()
+    h._cfg = _make_cfg(endpoint="https://x/v1", model="m", secret_id="s", max_tokens=65_536)  # noqa: SLF001
     common = dict(
         messages=[{"role": "user", "content": "hi"}],
         system=None,
@@ -1783,10 +1835,10 @@ def test_vllm_max_tokens_env_opt_in(monkeypatch):
     assert "max_tokens" not in h._build_chat_payload(**common)  # noqa: SLF001
     assert (
         h._build_chat_payload(**common, send_max_tokens=True)["max_tokens"]  # noqa: SLF001
-        == 2048
+        == 65_536
     )
     monkeypatch.setenv("LEGBA_LLM_SEND_MAX_TOKENS", "1")
-    assert h._build_chat_payload(**common)["max_tokens"] == 2048  # noqa: SLF001
+    assert h._build_chat_payload(**common)["max_tokens"] == 65_536  # noqa: SLF001
     monkeypatch.setenv("LEGBA_LLM_SEND_MAX_TOKENS", "false")
     assert "max_tokens" not in h._build_chat_payload(**common)  # noqa: SLF001
 

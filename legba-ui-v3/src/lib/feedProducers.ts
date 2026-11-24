@@ -2,7 +2,7 @@
  * feedProducers — the honest PRODUCER taxonomy behind the Live Feed's
  * analyst/unit drill-down.
  *
- * The feed's `analyst:` facet is a raw substrate id (`energy_security`,
+ * The feed's `analyst:` facet is a raw substrate id (a unit's id,
  * `country_composition`, `finding_supersession`, …). An operator picking a
  * producer from a dropdown needs those grouped into the three classes the
  * platform actually has:
@@ -26,27 +26,17 @@
  */
 
 import { humanizeAnalystId } from './analystNames'
+import { subjectUnits } from './profileUi'
 
 /**
  * The bounded reasoning UNITS, in headline order.
  *
- * MIRRORS `UNITS` in `v4/why/CountryUnitsAssessment.tsx` (the canonical
- * roster the country desk renders) — kept as a local id-only copy so this pure
- * model module never imports a React panel, with the lockstep TEST-ENFORCED in
- * `feedProducers.test.ts` (the same mirror-plus-lockstep-test idiom the
- * registry uses for `_FAITH_FLOOR`). Adding a unit descriptor means adding it
- * in both places; the test fails loudly until you do.
+ * ROSTER-2: READ from the instance profile (`subjectUnits()` in
+ * `lib/profileUi.ts` — the same resolver `v4/why/CountryUnitsAssessment.tsx`
+ * renders), never a list spelled here; `feedProducers.test.ts` still pins the
+ * two in lockstep. Adding a unit is a profile edit, not a code edit.
  */
-export const FEED_UNIT_IDS: readonly string[] = [
-  'leadership_transition',
-  'energy_security',
-  'escalation',
-  'narrative_coordination',
-  'internal_stability',
-  'military_posture',
-  'economic_coercion',
-  'proliferation_watch',
-]
+export const FEED_UNIT_IDS: readonly string[] = subjectUnits().map((u) => u.id)
 
 /**
  * The composition analysts that ship as descriptors
@@ -98,7 +88,7 @@ export const PRODUCER_GROUP_LABEL: Record<ProducerClass, string> = {
 export interface ProducerOption {
   /** The raw `analyst_id` — the exact value the `analyst:` chip carries. */
   id: string
-  /** Reader-facing label (`energy_security` → `Energy security`). */
+  /** Reader-facing label (`some_unit_id` → `Some unit id`). */
   label: string
   group: ProducerClass
   /** True when this producer has at least one row in the loaded page. */

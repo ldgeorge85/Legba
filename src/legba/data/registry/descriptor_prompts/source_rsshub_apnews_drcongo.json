@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.rsshub.apnews.drcongo": {
+      "source": "source_rsshub_apnews_drcongo.yaml",
+      "state": "draft"
+    }
+  }
+}

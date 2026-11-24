@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:kev_digest": {
+      "source": "analyst_kev_digest.yaml",
+      "state": "draft"
+    }
+  }
+}

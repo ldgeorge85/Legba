@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.presstv.english": {
+      "source": "source_presstv_english.yaml",
+      "state": "paused"
+    }
+  }
+}

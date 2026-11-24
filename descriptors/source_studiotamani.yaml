@@ -45,11 +45,8 @@
 # and not `state_media`, though donor/institutional-funded rather than
 # commercial.
 #
-# LICENCE/ROBOTS POSTURE: `robots.txt` present (Yoast SEO default block),
-# `User-agent: * / Disallow:` (nothing disallowed) — no restriction observed.
-# No machine-readable licence declaration found on-site. `scope.license_class`
-# left UNSET (honest absence, the LIC-2 default), which lands ingested
-# signals at teaser depth until an operator reviews it.
+# ROBOTS: `robots.txt` present (Yoast SEO default block),
+# `User-agent: * / Disallow:` (nothing disallowed).
 #
 # state: draft — bulk registration creates NO live actor; activation
 # (draft -> configured -> active) is the operator's after the route is

@@ -74,6 +74,16 @@ from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
 from ..data.facts.decay import fact_decay_weighting_enabled
+from ..data.gazetteer import applicable, gazetteer, or_empty
+from ..data import subject as _subject
+from .grounding_scope import (
+    REASON_FILTER_UNBUILDABLE,
+    SCOPE_NONE,
+    TargetScopeTagReader,
+    WorldContextChunks,
+    WorldContextScope,
+    resolve_world_context_scope,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +128,10 @@ __all__ = [
 # Env-overridable so an operator who later adds a high-trust source_type (e.g.
 # a vetted ``wikidata`` lane distinct from ``seed``) can admit it without a
 # code change; an empty/blank override falls back to the safe default.
-_DEFAULT_TRUSTED_SOURCE_TYPES: tuple[str, ...] = ("seed", "curated")
+#: ``operator`` (W11 C-2b-2/facts, decision D6): a fact the operator asserted
+#: through the consult write plane is the operator's own word — it grounds like
+#: curated. A model-initiated ``proposed`` fact still never does.
+_DEFAULT_TRUSTED_SOURCE_TYPES: tuple[str, ...] = ("seed", "curated", "operator")
 
 #: W3-A — the `entity_edges` families a GROUNDING preamble may assert, and the
 #: one place in the system where `reference` is WANTED. The analytics handlers
@@ -1351,11 +1364,19 @@ def situation_scope_for_target(target_id: str | None) -> str | None:
     the populated ``target_id`` (rather than the ``category==slug`` coincidence)
     means a future THEMATIC situation — different ``target_id`` — never leaks
     into a country assessor's grounding.
+
+    The per-subject id convention is the profile gazetteer's ``desk_ids.marker``
+    (``country`` on the exemplar, W10 CANON-1); a profile that declares none has
+    no per-subject ids here and every target reads the GLOBAL view — the
+    remaining id-only scope decision, declared in SEAMS #67.
     """
     if not target_id or not isinstance(target_id, str):
         return None
+    marker = gazetteer().get("desk_ids")
+    if not marker:
+        return None
     tid = target_id.strip()
-    return tid if tid.startswith("country") else None
+    return tid if tid.startswith(marker) else None
 
 
 def is_per_country_target(target_id: str | None) -> bool:
@@ -1381,16 +1402,11 @@ def world_context_country_filter_values(target_id: str | None) -> list[str] | No
     ``MatchAny`` matches whichever case the loader stored. This is what stops a
     France run from retrieving Iran chunks.
 
-    Returns ``None`` (→ NO filter; the whole collection is eligible) — NEVER an
-    empty filter that would match nothing — for the legitimate global cases:
-
-      * a meta / no-target run (``world_assessor`` — ``target_id`` None): the
-        global picture is legitimate;
-      * a target that doesn't resolve to a single ISO-2 (``region_*`` composers,
-        thematic dyads): there is no single country to scope to.
-
-    Never raises — any resolution failure degrades to ``None`` (no filter),
-    consistent with the module's degrade-not-drop contract.
+    Returns ``None`` — NEVER an empty filter that would match nothing — when the
+    target does not resolve to a single ISO-2. ``None`` is NOT a scope on its
+    own (OPEN-1): :mod:`legba.runtime.grounding_scope` decides whether such a
+    target is declared GLOBAL (no filter, logged) or unresolvable (no retrieval
+    at all). Never raises.
     """
     if not is_per_country_target(target_id):
         return None
@@ -1409,64 +1425,21 @@ def world_context_country_filter_values(target_id: str | None) -> list[str] | No
 
 # ISO-2 (and a couple of common slug tokens) → casefolded country name(s) so a
 # ``country_<iso2>`` target id expands to the name a finding actually prints
-# ("country_g20_id" → 'indonesia'). The off-target guard checks BOTH the raw
-# slug token (matches a finding's ISO-coded ``geo`` tag) and the expanded
-# name(s) (matches the country named in the finding text). Covers the G20 tier
-# (``country_g20_*``) AND the watch tier (``country_watch_*``: kp/tw/ua/il/ir/pk).
-# A slug MISSING here is now SAFE, not silent suppression: ``finding_is_off_target``
-# fails OPEN when a desk has no name anchor beyond its bare ISO slug (it cannot
-# tell the desk's own country from another's, so it publishes). An entry here
-# therefore buys PRECISION — it lets the guard actually catch that desk's
-# off-target contamination — but is NOT required to avoid the 100%-TRACE_ONLY
-# regression that hit the unmapped kp/tw/ua watch desks. (A miss on the
-# OTHER-country gazetteer side likewise only means a borderline finding is
-# safely published rather than suppressed.)
-_TARGET_SLUG_TO_NAMES: dict[str, tuple[str, ...]] = {
-    "us": ("united states", "america", "u.s.", "usa"),
-    "cn": ("china",),
-    "ru": ("russia",),
-    "ir": ("iran",),
-    "il": ("israel",),
-    "in": ("india",),
-    "id": ("indonesia",),
-    "br": ("brazil",),
-    "ar": ("argentina",),
-    "mx": ("mexico",),
-    "ca": ("canada",),
-    "fr": ("france",),
-    "de": ("germany",),
-    "it": ("italy",),
-    "gb": ("united kingdom", "britain", "uk"),
-    "uk": ("united kingdom", "britain"),
-    "jp": ("japan",),
-    "kr": ("south korea", "korea"),
-    "sa": ("saudi arabia",),
-    "tr": ("turkey", "turkiye"),
-    "au": ("australia",),
-    "za": ("south africa",),
-    "eu": ("european union",),
-    # Watch tier (non-G20 high-consequence desks). il/ir are already covered
-    # above; kp/tw/ua were MISSING → their desks self-suppressed to TRACE_ONLY
-    # (the P4 pre-push review C1). North Korea findings say "North Korea"/"DPRK".
-    "kp": ("north korea", "dprk"),
-    "tw": ("taiwan",),
-    "ua": ("ukraine",),
-    # Pakistan (S1-T2): a nuclear state on the India border. Without this entry
-    # the guard runs BLIND for the pk desk — it fails OPEN (publishes) but cannot
-    # tell Pakistan from India, so an India-only finding would slip through as a
-    # PK product. The mapping buys the precision to catch that off-target shape.
-    "pk": ("pakistan",),
-    # A3 / DEC-C (2026-07-16): the escalation-risk watch desks. Aliases cover
-    # the shapes wire copy actually uses ("Burma", "DRC", "Burkina"); the guard
-    # still fails OPEN for anything missing here.
-    "sd": ("sudan",),
-    "ml": ("mali",),
-    "bf": ("burkina faso", "burkina"),
-    "ne": ("niger",),
-    "cd": ("dr congo", "drc", "democratic republic of the congo", "congo"),
-    "mm": ("myanmar", "burma"),
-    "ht": ("haiti",),
-}
+# ("country_g20_id" → 'indonesia'): the profile gazetteer's
+# ``target_slug_names`` section (W10 CANON-1; formerly _TARGET_SLUG_TO_NAMES
+# here, with a regression comment per desk — see the gazetteer file). The
+# off-target guard checks BOTH the raw slug token (matches a finding's ISO-coded
+# ``geo`` tag) and the expanded name(s). A slug MISSING there is SAFE, not
+# silent suppression: ``finding_is_off_target`` fails OPEN when a desk has no
+# name anchor beyond its bare ISO slug — an entry buys PRECISION, it is never
+# required to avoid the 100%-TRACE_ONLY regression that hit the unmapped
+# kp/tw/ua watch desks. A profile that declares no such table makes the guard
+# NOT APPLICABLE, by name (SEAMS #67).
+
+
+def _slug_names() -> dict[str, tuple[str, ...]]:
+    value = gazetteer().get("target_slug_names")
+    return value if value is not None else or_empty("target_slug_names", consumer="grounding")
 
 
 def target_scope_names(target_id: str | None) -> set[str]:
@@ -1481,10 +1454,11 @@ def target_scope_names(target_id: str | None) -> set[str]:
     TEXT). DB-free; a caller can fold in additional aliases via
     :func:`finding_is_off_target`'s ``extra_target_names``."""
     names: set[str] = set()
+    slug_names = _slug_names()
     for tok in _target_id_geo_names(target_id):
         tlc = tok.casefold()
         names.add(tlc)
-        names.update(_TARGET_SLUG_TO_NAMES.get(tlc, ()))
+        names.update(slug_names.get(tlc, ()))
     return names
 
 
@@ -1518,8 +1492,9 @@ def target_country_name(target_id: str | None) -> str | None:
     slug yields ``None`` (never a bare ISO token as a query term)."""
     if not is_per_country_target(target_id):
         return None
+    slug_names = _slug_names()
     for tok in _target_id_geo_names(target_id):
-        names = _TARGET_SLUG_TO_NAMES.get(tok.casefold())
+        names = slug_names.get(tok.casefold())
         if names:
             return names[0].title()
     return None
@@ -1553,7 +1528,15 @@ def finding_is_off_target(
       * Else (names no country at all — a generic/thin finding) → False; we only
         suppress a finding that is demonstrably ABOUT other countries, never one
         that merely failed to name its own.
+
+    NOT APPLICABLE (False — published — counted and logged once by name,
+    SEAMS #67) on a profile whose gazetteer declares no desk-id convention,
+    slug names or other-country set: the guard cannot tell a desk's own subject
+    from another's there, and it says so rather than passing silently.
     """
+    gz = gazetteer()
+    if applicable("off_target", gz) is not None:
+        return False
     if not is_per_country_target(target_id):
         return False
     own = target_scope_names(target_id) | {
@@ -1591,29 +1574,15 @@ def finding_is_off_target(
     if any(_mentions(n) for n in own if n):
         return False
     # Otherwise: off-target only if it names some OTHER country.
-    others = {c for c in _KNOWN_COUNTRY_TOKENS if c not in own}
+    others = {c for c in gz.get("known_country_tokens") if c not in own}
     return any(_mentions(c) for c in others)
 
 
-# A small lowercase country gazetteer (ISO-2 + common names) for the off-target
-# guard's "names some OTHER country" test. Intentionally not exhaustive — it
-# only needs to recognise the country-shaped tokens that drive the D4
-# contamination (a per-country run whose finding is entirely about other
-# nation-states). Extend as needed; a miss only means a borderline finding is
-# (safely) published rather than suppressed.
-_KNOWN_COUNTRY_TOKENS: frozenset[str] = frozenset(
-    {
-        # G20 + frequent geopolitical actors (names + ISO-2 where unambiguous).
-        "united states", "america", "u.s.", "usa", "us",
-        "china", "russia", "iran", "israel", "ukraine", "india", "indonesia",
-        "brazil", "argentina", "mexico", "canada", "france", "germany",
-        "italy", "spain", "united kingdom", "britain", "uk", "japan",
-        "south korea", "north korea", "korea", "saudi arabia", "turkey",
-        "turkiye", "australia", "south africa", "egypt", "pakistan",
-        "afghanistan", "iraq", "syria", "lebanon", "yemen", "venezuela",
-        "taiwan", "vietnam", "thailand", "philippines", "nigeria",
-    }
-)
+# The off-target guard's "names some OTHER country" set is the profile
+# gazetteer's ``known_country_tokens`` (W10 CANON-1; formerly
+# _KNOWN_COUNTRY_TOKENS here): a small lowercase set — ISO-2 where unambiguous
+# plus common names — intentionally not exhaustive; a miss only means a
+# borderline finding is (safely) published rather than suppressed.
 
 
 # ---------------------------------------------------------------------------
@@ -1732,21 +1701,28 @@ def collect_grounding_candidates(
 
 
 def _target_id_geo_names(target_id: str | None) -> Iterable[str]:
-    """Best-effort geo names from a target id slug (``country_g20_us`` → 'us').
+    """The target's own geo token (``country_g20_us`` → 'us'), lower-cased.
 
-    Conservative: only emits the trailing token of a ``country_*`` /
-    ``*_country_*`` slug, which the resolver matches case-insensitively
-    against ``facts.subject`` (ISO code or country name). A non-country target
-    id yields nothing — the slice ``geo`` codes carry the scope instead.
+    The token is the target's SUBJECT CODE through the subject ladder
+    (``legba.data.subject``, W10 SUBJECT-1) when that code is the one geo code
+    the profile declares for it — never a code parsed out of the id. The
+    resolver matches it case-insensitively against ``facts.subject`` (ISO code
+    or country name). Only an id carrying the profile gazetteer's ``desk_ids``
+    marker is read (W10 CANON-1; none declared → no id carries a code); a
+    non-country target id, or one nothing declares, yields nothing — the slice
+    ``geo`` codes carry the scope instead.
     """
     if not target_id or not isinstance(target_id, str):
         return ()
-    tid = target_id.strip().lower()
-    if "country" not in tid:
+    marker = gazetteer().get("desk_ids")
+    if not marker:
         return ()
-    token = tid.rsplit("_", 1)[-1]
-    if len(token) >= 2:
-        return (token,)
+    tid = target_id.strip().lower()
+    if marker not in tid:
+        return ()
+    code = _subject.subject_code(tid)
+    if code in _subject.subject_geo(tid) and len(code) >= 2:
+        return (code.lower(),)
     return ()
 
 
@@ -1861,6 +1837,8 @@ class SubstrateGroundingResolver:
         # any missing → :meth:`resolve_world_context` returns ``[]`` (no block).
         self._qdrant = qdrant
         self._world_context_collection = world_context_collection
+        # OPEN-1 — target-head scope tags for the world-context scope decision.
+        self._scope_tags = TargetScopeTagReader()
 
     async def resolve(
         self, candidates: Sequence[str], *, max_facts: int,
@@ -1943,7 +1921,7 @@ class SubstrateGroundingResolver:
               AND (f.valid_until IS NULL OR f.valid_until > now())
               AND f.value !~ '^Q[0-9]+$'
             ORDER BY
-              (f.source_type IN ('seed','curated')) DESC,{prefer_order}
+              (f.source_type IN ('seed','curated','operator')) DESC,{prefer_order}
               f.confidence DESC NULLS LAST,
               f.valid_from DESC NULLS LAST
             LIMIT $3
@@ -1980,7 +1958,7 @@ class SubstrateGroundingResolver:
               AND (fds.decay_state IS NULL
                    OR fds.decay_state <> 'revoke_candidate')
             ORDER BY
-              (f.source_type IN ('seed','curated')) DESC,
+              (f.source_type IN ('seed','curated','operator')) DESC,
               f.confidence DESC NULLS LAST,
               f.valid_from DESC NULLS LAST
             LIMIT $3
@@ -2287,6 +2265,12 @@ class SubstrateGroundingResolver:
         except Exception as exc:  # degrade-not-drop — grounding is enrichment
             logger.warning("grounding.resolve_open_questions.failed err=%s", exc)
             return []
+        # DEC-19: a consult's minted watch is claim_watch's to watch — the drain
+        # would CLAIM it (status in_progress) out of that open set. Excluded
+        # unless LEGBA_DESK_GROUNDING_INCLUDES_CONSULT_WATCHES is on.
+        from ..data.analysts.consult_watch_fold import drop_consult_watches
+
+        rows = drop_consult_watches(rows)
 
         now = datetime.now(timezone.utc)
         decay_days = open_question_backlog_decay_days()
@@ -2430,12 +2414,13 @@ class SubstrateGroundingResolver:
             client-side (a stub / client that ignores the threshold still can't
             leak a below-floor chunk). If ALL hits fall below → no chunks → no
             block (degrade-not-drop).
-          * COUNTRY FILTER — for a single-country desk (``target_id`` resolves to
-            one ISO-2 via :func:`world_context_country_filter_values`), a Qdrant
-            ``MatchAny`` payload filter over the chunk ``countries`` array
-            restricts retrieval to THAT country's chunks (a France desk can't pull
-            an Iran chunk). A meta / no-target / non-single-country target applies
-            NO filter — the global picture is legitimate.
+          * EXPLICIT SCOPE (OPEN-1, :mod:`legba.runtime.grounding_scope`) — a
+            single-country desk gets a Qdrant ``MatchAny`` filter on its ISO-2
+            (a France desk can't pull an Iran chunk); a no-target run or a target
+            whose kind is declared global (region/lane/flow/situation/world) gets
+            NO filter, logged ``grounding.scope=global``; ANY other target gets
+            no retrieval — an empty :class:`WorldContextChunks` with
+            ``reason=unresolvable_scope`` — never the whole collection.
 
         HONESTY + degrade-not-drop, all yielding ``[]`` (→ no BACKGROUND PRIORS
         block, so no fabricated header):
@@ -2463,7 +2448,24 @@ class SubstrateGroundingResolver:
         # cosine-similarity minimum) and the per-desk country filter (None for a
         # legitimate global / non-single-country run).
         min_score = world_context_min_score()
-        country_values = world_context_country_filter_values(target_id)
+        scope = await resolve_world_context_scope(
+            self._pool, target_id, world_context_country_filter_values(target_id),
+            reader=self._scope_tags,
+        )
+        if not scope.retrieves:
+            return WorldContextChunks([], scope=scope)
+        country_values = list(scope.country_values or ()) or None
+        if country_values and self._world_context_country_filter(country_values) is None:
+            # CANON-1: a scoped target whose filter cannot be built REFUSES —
+            # never the unfiltered collection.
+            logger.warning(
+                "grounding.scope=none reason=%s target_id=%s values=%s "
+                "— no world_context retrieval",
+                REASON_FILTER_UNBUILDABLE, target_id, country_values,
+            )
+            return WorldContextChunks([], scope=WorldContextScope(
+                SCOPE_NONE, REASON_FILTER_UNBUILDABLE, tuple(country_values), scope.source,
+            ))
         # Embed the RAG query. An embed-backend failure degrades to no block
         # (never a fabricated vector) — the same contract vector_search honors.
         try:
@@ -2478,7 +2480,9 @@ class SubstrateGroundingResolver:
         except Exception as exc:  # degrade-not-drop — RAG is enrichment
             logger.warning("grounding.resolve_world_context.search_failed err=%s", exc)
             return []
-        return self._map_world_context_hits(hits, min_score=min_score)
+        return WorldContextChunks(
+            self._map_world_context_hits(hits, min_score=min_score), scope=scope,
+        )
 
     @staticmethod
     def _world_context_country_filter(country_values: Sequence[str] | None) -> Any | None:
@@ -2487,8 +2491,9 @@ class SubstrateGroundingResolver:
 
         The qdrant models import is LOCAL (mirrors ``substrate_query_port``) so
         the grounding module never hard-depends on the client at import time; a
-        filter-build failure degrades to ``None`` (no filter) rather than raising
-        on the grounding path.
+        filter-build failure returns ``None`` — which, for a scoped target, the
+        caller treats as a REFUSAL (``reason=filter_unbuildable``), never as "no
+        filter" (W10 CANON-1).
         """
         if not country_values:
             return None
@@ -2528,6 +2533,9 @@ class SubstrateGroundingResolver:
         """
         vec = list(query_embedding)
         query_filter = self._world_context_country_filter(country_values)
+        if country_values and query_filter is None:
+            # Never widen a scoped search to the whole collection (CANON-1).
+            raise RuntimeError("world_context scope filter could not be built")
         threshold = float(min_score) if min_score is not None else None
         if hasattr(self._qdrant, "query_points"):
             resp = await self._qdrant.query_points(

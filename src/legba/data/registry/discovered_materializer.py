@@ -767,8 +767,9 @@ async def materialize_discovered(
             INSERT INTO target_descriptors
               (descriptor_id, version, schema_uri, is_head,
                abstraction_level, state, owner, name, body, inherits,
-               created_at)
-            VALUES ($1, $2, $3, TRUE, $4, $5, $6, $7, $8::jsonb, $9, NOW())
+               created_at, written_by)
+            VALUES ($1, $2, $3, TRUE, $4, $5, $6, $7, $8::jsonb, $9, NOW(),
+                    legba_principal('rule:discovered_materializer'))
             """,
             descriptor.identity.id,
             hash_hex,

@@ -113,11 +113,10 @@ class OpenAIProviderHandler(LLMProviderHandler):
             "messages": list(messages),
             "stream": False,
         }
-        # Note: reasoning models use `max_completion_tokens`, not `max_tokens`.
-        if self._is_reasoning_model(model):
-            payload["max_completion_tokens"] = max_tokens
-        else:
-            payload["max_tokens"] = max_tokens
+        # Roll-86 follow-up (no output caps): neither `max_tokens` nor
+        # `max_completion_tokens` is sent — the Chat Completions API does not
+        # require one, so the model's own maximum governs; the caller's
+        # `max_tokens` never reaches the wire.
         if tools:
             payload["tools"] = list(tools)
         if temperature is not None and not self._is_reasoning_model(model):

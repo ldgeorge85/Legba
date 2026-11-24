@@ -5,8 +5,8 @@
 The bake-off measured that batching's win is prompt tokens and that it is large:
 the one-call-per-candidate path spends 1,462 prompt tokens per candidate because
 it repeats the whole system preamble and the entire allowed-``rel_type``
-vocabulary every time; at N=12 that falls to 297 (``docs/TYPING_BAKEOFF_
-2026-08-03.md`` §7.3). These tests pin the run-loop policy that makes that real:
+vocabulary every time; at N=12 that falls to 297 (``docs/history/
+TYPING_BAKEOFF.md`` §7.3). These tests pin the run-loop policy that makes that real:
 
   * N candidates cost ONE call;
   * verdicts land on the right pair (idx correlation, never position);
@@ -313,7 +313,7 @@ from legba.data.analysts.edge_qualification import (  # noqa: E402
     MIN_INDEPENDENT_SOURCES,
     RECOMMENDED_BAR,
 )
-from legba.data.analysts.handler_options import (  # noqa: E402
+from legba.data.option_catalog.handler_options import (  # noqa: E402
     ANALYST_KIND_OPTIONS,
     known_kind_option_names,
     resolve_kind_options,
@@ -350,25 +350,24 @@ async def test_every_shipped_option_is_accepted_by_the_catalog():
 
 
 async def test_the_shipped_cap_matches_the_documented_arithmetic():
-    """205 edges/day steady state is the target; the cap is sized for the DRAIN
-    and steady state falls out of arrivals. Pin both so the descriptor comment
-    and the number cannot drift apart."""
+    """The tree carries the LIVE operating point (2026-10-04, W6 SPLIT-1 fold):
+    three runs an hour, batch 6, a 600-candidate cap per run. Pin the numbers
+    the descriptor comment states so the comment and the knobs cannot drift
+    apart. Measured 10-01..10-03 on the exemplar: ~3,400 typed/day, ~330
+    accepted edges/day (acceptance ~10%), ~570 LLM calls/day — all on the $0
+    core plane, which is why no token budget is asserted (budgets are 0)."""
     opts = _shipped_options()
-    per_run = opts["max_candidates"]
-    runs_per_day = 2                      # cadence "45 */12 * * *"
-    accept_rate = 0.468                   # measured, core 120B
-    qualifying_arrivals_per_day = 450     # measured over the last week
-
-    assert per_run * runs_per_day == 1200
-    assert opts["batch_size"] == 12
-    assert per_run * runs_per_day / opts["batch_size"] == 100  # LLM calls/day
-    drain_edges = per_run * runs_per_day * accept_rate
-    assert 550 <= drain_edges <= 575
-    steady_edges = qualifying_arrivals_per_day * accept_rate
-    assert 200 <= steady_edges <= 215, "steady state must land near 205/day"
-    # ... and the whole day fits the provisioned token budget with headroom
-    tokens_per_candidate = 557
-    assert per_run * runs_per_day * tokens_per_candidate < 1_000_000
+    per_run_cap = opts["max_candidates"]
+    runs_per_day = 72                     # cadence "5,25,45 * * * *"
+    assert per_run_cap == 600
+    assert opts["batch_size"] == 6
+    assert per_run_cap * runs_per_day == 43_200   # capacity; arrivals bound the real number
+    typed_per_day_measured = 3_400
+    accept_rate_measured = 0.098
+    calls_per_day = typed_per_day_measured / opts["batch_size"]
+    assert 500 <= calls_per_day <= 650
+    accepted_per_day = typed_per_day_measured * accept_rate_measured
+    assert 300 <= accepted_per_day <= 360, "edges/day must land near the measured ~330"
 
 
 async def test_the_shipped_bar_is_the_recommended_one():

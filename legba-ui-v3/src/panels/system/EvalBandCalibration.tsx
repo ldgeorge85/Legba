@@ -85,27 +85,27 @@ function HorizonRates({ label, h }: { label: string; h: BandCalibrationHorizon }
       className="flex items-baseline gap-2 flex-wrap"
       data-testid={`band-calibration-horizon-${label}`}
     >
-      <span className="w-10 shrink-0 text-slate-400 font-mono">{label}</span>
-      <span className="text-slate-300">
+      <span className="w-10 shrink-0 text-ink-2 font-mono">{label}</span>
+      <span className="text-ink-1">
         persistence{' '}
         <span
-          className="font-mono text-slate-200"
+          className="font-mono text-ink-1"
           data-testid={`band-calibration-persistence-${label}`}
         >
           {bandRateLabel(h.persistence_rate)}
         </span>
       </span>
-      <span className="text-slate-300">
+      <span className="text-ink-1">
         reversal{' '}
         <span
-          className="font-mono text-slate-200"
+          className="font-mono text-ink-1"
           data-testid={`band-calibration-reversal-${label}`}
         >
           {bandRateLabel(h.reversal_rate)}
         </span>
       </span>
       <span
-        className="text-slate-600 text-[10px]"
+        className="text-ink-3 text-label"
         title={
           `confirmed=${h.confirmed} reverted=${h.reverted} (n_scored=${h.scored}) · ` +
           `excluded: insufficient=${h.excluded_insufficient} unresolvable=${h.excluded_unresolvable}`
@@ -126,7 +126,7 @@ function OutcomeTable({ label, h }: { label: string; h: BandCalibrationHorizon }
   if (rows.length === 0) {
     return (
       <div
-        className="text-slate-600 text-[10px] pl-10"
+        className="text-ink-3 text-label pl-10"
         data-testid={`band-calibration-outcomes-empty-${label}`}
       >
         nothing resolved at {label} yet — no outcome has occurred, which is not the
@@ -136,11 +136,11 @@ function OutcomeTable({ label, h }: { label: string; h: BandCalibrationHorizon }
   }
   return (
     <table
-      className="w-full text-[10px] border-collapse"
+      className="w-full text-label border-collapse"
       data-testid={`band-calibration-outcomes-${label}`}
     >
       <thead>
-        <tr className="text-slate-600">
+        <tr className="text-ink-3">
           <th className="text-left font-normal pl-10 py-0.5">{label} outcome</th>
           <th className="text-right font-normal py-0.5 w-12">claims</th>
           <th className="text-right font-normal py-0.5 w-24">share of resolved</th>
@@ -150,14 +150,14 @@ function OutcomeTable({ label, h }: { label: string; h: BandCalibrationHorizon }
         {rows.map((r) => (
           <tr
             key={r.outcome}
-            className={r.scored ? 'text-slate-300' : 'text-slate-500'}
+            className={r.scored ? 'text-ink-1' : 'text-ink-3'}
             data-testid={`band-calibration-outcome-${label}-${r.outcome}`}
             title={BAND_OUTCOME_MEANING[r.outcome] ?? r.outcome}
           >
             <td className="pl-10 py-0.5">
               {r.outcome}
               {!r.scored && (
-                <span className="text-slate-600"> · excluded from both rates</span>
+                <span className="text-ink-3"> · excluded from both rates</span>
               )}
             </td>
             <td className="text-right font-mono py-0.5">{r.n}</td>
@@ -190,8 +190,8 @@ function SliceTable({
   if (rows.length === 0) {
     return (
       <div className="space-y-0.5">
-        <div className="text-slate-500 text-[10px] uppercase tracking-wide">{caption}</div>
-        <div className="text-slate-600 text-[10px]" data-testid={`band-calibration-${id}-empty`}>
+        <div className="text-ink-3 text-label uppercase tracking-wide">{caption}</div>
+        <div className="text-ink-3 text-label" data-testid={`band-calibration-${id}-empty`}>
           {emptyText}
         </div>
       </div>
@@ -201,17 +201,17 @@ function SliceTable({
     <div className="space-y-0.5">
       <InfoTip
         text={explain}
-        className="text-slate-500 text-[10px] uppercase tracking-wide"
+        className="text-ink-3 text-label uppercase tracking-wide"
         testId={`band-calibration-${id}-explain`}
       >
         {caption}
       </InfoTip>
       <table
-        className="w-full text-[10px] border-collapse"
+        className="w-full text-label border-collapse"
         data-testid={`band-calibration-${id}`}
       >
         <thead>
-          <tr className="text-slate-600">
+          <tr className="text-ink-3">
             <th className="text-left font-normal py-0.5">{id === 'by-direction' ? 'direction' : 'dimension'}</th>
             <th className="text-right font-normal py-0.5 w-12">claims</th>
             {horizons.map((hz) => (
@@ -225,7 +225,7 @@ function SliceTable({
           {rows.map((r) => (
             <tr
               key={r.key}
-              className="text-slate-300"
+              className="text-ink-1"
               data-testid={`band-calibration-${id}-${r.key}`}
             >
               <td className="py-0.5">{r.key}</td>
@@ -235,7 +235,7 @@ function SliceTable({
                 return (
                   <td
                     key={hz}
-                    className="text-right font-mono py-0.5 text-slate-200"
+                    className="text-right font-mono py-0.5 text-ink-1"
                     data-testid={`band-calibration-${id}-${r.key}-${hz}`}
                     title={
                       h == null
@@ -245,7 +245,7 @@ function SliceTable({
                   >
                     {h == null ? ABSENT : bandRateLabel(h.persistence_rate)}
                     {h != null && (
-                      <span className="text-slate-600"> (n={h.scored})</span>
+                      <span className="text-ink-3"> (n={h.scored})</span>
                     )}
                   </td>
                 )
@@ -272,16 +272,16 @@ export function EvalBandCalibration({
 
   return (
     <div
-      className="bg-surface-100 border border-slate-800 rounded p-2 mb-2 space-y-1.5 text-xs"
+      className="bg-surf-2 border border-line rounded p-2 mb-2 space-y-1.5 text-xs"
       data-testid="eval-band-calibration"
     >
       <div className="flex items-baseline gap-2 flex-wrap">
-        <span className="text-slate-500 text-[10px] uppercase tracking-wide">
+        <span className="text-ink-3 text-label uppercase tracking-wide">
           band calibration
         </span>
         <InfoTip
           text={BAND_NO_BRIER_STATEMENT}
-          className="text-slate-600 text-[10px]"
+          className="text-ink-3 text-label"
           testId="band-calibration-explain"
         >
           persistence / reversal rate (not a Brier score)
@@ -289,7 +289,7 @@ export function EvalBandCalibration({
       </div>
 
       {state !== 'graded' ? (
-        <div className="text-slate-500 text-[10px] py-1" data-testid="band-calibration-empty">
+        <div className="text-ink-3 text-label py-1" data-testid="band-calibration-empty">
           {state === 'unavailable' ? (
             <span data-testid="band-calibration-unavailable">
               not measured yet — the band-calibration tracker has produced no finding, so
@@ -307,11 +307,11 @@ export function EvalBandCalibration({
         <>
           {/* Header: which spec graded these, how many claims, as of when. */}
           <div
-            className="flex items-baseline gap-2 flex-wrap text-slate-600 text-[10px]"
+            className="flex items-baseline gap-2 flex-wrap text-ink-3 text-label"
             data-testid="band-calibration-header"
           >
             <span
-              className="font-mono text-slate-400"
+              className="font-mono text-ink-2"
               title={specTitle(section!.resolution_spec)}
               data-testid="band-calibration-resolution-spec"
             >
@@ -362,14 +362,14 @@ export function EvalBandCalibration({
               is what cannot exist here, the note is why. */}
           {section!.no_brier && (
             <div
-              className="text-slate-500 text-[10px]"
+              className="text-ink-3 text-label"
               data-testid="band-calibration-no-brier"
             >
               {BAND_NO_BRIER_STATEMENT}
             </div>
           )}
           <div
-            className="text-slate-600 text-[10px] italic"
+            className="text-ink-3 text-label italic"
             data-testid="band-calibration-honesty-note"
           >
             {section!.honesty_note ?? BAND_NO_BRIER_STATEMENT}

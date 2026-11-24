@@ -47,13 +47,16 @@ import { ApiError } from '@/lib/api'
 import type {
   AssertedQuality,
   ComputedQuality,
+  EnrichmentLastPoll,
   SourceEarned,
   SourceQualityRow,
   SourceRating,
   StalenessDebtResponse,
+  StalenessQuality,
 } from '@/lib/api'
 import { relativeTime } from '@/lib/findingsViews'
 import { compareFreshness } from '@/lib/sourceFreshness'
+import type { FreshnessTone } from '@/lib/sourceFreshness'
 
 // ---------------------------------------------------------------------------
 // Numbers, and the absences that are not numbers.
@@ -316,6 +319,141 @@ export function isFreshnessAbsence(grade: string): boolean {
 export function lastSignalText(computed: ComputedQuality, now: number = Date.now()): string {
   if (!computed.last_signal_at) return 'no signal on record'
   return relativeTime(computed.last_signal_at, now)
+}
+
+/** `2026-10-01T06:12:03+00:00` → `2026-10-01 06:12Z` (UTC, minute precision);
+ *  an unparseable value is returned as given rather than guessed at. */
+export function formatUtcMinute(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}Z`
+}
+
+function formatExpectedInterval(seconds: number): string {
+  if (seconds >= 2 * 86400) return `${(seconds / 86400).toFixed(1)}d`
+  if (seconds >= 2 * 3600) return `${(seconds / 3600).toFixed(1)}h`
+  return `${Math.round(seconds / 60)}min`
+}
+
+export interface StalenessPill {
+  /** `stale · 9.2× expected interval`, or the honest absence. */
+  label: string
+  /** `last new item 2026-10-01 06:12Z` — null when there is none on record. */
+  detail: string | null
+  title: string
+  tone: FreshnessTone
+  /** False for NOT MEASURED (`—`) and for `unknown` (measured, unmeasurable):
+   *  neither is a verdict about the feed. */
+  measured: boolean
+}
+
+/**
+ * The staleness tripwire state as a pill. Tone: `fresh` ok, `quiet` watch,
+ * `stale`/`dead` bad. `unknown` and an absent block are MUTED absences — "no
+ * new item ever recorded" / "not measured" is not a fault the server claimed,
+ * and the factor is never shown as 0 when there is none.
+ */
+export function stalenessPill(s: StalenessQuality | null | undefined): StalenessPill {
+  if (!s) {
+    return {
+      label: `${ABSENT} staleness not measured`,
+      detail: null,
+      title: 'The staleness tripwire is measured for ACTIVE sources only.',
+      tone: 'muted',
+      measured: false,
+    }
+  }
+  if (s.state === 'unknown' || s.factor === null) {
+    return {
+      label: 'unknown',
+      detail: null,
+      title: s.reason || 'Nothing to measure staleness against.',
+      tone: 'muted',
+      measured: false,
+    }
+  }
+  const tone: FreshnessTone = s.state === 'fresh' ? 'ok' : s.state === 'quiet' ? 'watch' : 'bad'
+  const interval =
+    s.expected_interval_s !== null
+      ? ` Expected interval ${formatExpectedInterval(s.expected_interval_s)}${
+          s.weekday_only ? ' (weekday publisher: weekends do not count)' : ''
+        }.`
+      : ''
+  return {
+    label: `${s.state} · ${s.factor.toFixed(1)}× expected interval`,
+    detail:
+      [
+        s.last_new_item_at ? `last new item ${formatUtcMinute(s.last_new_item_at)}` : null,
+        // The poll outcome word: `gated` = the feed delivered, every entry was off-topic.
+        s.last_poll_gated ? 'last poll gated' : null,
+      ]
+        .filter((p): p is string => p !== null)
+        .join(' · ') || null,
+    title: `${s.reason}.${interval}`,
+    tone,
+    measured: true,
+  }
+}
+
+/** Short names for the enrichment stage kinds a reader sees most. */
+const ENRICHMENT_KIND_SHORT: Record<string, string> = {
+  ner_multilingual: 'ner',
+  language_detect: 'lang',
+  fact_extractor: 'facts',
+}
+
+/** Seconds with one decimal; a sub-50 ms total is `<0.1 s`, never `0.0 s`. */
+function enrichmentSeconds(ms: number): string {
+  if (!Number.isFinite(ms)) return ABSENT
+  return ms < 50 ? '<0.1 s' : `${(ms / 1000).toFixed(1)} s`
+}
+
+export interface EnrichmentLine {
+  /** The one-line text. */
+  text: string
+  /** Hover: the full stage table and the as-of. */
+  title: string
+  measured: boolean
+}
+
+/**
+ * The COMPUTED cell's enrichment line: `last poll: ner 1.2 s/3 · geocode 0.3 s/3`
+ * (stage, total wall time over the poll / calls). `null`/absent or an empty stage
+ * map is an absence and renders `enrichment not measured` -- never `0 s`.
+ */
+export function enrichmentLine(
+  e: EnrichmentLastPoll | null | undefined,
+  now: number = Date.now(),
+): EnrichmentLine {
+  const kinds = e ? Object.keys(e.stages ?? {}).sort() : []
+  if (!e || kinds.length === 0) {
+    return {
+      text: 'enrichment not measured',
+      title: 'No enrichment stage has been timed on this source yet (or it declares none).',
+      measured: false,
+    }
+  }
+  const parts = kinds.map((k) => {
+    const s = e.stages[k]
+    const name = ENRICHMENT_KIND_SHORT[k] ?? k
+    const errs = s.errors > 0 ? ` (${s.errors} err)` : ''
+    return `${name} ${enrichmentSeconds(s.total_ms)}/${s.calls}${errs}`
+  })
+  const asOf = e.polled_at ? ` · ${relativeTime(e.polled_at, now)}` : ''
+  const table = kinds
+    .map((k) => {
+      const s = e.stages[k]
+      return `${k}: ${s.calls} calls, ${enrichmentSeconds(s.total_ms)} total, max ${enrichmentSeconds(s.max_ms)}, ${s.errors} errors`
+    })
+    .join('\n')
+  return {
+    text: `last poll: ${parts.join(' · ')}${asOf}`,
+    title: `Wall time per enrichment stage over the newest poll that enriched a signal${
+      e.polled_at ? ` (${formatUtcMinute(e.polled_at)})` : ''
+    }. Total over calls; calls run in series per signal.\n${table}`,
+    measured: true,
+  }
 }
 
 /** Volume line for the row — `signals_24h` / `signals_7d` are plain counts. */

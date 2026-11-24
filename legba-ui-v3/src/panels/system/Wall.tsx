@@ -22,28 +22,31 @@
  *       (`/v3/system/source-firing`, `/v3/system/analyst-cadence`): signal
  *       volume + sub-hour source liveness + stale analysts + source errors.
  *
- * Cursor lifecycle: resolved ONCE per mount (`resolveWallCursor`), so the
- * visit keeps diffing from the same anchor while polling; every successful
- * response advances `localStorage.legba_wall_cursor` to its `server_now`
- * (never backwards), so the NEXT open diffs from the last moment this wall
- * was live. All non-DOM logic lives in `lib/wallModel.ts`.
+ * Cursor lifecycle (X1/D1): resolved ONCE per PAGE LOAD (`wallVisitForPage`)
+ * and shared by every Wall surface, so the Overview quadrant, the Movers tab
+ * and the standalone tile diff from one anchor and can never disagree; the
+ * stored `localStorage.legba_wall_cursor` advances to a response's
+ * `server_now` (never backwards) only when the movers list has been SHOWN —
+ * its tile visible and the document visible (`useMarkWallRead`) — so a page
+ * load, or a Wall mounted in a background tab, never stamps "read". All
+ * non-DOM logic lives in `lib/wallModel.ts`.
  */
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowDownRight, ArrowUpRight, Minus } from 'lucide-react'
 import { PanelChrome } from '@/components/PanelChrome'
 import { SeverityBadge } from '@/components/SeverityBadge'
 import { apiGet, getSystemAnalystCadence, getSystemSourceFiring } from '@/lib/api'
+import { ANALYST_CADENCE_KEY, SLOW_STALE_MS, SOURCE_FIRING_KEY } from '@/lib/queryKeys'
 import { relTime } from '@/lib/evalOps'
 import {
   bandChangeDeskLabel,
   buildMovers,
   healthRollup,
-  loadWallCursor,
-  resolveWallCursor,
+  markWallRead,
   sincePath,
-  storeWallCursor,
   topSevereVerified,
+  wallVisitForPage,
   type BandChange,
   type SinceResponse,
   type SituationChange,
@@ -54,9 +57,17 @@ import { ProvenanceStateBadge } from '@/components/ProvenanceBadge'
 import { resolveNumberProvenance, type ProvenanceState } from '@/lib/provenance'
 import type { Severity } from '@/v4/world/types'
 import type { PanelProps } from '@/types'
+import { PROFILE_UI, readTiers, subjectTierIds } from '@/lib/profileUi'
+import { useDockviewPanelApi } from '@/components/DockviewPanelApiContext'
 
 const SINCE_POLL_MS = 60_000
 const HEALTH_POLL_MS = 30_000
+
+/** The profile's words (UI-B2): the subject plural, and the per-subject read tier's noun. */
+const SUBJECTS = PROFILE_UI.subject.plural.toLowerCase()
+const SUBJECT_TIER = (
+  readTiers().find((t) => subjectTierIds(readTiers()).has(t.id))?.label ?? PROFILE_UI.subject.singular
+).toLowerCase()
 
 // ---------------------------------------------------------------------------
 // Quadrant shell
@@ -101,8 +112,8 @@ function BandGridQuadrant() {
   )
   return (
     <Quadrant
-      title="World at a glance"
-      aside={desks.length > 0 ? `${desks.length} assessed desks` : undefined}
+      title={PROFILE_UI.labels.overview_title}
+      aside={desks.length > 0 ? `${desks.length} assessed ${SUBJECTS}` : undefined}
       testid="wall-band-grid"
     >
       {isLoading && desks.length === 0 && (
@@ -110,7 +121,7 @@ function BandGridQuadrant() {
       )}
       {!isLoading && desks.length === 0 && (
         <div className="py-4 text-center text-label text-ink-3">
-          no verified country compositions yet
+          no verified {SUBJECT_TIER} compositions yet
         </div>
       )}
       <div className="flex flex-wrap gap-1">
@@ -123,7 +134,7 @@ function BandGridQuadrant() {
             }
             title={`${d.title} — confidence: ${d.verdict.confidence} · ${relTime(d.producedAt)}`}
             data-testid={`wall-desk-${d.iso2}`}
-            className="inline-flex items-center gap-1 rounded border border-line bg-surf-2 px-1.5 py-0.5 font-mono text-[11px] text-ink-1 hover:border-line-strong hover:bg-surf-1"
+            className="inline-flex items-center gap-1 rounded border border-line bg-surf-2 px-1.5 py-0.5 font-mono text-label text-ink-1 hover:border-line-strong hover:bg-surf-1"
           >
             <span
               className="h-2 w-2 rounded-sm"
@@ -135,7 +146,7 @@ function BandGridQuadrant() {
         ))}
       </div>
       {/* The choropleth legend — same ramp, same vocabulary as the World map. */}
-      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-ink-3">
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-label text-ink-3">
         {CHOROPLETH_LEGEND.map((l) => (
           <span key={l.level} className="inline-flex items-center gap-1">
             <span
@@ -164,19 +175,40 @@ function BandGridQuadrant() {
  * sees two different "since" answers depending on which tile it opened.
  */
 export function useSince() {
-  // Resolve the cursor ONCE per mount: the whole visit diffs from the same
-  // anchor; each successful poll advances the STORED cursor for the next open.
-  const visit = useMemo(() => resolveWallCursor(loadWallCursor()), [])
+  // X1/D1 — ONE anchor per page load, shared by every Wall surface (so the
+  // Overview and the Movers tab ask the same question under one query key).
+  // The fetch never stamps the stored cursor; `useMarkWallRead` does, and
+  // only when the movers were on screen.
+  const visit = useMemo(() => wallVisitForPage(), [])
   const q = useQuery<SinceResponse>({
     queryKey: ['wall-since', visit.cursor],
-    queryFn: async () => {
-      const res = await apiGet<SinceResponse>(sincePath(visit.cursor))
-      storeWallCursor(res.server_now)
-      return res
-    },
+    queryFn: () => apiGet<SinceResponse>(sincePath(visit.cursor)),
     refetchInterval: SINCE_POLL_MS,
   })
   return { visit, ...q }
+}
+
+/**
+ * X1/D1 — advance the stored cursor to `serverNow` only on a REAL read: the
+ * movers were rendered, the tile is the visible one in its Dockview group
+ * (outside a tile — a standalone render — it counts as visible), and the
+ * document is not hidden. A background tab's poll is not a read.
+ */
+function useMarkWallRead(serverNow: string | undefined) {
+  const api = useDockviewPanelApi()
+  const [tileVisible, setTileVisible] = useState<boolean>(() => (api ? api.isVisible : true))
+  useEffect(() => {
+    if (!api) return
+    setTileVisible(api.isVisible)
+    const sub = api.onDidVisibilityChange((e: { isVisible: boolean }) => setTileVisible(e.isVisible))
+    return () => sub.dispose()
+  }, [api])
+  useEffect(() => {
+    markWallRead(serverNow, {
+      tileVisible,
+      documentVisible: typeof document === 'undefined' || document.visibilityState !== 'hidden',
+    })
+  }, [serverNow, tileVisible])
 }
 
 const TONE_TEXT: Record<'bad' | 'good' | 'neutral', string> = {
@@ -194,10 +226,10 @@ function directionTone(direction: string): 'bad' | 'good' | 'neutral' {
 function BandChangeRow({ c }: { c: BandChange }) {
   const tone = directionTone(c.direction)
   const Icon = tone === 'bad' ? ArrowUpRight : tone === 'good' ? ArrowDownRight : Minus
-  // U-2: the desk reads as its country name, not the raw `country_g20_br` id.
+  // U-2: the subject reads as its declared name (lib/deskNames.ts), never its raw id.
   const desk = bandChangeDeskLabel(c.target_id)
   return (
-    <li className="flex items-center gap-1.5 text-[11px]" data-testid="wall-band-change" title={c.target_id}>
+    <li className="flex items-center gap-1.5 text-label" data-testid="wall-band-change" title={c.target_id}>
       <Icon className={`h-3 w-3 shrink-0 ${TONE_TEXT[tone]}`} aria-hidden />
       <span className="truncate text-ink-2">{desk}</span>
       <span className="truncate text-ink-3">{c.dimension}</span>
@@ -210,8 +242,8 @@ function BandChangeRow({ c }: { c: BandChange }) {
 
 function SituationRow({ s }: { s: SituationChange }) {
   return (
-    <li className="flex items-center gap-1.5 text-[11px]" data-testid="wall-situation-edge">
-      <span className="shrink-0 rounded bg-surf-1 px-1 text-[10px] text-ink-2">{s.change}</span>
+    <li className="flex items-center gap-1.5 text-label" data-testid="wall-situation-edge">
+      <span className="shrink-0 rounded bg-surf-1 px-1 text-label text-ink-2">{s.change}</span>
       <button
         type="button"
         className="min-w-0 truncate text-left text-ink-1 hover:underline"
@@ -247,6 +279,8 @@ export interface MoversContentProps {
  */
 export function MoversContent({ since, cursor, loading, error }: MoversContentProps) {
   const movers = since ? buildMovers(since) : null
+  // Rendered movers on a visible tile = read; the next page load diffs from here.
+  useMarkWallRead(since?.server_now)
   return (
     <>
       {loading && <div className="py-4 text-center text-label text-ink-3">diffing…</div>}
@@ -262,7 +296,7 @@ export function MoversContent({ since, cursor, loading, error }: MoversContentPr
         <div className="space-y-2">
           {movers.bandChanges.length > 0 && (
             <div>
-              <div className="mb-0.5 text-[10px] uppercase tracking-wide text-ink-3">
+              <div className="mb-0.5 text-label uppercase tracking-wide text-ink-3">
                 Band changes · {movers.bandTotal}
                 {movers.bandTruncated ? ` (showing ${movers.bandChanges.length})` : ''}
               </div>
@@ -274,14 +308,14 @@ export function MoversContent({ since, cursor, loading, error }: MoversContentPr
             </div>
           )}
           {movers.supersededCount > 0 && (
-            <div className="text-[11px] text-ink-2" data-testid="wall-superseded-count">
+            <div className="text-label text-ink-2" data-testid="wall-superseded-count">
               <span className="font-mono text-accent-warning">{movers.supersededCount}</span>{' '}
               finding{movers.supersededCount === 1 ? '' : 's'} superseded (reversals of record)
             </div>
           )}
           {movers.situationEdges.length > 0 && (
             <div>
-              <div className="mb-0.5 text-[10px] uppercase tracking-wide text-ink-3">
+              <div className="mb-0.5 text-label uppercase tracking-wide text-ink-3">
                 Situations · {movers.situationTotal}
                 {movers.situationTruncated ? ` (showing ${movers.situationEdges.length})` : ''}
               </div>
@@ -293,7 +327,7 @@ export function MoversContent({ since, cursor, loading, error }: MoversContentPr
             </div>
           )}
           {movers.alertCount > 0 && (
-            <div className="text-[11px] text-ink-2">
+            <div className="text-label text-ink-2">
               <span className="font-mono text-accent-critical">{movers.alertCount}</span> alert
               {movers.alertCount === 1 ? '' : 's'} in the window
             </div>
@@ -339,7 +373,7 @@ function NewestFindingsQuadrant({
           <li key={f.id} data-testid="wall-finding-row">
             <button
               type="button"
-              className="flex w-full items-center gap-2 rounded px-1 py-0.5 text-left text-[11px] hover:bg-surf-1"
+              className="flex w-full items-center gap-2 rounded px-1 py-0.5 text-left text-label hover:bg-surf-1"
               onClick={() =>
                 selectRow('finding', f.id, f.title, {
                   origin: 'wall',
@@ -355,10 +389,10 @@ function NewestFindingsQuadrant({
             >
               <SeverityBadge severity={(f.severity ?? 'info') as Severity} className="shrink-0" />
               <span className="min-w-0 flex-1 truncate text-ink-1">{f.title}</span>
-              <span className="shrink-0 font-mono text-[10px] text-ink-3">
+              <span className="shrink-0 font-mono text-label text-ink-3">
                 {Math.round(f.effective_confidence * 100)}%
               </span>
-              <span className="shrink-0 text-[10px] text-ink-3">{relTime(f.produced_at)}</span>
+              <span className="shrink-0 text-label text-ink-3">{relTime(f.produced_at)}</span>
             </button>
           </li>
         ))}
@@ -403,25 +437,32 @@ function Stat({
         <div className={`font-mono text-base leading-tight ${color}`}>{value}</div>
         {provenance && <ProvenanceStateBadge state={provenance} />}
       </div>
-      <div className="text-[10px] leading-tight text-ink-3">{label}</div>
+      <div className="text-label leading-tight text-ink-3">{label}</div>
     </div>
   )
 }
 
 function HealthQuadrant() {
   const sources = useQuery({
-    queryKey: ['wall-source-firing'],
+    queryKey: SOURCE_FIRING_KEY,
+    staleTime: SLOW_STALE_MS,
     queryFn: getSystemSourceFiring,
     refetchInterval: HEALTH_POLL_MS,
   })
   const analysts = useQuery({
-    queryKey: ['wall-analyst-cadence'],
+    queryKey: ANALYST_CADENCE_KEY,
+    staleTime: SLOW_STALE_MS,
     queryFn: getSystemAnalystCadence,
     refetchInterval: HEALTH_POLL_MS,
   })
   const loading = sources.isLoading || analysts.isLoading
   const error = sources.error ?? analysts.error
-  const h = healthRollup(sources.data ?? [], analysts.data ?? [])
+  // U-5 — these two reads share their query with the health line and the
+  // Engine's status (one key per resource), so the Wall can render on an
+  // answer another panel read; rows are rows only when the answer is a list.
+  const sourceRows = Array.isArray(sources.data) ? sources.data : []
+  const analystRows = Array.isArray(analysts.data) ? analysts.data : []
+  const h = healthRollup(sourceRows, analystRows)
   // P4-5 — live|fallback|absent on the health numbers. These roll up two live
   // routes; a number is `live` when its backing route returned rows, `absent`
   // when it returned none (an honest empty, not a fabricated zero). The routes
@@ -493,7 +534,7 @@ export default function WallPanel({ registration }: PanelProps) {
   return (
     <PanelChrome
       registration={registration}
-      subtitle="world at a glance · movers since last visit"
+      subtitle={`${PROFILE_UI.labels.overview_title.toLowerCase()} · movers since last visit`}
       onRefresh={() => refetch()}
     >
       <div

@@ -155,12 +155,13 @@ def test_submit_returns_202_and_task_id(monkeypatch):
     sent = captured["body"]
     assert sent["inputs"][0]["question"].startswith("What is the state")
     assert sent["options"]["run_id"]
-    # F1: no model chosen ⇒ the Opus default ⇒ NO override threaded.
-    assert "llm_component_override" not in sent["inputs"][0]
+    # Roll 84: no model chosen ⇒ the core component, threaded EXPLICITLY, so
+    # the default never rides a paid descriptor primary.
+    assert sent["inputs"][0]["llm_component_override"] == "llm.primary.openai_compat"
 
 
-def test_submit_model_core_threads_override(monkeypatch):
-    """F1 model picker: model='core' threads the sanctioned component id into the
+def test_submit_model_opus_threads_override(monkeypatch):
+    """F1 model picker: model='opus' threads the sanctioned component id (core is the default since DEC-17a, 2026-10-03, and threads none) into the
     deep submit invoke body; the deep_consult kind stamps it into the workflow."""
     envelope = {
         "outcome": "success",
@@ -176,12 +177,12 @@ def test_submit_model_core_threads_override(monkeypatch):
     client = TestClient(app)
     r = client.post(
         "/api/v1/deep_consult",
-        json={"question": "q", "model": "core"},
+        json={"question": "q", "model": "opus"},
     )
     assert r.status_code == 202, r.text
     assert (
         captured["body"]["inputs"][0]["llm_component_override"]
-        == "llm.primary.openai_compat"
+        == "llm.anthropic.opus_4_7"
     )
 
 
@@ -286,6 +287,29 @@ def test_status_completed_with_finding_and_lineage():
     assert pg.queries
     _sql, args = pg.queries[0]
     assert args[1] == "abcd1234%"
+
+
+def test_status_reads_the_stored_finding_shape():
+    """Roll 84: the analyst_outputs.data column holds the whole Finding, so the
+    synthesize stage's blob is at data.data.deep_consult — the poll must read
+    its uncertainty, contract and verdict there (it read data.deep_consult
+    only, and every live deep turn was labelled not_judged with no contract)."""
+    finding_id = str(uuid4())
+    verdict = {"schema": "consult_verification/1", "state": "judged", "score": 0.75, "reason": None}
+    row = {
+        "id": finding_id,
+        "body": "Brazil's grid is strained.",
+        "data": {"body": "Brazil's grid is strained.", "tags": [],
+                 "data": {"deep_consult": {"uncertainty": 0.4, "verification": verdict,
+                                           "contract": {"schema": "consult_contract/1"}}}},
+        "derived_from": [],
+    }
+    r = TestClient(_build_app(_StatusPg(row))).get("/api/v1/deep_consult/deep_consult.global.abcd1234")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["uncertainty"] == pytest.approx(0.4)
+    assert body["contract"] == {"schema": "consult_contract/1"}
+    assert body["verification"]["reason"] != "deep_consult_not_judged"
 
 
 # ---------------------------------------------------------------------------

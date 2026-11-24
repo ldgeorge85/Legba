@@ -53,6 +53,7 @@ from ..schemas.stack import (
     VectorStoreConfig,
 )
 from .credentials import CredentialResolverProtocol, MissingSecretError
+from ..stack.bearer import bearer_headers
 from .emitter import RegistryEventEmitter
 from .stack_events import stack_event_payload, stack_health_subject
 
@@ -203,7 +204,7 @@ class LLMProviderChecker:
         # NOT make a real completion call here because that consumes budget
         # against the real provider; the dedicated Phase-2 L-120 handler
         # owns the model-specific 1-token ping.
-        host, port = _split_endpoint(endpoint, default_port=443)
+        host, port = _split_probe_endpoint(endpoint, default_port=443)
         if not host:
             return StackComponentHealth(
                 component_id=component_id, kind=self.kind,
@@ -298,7 +299,7 @@ class EmbeddingChecker:
     async def check(self, component_id, resolved):
         cfg: EmbeddingServiceConfig = resolved.config
         endpoint = cfg.endpoint.raw
-        host, port = _split_endpoint(endpoint, default_port=80)
+        host, port = _split_probe_endpoint(endpoint, default_port=80)
         # Phase-1: TCP reachability + verify dim is in [64, 8192].
         reachable = _tcp_reachable(host, port) if host else False
         dim = int(cfg.dim.raw)
@@ -505,6 +506,14 @@ class NLPServiceChecker:
         path = health_path.raw if health_path is not None else "/health"
         url = f"{endpoint}{path}"
 
+        # W11-F107: the innoai gateway is Bearer-only and has no /health — its
+        # model list answering 200 IS the liveness signal.
+        provider_field = getattr(cfg, "provider", None)
+        gateway = provider_field is not None and provider_field.raw == "innoai_gateway"
+        if gateway and path == "/health":
+            url = f"{endpoint}/models"
+        headers: dict[str, str] = {}
+
         # Resolve creds (best-effort; internal docker path may be anon).
         auth = None
         try:
@@ -515,6 +524,11 @@ class NLPServiceChecker:
                     user_bytes.decode("utf-8"),
                     pass_bytes.decode("utf-8"),
                 )
+            key_bytes = await resolved.secret(getattr(cfg, "api_key", None))
+            if key_bytes:
+                # outbound bearer to the component's endpoint — built outside
+                # this module so the registry's credential guard stays honest
+                headers.update(bearer_headers(key_bytes.decode("utf-8")))
         except Exception as exc:                                # pragma: no cover
             return StackComponentHealth(
                 component_id=component_id, kind=self.kind,
@@ -525,7 +539,7 @@ class NLPServiceChecker:
         timeout = float(getattr(cfg.timeout_seconds, "raw", 60))
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.get(url, auth=auth)
+                resp = await client.get(url, auth=auth, headers=headers or None)
         except Exception as exc:
             return StackComponentHealth(
                 component_id=component_id, kind=self.kind,
@@ -550,7 +564,9 @@ class NLPServiceChecker:
             data = resp.json()
         except Exception:
             data = {}
-        status = data.get("status", "?")
+        status = data.get("status", "?") if isinstance(data, dict) else "?"
+        if gateway and status == "?":
+            status = "ok"  # a 200 model list; the gateway reports no status field
         ok = status == "ok"
         return StackComponentHealth(
             component_id=component_id, kind=self.kind,
@@ -558,7 +574,10 @@ class NLPServiceChecker:
             checked_at=_now(),
             detail=f"GET {url} -> {status}",
             last_success_at=_now() if ok else None,
-            extra={"endpoint": endpoint, "models_loaded": data.get("models_loaded")},
+            extra={
+                "endpoint": endpoint,
+                "models_loaded": data.get("models_loaded") if isinstance(data, dict) else None,
+            },
         )
 
 
@@ -573,15 +592,37 @@ def _split_endpoint(endpoint: str, default_port: int) -> tuple[str | None, int]:
     return host, port
 
 
+#: The port a URL means when its scheme is written and its port is not.
+_SCHEME_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _split_probe_endpoint(endpoint: str, default_port: int) -> tuple[str | None, int]:
+    """``(host, port)`` for a TCP reachability probe (W11-F97).
+
+    An explicit port wins; otherwise a written ``http``/``https`` scheme
+    decides (80 / 443); only a scheme-less ``host`` falls back to
+    ``default_port``. ``_split_endpoint`` ignores the scheme, so the embedding
+    probe of ``https://api.innoai.net/v1`` reported ``tcp api.innoai.net:80``
+    — a port the https client never dials.
+    """
+    _, host, port = _split_full_endpoint(endpoint, default_port, scheme_port=True)
+    return host, port
+
+
 def _split_full_endpoint(
-    endpoint: str, default_port: int
+    endpoint: str, default_port: int, *, scheme_port: bool = False,
 ) -> tuple[str, str | None, int]:
-    """Parse into `(scheme, host, port)`. Scheme defaults to 'http'."""
+    """Parse into `(scheme, host, port)`. Scheme defaults to 'http'.
+
+    With ``scheme_port`` a portless URL whose scheme is written takes that
+    scheme's port (:data:`_SCHEME_DEFAULT_PORTS`) instead of ``default_port``.
+    """
     if not endpoint:
         return "http", None, default_port
     scheme = "http"
     rest = endpoint
-    if "://" in endpoint:
+    scheme_written = "://" in endpoint
+    if scheme_written:
         scheme, rest = endpoint.split("://", 1)
     # Strip path / query
     rest = rest.split("/", 1)[0].split("?", 1)[0]
@@ -594,6 +635,8 @@ def _split_full_endpoint(
     else:
         host = rest
         port = default_port
+        if scheme_port and scheme_written:
+            port = _SCHEME_DEFAULT_PORTS.get(scheme.lower(), default_port)
     return scheme, host or None, port
 
 

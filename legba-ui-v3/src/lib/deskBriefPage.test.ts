@@ -14,6 +14,7 @@ import {
   EVIDENCE_STATE_LABEL,
   LIMIT_UNKNOWN,
   cadenceState,
+  compositionIndex,
   citationDateLine,
   deriveEvidenceTable,
   evidenceStateDetail,
@@ -24,6 +25,8 @@ import {
   parseExportDocument,
   readingLimits,
   shareText,
+  staleReadText,
+  carriedReadText,
   type ExportAbsences,
   type ExportCitation,
   type ExportDocument,
@@ -455,5 +458,96 @@ describe('readingLimits', () => {
   it('states an unrecorded limit as unrecorded, never as a default instant', () => {
     const limits = readingLimits({ doc: null })
     expect(limits.every((l) => l.value === LIMIT_UNKNOWN)).toBe(true)
+  })
+})
+
+describe('W11-F14 — a unit the register names carried, unsupported (the brief\'s unit block)', () => {
+  it('takes the carried state off the register and says what was last re-evidenced', () => {
+    const rows = deriveEvidenceTable({
+      coverage: [
+        { unit: 'escalation', status: 'carried_unsupported', read_date: null, age_h: 3, carried_status: 'moderate', last_evidence_age_h: 336.2 },
+        { unit: 'energy_security', status: 'carried_unsupported', read_date: null, age_h: 3, carried_status: 'high', last_evidence_age_h: null },
+        { unit: 'military_posture', status: 'in_basis', read_date: null, age_h: 3 },
+      ],
+      questions: new Map(),
+      latestByUnit: new Map(),
+      dimensions: null,
+      correctness: new Map(),
+      absences: null,
+      now: NOW,
+    })
+    const esc = rows.find((r) => r.unitId === 'escalation')!
+    expect(esc.state).toBe('carried_unsupported')
+    expect(esc.stateSource).toBe('coverage register')
+    expect(EVIDENCE_STATE_LABEL[esc.state]).toBe('carried, unsupported')
+    expect(esc.carried).toBe("status 'moderate' held; last re-evidenced 336 h ago")
+    const energy = rows.find((r) => r.unitId === 'energy_security')!
+    expect(energy.carried).toBe("status 'high' held; no read in the lookback re-evidenced it")
+    const mil = rows.find((r) => r.unitId === 'military_posture')!
+    expect(mil.carried).toBeNull()
+    expect(carriedReadText({ unit: 'x', status: 'below_floor', read_date: null, age_h: 1 })).toBeNull()
+  })
+})
+
+describe('W11 — the quoted read the composition marked stale (the brief\'s unit block)', () => {
+  it('carries the quoted age and the stale mark off the coverage register', () => {
+    const rows = deriveEvidenceTable({
+      coverage: [
+        { unit: 'escalation', status: 'in_basis', read_date: null, age_h: 94.3, cadence_h: 11, stale: true },
+        { unit: 'energy_security', status: 'in_basis', read_date: null, age_h: 6, cadence_h: 11, stale: false },
+      ],
+      questions: new Map(),
+      latestByUnit: new Map(),
+      dimensions: null,
+      correctness: new Map(),
+      absences: null,
+      now: NOW,
+    })
+    const esc = rows.find((r) => r.unitId === 'escalation')!
+    expect(esc.quotedAgeH).toBe(94.3)
+    expect(esc.quotedStale).toBe(true)
+    expect(staleReadText(esc.quotedAgeH, esc.quotedStale)).toBe('read 94 h old')
+    const energy = rows.find((r) => r.unitId === 'energy_security')!
+    expect(staleReadText(energy.quotedAgeH, energy.quotedStale)).toBeNull()
+    // A unit the register never named: not measured, nothing printed.
+    const other = rows.find((r) => r.unitId !== 'escalation' && r.unitId !== 'energy_security')!
+    expect(other.quotedStale).toBeNull()
+    expect(staleReadText(other.quotedAgeH, other.quotedStale)).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// X1/D1 — compositionIndex: the headline and the as-of off ONE row
+// ---------------------------------------------------------------------------
+
+describe('compositionIndex (X1/D1)', () => {
+  it('headlines the row’s own title and dates it from the assembly', () => {
+    const ix = compositionIndex(
+      { title: 'country_g20_br, 2026-10-08 — “A change…”', produced_at: '2026-10-08T11:30:02.837972Z' },
+      '2026-10-08T11:30:02.680467+00:00',
+      'desk',
+    )
+    expect(ix).toEqual({
+      present: true,
+      headline: 'country_g20_br, 2026-10-08 — “A change…”',
+      asOf: '2026-10-08T11:30:02.680467+00:00',
+      asOfLabel: '2026-10-08 11:30Z',
+    })
+  })
+
+  it('a row with no title still headlines as a composition, never as its absence', () => {
+    const ix = compositionIndex({ title: '  ', produced_at: '2026-10-08T11:30:02Z' }, null, 'desk')
+    expect(ix.present).toBe(true)
+    expect(ix.headline).toBe('Composition as of 2026-10-08 11:30Z')
+  })
+
+  it('no row: the stated absence, and no date', () => {
+    const ix = compositionIndex(null, '2026-10-08T11:30:02Z', 'lane')
+    expect(ix).toEqual({
+      present: false,
+      headline: 'No composition on record for this lane.',
+      asOf: null,
+      asOfLabel: LIMIT_UNKNOWN,
+    })
   })
 })

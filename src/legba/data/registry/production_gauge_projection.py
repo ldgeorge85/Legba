@@ -29,6 +29,14 @@ Quiet-by-design: flag off → ``ungauged`` with ``projection_disabled`` (a
 deliberately-off plane is a configuration, not a deficit). Flag on with no
 receipt → deficit: a build was expected and none landed. Degrades loud — a
 failed read is ``ungauged`` carrying the error.
+
+P-7 (2026-11-14): the serving table is UNLOGGED, so a database crash empties
+it while the receipt survives. That reads ``ungauged`` with
+``projection_rebuilding`` — the next tick rebuilds it; it is not data loss
+and not a parity deficit. Freshness is the newer of ``projected_at`` and
+``checked_at`` (an unchanged-input skip proves the projection current), and
+a source switched off by projector option (``excluded_sources``) is never a
+missing leg.
 """
 from __future__ import annotations
 
@@ -42,6 +50,8 @@ from ..graph_projection import (
     GUARANTEED_ARC_SOURCES,
     PROJECTION_DISABLED,
     PROJECTION_EMPTY,
+    PROJECTION_REBUILDING,
+    freshness_at,
     graph_projection_enabled,
     projection_max_age_seconds,
 )
@@ -65,12 +75,17 @@ LABEL = "Graph projection parity + freshness"
 QUIET_PROJECTION_DISABLED = PROJECTION_DISABLED
 QUIET_NO_RECEIPT = "projection_empty"  # flag on, no build ever landed
 QUIET_META_QUERY_FAILED = "projection_meta_query_failed"
+#: P-7: receipt names a build, the unlogged table is empty (crash recovery).
+QUIET_REBUILDING = PROJECTION_REBUILDING
 
+#: ``m.*`` so the gauge reads a pre-0267 receipt too (no P-7 columns).
 _META_SQL = """
-SELECT projected_at, arc_count, source_counts, build_seconds
-  FROM public.graph_arcs_meta
- WHERE id
+SELECT m.*
+  FROM public.graph_arcs_meta m
+ WHERE m.id
 """
+
+_HAS_ARCS_SQL = "SELECT EXISTS (SELECT 1 FROM public.graph_arcs)"
 
 #: Planner estimate per source table — instant, approximate, enough for the
 #: "rows but zero arcs" leg-detector.
@@ -106,9 +121,8 @@ def projection_gauge(
     projected_at = meta.get("projected_at")
     if projected_at is not None and getattr(projected_at, "tzinfo", None) is None:
         projected_at = projected_at.replace(tzinfo=timezone.utc)
-    age = (
-        (now - projected_at).total_seconds() if projected_at is not None else None
-    )
+    fresh = freshness_at(dict(meta))
+    age = (now - fresh).total_seconds() if fresh is not None else None
     max_age = projection_max_age_seconds()
     arc_count = int(meta.get("arc_count") or 0)
     raw_counts = meta.get("source_counts") or {}
@@ -121,6 +135,15 @@ def projection_gauge(
         raw_counts = {}
     source_counts = {str(k): int(v or 0) for k, v in raw_counts.items()}
     build_seconds = meta.get("build_seconds")
+    raw_excluded = meta.get("excluded_sources") or []
+    if isinstance(raw_excluded, str):
+        try:
+            raw_excluded = json.loads(raw_excluded)
+        except (ValueError, TypeError):
+            raw_excluded = []
+    excluded = {str(t) for t in raw_excluded} if isinstance(
+        raw_excluded, (list, tuple)
+    ) else set()
 
     # Leg detector: a GUARANTEED-arc source (junction/link tables — every row
     # must produce an arc) with live rows that contributed zero. Conditional
@@ -129,7 +152,8 @@ def projection_gauge(
     missing_legs = sorted(
         t
         for t in GUARANTEED_ARC_SOURCES
-        if int(estimates.get(t) or 0) > 0 and source_counts.get(t, 0) == 0
+        if t not in excluded
+        and int(estimates.get(t) or 0) > 0 and source_counts.get(t, 0) == 0
     )
     count_sum = sum(source_counts.values())
     consistent = count_sum == arc_count
@@ -142,6 +166,10 @@ def projection_gauge(
         "max_age_seconds": max_age,
         "missing_legs": missing_legs,
         "consistent": consistent,
+        "excluded_sources": sorted(excluded),
+        "last_outcome": meta.get("last_outcome"),
+        "checked_at": meta.get("checked_at"),
+        "persistence": meta.get("persistence"),
     }
 
     if not consistent:
@@ -222,6 +250,11 @@ async def read_projection_loops(
         est_rows = await conn.fetch(
             _RELTUPLES_SQL, list(GRAPH_ARC_SOURCE_TABLES)
         )
+        has_arcs = (
+            bool(await conn.fetchval(_HAS_ARCS_SQL))
+            if row is not None and int(row["arc_count"] or 0) > 0
+            else True
+        )
     except Exception as exc:  # pragma: no cover — degrade-not-drop
         logger.warning(
             "production_gauge.projection_meta_query_failed err=%s", exc
@@ -238,6 +271,19 @@ async def read_projection_loops(
     estimates = {
         str(r["relname"]): int(r["estimate"] or 0) for r in (est_rows or [])
     }
+    if not has_arcs:
+        # The receipt names a build; the unlogged table is empty — crash
+        # recovery. Quiet and named: the projector's next tick rebuilds it.
+        return [
+            _ungauged(
+                LOOP_GRAPH_PROJECTION,
+                LOOP_ID,
+                LABEL,
+                QUIET_REBUILDING,
+                receipt_arc_count=int(row["arc_count"] or 0),
+                receipt_projected_at=row["projected_at"],
+            )
+        ]
     return [
         projection_gauge(
             dict(row) if row is not None else None,
@@ -253,6 +299,7 @@ __all__ = [
     "QUIET_META_QUERY_FAILED",
     "QUIET_NO_RECEIPT",
     "QUIET_PROJECTION_DISABLED",
+    "QUIET_REBUILDING",
     "projection_gauge",
     "read_projection_loops",
 ]

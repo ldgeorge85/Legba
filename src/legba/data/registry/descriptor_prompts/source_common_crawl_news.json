@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.common_crawl.news": {
+      "source": "source_common_crawl_news.yaml",
+      "state": "draft"
+    }
+  }
+}

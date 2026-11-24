@@ -281,9 +281,10 @@ async def test_thematic_read_slice_reads_dimension_and_diffs_roster():
     # 2026-07-29) — assert each tag rather than the exact array literal so adding
     # a fan-out key doesn't read as a regression here.
     assert conn.roster_calls, "thematic run must resolve the desk roster"
-    rq, _ = conn.roster_calls[0]
-    assert "'g20'" in rq and "'watch'" in rq
-    assert "'supply_chain'" in rq
+    rq, rp = conn.roster_calls[0]
+    # ROSTER-1: the tags are the profile's subject roster, bound as $1.
+    assert "?| $1::text[]" in rq
+    assert rp[0] == ["g20", "watch", "supply_chain"]
 
     # (3) coverage: IN/DE present, IR a NAMED gap — denormalized onto every row.
     assert rows and all(r.get("_desk_mode") == synth.THEMATIC_MODE_PRESENT for r in rows)

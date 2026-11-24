@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.taipeitimes.news": {
+      "source": "source_taipeitimes.yaml",
+      "state": "draft"
+    }
+  }
+}

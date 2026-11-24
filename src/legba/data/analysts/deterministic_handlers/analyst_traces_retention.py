@@ -20,6 +20,10 @@ history has the retired body; the shared engine's ``_purge_traces`` /
 ``_finding_traces`` are that same code, parameterized) — this is a
 REGISTRATION SHIM, not a rewrite:
 
+  * DELETION IS OFF BY DEFAULT (owner decision 2026-11-15: traces are kept
+    forever). Even with a positive TTL nothing is deleted unless
+    ``LEGBA_ANALYST_TRACES_DELETE_ENABLED`` is truthy; the daily run then
+    reports ``deletion=off``.
   * ``ttl_days <= 0`` (the DEFAULT, seeded into the policy row) DISABLES the
     purge — the job ships inert until an operator sets a deliberately
     generous positive TTL.
@@ -48,6 +52,67 @@ RETIREMENT NOTE: this module stays importable/registered in
 :data:`legba.data.analysts.deterministic.SUB_HANDLERS` under the SAME
 sub_handler name (``analyst_traces_retention``) so no descriptor/dispatch
 change is required — it just no longer carries its own purge SQL.
+
+TRACE BULK TO COMPRESSED OBJECTS - DESIGN, NOT BUILT (SEAMS #trace-bulk-cold)
+-----------------------------------------------------------------------------
+Owner decision 2026-11-15: keep every trace's fingerprint forever and its bulk
+as a compressed file. Deletion is off (above); this is the other half. It was
+measured on live and judged too large to land half-built, so it is designed
+here and declared in docs/SEAMS.md.
+
+Measured on live (read-only, 2026-11-15): 112,403 rows, 1,988 MB with indexes,
+about 1.5 GB of it the six bulk columns (``output_payload`` 687 MB,
+``prompt_rendered`` 493 MB, ``llm_calls`` 190 MB, ``intermediate_steps`` 69 MB,
+``input_payload`` 54 MB, ``tool_calls`` 4 MB; sizes as Postgres already
+compresses them in TOAST). About 2,550 runs a day, so about 45 MB a day, 1.35 GB
+a month, 16 GB a year while nothing is deleted. A sample of 3,000 runs older than
+14 days: 26 KB of JSON per run, 3.6 KB after zstd level 3, 2.3 KB at level 19
+(the archive codec's default is level 3; see ``archive_codec``). That is 9 MB a
+day, about 3.3 GB a year (2.1 GB at level 19) against 16 GB in the table, and
+about 400 MB for the existing 112k rows against about 1.5 GB now.
+
+The shape:
+
+* One object per run: the canonical JSON of the six bulk columns, zstd-compressed,
+  content-addressed by the sha256 of the canonical JSON, in a DEDICATED root
+  (``LEGBA_TRACE_ARCHIVE_ROOT``), never the evidence archive: that archive's
+  retention sweep, tier mover and orphan checks are about fetched bytes and
+  must never see a trace. ``archive_store.EvidenceStore(root).put(body)`` is the
+  writer and ``.get(sha)`` the verified reader (it re-hashes on read).
+* The row keeps its fingerprint and a pointer and nothing bulky:
+  ``receipt_hash``/``prev_receipt_hash`` (the chain; ``prompt_rendered`` feeds
+  ``compute_receipt_hash``, so the object is what lets a chain be re-verified),
+  ``prompt_sha256`` (the full prompt), new nullable ``bulk_sha256``,
+  ``bulk_codec``, ``bulk_bytes``, ``bulk_moved_at``; the six bulk columns become
+  NULL or their empty defaults in the same transaction that records the pointer.
+* A mover (this handler's sibling, daily, behind ``LEGBA_TRACE_COLD``, default
+  off) takes runs older than N days in bounded batches: write the object, read it
+  back and re-hash, then UPDATE the row; a failed read-back leaves the row
+  untouched. A dry-run script reports the rows, bytes and compression ratio for
+  the existing 112k rows before the switch is ever turned on.
+
+Why it is not a contained change (the estimate, one lane, about four days):
+
+* Six readers take the bulk of ANY age and must hydrate from the object:
+  ``registry/lineage_api`` (show-the-work, the reason for the whole decision),
+  ``registry/layers_api``, ``registry/flow_api``, ``data/_frame_content``,
+  ``analysts/optimizer`` and ``deterministic_handlers/_reference_diff``. The
+  ``llm_calls`` readers (``consult_turn_cost``, production gauge metering,
+  runtime telemetry) read short recent windows, so they stay on the row if the
+  mover's age floor is above their window (30 days or more); ``llm_calls`` can
+  stay hot for good (190 MB) to make that unconditional.
+* The REGISTRY image cannot read an object today: it has no ``zstandard`` and no
+  mount of an archive volume (only the runtime image has both). The read path
+  needs the dependency in ``docker/Dockerfile.registry`` and a read-only mount of
+  the trace root, which is a deploy-topology change, not a code change.
+* The trace root is the only copy of that text once the row is emptied, so it
+  needs its own backup line in ``scripts/backup.sh`` and a restore proof.
+* Tests: a byte-identical read-back of a sample, the chain re-verified from
+  objects, every reader on a moved row, and the mover under a crash between the
+  write and the UPDATE.
+
+Until it lands, with deletion off, the table grows about 45 MB a day (see the
+disk ceiling in the data-layers review, section 7 note C).
 """
 
 from __future__ import annotations

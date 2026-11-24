@@ -474,6 +474,28 @@ describe('SourceHealthPanel — load faults', () => {
       /returned no rows/i,
     )
   })
+
+  it('says ONCE that the assurance ledger is empty when no source has a rating or dossier', async () => {
+    const bare = { ...LOW_SAMPLE, asserted: asserted({}) }
+    mockFetch({ rows: [bare], detail: { ...DETAIL, source_id: bare.source_id, ratings: [], dossier: null } })
+    renderPanel()
+    expect(await screen.findByTestId('source-health-ledger-empty')).toHaveTextContent(
+      /assurance ledger is empty/i,
+    )
+    fireEvent.click(screen.getByTestId(`source-health-toggle-${bare.source_id}`))
+    expect(
+      await screen.findByTestId(`source-health-ledger-empty-${bare.source_id}`),
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId(`source-health-ratings-empty-${bare.source_id}`)).toBeNull()
+    expect(screen.queryByTestId(`source-health-dossier-empty-${bare.source_id}`)).toBeNull()
+  })
+
+  it('keeps the per-source ratings and dossier sections when any source has one', async () => {
+    mockFetch()
+    renderPanel()
+    await screen.findByTestId('source-health-table')
+    expect(screen.queryByTestId('source-health-ledger-empty')).toBeNull()
+  })
 })
 
 describe('SourceHealthPanel — the per-source drill-down', () => {
@@ -760,5 +782,118 @@ describe('SourceHealthPanel — the freshness grade column', () => {
     const chip = screen.getByTestId('source-health-freshness-grade-g-future')
     expect(chip).toHaveTextContent('some_future_grade')
     expect(chip.className).not.toMatch(/emerald|amber|rose/)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The STALENESS TRIPWIRE pill (W3 SRC-2). The server decides the state
+// (`legba.runtime.source_staleness`); the panel renders it verbatim, with the
+// factor and the last-new-item instant, and never invents a number.
+// ---------------------------------------------------------------------------
+
+function stalenessRow(id: string, staleness: ComputedQuality['staleness']): SourceQualityRow {
+  return { ...MEASURED, source_id: id, computed: computed({ staleness }) }
+}
+
+const STALE_BLOCK = {
+  state: 'stale' as const,
+  factor: 9.2,
+  reason: 'stale · 9.2× its 1.0h expected interval (wall clock); last new item 2026-10-01T06:12:00+00:00',
+  age_s: 33120,
+  expected_interval_s: 3600,
+  weekday_only: false,
+  upstream_quiet: false,
+  last_new_item_at: '2026-10-01T06:12:00+00:00',
+  last_poll_ok_at: '2026-10-01T15:00:00+00:00',
+}
+
+describe('SourceHealthPanel — the staleness tripwire pill', () => {
+  it('shows state, factor and the last new item instant for a stale feed', async () => {
+    mockFetch({ rows: [stalenessRow('s-stale', STALE_BLOCK)] })
+    renderPanel()
+    await screen.findByTestId('source-health-table')
+    const pill = screen.getByTestId('source-health-staleness-pill-s-stale')
+    expect(pill).toHaveTextContent('stale · 9.2× expected interval')
+    expect(pill.className).toMatch(/rose/)
+    expect(screen.getByTestId('source-health-staleness-detail-s-stale')).toHaveTextContent(
+      'last new item 2026-10-01 06:12Z',
+    )
+  })
+
+  it('tones: fresh green, quiet amber, dead rose', async () => {
+    mockFetch({
+      rows: [
+        stalenessRow('s-fresh', { ...STALE_BLOCK, state: 'fresh', factor: 0.4 }),
+        stalenessRow('s-quiet', { ...STALE_BLOCK, state: 'quiet', factor: 3.3 }),
+        stalenessRow('s-dead', { ...STALE_BLOCK, state: 'dead', factor: 31 }),
+      ],
+    })
+    renderPanel()
+    await screen.findByTestId('source-health-table')
+    expect(screen.getByTestId('source-health-staleness-pill-s-fresh').className).toMatch(/emerald/)
+    expect(screen.getByTestId('source-health-staleness-pill-s-quiet').className).toMatch(/amber/)
+    expect(screen.getByTestId('source-health-staleness-pill-s-dead').className).toMatch(/rose/)
+  })
+
+  it('unknown and not-measured read muted absences, never a 0x factor', async () => {
+    mockFetch({
+      rows: [
+        stalenessRow('s-unknown', {
+          ...STALE_BLOCK,
+          state: 'unknown',
+          factor: null,
+          reason: 'no new item has ever been recorded for this source',
+          age_s: null,
+          last_new_item_at: null,
+        }),
+        stalenessRow('s-absent', null),
+      ],
+    })
+    renderPanel()
+    await screen.findByTestId('source-health-table')
+    const unknown = screen.getByTestId('source-health-staleness-pill-s-unknown')
+    expect(unknown).toHaveTextContent('unknown')
+    expect(unknown.className).not.toMatch(/emerald|amber|rose/)
+    expect(unknown).toHaveAttribute('title', 'no new item has ever been recorded for this source')
+    expect(screen.queryByTestId('source-health-staleness-detail-s-unknown')).not.toBeInTheDocument()
+    const absent = screen.getByTestId('source-health-staleness-pill-s-absent')
+    expect(absent).toHaveTextContent('staleness not measured')
+    expect(absent.className).not.toMatch(/emerald|amber|rose/)
+    expect(screen.getByTestId('source-health-staleness-s-absent')).not.toHaveTextContent('0.0')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The ENRICHMENT latency line (W5 SRC-4): the COMPUTED cell says where the
+// newest enriched poll's wall time went; a source never timed says so.
+// ---------------------------------------------------------------------------
+
+describe('SourceHealthPanel — the enrichment latency line', () => {
+  it('shows per-stage seconds/calls, and absence as "enrichment not measured"', async () => {
+    mockFetch({
+      rows: [
+        {
+          ...MEASURED,
+          source_id: 's-timed',
+          computed: computed({
+            enrichment_last_poll: {
+              stages: {
+                ner_multilingual: { calls: 3, total_ms: 1200, max_ms: 500, errors: 0 },
+                geocode: { calls: 3, total_ms: 300, max_ms: 110, errors: 0 },
+              },
+              polled_at: '2026-10-04T09:00:00Z',
+            },
+          }),
+        },
+        { ...MEASURED, source_id: 's-untimed', computed: computed({ enrichment_last_poll: null }) },
+      ],
+    })
+    renderPanel()
+    await screen.findByTestId('source-health-table')
+    const timed = screen.getByTestId('source-health-enrichment-s-timed')
+    expect(timed).toHaveTextContent('last poll: geocode 0.3 s/3 · ner 1.2 s/3')
+    const untimed = screen.getByTestId('source-health-enrichment-s-untimed')
+    expect(untimed).toHaveTextContent('enrichment not measured')
+    expect(untimed.textContent).not.toMatch(/\d/)
   })
 })

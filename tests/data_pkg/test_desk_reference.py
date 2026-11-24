@@ -91,7 +91,7 @@ def test_descriptor_validates_and_binds_a_third_family():
     # to OpenRouter Mistral Large 3. The property that matters ("not the writer's
     # plane, not the judge's") is held by the fence tests; this pins the SHIPPED ref
     # so a silent drift back to a dead key is loud.
-    assert raw == "llm.judge.openrouter_mistral_large.openai_compat", raw
+    assert raw == "llm.grader.innoai_lightning.openai_compat", raw
     assert "llm.primary" not in raw, "the reference must not share the WRITER's family"
     assert "nemotron" not in raw, "the reference must not share the JUDGE's family"
     assert "anthropic" not in raw.lower()
@@ -105,7 +105,7 @@ def test_every_declared_option_is_read_by_the_handler():
     """The X-1 contract, checked here too: a declared knob nobody reads is dead
     config with extra steps, and the descriptor documents these as the cost
     controls an operator turns."""
-    from legba.data.analysts.handler_options import known_option_names
+    from legba.data.option_catalog.handler_options import known_option_names
 
     source = __import__("pathlib").Path(dr.__file__).read_text()
     for name in known_option_names("desk_reference"):
@@ -520,8 +520,7 @@ async def pg_pool(migrated_pg: PostgresConfig):
     await pool.close()
 
 
-@pytest_asyncio.fixture
-async def clean_slate(pg_pool):
+async def _scrub_desk_reference(pg_pool) -> None:
     async with pg_pool.acquire() as conn:
         await conn.execute(
             "DELETE FROM unit_reference_labels WHERE labeled_by LIKE $1",
@@ -558,7 +557,22 @@ async def clean_slate(pg_pool):
         await conn.execute(
             "DELETE FROM signals WHERE source_id = $1", _SLICE_SOURCE
         )
-    yield
+
+
+@pytest_asyncio.fixture
+async def clean_slate(pg_pool):
+    await _scrub_desk_reference(pg_pool)
+    try:
+        yield
+    finally:
+        # TEARDOWN too (X4 NIGHTLY). ``_seed_unit_descriptor`` registers a stub
+        # ``escalation`` head (a bare ``method.bounded_question``, owner
+        # ``test_a1``) in the SESSION-shared database; left behind, the next
+        # file that asks the registry for the shipped ``escalation`` unit finds
+        # a stub that does not parse -- ``test_consult_write_unitcomp.py``'s two
+        # ``_pinned_unit`` tests died with ``KeyError: 'prompt'`` / ``'version'``
+        # whenever the shuffle ran them after this file (nightly 10-09 .. 10-13).
+        await _scrub_desk_reference(pg_pool)
 
 
 class _Deps:
@@ -1108,6 +1122,29 @@ def _ref_item(**kw: Any) -> dict[str, Any]:
     return base
 
 
+async def _foreign_matching_feeds(conn: Any) -> list[str]:
+    """W6-F7 — the "no known feed" precondition, stated instead of assumed.
+
+    The unfillable assertion below is a GLOBAL statement over the
+    session-shared ``source_descriptors``: ANY head of the unit's wanted
+    source class with an empty geo (or this desk's) makes the requirement
+    fillable. That is how this test went order-dependent in W6 — the
+    consult-write files (``world`` in test_consult_write_frame.py) left active
+    ``source.test.cw_*`` analysis heads behind. The polluter is fixed (W7-F5,
+    ``_scrub_registered`` in that fixture's teardown); this check makes the
+    next polluter name itself instead of reading as a product defect.
+    Reproduce the original: run test_consult_write_gate.py then this file with
+    ``-p no:randomly`` and the scrub removed.
+    """
+    from legba.data.analysts.deterministic_handlers import collection_gap as cg
+
+    iso2 = cg._desk_iso2(_TARGET)
+    rows = await cg._match_candidate_sources(
+        conn, cg.source_classes_for(_UNIT), [iso2] if iso2 else [], limit=50,
+    )
+    return [r["descriptor_id"] for r in rows]
+
+
 async def _requirements(conn: Any) -> list[Any]:
     return await conn.fetch(
         "SELECT * FROM collection_requirements WHERE desk = $1 "
@@ -1225,6 +1262,11 @@ async def test_an_uncollected_item_writes_a_requirement_and_opens_a_question(
         await _seed_target(conn)
         await _seed_unit_descriptor(conn)
         ref_id = await _seed_reference_row(conn, items=[_ref_item()])
+        leftover = await _foreign_matching_feeds(conn)
+    assert leftover == [], (
+        "session-DB pollution (W6-F7 class): another test left source heads "
+        f"that match this desk's wanted classes: {leftover}"
+    )
 
     result = await _run(pg_pool)
     block = result.finding.data["reference_gap_dispatch"]
@@ -1423,3 +1465,19 @@ async def test_a_side_write_failure_is_counted_and_never_fails_the_sweep(
     # And the measurement is intact.
     gauge = result.finding.data["collection_gauge"][f"{_TARGET}|{_UNIT}"]
     assert gauge["n_anchorable"] == 1
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_the_teardown_scrub_removes_the_escalation_stub(pg_pool, clean_slate):
+    """X4 NIGHTLY: the stub ``escalation`` head this file seeds is session-shared
+    state; the teardown scrub must take it out (``clean_slate``'s finally calls
+    the same function)."""
+    async with pg_pool.acquire() as conn:
+        await _seed_unit_descriptor(conn)
+        assert await conn.fetchval(
+            "SELECT count(*) FROM analyst_descriptors WHERE descriptor_id = $1", _UNIT) == 1
+    await _scrub_desk_reference(pg_pool)
+    async with pg_pool.acquire() as conn:
+        assert await conn.fetchval(
+            "SELECT count(*) FROM analyst_descriptors WHERE descriptor_id = $1", _UNIT) == 0

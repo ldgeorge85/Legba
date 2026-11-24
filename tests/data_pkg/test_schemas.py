@@ -588,8 +588,8 @@ def test_env_limited_dep_classifies_third_party_vs_legba():
     third = ModuleNotFoundError("No module named 'pycountry'", name="pycountry")
     assert _env_limited_dep(third) == "pycountry"
     ours = ModuleNotFoundError(
-        "No module named 'legba.data.analysts.handler_options'",
-        name="legba.data.analysts.handler_options",
+        "No module named 'legba.data.option_catalog.handler_options'",
+        name="legba.data.option_catalog.handler_options",
     )
     assert _env_limited_dep(ours) is None
 
@@ -632,14 +632,14 @@ def test_load_options_catalog_reraises_on_missing_legba_module(monkeypatch):
     def poisoned(name, *a, **k):
         if "handler_options" in name:
             raise ModuleNotFoundError(
-                "No module named 'legba.data.analysts.handler_options'",
-                name="legba.data.analysts.handler_options",
+                "No module named 'legba.data.option_catalog.handler_options'",
+                name="legba.data.option_catalog.handler_options",
             )
         return real_import(name, *a, **k)
 
     monkeypatch.setattr(builtins, "__import__", poisoned)
     monkeypatch.delitem(
-        __import__("sys").modules, "legba.data.analysts.handler_options",
+        __import__("sys").modules, "legba.data.option_catalog.handler_options",
         raising=False,
     )
     import pytest

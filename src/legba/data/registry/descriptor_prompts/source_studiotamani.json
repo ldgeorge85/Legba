@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.studiotamani.news": {
+      "source": "source_studiotamani.yaml",
+      "state": "draft"
+    }
+  }
+}

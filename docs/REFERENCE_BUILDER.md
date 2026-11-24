@@ -9,10 +9,12 @@ are code.*
 ## The gap it closes
 
 [The correctness grader](CORRECTNESS_GRADER.md) answers "is this read true" against a **reference**: an independent
-account of what happened to one country over one `window_days` window, built without reading our substrate. It
+account of what happened to one subject — a country, a shipping lane, a supply flow, whatever the profile's roster
+holds — over one `window_days` window, built without reading our substrate. It
 deliberately does not build one, because a grader that could build its own reference could close the loop on itself.
-This job is the other half of that pair: one reference per country per window, span-anchored, date-gated, and honest
-about where it is thin. It is the only writer of `unit_references`.
+This job is the other half of that pair: one reference per subject per window, span-anchored, date-gated, and honest
+about where it is thin. It writes `unit_references` through the one shared writer (`_reference_store`), which its
+[keyed sibling](#the-keyed-reference) and the hand loader also use.
 
 ## Why it is a hybrid
 
@@ -29,7 +31,7 @@ actively **mis-grades**, marking correct published work as contradicted. So:
   reach, and nothing it asserts about a date, a URL or a tier is taken on its word;
 * **thinness is declared, not hidden** — a dimension under `thin_below` surviving developments is written to
   `thin_dimensions`, the column the grader already reads, so the free lane under-claims rather than mis-grades;
-* **the substance gap is the operator's money decision**, closed by [a top-up lane](#the-operator-top-up) nothing in
+* **the substance gap is the owner's money decision**, closed by [a top-up](#the-owners-top-up) nothing in
   the platform schedules or can start.
 
 ## The six fences
@@ -90,7 +92,7 @@ frequently the only date there is, which is why it is admitted at all — as the
 weakest rung, named in the row, never silently.
 
 **Where each rung is fed.** `_reference_page.fetch_and_archive` — the
-operator-run door for the top-up merge and the proving harness — holds the
+admin-run door for the top-up merge and the proving harness — holds the
 response and offers all six. The scheduled loop goes through the `web_access`
 pack, whose `web_fetch` result carries `url` / `status_code` / `content_type` /
 `body` and **no response headers**, so rung 6 does not answer there and the
@@ -116,14 +118,27 @@ host leaves the list by becoming readable rather than by being re-argued.
 
 ## What runs, in order
 
-1. **Roster** — targets whose dimension desks have produced within `roster_window_days`, each with the dimensions
-   *that* target actually carries. Per-target, because `thin` must mean the same thing for every country.
+1. **Roster** — the profile's subjects: every target whose live head is `active` and carries a scored
+   roster tag or a `constants.reference_subject_tags` tag (the exemplar: `g20`, `watch`, `supply_chain`), whose units
+   — the scored ones plus those scoped to a reference leg — have produced within `roster_window_days`, each with the
+   dimensions *that* target actually carries. Per-target, because `thin` must mean the same thing for every subject.
+   A target with no head descriptor at all stays on, as at the pin. Live (2026-10-05): 38 — the 32 country desks and
+   the six active lanes and flows, each lane over `disruption_status` alone; the statement plans aggregate-first and
+   reads the head once per target (56.5 ms / 7,913 buffers live, against the pin's 50.6 ms / 7,709).
 2. **Cadence** — drop targets whose newest reference is inside `cadence_days`. A target is due when its newest
    reference is older than the cadence, or when it has none.
+   Each target's SUBJECT — the code its item ids carry (`RD-<CODE>-C-<n>`) and the name its instruction is
+   built around — comes from the subject ladder (`legba.data.subject`, [PROFILES.md](PROFILES.md) "The subject
+   ladder"): the code is the descriptor's declared `scope.subject_code`, else its single `scope.geo` code, else the
+   target id; the name is the gazetteer's for that code (only when the profile's gazetteer declares `polities`, and
+   only for a declared geo code), else the descriptor's name. A lane or a flow (several geo codes, none of them its
+   subject) is keyed and named by itself; nothing is read off the id's spelling. The instruction calls a polity a
+   "country" (the measured bytes) and anything else by its label's tier ("lane", "flow", "regime"), and its searches
+   substitute the label's NAME half ("Strait of Hormuz"), never the tier.
 3. **Order** — read the attempt ledger off this lane's own receipts, sort the due set by last attempt then by
    most-overdue, mark anything that failed inside `retry_backoff_hours` ineligible, and take `max_targets_per_run`
    from the eligible head. Nothing is ever removed from the queue.
-4. **Loop** — the core plane under the stage-one instruction re-anchored to this country and window, with two tools
+4. **Loop** — the core plane under the stage-one instruction re-anchored to this subject and window, with two tools
    (`web_search`, `fetch_page`) through the `web_access` pack. Page text older than a few turns is evicted; the
    model's note is the only record of it that survives, and the model is told so. If the last attempt on this target
    left carried notes, they are appended to the opening turn as leads.
@@ -133,6 +148,37 @@ host leaves the list by becoming readable rather than by being re-argued.
 6. **Fences** — F1, F4, F6, F5 over what it committed.
 7. **Thin** — per-dimension counts over the survivors; anything under `thin_below` is stamped.
 8. **Write** — one row into `unit_references` through the shared writer.
+
+**The query plan is the unit's own.** Each dimension's patterns are its `reference_queries` (profile data,
+`{subject}` the one substitution); a unit that declares none — the exemplar's `disruption_status` — searches its
+own `query_terms` cut into two-word queries after the subject (`Strait of Hormuz shipping traffic`, `… disruption
+closure`, `… transit flow`); a unit with neither gets the generic three, by name.
+
+## The keyed reference
+
+Some subjects' record is not prose at all: a published, machine-readable LIST indexed by a key — CISA's Known
+Exploited Vulnerabilities catalog (keyed by CVE id), a designations list (keyed by an entity id). For those the
+model and its fences are the wrong tool, and `reference_deterministic` is the right one: fetch the declared
+list once per tick through the SSRF-guarded client, and for every BOUND subject (`bindings`: `target_id=value|value`,
+matched against the item's `subject_field`) cut the items dated inside the window into one `unit_references` row,
+builder `deterministic:<feed_id>`. Every item is a development; its decisive span is the record itself, serialised
+canonically, so re-fetching the list reproduces it byte for byte. The row's `ref_json.keyed` block (the key pattern,
+whether the list declares itself complete) is what the grader reads to grade it exactly, by key and with no model
+([CORRECTNESS_GRADER](CORRECTNESS_GRADER.md#the-keyed-path)).
+
+| | |
+|---|---|
+| descriptor | `descriptors/analyst_reference_deterministic.yaml` — `draft`, `budget_tokens_per_day: 0`, daily at 05:53Z |
+| flag | `LEGBA_REFERENCE_DETERMINISTIC_ENABLED`, default off: nothing fetched, nothing written |
+| the list's shape | `feed_id`, `feed_url`, `items_path`, `key_field`, `key_pattern`, `date_field`, `subject_field`, `summary_fields`, `outlet`, `source_tier` |
+| `list_complete` | default `false`. Only a list that is complete for its window lets an ABSENT key grade; an empty cut of an incomplete list is `empty_window` and writes nothing |
+| `bindings` | empty on the exemplar — see below |
+| `dimensions` | the units every item bears on; absent, the subject's own units (its head's tags) |
+
+**The exemplar binds nothing.** The descriptor declares the KEV list and no binding: no list in the geopolitics
+catalog is keyed by anything a lane's or a flow's read names — a disruption read names no CVE and no designation id —
+so a binding there would grade every claim `silent` and call that coverage. The first real binding is the focused
+instance's (an `estate_*` subject bound to its `vendorProject`).
 
 ## The scheduler, and why the tick is hourly
 
@@ -160,7 +206,7 @@ and nothing spent, and recording them would rotate the queue on a misconfigurati
 **The retry backoff and the three-strike flag.** After a build that ends `no_commit` or `all_rejected` the target is
 ineligible for `retry_backoff_hours`, so a chronically failing country costs the lane one build a day rather than
 one an hour and the roster still cycles far faster than the cadence needs. `LEGBA_REFERENCE_RETRY_BACKOFF_HOURS`
-**wins over the descriptor knob** — the inverse of the two build walls, deliberately: those are volumes an operator
+**wins over the descriptor knob** — the inverse of the two build walls, deliberately: those are volumes an admin
 sizes once, where this is the lever reached for while the lane is stuck, when a descriptor PUT plus a re-register
 plus a fresh actor record is exactly the ceremony that cannot be afforded. The receipt records which source it read,
 and zero disables the fence, which is the only way to measure what it is doing.
@@ -169,7 +215,7 @@ After three consecutive failures a target is flagged `unbuildable_by_lane` on th
 never stops being retried — "this lane cannot fetch that country" is a statement about today's fetchers and licence
 classes, both of which change, and a target quietly removed from a roster is how a country disappears from a
 correctness programme without anyone deciding that. The flag routes it to the
-[operator top-up](#the-operator-top-up), the one thing that can close it.
+[owner's top-up](#the-owners-top-up), the one thing that can close it.
 
 ## Where the cadence meets the grader's currency window
 
@@ -268,15 +314,15 @@ paid rung only as a declared fallback under the pack's daily cost brake. A secon
 and was rejected: it duplicates the tool specs, the guarded fetch route and the prompt rules, and adds a lifecycle
 to drift.
 
-## The operator top-up
+## The owner's top-up
 
 What the free lane misses is substance, not verification, and closing that costs money, so the decision stays the
-operator's and nothing here takes it.
+owner's and nothing here takes it.
 
 ```bash
 PYTHONPATH=src python3 scripts/reference_topup_packet.py --candidates   # 0. which countries most need it
 PYTHONPATH=src python3 scripts/reference_topup_packet.py --target country_watch_il   # 1. write the packet
-# 2. the operator runs their own lane over the packet, on whatever model they choose
+# 2. the owner runs their own lane over the packet, on whatever model they choose
 # 3. merge the result back through the same fences
 PYTHONPATH=src python3 scripts/load_unit_reference.py additions.json --merge-into <reference_id>
 ```
@@ -291,7 +337,7 @@ readable as it was.
 
 `--candidates` is step zero because a target flagged `unbuildable_by_lane` has a different shape of problem: there
 is often no skeleton to difference against at all. For those the top-up lane runs from scratch and the result is
-loaded with no `--merge-into`, and the script says so rather than telling the operator to build one first — what the
+loaded with no `--merge-into`, and the script says so rather than telling the owner to build one first — what the
 lane has already failed to do three times.
 
 ## The receipt, and how to read it
@@ -314,7 +360,7 @@ The header line says what the tick did and what it cost, always nothing here. Th
 taken and why, and `next` lines name the rest of the due queue with each one's reason — `never_attempted`,
 `oldest_attempt`, or `retry_backoff` with the instant it returns and its strike count — so rotation is
 distinguishable from starvation at a glance. The per-target block gives the outcome, the survival rate, what the
-loop read, the thin dimensions and the build's own cost. Warnings carry what an operator can act on, such as
+loop read, the thin dimensions and the build's own cost. Warnings carry what an admin can act on, such as
 developments whose host has no reviewed licence class and whose page bodies were therefore not archived.
 
 The same facts are structured on the row's `data.data`: `t0`, `roster_size`, `n_due`, `n_eligible`, `due_queue`,
@@ -347,9 +393,9 @@ PYTHONPATH=src python3 scripts/reference_build_now.py --target country_watch_il 
 A build takes minutes of core-plane time, so the script's default timeout is half an hour. The forced run takes the
 **same** path as the cadence — a PUT to the analyst actor's own `run` method — not a second entry point. `--target`
 travels as `reference_targets` and `--as-of` as `as_of`, the **same key the correctness grader reads**, so an
-operator pinning a fortnight passes one value to both jobs. A named target bypasses both the cadence and the retry
+admin pinning a fortnight passes one value to both jobs. A named target bypasses both the cadence and the retry
 backoff, because naming one is a person saying build this now, and a lane answering "not for another nineteen hours"
-would obey its own scheduler over the operator; its strike history still travels on the receipt.
+would obey its own scheduler over the owner; its strike history still travels on the receipt.
 
 Both knobs ride inside the body's `options` object, the one channel the actor merges into a sub-handler's option
 mapping. A knob at the **top level** of the body is discarded silently, with no error and no log line. A wiring test
@@ -380,13 +426,13 @@ rebuilt before the descriptor is registered.
 
 **Some countries are not buildable by this lane at all.** Where a country's record is largely unfetchable here,
 builds commit nothing however well the loop behaves. The lane names those targets `unbuildable_by_lane` and keeps
-retrying them at the backoff cadence; closing one is the operator top-up, and `--candidates` is the list. Until then
+retrying them at the backoff cadence; closing one is the owner top-up, and `--candidates` is the list. Until then
 those targets have **no reference**, so the grader writes no number for them — the honest state, not a silent zero.
 **Salience is the matching residual**: the fences make a reference *true*, not *complete*. A dimension can carry two
 verified developments and still miss the fortnight's decisive event, nothing in-tree detects that, and it is
 declared per dimension rather than hidden.
 
-**Licence classes are still the operator's.** With no `license_class` recorded for a host, the archiver puts it at
+**Licence classes are still the owner's.** With no `license_class` recorded for a host, the archiver puts it at
 teaser depth: the page is read and the span checked against it in memory, but the body is **not archived** and the
 development carries `span_source: snippet`. Those developments are real and correctly fenced; what they are not is
 re-verifiable later, and the receipt says so per build with the count. See [SEAMS](SEAMS.md).

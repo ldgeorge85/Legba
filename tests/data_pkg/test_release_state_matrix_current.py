@@ -32,9 +32,13 @@ def test_registry_ts_is_parseable_and_nonempty() -> None:
     doc that looks fine but lists zero panels)."""
     text = gm.REGISTRY_TS.read_text(encoding="utf-8")
     rows = gm.parse_registry_ts(text)
-    assert len(rows) >= 50, (
-        f"expected at least 50 panel kinds parsed from {gm.REGISTRY_TS}, "
-        f"got {len(rows)} — the def()/PREVIEW_KINDS/HIDDEN_KINDS regexes in "
+    # The floor is the kind plan's END STATE (UI-D1 §2.5: 62 → 31 survivors),
+    # not today's count: the merge lanes shrink the registry on purpose
+    # (UI-B1/merges took it 62 → 45), and a parse below 31 can only be a
+    # broken regex, never a legitimate registry.
+    assert len(rows) >= 31, (
+        f"expected at least 31 panel kinds parsed from {gm.REGISTRY_TS}, "
+        f"got {len(rows)} — the def()/PREVIEW_KINDS/SINGLETON_DRILLS regexes in "
         f"gen_release_state_matrix.py may be out of sync with registry.ts's "
         f"current shape"
     )

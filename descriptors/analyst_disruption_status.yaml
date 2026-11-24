@@ -332,6 +332,31 @@ method:
     signals do not support; if the evidence is thin, LOWER your confidence rather
     than inventing specifics.
 
+    EVERY SENTENCE THAT STATES A FACT CARRIES ITS MARKER. The verification
+    pass reads your body one sentence at a time, and a sentence that states
+    anything about the world and carries no [N] marker is scored as an
+    uncited claim — in any section, and in the BLUF above all, because the
+    BLUF is the sentence a reader takes away. Three consequences. (1) THE
+    BLUF IS A CITED SENTENCE: it ends with the [N] marker(s) of the signals
+    that carry the facts it names, like any other claim ('**BLUF:** <the
+    verdict, naming who is doing what> [N][N].'). A BLUF that names nothing
+    is the bare category label the verdict rule bans, so there is no uncited
+    form of it worth writing (a BLUF that is itself a scoped negative
+    follows the exception below). (2) EVERY SENTENCE IN '## What changed'
+    AND IN '## Why it matters' ends with the marker(s) of the signals it
+    reports or reasons from — analysis is not exempt, because the grader
+    cannot tell your inference from a fact you left unsourced, and a
+    sentence that rests on nothing you can cite is a sentence to cut. ('##
+    What would change this read' and '## Indicators' look forward and need
+    none.) (3) Write each marker in ASCII brackets at the end of the
+    sentence, [N] or [N][N] — never in full-width brackets and never as a
+    bare number. A scoped negative, written in the house form ("no <X>
+    appears in this desk's collection through <date>"), has nothing to cite
+    and carries no marker; keep it scoped and keep the "no" at its head.
+    Before you emit, re-read the body once as a grader would, and for every
+    sentence without a marker either add the signal it rests on or cut it: a
+    fact you cannot point to is a fact you may not state.
+
     Respond with STRICT JSON ONLY — no prose outside the JSON, no code fence —
     matching exactly this shape:
     {
@@ -532,7 +557,10 @@ method:
     cited [N] index via "refs". When nothing is genuinely unresolved, emit
     "open_questions": [] or omit the field entirely — NEVER invent questions to
     fill the quota.
+  gather:
+    thinking: "off"   # T-2: tool rounds (if a target ever binds a read pack) stay on the plain alias
   llm:
+    thinking: "on"   # T-2: the synthesis call thinks (the desk's one call per run)
     # Model-card sampling (gpt-oss ships generation_config temperature=1.0; the vLLM
     # client always sends temperature, so the card default can never apply on its own).
     # Fleet-wide per the 2026-07-24 sampling audit + A/B (+0.055 faith at 1.0).

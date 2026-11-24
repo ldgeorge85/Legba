@@ -325,8 +325,36 @@ def test_version_value_and_shape() -> None:
     it names the branch rather than deciding one and can never disagree with
     the verdict on the row. No reason is added, renamed or reclassed; no score
     arithmetic, judge model, route, prompt or vocabulary moves.
+
+    ``2026-09-28/1`` — carried_unsupported, the MEMORY-BLOCK guard. The verify
+    pass now emits one new counted soft reason, ``carried_unsupported``: a
+    dated or numeric claim whose resolved citations are ALL memory blocks
+    (prior read / window ledger).
+
+    EXPECTED SHIFT: narrow and one-directional. Inert on any finding carrying
+    no memory citation; on findings that do, it can only ADD soft spans. Split
+    on this stamp and read the new reason against the memory-citing population
+    only. See ``judge_pipeline_version.py``'s lineage entry for the full
+    reasoning.
+
+    ``2026-10-03/1`` — carried_ungraded (SW-9). A unit finding whose every
+    resolved citation is a memory block publishes a NON-SCORE state:
+    ``faithfulness_score`` NULL, the gate capped at 0.5, its own title / tag /
+    counter. EXPECTED SHIFT: the score family MOVES (those rows leave every
+    mean); severity and census are declared NONE — no span, verdict or reason
+    moves, pinned byte-identical in ``test_memory_only_carried_ungraded.py``.
+
+    ``2026-10-03/2`` — the WORLD read's subject-group floor (W4 F-3). One new
+    deterministic check, ARM 4(c) ``drop_floor_violation`` (HARD, expected 0),
+    and one more check unit on every world assembly carrying ``floor``.
+    EXPECTED SHIFT: score MOVES (world reads only), census MOVES (one reason
+    code added), severity NONE (nothing re-classed). Inert on country,
+    thematic and region rows.
+
+    ``2026-11-13/1`` — the SAMPLING REGIME: temperature 1.0 on every model
+    call (judge, critic and graders move from 0.0/0.1). All families MOVES.
     """
-    assert JUDGE_PIPELINE_VERSION == "2026-09-25/1"
+    assert JUDGE_PIPELINE_VERSION == "2026-11-13/1"
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}/\d+", JUDGE_PIPELINE_VERSION)
 
 
@@ -627,8 +655,9 @@ def test_real_lineage_pooling_yield_for_the_score_family() -> None:
     """THE REAL-LINEAGE ANSWER, and it is a NEGATIVE RESULT worth stating.
 
     Computed over the actual lineage for ``faithfulness_score`` — the family
-    band calibration and the correctness scorer both measure — the 22 live
-    stamps collapse into 18 populations. Three boundaries in the entire
+    band calibration and the correctness scorer both measure — the 24 live
+    stamps collapse into 20 populations (``2026-10-03/1``, carried_ungraded,
+    MOVES the score family and is the new singleton head). Three boundaries in the entire
     lineage are declared score-neutral:
 
       * ``2026-08-10/1`` (V-I1 guard 6) joins ``2026-08-09/1`` — a withdraw-only
@@ -642,21 +671,27 @@ def test_real_lineage_pooling_yield_for_the_score_family() -> None:
         the [N+1] proof below: the new value is read off the SAME branch that
         already decided the row's verdict, so it can never disagree with it.
 
-    THE HEAD POOLS AGAIN, for the first time since ``2026-08-30/1`` (the [N+1]
-    transparency train, 201/201 byte-identical) — which pooled backward with
-    LRF into ``{2026-08-29/1, 2026-08-30/1}`` and was, until this stamp, the
-    lineage's only all-none entry. Below it, D-3 (``2026-09-03/1``) declares
-    ``moves`` on every family — sixteen new HARD reasons AND a comparator
-    re-point sized at 56.5% of absence claims; the VERIFY-REGIME FIX
-    (``2026-09-05/1``) declares ``moves`` on every family too; G3
-    (``2026-09-06/1``) and PARTITION-PRESERVE (``2026-09-08/1``) make a third
-    and fourth consecutive singleton; H3 (``2026-09-24/1``) a fifth — none of
-    those five assembly/judge-era stamps pool with each other, and G3's
-    provable inertness on the assembly/legacy populations (40/40
-    byte-identical) still does not buy it a ``none``: this registry keys on
-    the STAMP, one boundary for the whole fleet, and the Assessment rows carry
-    it too. The 08-29/08-30 pair survives below all of them, unchanged: a
-    later moving boundary never retracts an earlier declared-none one.
+    THE HEAD IS A SINGLETON AGAIN. ``2026-09-28/1`` (carried_unsupported)
+    declares ``moves`` on all three families — a new counted soft reason that
+    can only ADD soft spans on the memory-citing population, but that is still
+    a real, one-directional MOVE, not a ``none`` — so the boundary entering it
+    is HARD and it does not pool backward into the H3/H3-MEASURE pair
+    (``2026-09-24/1``, ``2026-09-25/1``), which itself pooled once, for the
+    first time since ``2026-08-30/1`` (the [N+1] transparency train, 201/201
+    byte-identical) — which pooled backward with LRF into
+    ``{2026-08-29/1, 2026-08-30/1}`` and was, until H3-MEASURE, the lineage's
+    only all-none entry. Below it, D-3 (``2026-09-03/1``) declares ``moves``
+    on every family — sixteen new HARD reasons AND a comparator re-point sized
+    at 56.5% of absence claims; the VERIFY-REGIME FIX (``2026-09-05/1``)
+    declares ``moves`` on every family too; G3 (``2026-09-06/1``) and
+    PARTITION-PRESERVE (``2026-09-08/1``) make a third and fourth consecutive
+    singleton; H3 (``2026-09-24/1``) a fifth — none of those assembly/judge-era
+    stamps pool with each other, and G3's provable inertness on the
+    assembly/legacy populations (40/40 byte-identical) still does not buy it a
+    ``none``: this registry keys on the STAMP, one boundary for the whole
+    fleet, and the Assessment rows carry it too. The 08-29/08-30 pair and the
+    09-24/09-25 pair both survive below the new head, unchanged: a later
+    moving boundary never retracts an earlier declared-none one.
 
     Below LRF the boundary stays hard — 08-28/1, 08-27/1, 08-25/1, 08-21/1 all
     declare real score shifts — so band calibration's ``n_scored`` still does
@@ -697,18 +732,21 @@ def test_real_lineage_pooling_yield_for_the_score_family() -> None:
         ("2026-09-08/1",),
         ("2026-09-20/1",),
         ("2026-09-24/1", "2026-09-25/1"),
+        ("2026-09-28/1",),
+        ("2026-10-03/1",),
+        ("2026-10-03/2",),
+        ("2026-11-13/1",),
     ]
-    # 22 stamps -> 18 populations (H3-MEASURE joins H3's pool, not a new one).
-    assert len(STAMP_LINEAGE) == 22 and len(pools) == 18
+    # 25 stamps -> 21 populations (carried_unsupported opened a singleton;
+    # carried_ungraded MOVES the score family, so it opens another; the W4 F-3
+    # world floor adds a check unit to every world read, so it opens a third).
+    assert len(STAMP_LINEAGE) == 26 and len(pools) == 22
 
-    # THE HEAD POOLS BACKWARD ONE STAMP: H3-MEASURE is a pure readout wire
-    # (persisting HOW H3 aligned, never re-deciding a verdict), so the
-    # boundary it opens is SHIFT_NONE and it joins H3's own population rather
-    # than opening a nineteenth. H3 itself does NOT pool further back — its own
-    # named-claim contract declares ``moves`` on every family — so the pair
-    # stops there.
+    # THE HEAD IS A SINGLETON (carried_ungraded moves the score family, as
+    # carried_unsupported did before it): carried_unsupported declares ``moves`` on every
+    # family, so the boundary it opens is HARD and it pools with nothing —
+    # neither H3-MEASURE nor anything further back.
     assert poolable_stamps(JUDGE_PIPELINE_VERSION, METRIC_FAITHFULNESS_SCORE) == (
-        "2026-09-24/1",
         JUDGE_PIPELINE_VERSION,
     )
 
@@ -731,11 +769,23 @@ def test_severity_and_census_families_pool_nothing_on_the_real_lineage() -> None
     all_none_pairs = [
         ("2026-08-29/1", "2026-08-30/1"),
         ("2026-09-24/1", "2026-09-25/1"),
+        # SW-9: carried_ungraded is score-only — severity/census pool backward.
+        ("2026-09-28/1", "2026-10-03/1"),
     ]
+    # W4 F-3 (2026-10-03/2) declares severity NONE and census MOVES, so the
+    # SW-9 pair widens to a triple for severity only.
+    per_family = {
+        METRIC_SEVERITY_SPLIT: {
+            "2026-09-28/1": ("2026-09-28/1", "2026-10-03/1", "2026-10-03/2"),
+            "2026-10-03/1": ("2026-09-28/1", "2026-10-03/1", "2026-10-03/2"),
+            "2026-10-03/2": ("2026-09-28/1", "2026-10-03/1", "2026-10-03/2"),
+        },
+        METRIC_REASON_CENSUS: {},
+    }
     stamp_to_pair = {s: pair for pair in all_none_pairs for s in pair}
     for family in (METRIC_SEVERITY_SPLIT, METRIC_REASON_CENSUS):
         for s in STAMP_LINEAGE:
-            expected = stamp_to_pair.get(s, (s,))
+            expected = per_family[family].get(s) or stamp_to_pair.get(s, (s,))
             # The two exceptions are the all-``SHIFT_NONE`` entries: the [N+1]
             # transparency train (2026-08-30/1, pools with LRF) and H3-MEASURE
             # (2026-09-25/1, pools with H3) — neither declares a reason string

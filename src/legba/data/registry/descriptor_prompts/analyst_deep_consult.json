@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:deep_consult": {
+      "source": "analyst_deep_consult.yaml",
+      "state": "active"
+    }
+  }
+}

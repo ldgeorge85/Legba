@@ -24,13 +24,23 @@
  * generic `/descriptors/{family}` POST/PUT pydantic-parse path consumes), with
  * `identity.version` set to the 16-zero sentinel so the registry re-stamps the
  * content hash on write.
+ *
+ * THE MODAL (UI-B1/tokens): the overlay is the `Dialog` primitive
+ * (`src/ui/dialog.tsx`) instead of a hand-rolled `role="dialog"` div with a
+ * window keydown listener. Behaviour kept as it was: Escape closes (also while
+ * a write is in flight, exactly as the old listener did), a press on the
+ * backdrop closes unless a write is in flight, and the header ✕ / Cancel are
+ * disabled mid-flight. Added by the primitive: focus moves into the modal and
+ * is trapped there, and returns to the opener on close. Every colour is a
+ * token (the modal held 31 raw palette classes).
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { X, ArrowRight, Loader2 } from 'lucide-react'
 import { apiGet, ApiError, readErrorBody } from '@/lib/api'
 import { cn } from '@/lib/cn'
+import { Dialog, DialogContent, DialogTitle } from '@/ui/dialog'
 
 /* -------------------------------------------------------------------------- */
 /* registry row shapes (the subset this modal reads)                          */
@@ -181,9 +191,6 @@ export default function WiringModal({
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const closeRef = useRef(onClose)
-  closeRef.current = onClose
-
   // Reset the form whenever the modal (re)opens, honouring the initial ids.
   useEffect(() => {
     if (!open) return
@@ -196,16 +203,6 @@ export default function WiringModal({
     setPending(false)
     setError(null)
   }, [open, initialTargetId, initialSourceId])
-
-  // Esc to dismiss (only while open + not mid-flight).
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeRef.current()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [open])
 
   // ---- dropdown option sources (only fetched while open) -------------------
   const targetsQ = useQuery<TargetRow[]>({
@@ -319,29 +316,32 @@ export default function WiringModal({
     }
   }
 
-  if (!open) return null
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Wire a subscription or grant"
-      onMouseDown={(e) => {
-        // backdrop click (not a click that started inside the card) dismisses
-        if (e.target === e.currentTarget && !pending) onClose()
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onClose()
       }}
-      data-testid="wiring-modal"
     >
-      <div className="w-[520px] max-w-full rounded-lg border border-slate-800 bg-surface-100 shadow-2xl">
+      <DialogContent
+        data-testid="wiring-modal"
+        aria-label="Wire a subscription or grant"
+        aria-describedby={undefined}
+        overlayClassName="bg-black/60"
+        className="w-[520px] max-w-[calc(100vw-2rem)]"
+        onPointerDownOutside={(e) => {
+          // the backdrop dismisses — but never mid-write
+          if (pending) e.preventDefault()
+        }}
+      >
         {/* header */}
-        <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
-          <h2 className="text-sm font-semibold text-slate-200">Wire it up</h2>
+        <div className="flex items-center justify-between border-b border-line px-4 py-3">
+          <DialogTitle className="text-sm font-semibold text-ink-1">Wire it up</DialogTitle>
           <button
             type="button"
             onClick={() => !pending && onClose()}
             disabled={pending}
-            className="text-slate-500 hover:text-slate-200 disabled:opacity-50"
+            className="text-ink-3 hover:text-ink-1 disabled:opacity-50"
             aria-label="Close"
             data-testid="wiring-modal-close"
           >
@@ -364,8 +364,8 @@ export default function WiringModal({
                 className={cn(
                   'rounded px-3 py-1 text-[11px] capitalize disabled:opacity-50',
                   mode === m
-                    ? 'bg-surface-50 text-slate-200 border border-slate-700'
-                    : 'bg-surface-200 text-slate-500 hover:text-slate-300',
+                    ? 'bg-surf-3 text-ink-1 border border-line-strong'
+                    : 'bg-surf-1 text-ink-3 hover:text-ink-1',
                 )}
                 data-testid={`wiring-modal-mode-${m}`}
               >
@@ -409,12 +409,12 @@ export default function WiringModal({
               <Preview testId="wiring-modal-preview">
                 {targetId && sourceId ? (
                   <span>
-                    subscribe <strong className="text-slate-200">{targetName}</strong>{' '}
-                    <ArrowRight size={11} className="inline -mt-0.5 text-slate-500" /> source{' '}
-                    <strong className="text-slate-200">{sourceName}</strong>
+                    subscribe <strong className="text-ink-1">{targetName}</strong>{' '}
+                    <ArrowRight size={11} className="inline -mt-0.5 text-ink-3" /> source{' '}
+                    <strong className="text-ink-1">{sourceName}</strong>
                   </span>
                 ) : (
-                  <span className="text-slate-500">pick a target and a source</span>
+                  <span className="text-ink-3">pick a target and a source</span>
                 )}
               </Preview>
             </>
@@ -435,8 +435,8 @@ export default function WiringModal({
                       className={cn(
                         'rounded px-3 py-1 text-[11px] capitalize disabled:opacity-50',
                         grantFamily === fam
-                          ? 'bg-surface-50 text-slate-200 border border-slate-700'
-                          : 'bg-surface-200 text-slate-500 hover:text-slate-300',
+                          ? 'bg-surf-3 text-ink-1 border border-line-strong'
+                          : 'bg-surf-1 text-ink-3 hover:text-ink-1',
                       )}
                       data-testid={`wiring-modal-grant-family-${fam}`}
                     >
@@ -477,16 +477,16 @@ export default function WiringModal({
               <Preview testId="wiring-modal-preview">
                 {grantScopeId && packId ? (
                   <span>
-                    grant pack <strong className="text-slate-200">{packName}</strong>{' '}
-                    <ArrowRight size={11} className="inline -mt-0.5 text-slate-500" /> {grantFamily}{' '}
-                    <strong className="text-slate-200">{grantScopeName}</strong>
-                    <span className="text-slate-500">
+                    grant pack <strong className="text-ink-1">{packName}</strong>{' '}
+                    <ArrowRight size={11} className="inline -mt-0.5 text-ink-3" /> {grantFamily}{' '}
+                    <strong className="text-ink-1">{grantScopeName}</strong>
+                    <span className="text-ink-3">
                       {' '}
                       ({grantFamily === 'analyst' ? 'action_packs' : 'allowed_action_packs'})
                     </span>
                   </span>
                 ) : (
-                  <span className="text-slate-500">pick a {grantFamily} and a pack</span>
+                  <span className="text-ink-3">pick a {grantFamily} and a pack</span>
                 )}
               </Preview>
             </>
@@ -503,12 +503,12 @@ export default function WiringModal({
         </div>
 
         {/* footer */}
-        <div className="flex items-center justify-end gap-2 border-t border-slate-800 px-4 py-3">
+        <div className="flex items-center justify-end gap-2 border-t border-line px-4 py-3">
           <button
             type="button"
             onClick={() => !pending && onClose()}
             disabled={pending}
-            className="rounded px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200 disabled:opacity-50"
+            className="rounded px-3 py-1.5 text-xs text-ink-2 hover:text-ink-1 disabled:opacity-50"
             data-testid="wiring-modal-cancel"
           >
             Cancel
@@ -528,8 +528,8 @@ export default function WiringModal({
             {pending ? 'Creating…' : 'Create'}
           </button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -540,7 +540,7 @@ export default function WiringModal({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block space-y-1">
-      <span className="text-[10px] uppercase tracking-wide text-slate-500">{label}</span>
+      <span className="text-[10px] uppercase tracking-wide text-ink-3">{label}</span>
       {children}
     </label>
   )
@@ -572,8 +572,8 @@ function Select({
       onChange={(e) => onChange(e.target.value)}
       disabled={disabled}
       className={cn(
-        'w-full rounded border border-slate-800 bg-surface-200 px-2 py-1.5 text-[11px] text-slate-200',
-        'focus:border-slate-600 focus:outline-none disabled:opacity-50',
+        'w-full rounded border border-line bg-surf-1 px-2 py-1.5 text-[11px] text-ink-1',
+        'focus:border-line-strong focus:outline-none disabled:opacity-50',
       )}
       data-testid={testId}
     >
@@ -590,7 +590,7 @@ function Select({
 function Preview({ children, testId }: { children: React.ReactNode; testId?: string }) {
   return (
     <div
-      className="rounded border border-slate-800 bg-surface-200 px-3 py-2 text-[11px] text-slate-400"
+      className="rounded border border-line bg-surf-1 px-3 py-2 text-[11px] text-ink-2"
       data-testid={testId}
     >
       {children}

@@ -4,11 +4,10 @@
 
 After migrations land, this module:
   1. Verifies all expected tables exist with their key columns.
-  2. Verifies AGE vocabulary (9 vertex + 14 edge labels) loaded.
-  3. Inserts a sample target descriptor row + reads it back.
-  4. Inserts a sample stack component row + reads it back.
-  5. Inserts a sample analyst_trace row + reads it back via provenance query.
-  6. Reports row counts + table sizes per L-091's audit pattern.
+  2. Inserts a sample target descriptor row + reads it back.
+  3. Inserts a sample stack component row + reads it back.
+  4. Inserts a sample analyst_trace row + reads it back via provenance query.
+  5. Reports row counts + table sizes per L-091's audit pattern.
 
 Use programmatically (`run_smoke(...)`) or via `python -m legba.data.smoke`.
 """
@@ -33,7 +32,6 @@ from .provenance import (
     is_valid_schema_uri,
     sha256_canonical,
 )
-from .vocabulary import ENTITY_CLASSES, RELATIONSHIP_TYPES, vertex_label
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +97,9 @@ RETIRED_TABLES: tuple[str, ...] = (
     # 2026-09-22: DATA MODEL V3 / P0 (migration 0202) RE-LANDS the three names
     # as new tables — the v1 tables were dropped at the June pivot; the same
     # re-landing shape as `nexuses`, `watchlist` and `situation_events`.
-    "goals", "watch_triggers", "discovered_urls", "users",
+    # "users" left this list on 10-09: X3-B3 (migration 0236) re-introduces a
+    # LOCAL users table — the pre-clean-slate one is gone, this one is new.
+    "goals", "watch_triggers", "discovered_urls",
 )
 
 # Required provenance columns per L-107 §1 on analyst-produced rows.
@@ -133,10 +133,6 @@ class SmokeResult:
     tables_missing: list[str] = field(default_factory=list)
     tables_unexpected_retired: list[str] = field(default_factory=list)
     provenance_table_failures: dict[str, list[str]] = field(default_factory=dict)
-    age_vertex_labels: list[str] = field(default_factory=list)
-    age_edge_labels: list[str] = field(default_factory=list)
-    vertex_label_diff: dict[str, list[str]] = field(default_factory=dict)
-    edge_label_diff: dict[str, list[str]] = field(default_factory=dict)
     sample_target_id: str | None = None
     sample_stack_component_id: str | None = None
     sample_trace_run_id: str | None = None
@@ -196,38 +192,6 @@ async def run_smoke(pg: PostgresConfig | None = None) -> SmokeResult:
                 result.provenance_table_failures["signals"] = missing
                 result.ok = False
 
-        # 3. AGE labels
-        try:
-            labels = await store.graph_labels()
-        except Exception as exc:
-            result.errors.append(f"AGE label query failed: {exc}")
-            result.ok = False
-            labels = {"vertex": [], "edge": []}
-
-        result.age_vertex_labels = sorted(labels.get("vertex", []))
-        result.age_edge_labels = sorted(labels.get("edge", []))
-
-        expected_vertices = {vertex_label(ec) for ec in ENTITY_CLASSES}
-        expected_edges = set(RELATIONSHIP_TYPES)
-
-        present_v = set(result.age_vertex_labels)
-        present_e = set(result.age_edge_labels)
-        missing_v = sorted(expected_vertices - present_v)
-        missing_e = sorted(expected_edges - present_e)
-        unexpected_v = sorted(present_v - expected_vertices - {"_ag_label_vertex", "_ag_label_edge"})
-        unexpected_e = sorted(present_e - expected_edges - {"_ag_label_vertex", "_ag_label_edge"})
-
-        if missing_v:
-            result.vertex_label_diff["missing"] = missing_v
-            result.ok = False
-        if missing_e:
-            result.edge_label_diff["missing"] = missing_e
-            result.ok = False
-        if unexpected_v:
-            result.vertex_label_diff["unexpected"] = unexpected_v
-        if unexpected_e:
-            result.edge_label_diff["unexpected"] = unexpected_e
-
         # 4. Sample target descriptor round-trip
         target_id = f"smoke_test_target_{uuid4().hex[:8]}"
         target_version = sha256_canonical({"smoke": "target", "id": target_id})[:32]
@@ -252,9 +216,11 @@ async def run_smoke(pg: PostgresConfig | None = None) -> SmokeResult:
                     """
                     INSERT INTO target_descriptors
                         (descriptor_id, version, schema_uri, is_head,
-                         abstraction_level, state, owner, name, body, created_at)
+                         abstraction_level, state, owner, name, body, created_at,
+                         written_by)
                     VALUES ($1, $2, 'legba/target/2.0.0', TRUE, 'L1', 'draft',
-                            'smoke@local', 'Smoke Test Target', $3::jsonb, NOW())
+                            'smoke@local', 'Smoke Test Target', $3::jsonb, NOW(),
+                            legba_principal('rule:smoke'))
                     """,
                     target_id, target_version, json.dumps(target_body),
                 )
@@ -294,9 +260,10 @@ async def run_smoke(pg: PostgresConfig | None = None) -> SmokeResult:
                     """
                     INSERT INTO stack_components
                         (component_id, version, schema_uri, kind, is_head,
-                         state, owner, name, body, created_at)
+                         state, owner, name, body, created_at, written_by)
                     VALUES ($1, $2, 'legba/stack/postgres/1.0.0', 'postgres', TRUE,
-                            'draft', 'smoke@local', 'Smoke PG Cluster', $3::jsonb, NOW())
+                            'draft', 'smoke@local', 'Smoke PG Cluster', $3::jsonb, NOW(),
+                            legba_principal('rule:smoke'))
                     """,
                     component_id, component_version, json.dumps(component_body),
                 )
@@ -451,14 +418,6 @@ if __name__ == "__main__":  # pragma: no cover — manual invocation
             print(f"retired-but-present: {result.tables_unexpected_retired}")
         if result.provenance_table_failures:
             print(f"provenance failures: {result.provenance_table_failures}")
-        print(
-            f"AGE: {len(result.age_vertex_labels)} vertex / "
-            f"{len(result.age_edge_labels)} edge labels"
-        )
-        if result.vertex_label_diff:
-            print(f"vertex diff: {result.vertex_label_diff}")
-        if result.edge_label_diff:
-            print(f"edge diff:   {result.edge_label_diff}")
         print(f"sample target id:     {result.sample_target_id}")
         print(f"sample stack id:      {result.sample_stack_component_id}")
         print(f"sample trace run_id:  {result.sample_trace_run_id}")

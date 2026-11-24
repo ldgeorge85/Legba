@@ -11,6 +11,13 @@
  * new rendering stack. It reuses the Why provenance trail (which itself reuses
  * GET /lineage/{kind}/{id}). When nothing is selected it shows the world
  * assessment one-pager (parity with Why's empty state) — never dead space.
+ *
+ * THE SUBJECT CLICK PATH (X3/D3). A `target` selection is a SUBJECT, and the
+ * Inspector opens on its READ STATE first (`SubjectReadState`: last read,
+ * carried-unsupported, the typed absences); its registry descriptor — the
+ * allowed packs, the hop limit, the 64-hex version — sits one click further,
+ * under "Configuration", never first. The subject is called by the profile's
+ * noun (`lib/subjectRead.ts`), never "target".
  */
 import { ChevronRight, ChevronLeft, FilePlus2, Telescope } from 'lucide-react'
 import { useState } from 'react'
@@ -31,6 +38,8 @@ import { unwrapEnvelope } from '@/lib/proseText'
 import { ScaleStamp } from '@/components/ScaleStamp'
 import { readScaleStamp } from '@/lib/scaleStamp'
 import type { PanelProps } from '@/types'
+import SubjectReadState from '@/components/inspector/SubjectReadState'
+import { selectionKindLabel } from '@/lib/subjectNoun'
 
 /** Keys floated to the top of the BODY DescriptorView. */
 const BODY_PRIMARY = ['title', 'summary', 'severity', 'confidence', 'status', 'produced_at'] as const
@@ -67,8 +76,8 @@ export default function InspectorPanel({ registration }: PanelProps) {
         <div className="flex h-full flex-col items-center justify-center gap-2 px-6 py-10 text-center" data-testid="inspector-empty">
           <div className="text-body font-medium text-ink-2">Nothing selected</div>
           <div className="max-w-xs text-label text-ink-3">
-            Click a finding, signal, entity, target, or any id — its full detail,
-            report, and provenance trail load here.
+            Click a finding, signal, entity, {selectionKindLabel('target')}, or any id — its full
+            detail, report, and provenance trail load here.
           </div>
         </div>
       </PanelChrome>
@@ -76,7 +85,9 @@ export default function InspectorPanel({ registration }: PanelProps) {
   }
 
   const title = detail?.label ?? selection.label ?? selection.id
-  const subtitle = `${selection.kind}${selection.origin ? ` · from ${selection.origin}` : ''}`
+  const subtitle = `${selectionKindLabel(selection.kind)}${selection.origin ? ` · from ${selection.origin}` : ''}`
+  // A SUBJECT opens on its read; the descriptor is its configuration.
+  const isSubject = selection.kind === 'target'
 
   return (
     <PanelChrome
@@ -90,7 +101,23 @@ export default function InspectorPanel({ registration }: PanelProps) {
 
         <Header kind={selection.kind} id={selection.id} label={title} />
 
-        {detail ? (
+        {isSubject ? (
+          <>
+            <SubjectReadState targetId={selection.id} label={title} />
+            {/* The descriptor: one click further, never first. */}
+            <details className="group" data-testid="inspector-configuration">
+              <summary className="cursor-pointer text-label font-semibold uppercase tracking-wider text-ink-2 hover:text-ink-1">
+                Configuration
+              </summary>
+              <div className="mt-2 space-y-density">
+                {detail ? <DetailView detail={detail} /> : <DetailSkeleton />}
+                <Section label="Provenance trail">
+                  <ProvenanceTrail selection={selection} />
+                </Section>
+              </div>
+            </details>
+          </>
+        ) : detail ? (
           <DetailView detail={detail} />
         ) : selection.preview?.body ? (
           // #4 — paint the prose we already have (the clicked feed row's body)
@@ -101,10 +128,13 @@ export default function InspectorPanel({ registration }: PanelProps) {
           <DetailSkeleton />
         )}
 
-        {/* Provenance trail — reused Why fetch (lineage walk). */}
-        <Section label="Provenance trail">
-          <ProvenanceTrail selection={selection} />
-        </Section>
+        {/* Provenance trail — reused Why fetch (lineage walk). A subject's
+            sits under its Configuration. */}
+        {!isSubject && (
+          <Section label="Provenance trail">
+            <ProvenanceTrail selection={selection} />
+          </Section>
+        )}
       </div>
     </PanelChrome>
   )
@@ -113,8 +143,11 @@ export default function InspectorPanel({ registration }: PanelProps) {
 function Header({ kind, id, label }: { kind: Selection['kind']; id: string; label?: string }) {
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-line pb-2">
-      <span className="rounded bg-surf-1 px-1.5 py-0.5 text-label uppercase tracking-wide text-ink-2">
-        {kind}
+      <span
+        className="rounded bg-surf-1 px-1.5 py-0.5 text-label uppercase tracking-wide text-ink-2"
+        data-testid="inspector-kind"
+      >
+        {selectionKindLabel(kind)}
       </span>
       {/* U-5 — a raw UUID/SHA shown in full is noisy and un-copyable without a
           text-select; truncated display + a one-click copy affordance (a
@@ -420,7 +453,7 @@ function OptimisticReport({ preview }: { preview: SelectionPreview }) {
     <>
       <Section label="Report">
         <div data-testid="inspector-report-optimistic">
-          <CitedAssessment text={text} citations={[]} analystId={preview.analystId ?? null} />
+          <CitedAssessment text={text} citations={[]} analystId={preview.analystId ?? null} pending />
         </div>
       </Section>
       <div

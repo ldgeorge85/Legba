@@ -1,0 +1,179 @@
+# W5 (2026-11-07) — THEME-FILTERED thematic composition: hybrid_threat_composition.
+#
+# Cross-border hybrid activity: hoax bomb threats, sabotage of rail, cables and
+# energy infrastructure, arson attributed to state proxies, GPS/GNSS jamming,
+# drone incursions over infrastructure, cyber-physical disruption. On
+# 2026-11-07 the European aviation bomb-hoax wave had 126 signals and 39 desk
+# findings across IT, GB, FR, AU and region_europe, and the world read did not
+# carry it: it lived in Italy's desks, Italy's head ranked 31 of 33, and no
+# composition gathered the campaign across borders
+# (planning/reviews/WORLD_READ_DIG_2026-11-07 item 7).
+#
+# ── what is new, and what is not ────────────────────────────────────────────
+# The SAME meta_findings_synthesizer kind and the SAME S2-T4 thematic READ_SLICE
+# branch as escalation_composition: target-less (one global run), one head per
+# (unit, desk), verify-floored, T7 correlation guard, desk coverage. Two things
+# differ, both declared below as data:
+#
+#   * other_analysts lists SEVERAL units, not one: the theme lands in whichever
+#     unit the desk filed it under (Italy's bomb hoaxes sat in escalation,
+#     internal_stability, military_posture and economic_coercion at once);
+#   * subscription.substrate.thematic_terms is the THEME (thematic_theme.py): a
+#     current head is admitted only when its LEAD SPAN — the sentence the
+#     assembly quotes — carries one of the terms. A desk with no on-theme head
+#     is `quiet` in data.desk_coverage, not a gap.
+#
+# The machinery names no theme; the terms, the units and the theme id are this
+# file's (PLATFORM, NOT EXEMPLAR). The term grammar is in the thematic_theme
+# banner: word-start match, a stem matches its inflections, a space or hyphen
+# matches either.
+#
+# ── composes ONLY under the assembly (SEAMS #75) ─────────────────────────────
+# The thematic prose prompt is worded for escalation and no theme prompt is
+# built. Under LEGBA_COMPOSITION_ASSEMBLY (live for every composition on
+# 2026-11-07) the read is deterministic quotation and needs no prompt; on the
+# prose path the run raises ThemeProseNotBuilt before any model call.
+#
+# ── cost ─────────────────────────────────────────────────────────────────────
+# Compose: ZERO model calls (the assembly). One basis read and one periphery
+# read over the listed units' current heads, with a regex pre-filter. Verify:
+# the composition faithfulness pass runs per head written, like every
+# composition; its judge call is SAMPLED on the configured verify route (the
+# same route and sampling escalation_composition's critiques carry). Two runs a
+# day; a run with no on-theme head returns an empty slice and NOOPs.
+#
+# ── carried at the world tier ───────────────────────────────────────────────
+# Listing this id in world_assessor's other_analysts admits its head as a
+# labelled `thematic:hybrid_threat_composition` block, its own subject group
+# under the world floor (one block guaranteed per group), so the campaign is
+# carried as one unit rather than ranked as Italy's 31st-place read. That edit
+# ships with the activation (descriptors/LIFECYCLE.md), not with this file.
+#
+# ── supersession ─────────────────────────────────────────────────────────────
+# Target-less, so the signature is composition:hybrid_threat_composition:world.
+
+identity:
+  id: hybrid_threat_composition
+  name: Hybrid Threat Composition (hybrid-activity desk reads across all desks → one read)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: meta_findings_synthesizer
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: w5_hybrid
+
+subscription:
+  # NO `targets` block ⇒ ONE global run (`target_filter=None`). 24h holds the
+  # freshest head per (unit, desk): every listed unit fires twice a day.
+  other_analysts:
+    - id: escalation
+      data_types: [finding]
+      time_window: 24h
+    - id: internal_stability
+      data_types: [finding]
+      time_window: 24h
+    - id: military_posture
+      data_types: [finding]
+      time_window: 24h
+    - id: energy_security
+      data_types: [finding]
+      time_window: 24h
+    - id: economic_coercion
+      data_types: [finding]
+      time_window: 24h
+    - id: narrative_coordination
+      data_types: [finding]
+      time_window: 24h
+  substrate:
+    direct_queries: false        # reads via the kind's READ_SLICE, not ad-hoc SQL
+    # THEMATIC discriminator (S2-T4): routes this target-less, verify-declaring
+    # run to the thematic branch. Its value names the THEME (no unit is called
+    # hybrid_threat; the units are other_analysts above).
+    thematic_dimension: hybrid_threat
+    # THE THEME. Matched against each head's lead span (the quoted sentence).
+    thematic_terms:
+      # hoax bomb threats (aviation, schools, public buildings)
+      - bomb hoax
+      - hoax bomb
+      - bomb threat
+      - false bomb
+      - hoax call
+      # sabotage of rail, cables, pipelines, energy and defence sites
+      - sabotag
+      - undersea cable
+      - subsea cable
+      - cable cut
+      - cable damage
+      - anchor drag
+      # arson attributed to state proxies
+      - arson attack
+      - arson plot
+      - state-sponsored arson
+      - state-backed arson
+      - russia-linked arson
+      # satellite-navigation interference
+      - gps jamming
+      - gnss jamming
+      - gps interference
+      - gnss interference
+      - gps spoofing
+      - gnss spoofing
+      # drone incursions over infrastructure
+      - drone incursion
+      - drone sighting
+      - drones over
+      - unidentified drone
+      - drone overflight
+      # cyber-physical disruption
+      - cyber-physical
+      - infrastructure cyberattack
+      - grid cyberattack
+      # the category, when a desk names it
+      - hybrid attack
+      - hybrid threat
+      - hybrid war
+      - hybrid campaign
+      - hybrid operation
+      - hybrid activit
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  # Runtime dispatch is on identity.kind (meta_findings_synthesizer); method.kind
+  # only needs to be a valid enum (same as analyst_escalation_composition.yaml).
+  kind: llm_planner
+  prompt_module: "legba.prompts.meta_findings_synthesizer.v1"
+  # No method.bounded_question, as for escalation_composition: a thematic tier
+  # answers many bounded questions at once (question_source fallback_desk_name).
+  llm:
+    temperature: 1.0
+    # Core plane via a stack_ref ($0). Unused under the assembly (no compose
+    # call); declared so the kind's deps build exactly as the other thematics'.
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    # PRESENCE of this block is the verify opt-in the dispatch keys on (and the
+    # S2-T4 thematic branch requires a verify-declaring descriptor).
+    verify:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+  budget_tokens_per_day: 0
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # After the last unit of the cycle (narrative_coordination 10/22 UTC) and
+  # before world_assessor (00:20 / 12:20), so the world reads a fresh head.
+  fallback_schedule: "50 11,23 * * *"
+  # 11h, below the 12h interval (the escalation_dyad reasoning).
+  cooldown_seconds: 39600
+
+outputs: []

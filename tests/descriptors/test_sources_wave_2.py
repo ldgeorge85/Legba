@@ -154,8 +154,9 @@ def test_ids_unique_and_disjoint_from_roster():
         body = yaml.safe_load(path.read_text())
         existing.add(body["identity"]["id"])
 
-    catalog = (REPO_ROOT / "scripts" / "bringup_register_source_catalog.py").read_text()
-    existing.update(re.findall(r'id="(source\.[a-z0-9_.]+)"', catalog))
+    # ROSTER-1: the catalog is profile data (the walker registers it too).
+    catalog = (REPO_ROOT / "profiles" / "geopolitics" / "rosters" / "source_catalog.yaml").read_text()
+    existing.update(e["id"] for e in yaml.safe_load(catalog)["entries"])
 
     collisions = sorted(set(wave_ids) & existing)
     assert not collisions, f"sources_wave_2 ids collide with existing roster: {collisions}"

@@ -26,14 +26,18 @@ consumer downstream.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from datetime import date
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote_plus, urlencode, urlsplit, urlunsplit
 
 __all__ = [
     "canonical_url",
+    "canonical_url_hash",
+    "levenshtein_distance",
     "normalize_wire_title",
     "normalized_levenshtein",
+    "stored_canonical_url_hash",
     "strip_www",
     "url_embedded_date",
 ]
@@ -133,6 +137,49 @@ def _strip_article_slug(path: str) -> str:
     return rebuilt if rebuilt != path else path
 
 
+# ---------------------------------------------------------------------------
+# Valueless IDENTIFIER query keys (lane N-U)
+# ---------------------------------------------------------------------------
+#
+# ``parse_qsl(keep_blank_values=False)`` drops a key with no value, which is
+# right for a flag (``?amp``, ``?orig_query``) and catastrophic for the SPIP
+# CMS, which addresses every article as ``/spip.php?article<N>``: all 1,503
+# lefaso.net signals (1,398 distinct articles) canonicalised to
+# ``https://lefaso.net/spip.php`` and tier 1 aliased them into one. MEASURED
+# 2026-11-13 over every stored ``canonical_url`` carrying a query (42,696
+# distinct): exactly four hosts carry a valueless key at all — lefaso.net
+# (``article<N>``, 1,400 URLs collapsed into ONE group), sawatdeenetwork.com
+# (``234-christianpfc``, 1 URL), eia.gov (``id``, 1 URL) and redwatch.org.au
+# (``orig_query``, 1 URL). The rule: a valueless key that carries a DIGIT is
+# the item's identifier (``article149046``, SPIP ``p123`` / ``breve42``,
+# ``234-christianpfc``) and is KEPT, bare, in sorted position; a digit-free
+# valueless key (a flag / tracking marker: ``id``, ``orig_query``, ``amp``)
+# is dropped as before. On the live set the canonical form changes for
+# lefaso.net (1,400 URLs) and sawatdeenetwork.com (1 URL) only.
+
+_IDENTIFIER_KEY_RE = re.compile(r"^[A-Za-z_\-]*\d[\w\-.]*$")
+
+
+def _valueless_identifier_keys(query: str) -> list[str]:
+    """The query's valueless keys (``k`` or ``k=``) that read as identifiers."""
+    if not query:
+        return []
+    out = []
+    for k, v in parse_qsl(query, keep_blank_values=True):
+        if k and v == "" and _IDENTIFIER_KEY_RE.match(k) and k not in out:
+            out.append(k)
+    return out
+
+
+def _merge_identifier_keys(pairs: list[tuple[str, str]], id_keys: list[str]) -> str:
+    """The sorted query with each identifier key written bare (``article123``)."""
+    items = [(k, v) for k, v in pairs] + [(k, None) for k in id_keys]
+    items.sort(key=lambda kv: (kv[0], kv[1] or ""))
+    return "&".join(
+        urlencode([(k, v)]) if v is not None else quote_plus(k) for k, v in items
+    )
+
+
 def canonical_url(url: str) -> str:
     """Canonicalize a URL for identity hashing.
 
@@ -143,7 +190,8 @@ def canonical_url(url: str) -> str:
       * Strip fragment (``#...``).
       * Sort query params lexicographically by name; preserve duplicate keys
         via stable order on (name, value).
-      * Drop empty query params.
+      * Drop empty query params — except a valueless IDENTIFIER key
+        (``spip.php?article123``, lane N-U), kept bare; see above.
       * Strip default ports (``:80`` http, ``:443`` https).
       * Preserve path case (paths are case-sensitive per RFC 3986).
       * Truncate the path after a publisher ARTICLE-ID segment (K-4 R4 F3),
@@ -160,30 +208,78 @@ def canonical_url(url: str) -> str:
     except ValueError:
         return url.strip()
 
+    try:
+        # ``.port`` parses lazily and raises on a malformed port
+        # ("host:443:8443", "host:99999"). Before N-S that escaped this
+        # function — a stored row carrying one made every tier-1 scan of its
+        # tenant raise. Same answer as an unsplittable URL: identity is the
+        # stripped string.
+        port = parts.port
+    except ValueError:
+        return url.strip()
     scheme = (parts.scheme or "").lower()
     netloc = strip_www(parts.hostname or "")
-    if parts.port is not None:
-        default = (scheme == "http" and parts.port == 80) or (
-            scheme == "https" and parts.port == 443
+    if port is not None:
+        default = (scheme == "http" and port == 80) or (
+            scheme == "https" and port == 443
         )
         if not default:
-            netloc = f"{netloc}:{parts.port}"
+            netloc = f"{netloc}:{port}"
     if parts.username or parts.password:
         # Preserve userinfo only if present (rare for normal URLs).
         user = parts.username or ""
         pw = f":{parts.password}" if parts.password else ""
         netloc = f"{user}{pw}@{netloc}" if user or pw else netloc
 
-    # Sort query: parse, drop empty-value pairs, sort by (key, value).
+    # Sort query: parse, drop empty-value pairs, sort by (key, value) — except
+    # a valueless IDENTIFIER key (N-U, below), kept bare.
     query_pairs = [
         (k, v) for k, v in parse_qsl(parts.query, keep_blank_values=False) if k
     ]
     query_pairs.sort(key=lambda kv: (kv[0], kv[1]))
     query = urlencode(query_pairs, doseq=False)
+    id_keys = _valueless_identifier_keys(parts.query)
+    if id_keys:
+        query = _merge_identifier_keys(query_pairs, id_keys)
 
     path = _strip_article_slug(parts.path or "")
 
     return urlunsplit((scheme, netloc, path, query, ""))
+
+
+def canonical_url_hash(url: str) -> str:
+    """SHA-256 hex of :func:`canonical_url` — the tier-1 document-identity key.
+
+    The ONE place the key is minted, so the probe side (a new signal's URL in
+    ``filters.ingest_dedupe``) and the stored side (``signals.canonical_url_hash``,
+    migration 0247, written on every insert path and by
+    ``scripts/backfill_signal_url_hash.py``) can never hash differently.
+
+    A stored key is only as current as the rules above: if :func:`canonical_url`
+    ever changes what it returns, stored keys go stale silently (a missed
+    duplicate, never a false one — but missed). Any change to the rules must
+    re-run the backfill script with ``--recompute``; its ``--verify`` mode
+    counts stale rows.
+    """
+    return hashlib.sha256(canonical_url(url).encode("utf-8")).hexdigest()
+
+
+def stored_canonical_url_hash(stored: str | None) -> str | None:
+    """The value ``signals.canonical_url_hash`` carries for a stored
+    ``canonical_url`` column value.
+
+    ``None`` exactly when the column is NULL or ``''`` — the rows tier 1 has
+    never looked at (its stored-side predicate was always ``canonical_url IS
+    NOT NULL AND canonical_url <> ''``), so they need no key and never sit in
+    the un-hashed fallback set. Every other value gets a key, even one whose
+    canonical form is empty (``"   "``): that key is the hash of ``""``, which
+    no probe can produce (a probe with an empty canonical form never looks
+    up), so the row is correctly unmatchable instead of being re-scanned
+    forever as "not yet hashed".
+    """
+    if stored is None or stored == "":
+        return None
+    return canonical_url_hash(stored)
 
 
 #: Agency wire REVISION markers. A wire story is re-sent as it develops and
@@ -314,34 +410,60 @@ def url_embedded_date(url: str):
 # implementations of the near-duplicate test, which is its own joke.
 
 
+def levenshtein_distance(a: str, b: str) -> int:
+    """The exact Levenshtein (unit-cost insert/delete/substitute) distance.
+
+    N-W (2026-11-13): bit-parallel (Myers 1999 as restated for global edit
+    distance by Hyyrö 2001) instead of the O(n*m) cell-by-cell DP. The loop
+    lag monitor named the DP as the innermost frame of every 2-plus-second
+    block in ``event_clustering`` — about 0.3 ms per title pair, tens of
+    thousands of pairs per tick, all on the runtime's event loop. The
+    bit-parallel form does one handful of integer operations per character
+    of the longer string (Python integers are arbitrary-width, so the
+    pattern length is not bounded by a machine word) and returns the SAME
+    integer the DP returned; ``tests/data_pkg/test_levenshtein_n_w.py``
+    pins that against the DP kept verbatim as a fixture.
+    """
+    if a == b:
+        return 0
+    if len(a) > len(b):
+        a, b = b, a             # the shorter string is the bit pattern
+    m = len(a)
+    if m == 0:
+        return len(b)
+    peq: dict[str, int] = {}
+    bit = 1
+    for ch in a:
+        peq[ch] = peq.get(ch, 0) | bit
+        bit <<= 1
+    mask = (1 << m) - 1
+    last = 1 << (m - 1)
+    vp, vn, score = mask, 0, m
+    for ch in b:
+        x = peq.get(ch, 0) | vn
+        d0 = ((((x & vp) + vp) ^ vp) | x) & mask
+        hn = vp & d0
+        hp = (vn | ~(d0 | vp)) & mask
+        if hp & last:
+            score += 1
+        elif hn & last:
+            score -= 1
+        x = ((hp << 1) | 1) & mask
+        vn = x & d0
+        vp = ((hn << 1) | ~(d0 | x)) & mask
+    return score
+
+
 def normalized_levenshtein(a: str, b: str) -> float:
     """Return Levenshtein distance / max(len(a), len(b)).
 
-    Pure Python implementation. ``rapidfuzz`` / ``python-Levenshtein``
-    aren't pinned in pyproject; for the ~100-char titles this filter
-    sees, the naive O(n*m) DP is < 50us in CPython 3.11+. If profiling
-    shows it as a hotspot at scale, swap for ``rapidfuzz`` behind a
-    feature flag.
+    Pure Python, no third-party dependency (``rapidfuzz`` is not pinned);
+    the distance itself is :func:`levenshtein_distance`'s bit-parallel
+    walk (N-W, 2026-11-13), exact and roughly an order of magnitude faster
+    than the DP it replaced on headline-length titles.
     """
     if a == b:
         return 0.0
     if not a or not b:
         return 1.0
-    n, m = len(a), len(b)
-    if n < m:
-        a, b = b, a
-        n, m = m, n
-    previous = list(range(m + 1))
-    for i in range(1, n + 1):
-        current = [i] + [0] * m
-        ca = a[i - 1]
-        for j in range(1, m + 1):
-            cost = 0 if ca == b[j - 1] else 1
-            current[j] = min(
-                current[j - 1] + 1,      # insertion
-                previous[j] + 1,         # deletion
-                previous[j - 1] + cost,  # substitution
-            )
-        previous = current
-    distance = previous[m]
-    return distance / float(n)
+    return levenshtein_distance(a, b) / float(max(len(a), len(b)))

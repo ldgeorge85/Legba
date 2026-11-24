@@ -81,6 +81,7 @@ from pydantic import BaseModel, ConfigDict
 
 from ...provenance.models import FindingPayload
 from ...provenance.origin import origin_class_clause
+from ...source_classification import source_classification
 from ...sources._contract import InMemoryStateStore, SourceContext
 from ....runtime.analyst_method import AnalystMethodResult
 from ....runtime.source_factory import build_source_handler
@@ -720,6 +721,9 @@ async def _probe_source_health(
             config=_RawConfig(**raw_config),
             state_store=InMemoryStateStore(),
             secrets_resolve=secrets_resolve,
+            # W10 TAX-2: the head's declared classification, as the poll path
+            # carries it (the probe discards its signals; the context matches).
+            classification=await source_classification((body or {}).get("scope")),
         )
         newest = await _probe_content_freshness(
             handler=handler, ctx=ctx, auto_paused_at=auto_paused_at,
@@ -1035,6 +1039,26 @@ async def _repoint_facts(conn: Any, loser: str, keeper: str) -> int:
     return touched
 
 
+#: ``data.merge.edges`` on a loser the write plane merged (W11 — an operator
+#: merge through consult or an accepted journal ``merge_entities``): unlike
+#: ``entity_researcher.merge_pair`` it did NOT fold the loser's id-keyed
+#: ``entity_edges`` / event links at merge time, so the merge stays exactly
+#: unmergeable until compaction. Compaction folds them here. The literal is
+#: ``registry/consult_write_entity_apply.MERGE_EDGES_DEFERRED`` (not imported:
+#: this handler does not reach into the registry package).
+MERGE_EDGES_DEFERRED = "deferred_to_compaction"
+
+
+async def _fold_deferred_id_edges(conn: Any, loser_id: Any) -> int:
+    """The K-G1 id-keyed folds a write-plane merge deferred to compaction
+    (``fold_entity_edges`` + ``fold_event_entity_links``, the same functions
+    ``merge_pair`` runs in its transaction). Returns rows touched."""
+    fold = await conn.fetchrow("SELECT * FROM fold_entity_edges($1::uuid)", loser_id)
+    touched = sum(int(fold[k] or 0) for k in ("repointed", "superseded", "self_closed")) if fold else 0
+    touched += int(await conn.fetchval("SELECT fold_event_entity_links($1::uuid)", loser_id) or 0)
+    return touched
+
+
 async def _compact_merged_edges(pool: Any, batch_limit: int = 200) -> int:
     """For merged-loser tombstones not yet compacted, re-point their OPEN nexus/
     fact endpoints onto the keeper canonical_name, then mark the loser compacted
@@ -1051,7 +1075,8 @@ async def _compact_merged_edges(pool: Any, batch_limit: int = 200) -> int:
             -- (0086, cycle-safe) chases to the live keeper. The k.merged_into IS
             -- NULL guard defers a loser whose terminal is (degenerately) still a
             -- tombstone, so it settles after the chain collapses (never strands).
-            SELECT l.id, l.canonical_name AS loser, k.canonical_name AS keeper
+            SELECT l.id, l.canonical_name AS loser, k.canonical_name AS keeper,
+                   l.data->'merge'->>'edges' AS edges
               FROM entity_profiles l
               JOIN entity_profiles k ON k.id = public.resolve_entity(l.merged_into)
              WHERE l.merged_into IS NOT NULL
@@ -1074,6 +1099,8 @@ async def _compact_merged_edges(pool: Any, batch_limit: int = 200) -> int:
                         # the queue twice.
                         total += await _repoint_proposed_edges(
                             conn, loser, keeper)
+                    if r["edges"] == MERGE_EDGES_DEFERRED:
+                        total += await _fold_deferred_id_edges(conn, r["id"])
                     await conn.execute(
                         """
                         UPDATE entity_profiles

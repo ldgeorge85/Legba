@@ -1,0 +1,8 @@
+{
+  "states": {
+    "action_pack:substrate_read_raw": {
+      "source": "action_pack_substrate_read_raw.yaml",
+      "state": "draft"
+    }
+  }
+}

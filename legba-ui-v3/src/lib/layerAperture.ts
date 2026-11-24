@@ -4,7 +4,7 @@
  *
  * ## What this closes
  *
- * `docs/LAYERS.md` — the aperture declaration (`desk_apertures`) is
+ * `docs/DATA_SOURCES.md` — the aperture declaration (`desk_apertures`) is
  * TARGET × LAYER → `present` / `absent` / `unmeasured`, curated per desk, and
  * `absent` REQUIRES the operator's own reason (enforced twice: the pydantic
  * model and a table CHECK). The whole point of it is that **a structurally

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.splash247.news": {
+      "source": "source_splash247.yaml",
+      "state": "draft"
+    }
+  }
+}

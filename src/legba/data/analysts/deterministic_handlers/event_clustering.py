@@ -48,21 +48,13 @@ realistic shape, heavy on repeated real-world entities) folded in ~9-10 s
 un-memoized and ~0.2-0.3 s memoized; the per-candidate walk that follows lands
 well under a second either way, since it is now arithmetic, not folding.
 
-P1d (2026-09-24) made the tower leg's per-candidate wall real. The reserve fix's
-first live tick ran ONE candidate 254.3 s against a 10 s ``tower_candidate_max_seconds``
-and held the actor turn 381 s: ``_write_tower_candidate`` calls ``_match_event``
-SYNCHRONOUSLY before its first await, and ``asyncio.wait_for`` cannot cancel
-CPU work — matching a 120-member candidate against up to 2,000 open events
-re-derived that fixed candidate's folded/normalized/direction-scanned features
-on every row it walked. Four changes, none touching the reserve gate: the
-aggregate side is ``prepare_aggregate``d ONCE and scored with
-``match_prepared_to_event`` instead of re-``_prepare``d per row; the COMPARE
-(never the write) is bounded to ``max_tower_members`` representative members
-(newest first, then distinct source); the open-event walk is pre-filtered to
-the candidate's own category/geo first; and ``_match_event`` itself now
-accepts a cooperative ``deadline_monotonic``, checked every handful of rows,
-so a candidate is matched or cut UNDER the wall from inside the loop that does
-the work — ``asyncio.wait_for`` stays the outer guard for the write's awaits.
+P1d (2026-09-24) made the tower leg's per-candidate wall real (one candidate
+had run 254.3 s against a 10 s wall, because ``asyncio.wait_for`` cannot cancel
+CPU work): the aggregate is ``prepare_aggregate``d ONCE; the COMPARE (never the
+write) is bounded to ``max_tower_members`` representative members; the walk is
+pre-filtered to the candidate's category/geo; and ``_match_event`` takes a
+cooperative ``deadline_monotonic`` checked every handful of rows, so the walk
+cuts itself UNDER the wall — ``asyncio.wait_for`` guards the write's awaits.
 
 P1c (2026-09-23) moved the run's time to where the product is. The first
 budgeted tick spent 83 s clustering 300 signals (44,850 all-pairs scores) plus
@@ -75,16 +67,32 @@ per-candidate wall (``tower_candidate_max_seconds``) that a candidate is never
 started without. The tower page's lineage resolves in ONE batched round rather
 than four queries per candidate.
 
-P1b (2026-09-23) bounds the whole pass: P1's first live run held its Dapr actor
-turn ~60 minutes because one pass had no budget, no cursor and no partial
-receipt. The run now holds ``LEGBA_EVENT_CLUSTERING_PASS_BUDGET_SECONDS``
-(default 120 s — under the 180 s actor invoke timeout), checked between phases
-and between candidates; on exhaustion it writes the receipt with the partial
-funnel, ``budget_exceeded``, the phase it stopped in and the resume cursor, and
-returns. The signal slice resumes from a ``(fetched_at, id)`` watermark and the
-two tower legs from ``(produced_at | occurred_at, id)`` watermarks, all on
-``alert_trigger_watermarks`` keyed by this handler — a completed pass advances
-them and an exhausted pass advances them to where it stopped.
+P1b (2026-09-23) bounds the whole pass (one live turn had held ~60 minutes):
+``LEGBA_EVENT_CLUSTERING_PASS_BUDGET_SECONDS`` (default 120 s, under the 180 s
+actor invoke timeout) is checked between phases and candidates; on exhaustion
+the receipt carries the partial funnel, ``budget_exceeded``, the stopping phase
+and the resume cursors — the slice's ``(fetched_at, id)`` and the tower legs'
+``(produced_at | occurred_at, id)`` watermarks on ``alert_trigger_watermarks``.
+
+N-W (2026-11-13): the loop-lag monitor caught this handler holding the
+runtime's asyncio loop 23-44 s every tick (cluster, match and tower fold all
+ran as plain Python on it). Every CPU-bound step — clustering the page,
+folding the open-event set, each candidate's match walk — now runs in
+``asyncio.to_thread``; database I/O stays on the loop, the prepared-event
+cache is locked (``_event_matcher._PREPARED_CACHE_LOCK``) and sized for both
+producers' open sets (it held one, so the two evicted each other and hit 0%),
+and the title distance is the exact bit-parallel Levenshtein. Output is
+unchanged: ``tests/data_pkg/test_event_clustering_loop_n_w.py`` pins it.
+
+N-Z (2026-11-14): the front (slice, cluster, match, write) lives in
+``_event_clustering_front`` — several pages a pass, a progress floor so a
+pass always advances or records what it skipped, a newest-first catch-up
+split with an oldest-first backfill when the cursor lags, and the lag on
+every receipt; the lifecycle scan lost its links × entities fan-out.
+
+2026-11-09: the signal slice's resume rule is ``_event_slice_progress``'s —
+the processed-prefix watermark, an adaptive page, skip-and-record, a stall
+guard and a one-time catch-up floor (the seven-week freeze it closes).
 
 ``LEGBA_EVENTS`` remains the structural gate: with it off this handler returns an
 audited no-op before it reads or writes the event plane. The descriptor ships
@@ -97,10 +105,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sys
 import time
 from collections import Counter
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator, Mapping
 from uuid import UUID, uuid4
@@ -113,12 +122,14 @@ from ._event_candidates import (
     EventCandidate,
     cluster_candidate,
     entity_links_for,
-    fetch_signal_evidence,
+    fetch_signal_page,  # noqa: F401 — a seam: ``_event_clustering_front`` reads it off this module
     fetch_tower_candidates,
     normalize_signal,
     signal_links_for,
     tower_producer_id,
 )
+from . import _event_slice_progress as _slice_progress
+from . import _event_clustering_front as _front
 from ._event_lifecycle import maintain_event_lifecycle
 from ._event_matcher import (
     DEFAULT_EMBEDDING_THRESHOLD,
@@ -132,7 +143,6 @@ from ._event_matcher import (
     match_prepared_pair,
     prepare_aggregate,
     prepare_open_events,
-    prepared_cache_stats,
 )
 from ._open_event_read import fetch_open_events as _open_events
 from .cross_source_dedup import (
@@ -177,6 +187,11 @@ DEFAULT_TOWER_CANDIDATE_MAX_SECONDS = 10.0
 #: reaches ``signal_links_for``/``entity_links_for``, so every derived signal
 #: keeps its link on the written event regardless of the cap.
 DEFAULT_MAX_TOWER_MEMBERS = 20
+
+#: N-W — the prepared-event cache holds BOTH producers' open sets plus a set
+#: of headroom for rows a tick re-folds; sized to one set, the two scans
+#: evicted each other LRU-first and hit 0 of 2,000 every tick.
+_PREPARE_CACHE_SETS = 3
 
 #: P1d — check the cooperative deadline every this many open events walked, so
 #: the monotonic-clock read costs nothing next to the score itself but a
@@ -339,8 +354,11 @@ def _decode_cursor(state: Any) -> tuple[datetime, UUID] | None:
     return (ts, uid)
 
 
-async def _load_cursors(conn: Any) -> dict[str, tuple[datetime, UUID] | None]:
-    """This handler's resume cursors off the shared watermark plane.
+async def _load_cursors(
+    conn: Any,
+) -> tuple[dict[str, tuple[datetime, UUID] | None], dict[str, dict[str, Any]]]:
+    """This handler's resume cursors (and their raw states) off the shared
+    watermark plane.
 
     Call-time import of the alert plane's watermark helpers — the
     situation_tracker precedent that keeps the deterministic-handler import
@@ -349,7 +367,7 @@ async def _load_cursors(conn: Any) -> dict[str, tuple[datetime, UUID] | None]:
     from .alert_trigger_scan import _load_class_watermarks
 
     _seeded, rows = await _load_class_watermarks(conn, WATERMARK_CLASS)
-    return {key: _decode_cursor(state) for key, state in rows.items()}
+    return {key: _decode_cursor(state) for key, state in rows.items()}, rows
 
 
 async def _save_cursor(
@@ -358,9 +376,14 @@ async def _save_cursor(
     pos: tuple[datetime, UUID] | None,
     *,
     prior: tuple[datetime, UUID] | None,
+    state: Mapping[str, Any] | None = None,
 ) -> None:
-    """Persist one cursor's advance; a ``None`` position writes nothing."""
-    if pos is None or pos == prior:
+    """Persist one cursor's advance; a ``None`` position writes nothing.
+
+    ``state`` (the signal slice's full progress state) is written whenever
+    given — the page, stall count and catch-up record change on ticks whose
+    position does not."""
+    if state is None and (pos is None or pos == prior):
         return
     from .alert_trigger_scan import _upsert_watermark
 
@@ -368,7 +391,8 @@ async def _save_cursor(
         conn,
         WATERMARK_CLASS,
         key,
-        {"ts": pos[0].isoformat(), "id": str(pos[1])},
+        dict(state) if state is not None
+        else {"ts": pos[0].isoformat(), "id": str(pos[1])},  # type: ignore[index]
         fired=False,
     )
 
@@ -675,6 +699,22 @@ def _match_event(
     return _MatchOutcome(matched=best[1], capped=capped, cut=cut)
 
 
+def _cluster_page(
+    evidence: list[Any], *, sort: bool, **kwargs: Any
+) -> tuple[list[EventCandidate], Counter]:
+    """The cluster phase's CPU work (N-W: run in a worker thread): cluster
+    the page, project each cluster to a candidate and, for the live path,
+    order them by slice position so a cut leaves a processed PREFIX the
+    watermark can advance over."""
+    clusters, match_counts = cluster_evidence(evidence, **kwargs)
+    candidates = [cluster_candidate(c) for c in clusters]
+    if sort:
+        candidates.sort(
+            key=lambda c: _slice_progress.candidate_order_key(c.cursor_position)
+        )
+    return candidates, match_counts
+
+
 def _event_payload(
     candidate: EventCandidate,
     *,
@@ -687,7 +727,10 @@ def _event_payload(
     prior_sources = {
         str(v) for v in ((matched or {}).get("source_ids") or ()) if str(v)
     }
-    sources = prior_sources | {m.source_id for m in candidate.members if m.source_id}
+    # C-1: a claim member's source never counts as an independent source (the
+    # lifecycle pass recounts from signal_event_links with the same rule).
+    sources = prior_sources | {m.source_id for m in candidate.members
+                               if m.source_id and m.source_class != "claim"}
     prior_geo = {str(v).lower() for v in ((matched or {}).get("geo") or ())}
     geo = prior_geo | set(candidate.geo)
     starts = [x for x in (candidate.time_start, (matched or {}).get("time_start")) if x]
@@ -820,7 +863,8 @@ async def _write_tower_candidate(
     the candidate loop starts, so this call never re-derives the event side's
     features; ``events`` stays the raw list for the exact-signature check.
     """
-    outcome = _match_event(
+    outcome = await asyncio.to_thread(
+        _match_event,
         candidate,
         events,
         threshold=threshold,
@@ -881,6 +925,8 @@ async def handle(
         # deadline (walk cut mid-scan) that make the per-candidate wall real.
         "tower_candidates_capped": 0,
         "tower_match_cut": 0,
+        # 2026-11-09 — candidates that raised and were skipped, not retried.
+        "candidates_skipped": 0,
     })
     funnel["transitions_by_kind"] = {}
     phase_seconds = {
@@ -957,6 +1003,9 @@ async def handle(
         options.get("max_tower_members", DEFAULT_MAX_TOWER_MEMBERS),
         DEFAULT_MAX_TOWER_MEMBERS,
     )
+    min_signals, catch_up_floor_hours = _slice_progress.knobs(options)
+    split_lag_minutes, split_head_minutes, max_pages = _front.catch_up_knobs(options)
+    cache_limit = max_events * _PREPARE_CACHE_SETS
     ctx = _analyst_ctx(options)
     now = datetime.now(timezone.utc)
     budget_seconds = _pass_budget_seconds(options)
@@ -973,14 +1022,15 @@ async def handle(
         evidence = [e for e in (normalize_signal(i) for i in inputs) if e]
         funnel["examined"] = len(evidence)
         with _phase(phase_seconds, "cluster"):
-            clusters, match_counts = cluster_evidence(
+            candidates, match_counts = await asyncio.to_thread(
+                _cluster_page,
                 evidence,
+                sort=False,
                 threshold=match_threshold,
                 embedding_threshold=embedding_threshold,
                 max_members=MAX_CLUSTER_MEMBERS,
                 block_window_hours=block_window_hours,
             )
-            candidates = [cluster_candidate(c) for c in clusters]
         funnel.update(match_counts)
         funnel["clustered"] = len(candidates)
         funnel["oversized"] = sum(c.oversized for c in candidates)
@@ -997,8 +1047,22 @@ async def handle(
 
     qdrant = (getattr(deps, "extras", {}) or {}).get("qdrant")
     async with pool.acquire() as conn:
-        cursors = await _load_cursors(conn)
+        cursors, raw_states = await _load_cursors(conn)
         since = now - timedelta(hours=lookback_hours)
+        # 2026-11-09 — the slice's progress contract (see
+        # ``_event_slice_progress``): adaptive page, processed-prefix
+        # watermark, skip-and-record, stall guard, one-time catch-up floor.
+        progress = _slice_progress.begin(
+            raw_states.get(SIGNAL_CURSOR_KEY),
+            cursors.get(SIGNAL_CURSOR_KEY),
+            max_signals=max_signals,
+            min_signals=min_signals,
+        )
+        await _slice_progress.apply_catch_up_floor(
+            conn, progress, floor_hours=catch_up_floor_hours, now=now
+        )
+        _front.open_split(progress, now=now, lag_minutes=split_lag_minutes,
+                          head_minutes=split_head_minutes)
 
         # -- phase: lifecycle (FIRST, P1c) ------------------------------------
         # The transitions ARE the product, and before P1c they ran last: the
@@ -1027,214 +1091,30 @@ async def handle(
         if lifecycle.get("deferred"):
             stopped_in_phase = "lifecycle"
 
-        # -- phase: slice --------------------------------------------------
-        # The fetch IS the examination — every row returned is counted, so a
-        # truncated pass resumes the slice from the last candidate it failed
-        # to finish writing rather than from the page boundary.
-        evidence: list[Any] = []
-        cosines: dict[tuple[UUID, UUID], float] = {}
-        semantic_counts: dict[str, int] = {}
-        if stopped_in_phase is None:
-            with _phase(phase_seconds, "slice"):
-                evidence = await fetch_signal_evidence(
-                    conn,
-                    since=since,
-                    max_signals=max_signals,
-                    cursor=cursors.get(SIGNAL_CURSOR_KEY),
-                )
-                if evidence and not _spent(budget, tower_reserve):
-                    cosines, semantic_counts = await _semantic_cosines(
-                        conn,
-                        evidence,
-                        qdrant=qdrant,
-                        collection=qdrant_collection,
-                        threshold=embedding_threshold,
-                    )
-        funnel["examined"] = len(evidence)
-        funnel.update(semantic_counts)
-        slice_tail = (
-            (evidence[-1].fetched_at, evidence[-1].id)
-            if evidence and evidence[-1].fetched_at is not None
-            else None
-        )
-
-        # -- phase: cluster -------------------------------------------------
-        candidates: list[EventCandidate] = []
-        if evidence and _spent(budget, tower_reserve):
-            stopped_in_phase = "cluster"
-        elif evidence:
-            with _phase(phase_seconds, "cluster"):
-                clusters, match_counts = cluster_evidence(
-                    evidence,
-                    threshold=match_threshold,
-                    embedding_cosines=cosines,
-                    embedding_threshold=embedding_threshold,
-                    max_members=MAX_CLUSTER_MEMBERS,
-                    block_window_hours=block_window_hours,
-                )
-                candidates = [cluster_candidate(c) for c in clusters]
-            funnel.update(match_counts)
-            funnel["clustered"] = len(candidates)
-            funnel["oversized"] = sum(c.oversized for c in candidates)
-            funnel["declined_single_source"] = sum(
-                c.decline_reason == "single_source" for c in candidates
-            )
-            funnel["signature_unmintable"] = sum(
-                c.decline_reason == "signature_unmintable" for c in candidates
-            )
-            if _spent(budget, tower_reserve):
-                stopped_in_phase = "match"
-
-        # -- phases: match + write ------------------------------------------
-        # ``unprocessed`` starts as every candidate and shrinks as the write
-        # loop lands each one; the slice watermark resumes at the earliest
-        # member position still owed a write.
+        # -- phases: slice, cluster, match, write (``_event_clustering_front``)
+        # N-Z: head pages then backfill pages under the front's budget share,
+        # with the progress floor, the catch-up split and the lag report.
         newly_linked: dict[UUID, set[UUID]] = {}
         new_context: dict[UUID, bool] = {}
-        unprocessed = list(candidates)
-        if candidates and stopped_in_phase is None:
-            with _phase(phase_seconds, "match"):
-                open_events = await _open_events(
-                    conn, analyst_id=ctx.analyst_id, limit=max_events
-                )
-                # P1e — folded ONCE for the whole candidate loop below, not
-                # once per candidate; kept in step with ``open_events`` by the
-                # same reattach/mint refresh that keeps that list current.
-                # P1g — and across ticks: an event unchanged in every column
-                # the fold reads reuses the bundle it was folded into last
-                # tick, so a settled open set costs no fold at all.
-                prepared_open_events = prepare_open_events(
-                    open_events, cache_limit=max_events
-                )
-            for idx, candidate in enumerate(candidates):
-                if _spent(budget, tower_reserve):
-                    stopped_in_phase = "write"
-                    break
-                unprocessed = candidates[idx + 1:]
-                if candidate.oversized:
-                    continue
-                with _phase(phase_seconds, "match"):
-                    # No cap, no prefilter, no deadline: this leg's candidates
-                    # are already bounded by MAX_CLUSTER_MEMBERS, and this call
-                    # keeps the exact pre-P1d behaviour.
-                    matched = _match_event(
-                        candidate, open_events, threshold=match_threshold,
-                        prepared_events=prepared_open_events,
-                    ).matched
-                if not candidate.promoted and matched is None:
-                    continue
-                if not candidate.promoted:
-                    # A corroboration bar decides whether a NEW event may open;
-                    # it is not a refusal to attach a signal to an occurrence
-                    # that already exists. This is what lets a resolved event
-                    # reactivate on one late official/reporting link.
-                    candidate = replace(
-                        candidate,
-                        promoted=True,
-                        decline_reason=f"reattached_{candidate.decline_reason}",
-                    )
-                with _phase(phase_seconds, "write"):
-                    event_id, _new, _sit_linked = await _write_candidate(
-                        conn,
-                        candidate,
-                        matched=matched,
-                        ctx=ctx,
-                        newly_linked=newly_linked,
-                        new_context=new_context,
-                    )
-                if event_id is None:
-                    funnel["write_refusals"] += 1
-                    continue
-                funnel["promoted"] += 1
-                funnel["situations_linked"] += _sit_linked
-                if matched is not None:
-                    funnel["reattached"] += 1
-                    # Refresh the local row enough for subsequent candidates in
-                    # the same tick to see the newly attached member ids / geo.
-                    row = dict(matched)
-                    row["signal_ids"] = list(
-                        set(row.get("signal_ids") or ()) | set(candidate.signal_ids)
-                    )
-                    row["entity_ids"] = list(
-                        set(row.get("entity_ids") or ())
-                        | {l.entity_id for l in entity_links_for(candidate)}
-                    )
-                    row["entity_names"] = sorted(
-                        set(row.get("entity_names") or ())
-                        | {n for m in candidate.members for n in m.entity_names}
-                    )
-                    row["geo"] = sorted(set(row.get("geo") or ()) | set(candidate.geo))
-                    if candidate.time_end and (
-                        row.get("latest_linked_at") is None
-                        or candidate.time_end > row["latest_linked_at"]
-                    ):
-                        row["latest_linked_at"] = candidate.time_end
-                    open_events = [
-                        row if _uuid(r.get("id")) == event_id else r
-                        for r in open_events
-                    ]
-                    # P1e — the reattached row's features changed (entities,
-                    # geo, latest link time), so its prepared bundle is
-                    # re-folded here, ONCE, rather than left stale for the
-                    # rest of this candidate loop.
-                    # P1g — through the same cache: the rewritten entity /
-                    # geo / link-time values are cache-key columns, so this is
-                    # a miss that folds once and stores under the new stamps.
-                    refreshed = prepare_open_events(
-                        [row], cache_limit=max_events
-                    )[0]
-                    prepared_open_events = [
-                        refreshed if _uuid(item.row.get("id")) == event_id else item
-                        for item in prepared_open_events
-                    ]
-                else:
-                    # The same projection ``_open_event_read`` returns, so a
-                    # minted row and a fetched one are one shape in this list.
-                    row = dict((await conn.fetchrow(
-                        "SELECT id, event_signature, title, category, geo,"
-                        " time_start, time_end, updated_at"
-                        " FROM events WHERE id = $1", event_id
-                    )) or {})
-                    row["signal_ids"] = candidate.signal_ids
-                    row["source_ids"] = [m.source_id for m in candidate.members if m.source_id]
-                    row["entity_ids"] = [l.entity_id for l in entity_links_for(candidate)]
-                    row["entity_names"] = list(
-                        {n for m in candidate.members for n in m.entity_names}
-                    )
-                    row["latest_linked_at"] = candidate.time_end
-                    open_events.append(row)
-                    # P1e — a freshly minted event joins the prepared list too,
-                    # so a later candidate in this same loop can reattach to it
-                    # without falling back to an unprepared scan.
-                    # P1g — a new id is a new cache key: folded once here and
-                    # already warm for the next tick that reads it back.
-                    prepared_open_events.append(
-                        prepare_open_events([row], cache_limit=max_events)[0]
-                    )
-
-        # A slice whose write loop finished advances to the page tail; a slice
-        # cut mid-write resumes INCLUSIVE at the earliest member position still
-        # owed a write (the NIL-id bound re-reads every row at that timestamp —
-        # idempotent upserts absorb the overlap); a slice that never reached
-        # the write loop keeps its prior watermark, so the page is re-offered
-        # rather than dropped.
-        # P1c: lifecycle runs before the slice, so stopping there means the
-        # slice never ran and ``evidence`` is empty — only ``tower`` can now
-        # follow a fully consumed slice.
-        slice_done = stopped_in_phase in (None, "tower")
-        if evidence:
-            if slice_done:
-                if slice_tail is not None:
-                    cursors_out[SIGNAL_CURSOR_KEY] = slice_tail
-            else:
-                floors = [
-                    p for p in (c.cursor_position for c in unprocessed)
-                    if p is not None
-                ]
-                if floors:
-                    cursors_out[SIGNAL_CURSOR_KEY] = (
-                        min(floors)[0], _NIL_UUID,
-                    )
+        front_stop = await _front.run_front(
+            _front.FrontContext(
+                h=sys.modules[__name__], conn=conn, ctx=ctx, budget=budget,
+                reserve=tower_reserve, since=since, now=now,
+                match_threshold=match_threshold,
+                embedding_threshold=embedding_threshold,
+                block_window_hours=block_window_hours, max_events=max_events,
+                cache_limit=cache_limit, qdrant=qdrant,
+                qdrant_collection=qdrant_collection, funnel=funnel,
+                phase_seconds=phase_seconds, progress=progress,
+                newly_linked=newly_linked, new_context=new_context,
+            ),
+            lifecycle_cut=stopped_in_phase == "lifecycle",
+            max_pages=max_pages,
+        )
+        stopped_in_phase = stopped_in_phase or front_stop
+        cursors_out[SIGNAL_CURSOR_KEY] = progress.cursor_after
+        _front.record_lag(progress, now=now)
+        _slice_progress.log_line(progress)
 
         # -- phase: tower ----------------------------------------------------
         unprocessed_tower: list[EventCandidate] = []
@@ -1246,18 +1126,12 @@ async def handle(
         # ride the ``tower`` receipt block) rather than once per candidate.
         events_prepared = 0
         prepare_seconds = 0.0
-        # P1g — how much of that fold the cross-tick cache answered. The two
-        # partition ``events_prepared``: a hit reused a bundle folded under
-        # the same change stamps, a miss folded.
+        # P1g — the cache's hits/misses partition ``events_prepared``.
         prepare_cache_hits = 0
         prepare_cache_misses = 0
-        # P1c review (2026-09-24): the front phases stop AT the reserve
-        # boundary (``_spent(budget, tower_reserve)``), and that sets
-        # ``stopped_in_phase`` — so a gate of "nothing stopped" meant the
-        # reserve was honoured by the front and then never used (three live
-        # ticks: cut in write at 90 s of 120, tower 0.0 s). A front cut is a
-        # front cut, not a spent budget: the tower runs whenever its reserve
-        # is still there (the whole budget is not exhausted).
+        # P1c review (2026-09-24): a front cut at the reserve boundary is not
+        # a spent budget — the tower runs whenever its reserve is still there
+        # (three live ticks had cut in write at 90 s of 120, tower 0.0 s).
         tower_ran = False
         tower_cut = False
         tower_may_run = include_tower and (
@@ -1295,17 +1169,15 @@ async def handle(
                 # right after the fetch, and hand the same list to every
                 # candidate below.
                 _prepare_started = time.monotonic()
-                _cache_before = prepared_cache_stats()
-                tower_prepared_events = prepare_open_events(
-                    tower_events, cache_limit=max_events
+                _fold_stats: dict[str, int] = {}
+                tower_prepared_events = await asyncio.to_thread(
+                    prepare_open_events, tower_events,
+                    cache_limit=cache_limit, stats=_fold_stats,
                 )
                 prepare_seconds = time.monotonic() - _prepare_started
                 events_prepared = len(tower_prepared_events)
-                _cache_after = prepared_cache_stats()
-                prepare_cache_hits = _cache_after["hits"] - _cache_before["hits"]
-                prepare_cache_misses = (
-                    _cache_after["misses"] - _cache_before["misses"]
-                )
+                prepare_cache_hits = _fold_stats.get("hits", 0)
+                prepare_cache_misses = _fold_stats.get("misses", 0)
                 unprocessed_tower = list(tower_candidates)
                 for idx, candidate in enumerate(tower_candidates):
                     # The budget check runs BEFORE each candidate and asks
@@ -1401,7 +1273,10 @@ async def handle(
         async with conn.transaction():
             for key, pos in cursors_out.items():
                 await _save_cursor(
-                    conn, key, pos, prior=cursors.get(key)
+                    conn, key, pos, prior=cursors.get(key),
+                    state=(
+                        progress.state() if key == SIGNAL_CURSOR_KEY else None
+                    ),
                 )
 
     changed = bool(
@@ -1419,7 +1294,7 @@ async def handle(
         reason,
         _receipt_data(
             funnel, phase_seconds, cursors_out, stopped_in_phase,
-            extra={"tower": {
+            extra={"slice": progress.receipt(), "tower": {
                 "ran": tower_ran,
                 "cut": tower_cut,
                 "per_candidate_seconds": per_candidate_seconds,

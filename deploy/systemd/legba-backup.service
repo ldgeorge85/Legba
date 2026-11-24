@@ -1,21 +1,26 @@
-# Legba scheduled backup (resilience-observability W-1b §5).
+# Legba scheduled backup — one ENCRYPTED set per night (X1-A2).
 #
-# Oneshot unit run by legba-backup.timer. Wraps scripts/backup.sh with
-# retention + offsite (scripts/backup_scheduled.sh). Install:
+# Oneshot unit run by legba-backup.timer: scripts/backup_scheduled.sh runs
+# scripts/backup.sh (postgres + the evidence archive (incremental) + qdrant +
+# opensearch + redis + nats + seeds/planning + the sealed key escrow, all
+# encrypted to LEGBA_BACKUP_PUBKEY, shipped to LEGBA_BACKUP_DEST) and then
+# prunes the destination to 7 daily / 4 weekly sets.
+#
+# Install (no host_bootstrap.sh exists; this is the documented path —
+# docs/RUNBOOK.md "Back up and restore"):
 #
 #   sudo cp deploy/systemd/legba-backup.{service,timer} /etc/systemd/system/
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now legba-backup.timer
-#   systemctl list-timers legba-backup.timer        # confirm next run
-#   sudo systemctl start legba-backup.service        # run once now
+#   systemctl list-timers legba-backup.timer        # confirm the next run
+#   sudo systemctl start legba-backup.service        # one run now
 #
-# Offsite is OFF until LEGBA_BACKUP_OFFSITE_DEST is set (in .env). Until then
-# the wrapper warns loudly + drops an OFFSITE_NOT_CONFIGURED marker (declared
-# SEAM — see docs/SEAMS.md). See docs/RUNBOOK.md backup section for the restore
-# drill.
+# backup.sh refuses (exit 2, unit failed) until LEGBA_BACKUP_PUBKEY names an
+# OpenPGP public key file — nothing leaves the host unencrypted. The knobs are
+# read from .env (LEGBA_BACKUP_* lines) by the script itself.
 
 [Unit]
-Description=Legba scheduled backup (pg + redis + qdrant + NATS JetStream, retention + offsite)
+Description=Legba scheduled backup (encrypted set: pg, archive, qdrant, opensearch, redis, nats, repo, key escrow; 7d/4w retention)
 Documentation=file:///usr/local/deployments/active/legba/docs/RUNBOOK.md
 After=docker.service network-online.target
 Wants=network-online.target
@@ -26,18 +31,12 @@ Type=oneshot
 User=root
 Group=root
 WorkingDirectory=/usr/local/deployments/active/legba
-EnvironmentFile=-/usr/local/deployments/active/legba/.env
-# Substrate ports are loopback-mapped from the compose stack.
-Environment=PG_HOST=127.0.0.1
-Environment=PG_PORT=5432
-Environment=REDIS_HOST=127.0.0.1
-Environment=REDIS_PORT=6379
-Environment=QDRANT_URL=http://127.0.0.1:6333
-Environment=OS_URL=http://127.0.0.1:9200
-Environment=OS_AUDIT_URL=http://127.0.0.1:9201
-Environment=NATS_URL=nats://127.0.0.1:4222
-Environment=COMPOSE_PROJECT=legba
-Environment=LEGBA_BACKUP_KEEP=14
+# The archive pack of a first (full) run is ~30 GB of reads; never let the
+# unit's default timeout kill it half-written.
+TimeoutStartSec=6h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
 ExecStart=/usr/bin/env bash /usr/local/deployments/active/legba/scripts/backup_scheduled.sh
 StandardOutput=append:/usr/local/deployments/active/legba/logs/backup.log
 StandardError=append:/usr/local/deployments/active/legba/logs/backup.log

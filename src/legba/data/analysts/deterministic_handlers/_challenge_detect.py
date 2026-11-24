@@ -90,6 +90,13 @@ _CHALLENGE_RULES: tuple[tuple[str, ...], ...] = (
     # blocker"). Reuters is closed by ROBOTS (FETCH_REVIEW §2) and is never
     # fetched; the tell is kept because DataDome fronts other publishers too.
     ("enable js and disable any ad blocker",),
+    # The Federal Register / eCFR access wall (W11-F259, roll 79): a 200
+    # redirect from www.federalregister.gov to unblock.federalregister.gov,
+    # titled "Request Access", 800 chars of prose and a CAPTCHA. Each tell is
+    # the wall's own sentence; none is ordinary article prose.
+    ("your request has been flagged as potentially automated",),
+    ("complete the captcha", "request access"),
+    ("programmatic access to these sites is limited",),
 )
 
 #: Tells that exist only in the markup/script and can never survive main-text

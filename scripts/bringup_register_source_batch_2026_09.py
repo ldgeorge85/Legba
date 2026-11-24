@@ -164,6 +164,124 @@ CREDIBILITY_SEEDS: list[tuple[str, float, str, str, bool]] = [
         "Studio Kalangou treatment.",
         "wire", False,
     ),
+    (
+        "royalnavy.mod.uk", 0.90,
+        "UK Royal Navy / UKMTO (sccd.royalnavy.mod.uk) — the UK Maritime Trade "
+        "Operations incident list (roll 73). Official reporting of maritime "
+        "security incidents; a state body, read as official reporting.",
+        "gov", True,
+    ),
+    # K-1 cyber desk (2026-11-14). Official CERTs and agencies read as
+    # official reporting; the three trade outlets as specialist news (wire
+    # tier, the closed CHECK has no 'trade' value). No row for the provider
+    # status feeds: their hosts (amazon.com, google.com, azure.status.microsoft)
+    # are shared, and a host row would score every URL under them.
+    (
+        "cisa.gov", 0.92,
+        "US CISA (cisa.gov) — the Known Exploited Vulnerabilities catalogue and "
+        "the agency's advisories (K-1). A federal agency's primary publication "
+        "about vulnerabilities and threats; official, state body.",
+        "gov", True,
+    ),
+    (
+        "ncsc.gov.uk", 0.90,
+        "UK National Cyber Security Centre (part of GCHQ) — news, reports and "
+        "guidance (K-1). Official, state body; its attributions are the UK "
+        "government's position, not independent confirmation.",
+        "gov", True,
+    ),
+    (
+        "cyber.gouv.fr", 0.90,
+        "ANSSI / CERT-FR (cert.cyber.gouv.fr, formerly cert.ssi.gouv.fr) — the "
+        "French government CERT's alerts and threat reports (K-1). Official, "
+        "state body.",
+        "gov", True,
+    ),
+    (
+        "cert.europa.eu", 0.88,
+        "CERT-EU — the cybersecurity service of the EU institutions; its "
+        "security advisories (K-1). Official EU body.",
+        "gov", True,
+    ),
+    (
+        "bsi.bund.de", 0.88,
+        "German Federal Office for Information Security (BSI) — press releases "
+        "and warnings (K-1). Official, state body.",
+        "gov", True,
+    ),
+    (
+        "therecord.media", 0.80,
+        "The Record (Recorded Future News) — original cybersecurity reporting "
+        "with named-official sourcing and a record of first reports (K-1). "
+        "Owned by a threat-intelligence vendor (Recorded Future, a Mastercard "
+        "company): first-hand but not disinterested on actors the parent tracks.",
+        "wire", False,
+    ),
+    (
+        "cyberscoop.com", 0.78,
+        "CyberScoop (Scoop News Group) — original reporting on cyber policy, "
+        "government and nation-state operations (K-1).",
+        "wire", False,
+    ),
+    (
+        "securityweek.com", 0.75,
+        "SecurityWeek — daily cybersecurity news, incidents, vulnerabilities "
+        "and ICS security; original reporting plus round-ups that aggregate "
+        "other outlets (K-1).",
+        "wire", False,
+    ),
+    # X-1 source expansion (2026-11-14). Hosts whose descriptors write text
+    # signals only. No row for gov.uk or federalreserve.gov (the profile's
+    # source catalog already seeds both), t.me (shared by every channel), or
+    # the series / register endpoints (they write observations and structured
+    # change records, not cited pages).
+    (
+        "novayagazeta.eu", 0.78,
+        "Novaya Gazeta Europe — independent Russian-language newsroom in exile "
+        "(Riga), founded by Novaya Gazeta journalists in 2022 (X-1).",
+        "wire", False,
+    ),
+    (
+        "radiotamazuj.org", 0.72,
+        "Radio Tamazuj — independent South Sudanese news outlet (X-1).",
+        "wire", False,
+    ),
+    (
+        "oc-media.org", 0.75,
+        "OC Media — independent newsroom in Tbilisi covering the South and "
+        "North Caucasus (X-1).",
+        "wire", False,
+    ),
+    (
+        "ec.europa.eu", 0.90,
+        "European Commission (ec.europa.eu) — the Commission's own press "
+        "releases and statements (X-1). Official EU institution; its "
+        "statements are the Commission's position.",
+        "gov", True,
+    ),
+    (
+        "ecb.europa.eu", 0.92,
+        "European Central Bank — press releases, monetary-policy decisions and "
+        "speeches (X-1). Official, the euro area's central bank.",
+        "gov", True,
+    ),
+    (
+        "ecdc.europa.eu", 0.90,
+        "European Centre for Disease Prevention and Control — threat reports, "
+        "risk assessments and news (X-1). Official EU agency.",
+        "gov", True,
+    ),
+    # I-5 (2026-11-14). The one I-5 host whose descriptor writes text
+    # signals; the five series endpoints (World Bank, NBU, BCB, Bank of
+    # England database, Eurostat) write observations only, as X-1's ECB
+    # series do, and get no row.
+    (
+        "jma.go.jp", 0.93,
+        "Japan Meteorological Agency — Japan's national meteorological and "
+        "seismological authority; its earthquake bulletins are the official "
+        "Japanese record of a quake's hypocentre, magnitude and intensity (I-5).",
+        "gov", True,
+    ),
 ]
 
 

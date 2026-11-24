@@ -42,6 +42,7 @@ is affordable. Every such claim is written ``single_family = true``.
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import json
 import logging
@@ -67,6 +68,10 @@ CONTRACT_FIELDS: tuple[str, ...] = (
 #: Family order. F0 first because the triage depends on its answer.
 FAMILY_ORDER: tuple[str, ...] = ("F0", "F2", "F3")
 #: The PAID families — the ones the daily ceiling governs.
+#: Historical name. Since the 2026-10-23 cutover F2 and F3 are $0 lanes on our
+#: own box, but they remain the CROSS-FAMILY set: the triage sends them only the
+#: claims F0 did not call silent, and the ceiling guard still bounds them (at
+#: $0 prices it never trips). The name stays so the ledger keys stay.
 PAID_FAMILIES: tuple[str, ...] = ("F2", "F3")
 
 #: Per-family registration. ``model`` is the id the calibration was run
@@ -91,13 +96,17 @@ FAMILIES: dict[str, dict[str, Any]] = {
                 "outlier (VERDICT_P1v4: F0xF3 = 0.90, the strongest pair).",
     },
     "F2": {
-        "label": "F2 Meta Llama-3.3-70B (OpenRouter)",
-        "component": "llm.audit.openrouter_llama33_70b.openai_compat",
-        "model": "meta-llama/llama-3.3-70b-instruct",
-        "paid": True,
-        "price_in": 0.13,
-        "price_out": 0.40,
-        "est_first_cost_usd": 0.0015,
+        # Cutover 2026-10-23: the OpenRouter Llama-3.3 lane is RETIRED (its
+        # credits ran out 10-17; every call 402). F2 is now Gemma 4 on our own
+        # box behind the innoai gateway — the same component that judges
+        # faithfulness, a family distinct from the MiMo writer (F0). $0 lane.
+        "label": "F2 Gemma 4 (innoai gateway)",
+        "component": "llm.verify.innoai_gemma.openai_compat",
+        "model": "gemma",
+        "paid": False,
+        "price_in": 0.0,
+        "price_out": 0.0,
+        "est_first_cost_usd": 0.0,
     },
     "F3": {
         # REPOINTED 2026-09-20. ``mistralai/mistral-large-2512`` — the id the
@@ -116,13 +125,16 @@ FAMILIES: dict[str, dict[str, Any]] = {
         # to publish rather than pooling a new model's labels into a number
         # calibrated on a different one. Re-gate with
         # ``scripts/correctness_regate.py``; nothing here seeds a row.
-        "label": "F3 Mistral Medium 3.1 (OpenRouter)",
-        "component": "llm.judge.openrouter_mistral_large.openai_compat",
-        "model": "mistralai/mistral-medium-3.1",
-        "paid": True,
-        "price_in": 0.40,
-        "price_out": 2.00,
-        "est_first_cost_usd": 0.004,
+        # Cutover 2026-10-23: the OpenRouter Mistral lane is RETIRED with the
+        # same credits. F3 is Nemotron Lightning (thinking off) on the box —
+        # the third family, distinct from F0 (MiMo) and F2 (Gemma). $0 lane.
+        "label": "F3 Nemotron Lightning (innoai gateway)",
+        "component": "llm.grader.innoai_lightning.openai_compat",
+        "model": "lightning",
+        "paid": False,
+        "price_in": 0.0,
+        "price_out": 0.0,
+        "est_first_cost_usd": 0.0,
     },
 }
 
@@ -572,7 +584,7 @@ async def _call_once(
 ) -> Any:
     """One completion. ``max_tokens`` is NEVER passed — see the module docstring."""
     return await llm.chat_complete(
-        list(messages), system=system_message, temperature=1.0,
+        list(messages), system=system_message, temperature=HOUSE_TEMPERATURE,
     )
 
 

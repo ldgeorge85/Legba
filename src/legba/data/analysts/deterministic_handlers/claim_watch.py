@@ -410,11 +410,12 @@ import hashlib
 import json
 import logging
 import math
+import operator
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Optional, Sequence
 from uuid import UUID
 
-from legba.data._entity_resolve import resolve_keeper
+from legba.data._entity_resolve import resolve_keepers
 
 from ..._url_canon import canonical_url as _document_identity
 from ...facts.decay import retention_factor
@@ -447,6 +448,7 @@ from .claim_watch_sql import (  # noqa: F401 — re-export, see module docstring
     _SKIPPED_SIGNAL_COUNT_SQL,
     _STALENESS_DEBT_SQL,
 )
+from ...claim_support import claim_of  # C-2: a claim row's edge says so
 from .bearing_gate import (
     DEFAULT_BEARING_CONFIRM_CAP,
     DEFAULT_BEARING_CONFIRM_MODE,
@@ -458,6 +460,11 @@ from .bearing_gate import (
     gate_enabled,
     run_bearing_pipeline,
     signal_digest,
+)
+from .bearing_shadow import (
+    DEFAULT_BEARING_SHADOW_REF,
+    run_bearing_shadow,
+    shadow_enabled,
 )
 from .alert_trigger_scan import (
     _load_class_watermarks,
@@ -813,13 +820,23 @@ _QUESTION_EMBED_CACHE: dict[str, tuple[str, list[float]]] = {}
 # ---------------------------------------------------------------------------
 
 
-def cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
-    """Plain cosine in [−1, 1]; 0.0 on any degenerate input."""
+def vector_norm(v: Sequence[float]) -> float:
+    """``sqrt(sum(x*x))`` — summed in the same order as ever, so bit-equal."""
+    return math.sqrt(sum(map(operator.mul, v, v)))
+
+
+def cosine_similarity(
+    a: Sequence[float], b: Sequence[float], *,
+    norm_a: float | None = None, norm_b: float | None = None,
+) -> float:
+    """Plain cosine in [−1, 1]; 0.0 on any degenerate input. N-W: the match
+    loop passes each vector's norm, computed once (the per-pair re-derivation
+    held the runtime's event loop 4-7 s a pass); the result is bit-equal."""
     if not a or not b or len(a) != len(b):
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
+    dot = sum(map(operator.mul, a, b))
+    na = vector_norm(a) if norm_a is None else norm_a
+    nb = vector_norm(b) if norm_b is None else norm_b
     if na <= 0.0 or nb <= 0.0:
         return 0.0
     return dot / (na * nb)
@@ -1476,6 +1493,11 @@ async def handle(
     bearing_confirm_mode = options.get(
         "bearing_confirm_mode", DEFAULT_BEARING_CONFIRM_MODE
     )
+    # W11-F108 — the decision-model SHADOW (:mod:`.bearing_shadow`): OFF in
+    # code; it asks the gate's question again and moves no decision.
+    bearing_shadow_ref = options.get("bearing_shadow_ref", DEFAULT_BEARING_SHADOW_REF)
+    bearing_shadow_cap = max(0, int(options.get("bearing_shadow_cap", bearing_gate_cap)))
+    bearing_asked: list | None = [] if shadow_enabled(bearing_shadow_ref) else None
     # Resolved once so the OFF path costs literally nothing: with the gate off
     # the per-signal text digest below is never even built.
     bearing_gate_on = gate_enabled(bearing_gate_mode)
@@ -1989,12 +2011,15 @@ async def handle(
             names = _ner_names(s["payload"])
             if not names or resolve_calls >= _MAX_RESOLVE_CALLS:
                 continue
+            # P-6: one batch per signal (one statement per probe step for all
+            # its names when LEGBA_ENTITY_ALIAS_LOOKUP=table; the same per-name
+            # resolve_keeper calls, in order, otherwise). Same budget.
+            take = names[: _MAX_RESOLVE_CALLS - resolve_calls]
+            resolve_calls += len(take)
+            kept_by_name = await resolve_keepers(conn, take, cache=resolve_cache)
             resolved: set[str] = set()
-            for name in names:
-                if resolve_calls >= _MAX_RESOLVE_CALLS:
-                    break
-                resolve_calls += 1
-                kept = await resolve_keeper(conn, name, cache=resolve_cache)
+            for name in take:
+                kept = kept_by_name.get(name)
                 if kept and kept.strip():
                     resolved.add(kept.strip().lower())
             if resolved:
@@ -2110,6 +2135,7 @@ async def handle(
     last_processed: Any | None = None
     processed_count = 0
     budget_stop = False
+    q_norms: dict[str, float] = {}
 
     for s in signal_rows:
         sid = str(s["id"])
@@ -2117,6 +2143,7 @@ async def handle(
         s_ents = sig_entity_ids.get(sid, set())
         s_names = sig_names.get(sid, set())
         s_vec = sig_vecs.get(sid)
+        s_norm = vector_norm(s_vec) if s_vec else 0.0
         # CW-5's anchor surfaces, built ONCE per signal and only when some
         # contention question is in play — the text extraction is cheap but
         # not free, and an ordinary run has no reason to pay for it.
@@ -2161,7 +2188,11 @@ async def handle(
             vector_sim = None
             q_vec = q_vecs.get(qid)
             if s_vec is not None and q_vec is not None:
-                vector_sim = cosine_similarity(s_vec, q_vec)
+                if qid not in q_norms:
+                    q_norms[qid] = vector_norm(q_vec)
+                vector_sim = cosine_similarity(
+                    s_vec, q_vec, norm_a=s_norm, norm_b=q_norms[qid]
+                )
 
             # DISTINCT shared canonical entities, each weighted by its
             # COMBINED specificity — a graded sum, not a boolean and not a
@@ -2242,6 +2273,7 @@ async def handle(
 
         # Only the gate reads this text, so an OFF run never pays for it.
         s_digest = signal_digest(s["payload"]) if (cands and bearing_gate_on) else ""
+        s_claim = claim_of(_parse_jsonish(s["payload"])) if cands else None  # C-2
         for weight, planes, q in cands:
             edge_rows.append(
                 EdgeCandidate(
@@ -2257,6 +2289,8 @@ async def handle(
                     # prompts then show no desk line at all, which is the
                     # honest rendering of "this question is not desk-scoped".
                     desk_label=desk_label.get(str(q["target_id"] or ""), ""),
+                    target_id=str(q["target_id"] or ""),
+                    claim=s_claim,
                 )
             )
             # matches_* count what the DETERMINISTIC matcher produced — the
@@ -2327,6 +2361,7 @@ async def handle(
         confirm_cap=bearing_confirm_cap,
         confirm_mode=bearing_confirm_mode,
         counters=counters,
+        asked=bearing_asked,
     )
     for cand in edge_rows:
         qid = str(cand.question_id)
@@ -2426,6 +2461,15 @@ async def handle(
                 fired=counters["edges_written"] > 0,
             )
         counters["staleness_debt"] = await _staleness_debt(conn)
+
+    # W11-F108 — the SHADOW runs after every write landed, over the pairs the
+    # gate asked; it never raises (OFF: returns at once, receipt untouched).
+    await run_bearing_shadow(
+        bearing_asked or [], deps=deps, pool=pool, shadow_ref=bearing_shadow_ref,
+        shadow_cap=bearing_shadow_cap, gate_ref=bearing_gate_ref,
+        run_id=options.get("run_id"), analyst_id=options.get("analyst_id"),
+        target_id=options.get("target_id"), counters=counters,
+    )
 
     if (
         counters["edges_written"]

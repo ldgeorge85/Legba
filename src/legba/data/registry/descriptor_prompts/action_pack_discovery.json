@@ -1,0 +1,8 @@
+{
+  "states": {
+    "action_pack:discovery": {
+      "source": "action_pack_discovery.yaml",
+      "state": "retired"
+    }
+  }
+}

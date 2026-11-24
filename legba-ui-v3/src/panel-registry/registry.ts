@@ -15,6 +15,8 @@
 import { lazy } from 'react'
 import type { ComponentType } from 'react'
 import type { PanelKind, PanelKindDefinition, PanelProps } from '@/types'
+import { PROFILE_UI } from '@/lib/profileUi'
+import { PANEL_DESCRIPTIONS } from '@/panel-registry/descriptions'
 
 export interface RegistryEntry {
   definition: PanelKindDefinition
@@ -26,17 +28,12 @@ export interface RegistryEntry {
 // Lazy component imports — one per panel module.
 // ---------------------------------------------------------------------------
 
-const TargetOverview = lazy(() => import('@/panels/target/Overview'))
-const TargetSignals = lazy(() => import('@/panels/target/Signals'))
-const TargetFindings = lazy(() => import('@/panels/target/Findings'))
-const TargetSituations = lazy(() => import('@/panels/target/Situations'))
-const TargetSources = lazy(() => import('@/panels/target/Sources'))
+// UI-B3 — the subject page: one bound page per subject of any frame kind. Its
+// eight tabs mount the retired per-subject reads, unmodified
+// (the panels/subject/ files; the brief tab is the desk brief generalized).
+const SubjectPage = lazy(() => import('@/panels/subject/SubjectPage'))
 const TargetMap = lazy(() => import('@/panels/target/Map'))
-const TargetGraph = lazy(() => import('@/panels/target/Graph'))
 const TargetTimeline = lazy(() => import('@/panels/target/Timeline'))
-const TargetClaims = lazy(() => import('@/panels/target/Claims'))
-// P-A — the desk brief as a page (the composed export, read rather than downloaded).
-const TargetDeskBriefPage = lazy(() => import('@/panels/target/DeskBriefPage'))
 
 const AnalystRuns = lazy(() => import('@/panels/analyst/Runs'))
 const AnalystOutputs = lazy(() => import('@/panels/analyst/Outputs'))
@@ -44,48 +41,42 @@ const AnalystCrossTarget = lazy(() => import('@/panels/analyst/CrossTarget'))
 const AnalystCritiques = lazy(() => import('@/panels/analyst/Critiques'))
 
 const SystemFindings = lazy(() => import('@/panels/system/Findings'))
-// The Navigator — the landing's product rail (WORKSTATION_V2_FLOW_DESIGN §4).
-const SystemNavigator = lazy(() => import('@/panels/system/Navigator'))
-const SystemBudget = lazy(() => import('@/panels/system/Budget'))
-const SystemOptimizer = lazy(() => import('@/panels/system/Optimizer'))
-const SystemDeadLetter = lazy(() => import('@/panels/system/DeadLetter'))
+// UI-B1/merges — the Optimizer folds its prompt-module diff drill in as a tab
+// (merged/Optimizer.tsx mounts both original, unmodified components).
+const SystemOptimizerMerged = lazy(() => import('@/panels/merged/Optimizer'))
 // U-3 merge — Deep Consult folds into a depth toggle on Consult; the merged
 // wrapper mounts both original, unmodified components (merged/Consult.tsx).
 const SystemConsultMerged = lazy(() => import('@/panels/merged/Consult'))
 const SystemSettings = lazy(() => import('@/panels/system/Settings'))
 
-const RegistryTargets = lazy(() => import('@/panels/registry/Targets'))
-const RegistryAnalysts = lazy(() => import('@/panels/registry/Analysts'))
-const RegistryStack = lazy(() => import('@/panels/registry/Stack'))
-const RegistryActionPacks = lazy(() => import('@/panels/registry/ActionPacks'))
-
-// Source-first surfaces (UI-2 / Tier C — pivot)
-const SourceRegistry = lazy(() => import('@/panels/source/SourceRegistry'))
-const SourceDetail = lazy(() => import('@/panels/source/SourceDetail'))
-const SourceSubscriptionBuilder = lazy(() => import('@/panels/source/SubscriptionBuilder'))
-const SourceSubscriptionPolicy = lazy(() => import('@/panels/source/SubscriptionPolicy'))
-const SourceFanout = lazy(() => import('@/panels/source/FanoutExplorer'))
+// UI-B1/merges — the Engine's three merged wrappers (UI-D1 Table A). Each
+// mounts its retired kinds' original, unmodified components as tabs:
+//   Registry → registry.{targets,analysts,sources,stack,action_packs},
+//              source.{detail,subscription_builder,subscription_policy}, v4.flow
+//   Ledgers  → system.{governor,audit,budget}
+//   Status   → system.status + system.{production_gauge,dead_letter,
+//              actor_health,stream_lag}
+const SystemRegistryMerged = lazy(() => import('@/panels/merged/Registry'))
+const SystemLedgersMerged = lazy(() => import('@/panels/merged/Ledgers'))
+const SystemStatusMerged = lazy(() => import('@/panels/merged/Status'))
+// UI-B1/merges — the frame register: Situations · Narratives (re-pointed off
+// Provenance's old Trajectory / Narratives tabs).
+const SystemRegisterMerged = lazy(() => import('@/panels/merged/Register'))
+// N-J — the Flow: a read-only canvas over the descriptor heads (React Flow +
+// ELK). Every edge is a declared relation with its basis; nothing is edited.
+const SystemFlow = lazy(() => import('@/panels/flow/FlowPanel'))
 
 // Eval + Ops surfaces (UI-5 / Tiers E+F — appended)
 const SystemEvalScorecard = lazy(() => import('@/panels/system/EvalScorecard'))
 // Correctness gold-set weekly labeling worksheet (P2-5).
 const SystemGoldset = lazy(() => import('@/panels/system/Goldset'))
-const SystemOptimizerDiff = lazy(() => import('@/panels/system/OptimizerDiff'))
-const SystemGovernorEvents = lazy(() => import('@/panels/system/GovernorEvents'))
-const SystemAuditChain = lazy(() => import('@/panels/system/AuditChain'))
-const SystemStreamLag = lazy(() => import('@/panels/system/StreamLag'))
-const SystemActorHealth = lazy(() => import('@/panels/system/ActorHealth'))
-// System Status — the at-a-glance per-layer health view (#89 ops surface).
-const SystemStatus = lazy(() => import('@/panels/system/SystemStatus'))
 // The Timeline — U-3 merge: one "Timeline" panel with an Events/Validity mode
 // switch (merged/Timeline.tsx), folding v4.timeline (event lanes) + the
 // original system.timeline (validity windows, imported inside the wrapper).
 const SystemTimelineMerged = lazy(() => import('@/panels/merged/Timeline'))
-// The Wall — the mission-control anchor tile (P1-7).
-const SystemWall = lazy(() => import('@/panels/system/Wall'))
-// U-4 — standalone mount of the Wall's movers-since-last-visit quadrant,
-// boot-seeded so cold boot answers "what changed" (see types.ts / App.tsx).
-const SystemWallMovers = lazy(() => import('@/panels/system/WallMovers'))
+// The Wall — UI-B1/merges: the At-a-Glance band over Overview · Movers
+// (merged/Wall.tsx folds v4.kpi + system.wall_movers, unmodified).
+const SystemWallMerged = lazy(() => import('@/panels/merged/Wall'))
 // Product surfaces (UI-6 / Tier G — pivot)
 const SystemSearch = lazy(() => import('@/panels/system/Search'))
 const SystemEntities = lazy(() => import('@/panels/system/Entities'))
@@ -100,7 +91,6 @@ const SystemJournal = lazy(() => import('@/panels/system/Journal'))
 // GLASS-2 — the three unconsumed API surfaces get their consumers.
 const SystemJournalGate = lazy(() => import('@/panels/system/JournalGate'))
 // GLASS-3 — the ops deck.
-const SystemProductionGauge = lazy(() => import('@/panels/system/ProductionGauge'))
 const SystemJudgeStats = lazy(() => import('@/panels/system/JudgeStats'))
 const SystemSourceHealth = lazy(() => import('@/panels/system/SourceHealth'))
 const SystemEvalBoards = lazy(() => import('@/panels/system/EvalBoards'))
@@ -111,15 +101,17 @@ const SystemLayerDivergence = lazy(() => import('@/panels/system/LayerDivergence
 
 // Wave P lane B — the cross-framing comparison, scoped to one CLAIM.
 const AnalysisCrossFraming = lazy(() => import('@/panels/analysis/CrossFraming'))
+// W2 — the contrary-evidence pass's records as a list (`/v3/contentions`).
+const AnalysisContentions = lazy(() => import('@/panels/analysis/Contentions'))
 
 // v4 visual workspace panels (selection-linked singletons).
 const V4Map = lazy(() => import('@/panels/v4/MapPanel'))
 const V4Assessment = lazy(() => import('@/panels/v4/AssessmentPanel'))
 const V4MorningRead = lazy(() => import('@/panels/v4/MorningReadPanel'))
-const V4Kpi = lazy(() => import('@/panels/v4/KpiPanel'))
 
-// U-3 merge — Provenance folds v4.why + system.lineage + v4.flow into one
-// tabbed surface (merged/Provenance.tsx mounts all three, unmodified).
+// U-3 merge, re-cut by UI-B1/merges — Provenance: Why · Lineage · Fan-out
+// (merged/Provenance.tsx mounts v4.why + system.lineage + source.fanout,
+// unmodified).
 const SystemProvenance = lazy(() => import('@/panels/merged/Provenance'))
 // U-3 merge — Alerts & Watches folds system.watchlist + system.alert_center +
 // system.escalations into one tabbed surface (merged/AlertsWatches.tsx).
@@ -130,46 +122,26 @@ const SystemAlertsWatches = lazy(() => import('@/panels/merged/AlertsWatches'))
 // ---------------------------------------------------------------------------
 
 export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
-  // --- Target panels (T1–T10) ---
-  'target.overview': {
-    definition: def('target.overview', 'target_overview', 'target', 'target_id', 'Target Overview', true, ['personal', 'cis'], 'Target'),
-    Component: TargetOverview,
+  // --- The subject page (UI-B3, UI-D1 Table A) ---
+  // Bound to one subject of ANY frame kind (a country desk, a lane or flow, a
+  // region, a situation, a regime). Tabs Brief · Evidence · Claims · Signals ·
+  // Situations · Sources · Graph · Runtime; the eight retired `target.*` ids
+  // alias onto them (aliases.ts). The title is the profile's subject noun.
+  // Mounted UNBOUND by the Subject stance (id `desk`), it follows the subject
+  // the reader selected (`kindPlan.ts::SUBJECT_FOLLOWING_KINDS`).
+  'subject.page': {
+    definition: def('subject.page', 'subject_page', 'target', 'target_id', PROFILE_UI.subject.singular, true, ['personal', 'cis'], 'Target'),
+    Component: SubjectPage,
   },
-  'target.signals': {
-    definition: def('target.signals', 'target_signals', 'target', 'target_id', 'Target Signals', true, ['personal'], 'Radio'),
-    Component: TargetSignals,
-  },
-  'target.findings': {
-    definition: def('target.findings', 'target_findings', 'target', 'target_id', 'Target Findings', true, ['personal', 'cis'], 'Flag'),
-    Component: TargetFindings,
-  },
-  'target.situations': {
-    definition: def('target.situations', 'target_situations', 'target', 'target_id', 'Target Situations', true, ['personal', 'cis'], 'AlertTriangle'),
-    Component: TargetSituations,
-  },
-  'target.sources': {
-    definition: def('target.sources', 'target_sources', 'target', 'target_id', 'Target Sources', true, ['personal'], 'Database'),
-    Component: TargetSources,
-  },
+  // --- Per-target reads pending their survivors (Table B: `v4.map` and
+  //     `system.timeline` with a subject param) ---
   'target.map': {
     definition: def('target.map', 'target_map', 'target', 'target_id', 'Target Map', true, ['personal', 'cis'], 'Map'),
     Component: TargetMap,
   },
-  'target.graph': {
-    definition: def('target.graph', 'target_graph', 'target', 'target_id', 'Target Graph', true, ['personal', 'cis'], 'Share2'),
-    Component: TargetGraph,
-  },
   'target.timeline': {
     definition: def('target.timeline', 'target_timeline', 'target', 'target_id', 'Target Timeline', true, ['personal', 'cis'], 'Clock'),
     Component: TargetTimeline,
-  },
-  'target.claims': {
-    definition: def('target.claims', 'target_claims', 'target', 'target_id', 'Target Claims', true, ['personal', 'cis'], 'Quote'),
-    Component: TargetClaims,
-  },
-  'target.desk_brief_page': {
-    definition: def('target.desk_brief_page', 'target_desk_brief_page', 'target', 'target_id', 'Desk Brief', true, ['personal', 'cis'], 'Newspaper'),
-    Component: TargetDeskBriefPage,
   },
 
   // --- Analyst panels (A1–A5) ---
@@ -193,23 +165,10 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
   // (Cross-target dashboards D1–D3 removed — S7-T2 consolidation.)
 
   // --- Operator (O1–O5) ---
-  'registry.targets': {
-    definition: def('registry.targets', 'registry_targets', 'operator', null, 'Target Registry', false, ['personal'], 'FolderTree'),
-    Component: RegistryTargets,
-  },
-  'registry.analysts': {
-    definition: def('registry.analysts', 'registry_analysts', 'operator', null, 'Analyst Registry', false, ['personal'], 'Users'),
-    Component: RegistryAnalysts,
-  },
-  'registry.stack': {
-    definition: def('registry.stack', 'registry_stack', 'operator', null, 'Stack Registry', false, ['personal'], 'Layers'),
-    Component: RegistryStack,
-  },
-  'registry.action_packs': {
-    definition: def('registry.action_packs', 'registry_action_packs', 'operator', null, 'Action-Pack Grants', false, ['personal'], 'KeyRound'),
-    Component: RegistryActionPacks,
-  },
-  // (registry.wirings / registry.mutations / registry.discovery removed — S7-T2.)
+  // UI-B1/merges — the five `registry.*` kinds and the three `source.*`
+  // authoring kinds are tabs of `system.registry` (Engine stance, below); their
+  // ids resolve through aliases.ts. (registry.wirings / registry.mutations /
+  // registry.discovery removed — S7-T2.)
 
   // --- System (S1–S8 + P-1 cross-target findings + consult) ---
   'system.findings': {
@@ -219,27 +178,18 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
     definition: def('system.findings', 'system_findings', 'system', null, 'Live Feed', false, ['personal', 'cis'], 'Radio'),
     Component: SystemFindings,
   },
-  'system.navigator': {
-    // The front door. `system` (not `operator`) and BOTH modes deliberately:
-    // the landing seeds it, and a cis session that boots without its navigation
-    // rail lands on a report with no way to change which report.
-    definition: def('system.navigator', 'system_navigator', 'system', null, 'Navigator', false, ['personal', 'cis'], 'ListTree'),
-    Component: SystemNavigator,
-  },
-  'system.budget': {
-    definition: def('system.budget', 'system_budget', 'system', null, 'Budget Ledger', false, ['personal'], 'DollarSign'),
-    Component: SystemBudget,
-  },
+  // (system.navigator RETIRED in UI-B1/merges — the products index is the
+  //  object rail's Reads section now; the id aliases onto the read it opened.)
+  // UI-B1/merges — Candidates · Diff: the prompt-module diff drill is the
+  // queue's second tab (merged/Optimizer.tsx; `system.optimizer.diff` aliases
+  // onto it and its candidate rides `state/panelParams`).
   'system.optimizer': {
     definition: def('system.optimizer', 'system_optimizer', 'system', null, 'Optimizer Candidates', false, ['personal'], 'Sparkles'),
-    Component: SystemOptimizer,
-  },
-  'system.dead_letter': {
-    definition: def('system.dead_letter', 'system_dead_letter', 'system', null, 'Dead-letter Inspector', false, ['personal'], 'AlertOctagon'),
-    Component: SystemDeadLetter,
+    Component: SystemOptimizerMerged,
   },
   // (system.runtime → merged into system.actor_health; system.streams / system.users
-  //  removed — S7-T2 consolidation.)
+  //  removed — S7-T2 consolidation. system.budget / system.dead_letter are tabs
+  //  of system.ledgers / system.status since UI-B1/merges.)
   'system.consult': {
     // U-3 merge — Deep Consult is a depth toggle here (merged/Consult.tsx);
     // `system.deep_consult` retired into the alias table (→ tab "deep").
@@ -254,33 +204,43 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
     Component: SystemSettings,
   },
 
-  // --- Source-first surfaces (UI-2 / Tier C — pivot) ---
+  // --- The Engine's merged wrappers (UI-B1/merges, UI-D1 Table A) ---
   // Operator-category panels are personal-only per L-108 §6 (registry.test.ts
   // enforces modes === ['personal']).
-  'registry.sources': {
-    definition: def('registry.sources', 'registry_sources', 'operator', null, 'Source Registry', false, ['personal'], 'Database'),
-    Component: SourceRegistry,
+  //
+  // Registry — the descriptor families as one kind with a family switch:
+  // Subjects · Units · Sources (+ the per-source detail) · Stack · Packs ·
+  // Builder · Policy · Canvas. Absorbs the five `registry.*` kinds,
+  // `source.detail`, `source.subscription_builder`,
+  // `source.subscription_policy` and (re-pointed) `v4.flow`.
+  'system.registry': {
+    definition: def('system.registry', 'system_registry', 'operator', null, 'Registry', false, ['personal'], 'FolderTree'),
+    Component: SystemRegistryMerged,
   },
-  'source.detail': {
-    definition: def('source.detail', 'source_detail', 'operator', null, 'Source Detail', false, ['personal'], 'Activity'),
-    Component: SourceDetail,
+  // The Flow (N-J v0) — what each agent is, reads and writes (as the
+  // registry declares it) and what a real run did. Operator: it shows prompts
+  // and run internals. Read-only; layout computed, never saved.
+  'system.flow': {
+    definition: def('system.flow', 'system_flow', 'operator', null, 'Flow', false, ['personal'], 'Workflow'),
+    Component: SystemFlow,
   },
-  'source.subscription_builder': {
-    definition: def('source.subscription_builder', 'source_subscription_builder', 'operator', null, 'Subscription Builder', false, ['personal'], 'Filter'),
-    Component: SourceSubscriptionBuilder,
+  // Ledgers — Governor · Audit · Budget, the three append-only engine ledgers.
+  'system.ledgers': {
+    definition: def('system.ledgers', 'system_ledgers', 'system', null, 'Ledgers', false, ['personal'], 'BookLock'),
+    Component: SystemLedgersMerged,
   },
-  'source.subscription_policy': {
-    definition: def('source.subscription_policy', 'source_subscription_policy', 'operator', null, 'Subscription Policy', false, ['personal'], 'Lock'),
-    Component: SourceSubscriptionPolicy,
-  },
-  'source.fanout': {
-    definition: def('source.fanout', 'source_fanout', 'operator', null, 'Fan-out Explorer', false, ['personal'], 'Network'),
-    Component: SourceFanout,
+  // Register — the frame register: Situations · Narratives. Both were
+  // Provenance tabs (GLASS-2) for the old sidebar budget; Table A gives them
+  // their own kind and re-points `system.situations` / `system.narratives`.
+  // Ships personal + cis, like the Provenance surface it came off.
+  'system.register': {
+    definition: def('system.register', 'system_register', 'system', null, 'Register', false, ['personal', 'cis'], 'Frame'),
+    Component: SystemRegisterMerged,
   },
 
   // --- Eval + Ops surfaces (UI-5 / Tiers E+F — appended) ---
   'system.eval_scorecard': {
-    definition: def('system.eval_scorecard', 'system_eval_scorecard', 'system', null, 'Eval Scorecard', false, ['personal'], 'ClipboardCheck'),
+    definition: def('system.eval_scorecard', 'system_eval_scorecard', 'system', null, 'Accuracy', false, ['personal'], 'ClipboardCheck'),
     Component: SystemEvalScorecard,
   },
   // Correctness gold-set weekly labeling worksheet (P2-5) — personal-only:
@@ -292,32 +252,14 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
     definition: def('system.goldset', 'system_goldset', 'system', null, 'Weekly Grading', false, ['personal'], 'ClipboardPen'),
     Component: SystemGoldset,
   },
-  'system.optimizer.diff': {
-    definition: def('system.optimizer.diff', 'system_optimizer_diff', 'system', null, 'Prompt-Module Diff', false, ['personal'], 'GitCompare'),
-    Component: SystemOptimizerDiff,
-  },
-  'system.governor': {
-    definition: def('system.governor', 'system_governor', 'system', null, 'Governor Events', false, ['personal'], 'ShieldAlert'),
-    Component: SystemGovernorEvents,
-  },
-  'system.audit': {
-    definition: def('system.audit', 'system_audit', 'system', null, 'Audit-Chain Browser', false, ['personal'], 'FileLock2'),
-    Component: SystemAuditChain,
-  },
-  'system.stream_lag': {
-    definition: def('system.stream_lag', 'system_stream_lag', 'system', null, 'Consumer-Lag Monitor', false, ['personal'], 'Gauge'),
-    Component: SystemStreamLag,
-  },
-  'system.actor_health': {
-    definition: def('system.actor_health', 'system_actor_health', 'system', null, 'Actor Health', false, ['personal'], 'HeartPulse'),
-    Component: SystemActorHealth,
-  },
-  // System Status — the at-a-glance per-layer health view (acquisition / analysis
-  // / queues / infra in one page) the operator has repeatedly asked for. Live
-  // tier; System group via the system.* → Operate prefix fallback (navGroups.ts).
+  // System Status — UI-D1 Table A "Engine: Status · Production · Failures ·
+  // Actors · Queues". The per-layer health page (acquisition / analysis /
+  // queues / infra) is the first tab; the production gauge, the dead-letter
+  // inspector, actor health and consumer lag are the other four
+  // (merged/Status.tsx, each unmodified; their ids alias onto their tabs).
   'system.status': {
     definition: def('system.status', 'system_status', 'system', null, 'System Status', false, ['personal'], 'Gauge'),
-    Component: SystemStatus,
+    Component: SystemStatusMerged,
   },
   // The Timeline — U-3 merge (the two panels literally both named "Timeline"):
   // an Events (v4 lanes) / Validity (P4-4 ranged-item, [valid_from,
@@ -330,21 +272,12 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
   },
   // The Wall (P1-7) — the mission-control anchor: world-at-a-glance band grid
   // + movers-since-last-visit + newest high-severity verified + health corner.
-  // Ships in personal + cis. The MORNING READ workspace mounts this whole
-  // panel as its top band (lib/workspaces.ts) — the standalone movers tile
-  // below is no longer seeded, because mounting a quadrant beside its own
-  // parent was the duplication the holistic design called out.
+  // Ships in personal + cis. UI-B1/merges: the At-a-Glance strip (`v4.kpi`) is
+  // its header band and the standalone movers quadrant (`system.wall_movers`,
+  // U-4) its Movers tab (merged/Wall.tsx; both ids alias here).
   'system.wall': {
     definition: def('system.wall', 'system_wall', 'system', null, 'The Wall', false, ['personal', 'cis'], 'LayoutGrid'),
-    Component: SystemWall,
-  },
-  // U-4 (COHERENCE_WAVES_PLAN_2026-07-28) — standalone mount of JUST the
-  // Wall's movers-since-last-visit quadrant. Kept registered + hidden
-  // (HIDDEN_KINDS below) rather than aliased onto the Wall: a saved layout
-  // holding this tile keeps rendering the quadrant it asked for.
-  'system.wall_movers': {
-    definition: def('system.wall_movers', 'system_wall_movers', 'system', null, 'Movers Since Last Visit', false, ['personal', 'cis'], 'TrendingUp'),
-    Component: SystemWallMovers,
+    Component: SystemWallMerged,
   },
   // --- Product surfaces (UI-6 / Tier G — pivot) ---
   // System-category singletons; ship in personal + cis (the Travis-ASM
@@ -421,14 +354,10 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
   // Personal-only: every one of them reads operational internals (provider
   // routing, source ledgers, run timings) that the `cis` mode has no use for.
   //
-  // The whole-engine production read + its integrity/metering bricks. Leads the
-  // deck because it is the one that PAGES: its `pages` flag is the same
-  // predicate the alert plane's production_deficit trigger fires on, so this
-  // panel and the operator's phone cannot disagree.
-  'system.production_gauge': {
-    definition: def('system.production_gauge', 'system_production_gauge', 'system', null, 'Production Gauge', false, ['personal'], 'Gauge'),
-    Component: SystemProductionGauge,
-  },
+  // (The whole-engine production gauge — the deck's paging read — is System
+  // Status' Production tab since UI-B1/merges; `system.production_gauge`
+  // aliases onto it.)
+  //
   // The judge's verdict mix by serving provider — the track's one new API.
   'system.judge_stats': {
     definition: def('system.judge_stats', 'system_judge_stats', 'system', null, 'Judge Stats', false, ['personal'], 'Scale'),
@@ -461,11 +390,21 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
   // the layer-divergence receipt, and what no unit says. A DRILL surface, not a
   // deck row: it is opened from the claim it is about (the Claims panel's
   // action, a situation row, ⌘K) and has nothing to show without one, which is
-  // why it ships hidden — see HIDDEN_KINDS for the argument, and
-  // `registry.test.ts`'s size ratchet for why a 60th kind was taken at all.
+  // why it is a DRILL (kindPlan.ts SINGLETON_DRILLS) and never in the `＋`
+  // catalog.
   'analysis.cross_framing': {
     definition: def('analysis.cross_framing', 'analysis_cross_framing', 'system', null, 'Cross-framing', false, ['personal'], 'Columns3'),
     Component: AnalysisCrossFraming,
+  },
+  // W2 S-batch — CONTENTIONS. The contrary-evidence pass's records as a LIST:
+  // until this row a `claim_contentions` record was reachable only one claim at
+  // a time (the chip on its sentence, the Cross-framing drill), and the route's
+  // own fleet-wide "what did the pass find last night" read had no surface.
+  // It was hidden for the old sidebar budget; with the tree gone it is an
+  // ordinary `＋` catalog kind, mounted by the Trust stance (UI-D1 Table A).
+  'analysis.contentions': {
+    definition: def('analysis.contentions', 'analysis_contentions', 'system', null, 'Contentions', false, ['personal'], 'Scale'),
+    Component: AnalysisContentions,
   },
   // THE READ SCOREBOARD (D2e) — the only panel on the deck that measures the
   // OPERATOR instead of the engine. Sits with the ops panels because it is
@@ -478,11 +417,11 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
 
   // --- v4 visual workspace panels (singletons; selection-linked) ---
   'v4.map': {
-    definition: def('v4.map', 'v4_map', 'system', null, 'World Map', false, ['personal', 'cis'], 'Globe2'),
+    definition: def('v4.map', 'v4_map', 'system', null, PROFILE_UI.map.title, false, ['personal', 'cis'], 'Globe2'),
     Component: V4Map,
   },
   'v4.assessment': {
-    definition: def('v4.assessment', 'v4_assessment', 'system', null, 'World Assessment', false, ['personal', 'cis'], 'ScrollText'),
+    definition: def('v4.assessment', 'v4_assessment', 'system', null, PROFILE_UI.labels.read_title, false, ['personal', 'cis'], 'ScrollText'),
     Component: V4Assessment,
   },
   // D-4 — the assembly reader. Registered beside `v4.assessment` rather than
@@ -496,12 +435,7 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
     Component: V4MorningRead,
   },
   // (v4.case Casework Board removed — S7-T2; shelved, no pin board reachable.)
-  // Renamed "At a Glance" (U-3 §4) — "KPI Strip" named the widget, not what an
-  // operator uses it FOR.
-  'v4.kpi': {
-    definition: def('v4.kpi', 'v4_kpi', 'system', null, 'At a Glance', false, ['personal', 'cis'], 'Gauge'),
-    Component: V4Kpi,
-  },
+  // (v4.kpi "At a Glance" is the Wall's header band since UI-B1/merges.)
 }
 
 function def(
@@ -513,11 +447,10 @@ function def(
   requiresBinding: boolean,
   modes: PanelKindDefinition['modes'],
   iconName?: string,
-  hidden?: boolean,
 ): PanelKindDefinition {
   // tier defaults to 'live'; the PREVIEW_KINDS set below promotes the
-  // guarded-preview surfaces to 'preview' in one place (mirrors HIDDEN_KINDS).
-  return { kind, panelId, category, scopeKey, defaultTitle, requiresBinding, modes, iconName, hidden, tier: 'live' }
+  // guarded-preview surfaces to 'preview' in one place.
+  return { kind, panelId, category, scopeKey, defaultTitle, requiresBinding, modes, iconName, tier: 'live' }
 }
 
 // Panels whose backend route is a guarded preview / honest pending-state, or
@@ -526,78 +459,35 @@ function def(
 // §"Panel tiers".
 //   * system.backfill        — backend POST is an honest 501 (cross-plane
 //                              runtime trigger not exposed through the registry)
-//   * system.optimizer.diff  — operator review aid over the GEPA loop
 //   * system.search          — client-only product surface (no dedicated
 //                              backend route yet)
 // (system.report_export left this set in A10 — it now fronts the real
 // POST /api/v1/v3/export collection-basket route, shipped on the same train.)
 // (system.alert_center left this set when it RETIRED into the alias table —
 //  it is now Alerts & Watches' "Triggers" tab, which carries the preview badge
-//  on the tab itself; see panels/merged/AlertsWatches.tsx.)
+//  on the tab itself; see panels/merged/AlertsWatches.tsx. system.optimizer.diff
+//  left it the same way in UI-B1/merges: the Optimizer's Diff tab carries the
+//  badge; see panels/merged/Optimizer.tsx.)
 const PREVIEW_KINDS: ReadonlySet<PanelKind> = new Set([
-  'system.optimizer.diff',
   'system.search',
 ])
 for (const k of PREVIEW_KINDS) {
   PANEL_REGISTRY[k].definition.tier = 'preview'
 }
 
-// Hidden-but-registered set — SHRUNK to the surfaces that have no survivor yet.
-//
-// The twelve U-3/GLASS-2 merge originals that used to live here (v4.timeline,
-// v4.why, system.lineage, v4.flow, system.situations, system.narratives,
-// system.watchlist, system.alert_center, system.escalations,
-// system.deep_consult, system.entity_graph, system.notable_structure) are GONE
-// from this file entirely: they are now rows in `panel-registry/aliases.ts`,
-// which resolves a retired id onto the survivor that already renders it —
-// without a registry row, a component import, or a `hidden` flag to remember
-// (UI_HOLISTIC_DESIGN_2026-08-24 §4.4). Twelve rows of catalog that existed
-// only to be invisible became twelve lines of data.
-//
-// What is still hidden-but-registered is the set an alias CANNOT yet describe,
-// because no shipped surface renders it. Each needs a merge train first, and
-// hiding is the honest holding position until then — pointing an alias at an
-// approximation would silently lose the capability:
-//   * system.optimizer.diff       — the Optimizer's candidate drill (opened by
-//                                   its event bridge, not by a sidebar row)
-//   * source.subscription_builder — niche source-config; reachable via ⌘K
-//   * source.subscription_policy  — niche source-config; reachable via ⌘K
-//   * source.fanout               — niche explorer; reachable via ⌘K
-//   * system.stream_lag           — consumer-lag detail; System Status shows
-//                                   the QUEUES rollup, not this drill
-//   * system.wall_movers          — the standalone movers tile. Not a merge
-//                                   original: the Wall carries movers as its
-//                                   own quadrant, so the landing workspace
-//                                   mounts the WALL and this tile stays
-//                                   reachable for anyone whose saved layout
-//                                   holds it.
-//   * analysis.cross_framing      — wave P lane B. The second non-retirement in
-//                                   this set, and for the same reason as
-//                                   `system.wall_movers`: it is not a surface
-//                                   waiting for a survivor, it is a DRILL. Its
-//                                   scope is a CLAIM — it is opened from the
-//                                   claim it is about (the Claims panel's
-//                                   action, a situation row, ⌘K), and a sidebar
-//                                   row would open it with no claim in hand and
-//                                   nothing to say. `system.optimizer.diff` is
-//                                   the exact precedent: registered, hidden,
-//                                   reached from its parent surface. Hiding it
-//                                   also means the 26-row sidebar budget is
-//                                   untouched by this lane — it takes the
-//                                   ratchet's third option ("hide") honestly
-//                                   rather than arguing for a 27th row.
-const HIDDEN_KINDS: ReadonlySet<PanelKind> = new Set<PanelKind>([
-  'analysis.cross_framing',
-  'system.optimizer.diff',
-  'source.subscription_builder',
-  'source.subscription_policy',
-  'source.fanout',
-  'system.stream_lag',
-  'system.wall_movers',
-])
-for (const k of HIDDEN_KINDS) {
-  PANEL_REGISTRY[k].definition.hidden = true
+// X3/D2 — every kind's one-line description (the catalog prints it under the
+// name). The data is its own module so the rows above stay one line each.
+for (const [k, text] of Object.entries(PANEL_DESCRIPTIONS) as Array<[PanelKind, string]>) {
+  if (PANEL_REGISTRY[k]) PANEL_REGISTRY[k].definition.description = text
 }
+
+// (HIDDEN_KINDS is GONE — UI-B1/shell, UI-D1 §2.2. "Hidden" was a flag the
+// sidebar budget needed; it is now a DERIVED property: a kind whose params need
+// a ref is a DRILL (`panel-registry/kindPlan.ts::isDrill`), never listed in the
+// `＋` catalog and opened from its parent object. Every other kind is listed.
+// The kinds the flag used to park are a drill (cross-framing), retired into a
+// survivor's tab (aliases.ts — the optimizer diff and four others, UI-B1/merges)
+// or a catalog kind with a stance (contentions).)
 
 /** Map panel-id (descriptor surface) → panel-kind (frontend surface). */
 export const PANEL_ID_TO_KIND: Record<string, PanelKind> = (() => {
@@ -609,16 +499,13 @@ export const PANEL_ID_TO_KIND: Record<string, PanelKind> = (() => {
 })()
 
 /**
- * Singleton panels (no binding required) — added to layout at boot
- * regardless of registry rows.  Hidden panels (§6 DROP set) are filtered
- * out so the sidebar's "Always-on" section only shows live + soon-to-be-
- * live panels.
+ * Singleton panels — every kind that needs no binding. (The `＋` catalog is
+ * this minus the singleton drills: `kindPlan.ts::catalogKinds`.)
  */
 export const SINGLETON_PANELS: PanelKind[] = (() => {
   const out: PanelKind[] = []
   for (const [kind, entry] of Object.entries(PANEL_REGISTRY) as Array<[PanelKind, RegistryEntry]>) {
     if (entry.definition.requiresBinding) continue
-    if (entry.definition.hidden) continue
     out.push(kind)
   }
   return out

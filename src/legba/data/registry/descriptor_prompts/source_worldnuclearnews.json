@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.worldnuclearnews.news": {
+      "source": "source_worldnuclearnews.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -46,7 +46,7 @@ from legba.data.analysts.deterministic import (
 )
 from legba.data.analysts.deterministic_handlers import layer_divergence as ld
 from legba.data.analysts.deterministic_handlers import _layer_fold as lf
-from legba.data.analysts.handler_options import HANDLER_OPTIONS, known_option_names
+from legba.data.option_catalog.handler_options import HANDLER_OPTIONS, known_option_names
 from legba.data.config import PostgresConfig
 from legba.data.layers._vocab import LAYER_VOCAB
 from legba.data.provenance.kinds import (
@@ -496,7 +496,7 @@ async def test_a_pair_is_skipped_and_named_when_either_side_is_excluded():
 
 
 async def test_unmeasured_and_undeclared_are_excluded_and_distinguished():
-    """docs/LAYERS.md is emphatic: an undeclared layer is NOT unmeasured."""
+    """docs/DATA_SOURCES.md is emphatic: an undeclared layer is NOT unmeasured."""
     partial = [
         {"layer": "official", "declared": "present", "reason": ""},
         {"layer": "social_digest", "declared": "unmeasured", "reason": ""},
@@ -783,7 +783,7 @@ def test_the_descriptor_exists_and_is_a_draft_deterministic_analyst():
 def test_the_descriptor_options_all_resolve_with_no_rejects():
     import yaml
 
-    from legba.data.analysts.handler_options import resolve_handler_options
+    from legba.data.option_catalog.handler_options import resolve_handler_options
     from legba.data.schemas.analyst import AnalystDescriptor
 
     path = REPO_ROOT / "descriptors" / "analyst_layer_divergence.yaml"

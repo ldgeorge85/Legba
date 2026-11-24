@@ -84,6 +84,24 @@ method:
   # clears it).
   options:
     judge_sample_rate: 1.0
+    # Lane N-B — the WATERMARK slice (data/slice_coverage.py): this desk reads
+    # everything fetched since its last successful run (not the newest 120
+    # rows, which covered ~6 h of an ~11 h cycle), salience-selected on
+    # overflow, and its finding records the in-window signals it did not read
+    # (data.slice_coverage). narrative_coordination does NOT carry it: its
+    # 72 h window IS its synchrony measurement.
+    slice_since_watermark: true
+    # X4 LEVEL (W11-F36) — the STANDING conditions this unit's "high /
+    # elevated" reads rest on (a sanctions regime in force, a route under
+    # attack, a supply emergency) are measured as LEVELS: each id below reads
+    # "observed_at_level" on a report from this window, which re-evidences
+    # the status for the carried-state rule (data/carried_state.py). The
+    # four change-shaped signposts are untouched. The bar text after "=" is
+    # the reference the prompt names verbatim (a test pins the two).
+    level_indicators:
+      - "energy-trade-restriction-in-force=bar:a signal in this window reports the measure still in force or being enforced, not only that it was once imposed"
+      - "energy-route-disruption-in-force=bar:a signal in this window reports the route still closed, blockaded or under attack"
+      - "energy-supply-stress-in-force=bar:a signal in this window reports rationing, load-shedding, an emergency reserve release, a declared energy emergency, or a price at a reported multi-year high, still in effect"
     # 7g-2 (2026-09-25): the HISTORICAL SERIES grounding block, opt-in per
     # unit — energy_security is the one desk unit that reads it first because
     # the pilot collection's series are energy and macro numbers (EIA crude,
@@ -214,6 +232,31 @@ method:
     signals do not support; if the evidence is thin, LOWER your confidence
     rather than inventing specifics.
 
+    EVERY SENTENCE THAT STATES A FACT CARRIES ITS MARKER. The verification
+    pass reads your body one sentence at a time, and a sentence that states
+    anything about the world and carries no [N] marker is scored as an
+    uncited claim — in any section, and in the BLUF above all, because the
+    BLUF is the sentence a reader takes away. Three consequences. (1) THE
+    BLUF IS A CITED SENTENCE: it ends with the [N] marker(s) of the signals
+    that carry the facts it names, like any other claim ('**BLUF:** <the
+    verdict, naming who is doing what> [N][N].'). A BLUF that names nothing
+    is the bare category label the verdict rule bans, so there is no uncited
+    form of it worth writing (a BLUF that is itself a scoped negative
+    follows the exception below). (2) EVERY SENTENCE IN '## What changed'
+    AND IN '## Why it matters' ends with the marker(s) of the signals it
+    reports or reasons from — analysis is not exempt, because the grader
+    cannot tell your inference from a fact you left unsourced, and a
+    sentence that rests on nothing you can cite is a sentence to cut. ('##
+    What would change this read' and '## Indicators' look forward and need
+    none.) (3) Write each marker in ASCII brackets at the end of the
+    sentence, [N] or [N][N] — never in full-width brackets and never as a
+    bare number. A scoped negative, written in the house form ("no <X>
+    appears in this desk's collection through <date>"), has nothing to cite
+    and carries no marker; keep it scoped and keep the "no" at its head.
+    Before you emit, re-read the body once as a grader would, and for every
+    sentence without a marker either add the signal it rests on or cut it: a
+    fact you cannot point to is a fact you may not state.
+
     OUTPUT: respond with STRICT JSON and NOTHING ELSE — no preamble, no prose
     outside the single JSON object:
     {"title": "<short headline: the country + what this window actually shows about what is moving through its energy system and what is not — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name what is HOLDING it — see TITLE in the HOUSE READ CONTRACT below>",
@@ -230,7 +273,10 @@ method:
        {"id": "lng-terminal-outage", "statement": "Unplanned outage, damage, or shutdown at an LNG import/export terminal serving this country", "status": "not_observed", "horizon_date": "<as-of + 14 days>", "first_seen": "<as-of date>", "citations": []},
        {"id": "pipeline-disruption", "statement": "Disruption, sabotage, or cutoff of a major oil/gas pipeline supplying this country", "status": "not_observed", "horizon_date": "<as-of + 30 days>", "first_seen": "<as-of date>", "citations": []},
        {"id": "grid-blackout-or-shortfall", "statement": "Widespread grid blackout or a mandated load-shedding / supply shortfall", "status": "not_observed", "horizon_date": "<as-of + 30 days>", "first_seen": "<as-of date>", "citations": []},
-       {"id": "supply-route-chokepoint-risk", "statement": "Escalated interdiction risk on a maritime chokepoint carrying this country's energy imports", "status": "not_observed", "horizon_date": "<as-of + 14 days>", "first_seen": "<as-of date>", "citations": []}
+       {"id": "supply-route-chokepoint-risk", "statement": "Escalated interdiction risk on a maritime chokepoint carrying this country's energy imports", "status": "not_observed", "horizon_date": "<as-of + 14 days>", "first_seen": "<as-of date>", "citations": []},
+       {"id": "energy-trade-restriction-in-force", "statement": "A sanctions, embargo, price-cap or export-ban regime on this country's energy trade is in force", "status": "not_observed", "shape": "level", "reference": "bar:a signal in this window reports the measure still in force or being enforced, not only that it was once imposed", "horizon_date": "<as-of + 7 days>", "first_seen": "<as-of date>", "citations": []},
+       {"id": "energy-route-disruption-in-force", "statement": "A maritime chokepoint, pipeline or grid link carrying this country's energy is closed, blockaded or under repeated attack", "status": "not_observed", "shape": "level", "reference": "bar:a signal in this window reports the route still closed, blockaded or under attack", "horizon_date": "<as-of + 7 days>", "first_seen": "<as-of date>", "citations": []},
+       {"id": "energy-supply-stress-in-force", "statement": "This country's fuel, gas or power supply is under stress: rationing, load-shedding, an emergency reserve release, a declared energy emergency, or prices at a reported multi-year high", "status": "not_observed", "shape": "level", "reference": "bar:a signal in this window reports rationing, load-shedding, an emergency reserve release, a declared energy emergency, or a price at a reported multi-year high, still in effect", "horizon_date": "<as-of + 7 days>", "first_seen": "<as-of date>", "citations": []}
      ]}
 
     RULES:
@@ -240,7 +286,8 @@ method:
         of your `## Indicators` prose — a JSON field, not a section to render:
         never paste its keys ("status", "horizon_date", "first_seen", the id
         slug) into the prose. A SMALL, bounded list (about 3-6) of
-        concrete, resolvable near-term signposts. Set each "status" to
+        concrete, resolvable near-term signposts, plus every level indicator
+        (below). Set each "status" to
         "not_observed" (pre-registered, not yet seen), "triggered" (already firing
         in the slice), or "expired" (its horizon_date passed). A "triggered"
         indicator MUST name the signal(s) that fired it in "citations" as ASCII
@@ -256,6 +303,18 @@ method:
         placeholders — always compute real dates from this run's as-of date,
         never copy a literal from an example. Write both dates in the
         schema's `YYYY-MM-DD` form; the human-date rule applies to prose only.
+      - LEVEL INDICATORS — the entries whose "shape" is "level" measure a
+        STANDING CONDITION against the bar named in their "reference", not a
+        new event, and they are ALWAYS in the array. Each run, set a level
+        indicator to "observed_at_level" when a signal in THIS window's slice
+        reports the condition at that bar, and cite that signal's [N] in
+        "citations"; otherwise set it to "not_observed". A level is observed
+        again every window or it is not observed: your PRIOR READ, the
+        situation register and any HISTORICAL SERIES line are memory, not a
+        report, and an "observed_at_level" that cites only them is set back to
+        "not_observed". Never mark a level indicator "triggered", never use
+        "observed_at_level" on any other indicator, and copy "shape" and
+        "reference" exactly as written in the schema.
       - CANONICAL IDS — REUSE, do NOT re-mint: the id slugs above are this unit's
         FIXED vocabulary. Every run, REUSE these exact id slugs verbatim (only
         change "status" / "citations" / "first_seen" as the situation evolves) so
@@ -415,7 +474,10 @@ method:
     least one cited [N] index via "refs". When nothing is genuinely unresolved,
     emit "open_questions": [] or omit the field entirely — NEVER invent
     questions to fill the quota.
+  gather:
+    thinking: "off"   # T-2: tool rounds (if a target ever binds a read pack) stay on the plain alias
   llm:
+    thinking: "on"   # T-2: the synthesis call thinks (the desk's one call per run)
     # Model-card sampling (gpt-oss ships generation_config temperature=1.0; the vLLM
     # client always sends temperature, so the card default can never apply on its own).
     # Fleet-wide per the 2026-07-24 sampling audit + A/B (+0.055 faith at 1.0).

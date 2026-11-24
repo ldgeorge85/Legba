@@ -1,0 +1,1309 @@
+/* phone.css — the phone shell's own layer (M-2; plan §2.2).
+ *
+ * Every colour is a token from `globals.css` (`--surf-*`, `--ink-*`,
+ * `--line-*`, `--sev-*`, and `--point`, the ONE accent, used only for the
+ * reader's point and Consult's actions). Dark only.
+ *
+ *   type     body 16 px, statements 18 px serif, metadata 13 px, NOTHING under 12 px
+ *   touch    every control at least 44 × 44 px
+ *   layout   one column, a 16 px gutter held clear of the four safe-area insets,
+ *            `dvh` (and the keyboard's visual viewport) not `vh`, top bar 48 px,
+ *            bottom bar 56 px + the bottom inset; landscape and 481–900 px touch
+ *            screens get the same shell in a centred 640 px column
+ */
+
+.ph-app {
+  --ph-gutter-l: max(16px, env(safe-area-inset-left, 0px));
+  --ph-gutter-r: max(16px, env(safe-area-inset-right, 0px));
+  --ph-top-h: 48px;
+  --ph-bar-h: 56px;
+  --ph-measure: 640px;
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surf-base);
+  color: var(--ink-1);
+  font-family: var(--font-ui);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+  overflow: hidden;
+}
+
+/* The page is the shell: the root is one column the height the keyboard
+   leaves (`--ph-vvh`), the app's banners (P-1/P-3: offline, update, install)
+   in flow at its top, the shell under them. Set while the shell is mounted. */
+html[data-ph-shell] body {
+  margin: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+html[data-ph-shell] #root {
+  display: flex;
+  flex-direction: column;
+  height: var(--ph-vvh, 100dvh);
+}
+
+html[data-ph-shell] .pwa-banners {
+  flex: none;
+}
+
+/* a banner holds the top: it pays the status-bar inset, the shell does not */
+html[data-pwa-banner] .ph-top {
+  padding-top: 0;
+}
+
+/* ── top bar ───────────────────────────────────────────────────────────── */
+
+.ph-top {
+  flex: none;
+  padding-top: env(safe-area-inset-top, 0px);
+  background: var(--surf-base);
+  border-bottom: 1px solid var(--line-1);
+}
+
+.ph-top-inner {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: var(--ph-top-h);
+  max-width: var(--ph-measure);
+  margin: 0 auto;
+  padding: 0 calc(var(--ph-gutter-r) - 8px) 0 calc(var(--ph-gutter-l) - 8px);
+}
+
+/* at a tab's root there is no Back: the title keeps the gutter */
+.ph-brand {
+  width: 8px;
+}
+
+.ph-top-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ph-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  color: var(--ink-2);
+  font-size: 24px;
+  line-height: 1;
+}
+
+.ph-icon-btn:active {
+  background: var(--surf-3);
+}
+
+.ph-offline {
+  margin: 0;
+  padding: 6px var(--ph-gutter-r) 8px var(--ph-gutter-l);
+  font-size: 13px;
+  color: var(--sev-medium);
+  border-top: 1px solid var(--line-1);
+}
+
+/* ── the screen ───────────────────────────────────────────────────────── */
+
+.ph-main {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.ph-layer {
+  position: absolute;
+  inset: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  background: var(--surf-base);
+}
+
+.ph-layer[data-on='0'] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.ph-screen {
+  max-width: var(--ph-measure);
+  margin: 0 auto;
+  padding: 12px var(--ph-gutter-r) 24px var(--ph-gutter-l);
+}
+
+.ph-screen-tight {
+  padding-top: 0;
+}
+
+/* the reused phone read keeps its own measure; its own back is the top bar's */
+.ph-read .m-screen {
+  max-width: var(--ph-measure);
+  padding-left: var(--ph-gutter-l);
+  padding-right: var(--ph-gutter-r);
+}
+
+.ph-layer .m-back {
+  display: none;
+}
+
+/* ── bottom bar ───────────────────────────────────────────────────────── */
+
+.ph-bar {
+  flex: none;
+  display: flex;
+  justify-content: center;
+  height: calc(var(--ph-bar-h) + env(safe-area-inset-bottom, 0px));
+  padding: 0 env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+  background: var(--surf-2);
+  border-top: 1px solid var(--line-1);
+}
+
+.ph-app[data-kb='1'] .ph-bar {
+  display: none;
+}
+
+.ph-tab {
+  flex: 1 1 0;
+  max-width: 128px;
+  min-width: 48px;
+  min-height: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  background: none;
+  border: 0;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.ph-tab[aria-current='page'] {
+  color: var(--ink-1);
+  font-weight: 600;
+}
+
+.ph-tab[aria-current='page'] .ph-tab-icon::after {
+  content: '';
+  position: absolute;
+  left: -6px;
+  right: -6px;
+  top: -6px;
+  height: 2px;
+  background: var(--ink-1);
+  border-radius: 1px;
+}
+
+.ph-tab-icon {
+  position: relative;
+  display: inline-flex;
+}
+
+.ph-badge {
+  position: absolute;
+  top: -6px;
+  left: 14px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--sev-critical);
+  color: var(--surf-base);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── shared pieces ────────────────────────────────────────────────────── */
+
+.ph-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+
+.ph-chip {
+  min-height: 44px;
+  min-width: 56px;
+  padding: 0 14px;
+  border: 1px solid var(--line-2);
+  border-radius: 22px;
+  background: none;
+  color: var(--ink-2);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ph-chip[aria-pressed='true'] {
+  background: var(--surf-4);
+  border-color: var(--ink-3);
+  color: var(--ink-1);
+  font-weight: 600;
+}
+
+.ph-chip-map {
+  margin-left: auto;
+}
+
+.ph-section {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 20px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.ph-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+
+.ph-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--line-0);
+}
+
+.ph-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-height: 64px;
+  padding: 10px 0;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--line-0);
+  color: inherit;
+  text-align: left;
+  font: inherit;
+}
+
+button.ph-row:active {
+  background: var(--surf-2);
+}
+
+.ph-row-nav {
+  justify-content: center;
+}
+
+.ph-row-head {
+  font-size: 16px;
+  line-height: 1.4;
+  color: var(--ink-1);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.ph-row-meta {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.ph-row-tail {
+  color: var(--ink-3);
+}
+
+.ph-kind {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+/* severity: a word plus a 2 px rule in the semantic colour — never colour alone */
+.ph-rule {
+  border-left: 2px solid var(--line-2);
+  padding-left: 12px;
+}
+.ph-sev-critical { border-left-color: var(--sev-critical); }
+.ph-sev-high { border-left-color: var(--sev-high); }
+.ph-sev-medium { border-left-color: var(--sev-medium); }
+.ph-sev-low { border-left-color: var(--sev-low); }
+.ph-sev-info { border-left-color: var(--sev-info); }
+
+.ph-quiet {
+  margin: 8px 0;
+  font-size: 14px;
+  color: var(--ink-3);
+}
+
+.ph-dim {
+  color: var(--ink-3);
+}
+
+.ph-ink-1 {
+  color: var(--ink-1);
+}
+
+.ph-fig {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--ink-1);
+}
+
+.ph-point {
+  color: var(--point);
+}
+
+.ph-body {
+  margin: 4px 0 8px;
+  font-size: 15px;
+  color: var(--ink-2);
+}
+
+.ph-eyebrow {
+  margin: 4px 0 0;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.ph-title {
+  margin: 4px 0 8px;
+  font-family: var(--font-serif);
+  font-size: 22px;
+  line-height: 1.3;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.ph-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: var(--surf-3);
+  color: var(--ink-1);
+  font-size: 15px;
+  text-decoration: none;
+}
+
+.ph-btn-wide {
+  width: 100%;
+  margin: 8px 0;
+}
+
+.ph-btn-quiet {
+  background: none;
+  margin-left: auto;
+  font-size: 14px;
+}
+
+.ph-primary {
+  display: block;
+  width: 100%;
+  min-height: 48px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--point);
+  color: var(--surf-base);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.ph-link {
+  /* the touch floor both ways: a short name ("Iran", roll 87 at 360 px) was
+     44 px tall and 28 px wide */
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--ink-1);
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: var(--line-2);
+  text-underline-offset: 3px;
+}
+
+.ph-input {
+  width: 100%;
+  min-height: 48px;
+  padding: 0 14px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: var(--surf-2);
+  color: var(--ink-1);
+  font-size: 16px; /* 16 px: iOS does not zoom on focus */
+}
+
+.ph-search {
+  display: block;
+  margin: 4px 0 8px;
+}
+
+/* "Ask about this": Consult's action, so the accent */
+.ph-ask {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 56px;
+  margin: 16px 0 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--point);
+  border-radius: 6px;
+  background: none;
+  color: var(--point);
+  font-size: 16px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.ph-ask-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 14px;
+  border: 1px solid var(--point);
+  font-size: 14px;
+}
+
+.ph-ask-sub {
+  display: block;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+/* ── Changed ──────────────────────────────────────────────────────────── */
+
+.ph-since {
+  padding: 4px 0 8px;
+  border-bottom: 1px solid var(--line-1);
+}
+
+.ph-since-head {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.ph-since-counts {
+  margin: 2px 0;
+  font-size: 18px;
+  color: var(--ink-2);
+}
+
+.ph-since-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.ph-since-foot .ph-btn {
+  margin-left: auto;
+  font-size: 14px;
+}
+
+/* ── Watch and the alert page ─────────────────────────────────────────── */
+
+.ph-seg {
+  display: flex;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 4px 0 8px;
+}
+
+.ph-seg-btn {
+  flex: 1;
+  min-height: 44px;
+  min-width: 44px;
+  background: none;
+  border: 0;
+  color: var(--ink-2);
+  font-size: 15px;
+}
+
+.ph-seg-btn + .ph-seg-btn {
+  border-left: 1px solid var(--line-2);
+}
+
+.ph-seg-btn[aria-selected='true'] {
+  background: var(--surf-4);
+  color: var(--ink-1);
+  font-weight: 600;
+}
+
+.ph-alert-sev {
+  margin: 4px 0;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.ph-sev-word {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.ph-facts {
+  margin: 8px 0;
+}
+
+.ph-facts > div {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line-0);
+}
+
+.ph-facts dt {
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.ph-facts dd {
+  margin: 0;
+  font-size: 15px;
+  color: var(--ink-1);
+  overflow-wrap: anywhere;
+}
+
+.ph-attention {
+  margin: 12px 0;
+  padding: 0;
+}
+
+.ph-attention-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ph-btn-act {
+  border-color: var(--ink-2);
+  font-weight: 600;
+}
+
+.ph-snooze {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ph-fine {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.ph-error {
+  margin: 8px 0;
+  font-size: 14px;
+  color: var(--sev-critical);
+}
+
+.ph-history {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.ph-history li {
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line-0);
+}
+
+button:disabled {
+  opacity: 0.6;
+}
+
+/* ── reused desktop views, narrowed by the wrapper (no change to their code) ── */
+
+/* the views bring their own page padding and full height: on the phone the
+   screen's gutter is the one gutter, and the layer is the one scroller */
+.ph-view > div,
+.ph-view > section {
+  height: auto !important;
+  overflow: visible !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  background: none !important;
+}
+
+/* touch floor on reused controls (chips, toggles, "show more") */
+.ph-view button,
+.ph-view select,
+.ph-view [role='button'] {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.ph-view a {
+  overflow-wrap: anywhere;
+}
+
+/* a subject's name inside a row's line stays a link in the text (no 44 px
+   box breaking the line); an invisible ::after gives it a 44 px reach */
+.ph-view [data-testid='watch-subject-link'] {
+  display: inline;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+}
+
+.ph-view [data-testid='watch-subject-link']::after {
+  content: '';
+  position: absolute;
+  /* 44 px wide too, whatever the name's length (a two-letter name was 16 px) */
+  left: 50%;
+  top: 50%;
+  width: max(100%, 44px);
+  height: 44px;
+  transform: translate(-50%, -50%);
+}
+
+/* the alert log's filters fold into one "Filters" row on the phone */
+.ph-watch:not([data-filters='1']) [data-testid='watch-alert-filters'] {
+  display: none;
+}
+
+/* a link that stands on its own line (not inside running text) gets a full
+   44 px row to tap */
+.ph-view a:not(p a):not(li > span a) {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* the map's own chrome (the layer card's button, the legend's close, the zoom
+   controls) at the touch floor */
+.ph-map-box button {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* a wide table scrolls in its own box, its first column held (Ledger, Proof) */
+.ph-tables table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.ph-tables th:first-child,
+.ph-tables td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surf-base);
+  white-space: normal;
+  min-width: 7.5rem;
+  max-width: 10rem;
+}
+
+/* Citation chips (the shared CitedProse): M-0a's phone touch area — the chip
+   keeps its inline size and an invisible ::after takes the tap over 44 × 44 px;
+   its card is pinned in the viewport above the bottom bar. */
+.ph-app [data-testid='citation-chip'] {
+  position: relative;
+}
+
+.ph-app [data-testid='citation-chip']::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: max(100%, 44px);
+  height: max(100%, 44px);
+  transform: translate(-50%, -50%);
+}
+
+.ph-app [data-testid='citation-card'] {
+  position: fixed;
+  left: var(--ph-gutter-l);
+  right: var(--ph-gutter-r);
+  top: auto;
+  bottom: calc(var(--ph-bar-h) + 16px + env(safe-area-inset-bottom, 0px));
+  width: auto;
+  max-width: 36rem;
+  margin: 0 auto;
+}
+
+/* ── the Record ───────────────────────────────────────────────────────── */
+
+.ph-peek-wrap {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.ph-scrim {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.ph-peek {
+  position: relative;
+  max-height: 72%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 var(--ph-gutter-r) calc(16px + env(safe-area-inset-bottom, 0px)) var(--ph-gutter-l);
+  background: var(--surf-4);
+  border-top: 1px solid var(--line-2);
+  border-radius: 12px 12px 0 0;
+  max-width: var(--ph-measure);
+  width: 100%;
+  margin: 0 auto;
+}
+
+.ph-peek-grip {
+  align-self: center;
+  width: 40px;
+  height: 4px;
+  margin-top: 8px;
+  border-radius: 2px;
+  background: var(--line-2);
+}
+
+.ph-peek-head {
+  display: flex;
+  align-items: center;
+}
+
+.ph-peek-title {
+  flex: 1;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.ph-peek-body {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.ph-statement {
+  margin: 0 0 8px;
+  font-family: var(--font-serif);
+  font-size: 18px;
+  line-height: 1.45;
+  color: var(--ink-1);
+}
+
+.ph-peek-row {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+.ph-peek-count {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+
+.ph-record-page [data-testid='record-chain'] {
+  height: auto;
+  overflow: visible;
+  max-width: var(--ph-measure);
+  margin: 0 auto;
+  padding-left: var(--ph-gutter-l);
+  padding-right: var(--ph-gutter-r);
+}
+
+.ph-record-page [data-testid='record-chain'] button {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* a receipt value the desk truncates behind a hover title (a URL, a hash, the
+   stored version) is shown whole on the phone, wrapped: there is no hover */
+.ph-record-page [data-testid='record-chain'] dd.truncate,
+.ph-record-page [data-testid='record-chain'] .truncate {
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+
+/* ── the Map ──────────────────────────────────────────────────────────── */
+
+.ph-map {
+  max-width: var(--ph-measure);
+  margin: 0 auto;
+  padding: 8px var(--ph-gutter-r) 24px var(--ph-gutter-l);
+}
+
+.ph-map-box {
+  position: relative;
+  /* the drawn world is 2.2 : 1; the box leaves it a little room and stays
+     under 30 rem tall, so the legend and the layer card fold to their buttons */
+  width: 100%;
+  aspect-ratio: 1.25 / 1;
+  max-height: 440px;
+  border: 1px solid var(--line-1);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surf-1);
+}
+
+/* the map's own "drawn map: why" corner note: the screen says it under the map */
+.ph-map-box [data-testid='globe-fallback-note'] {
+  display: none;
+}
+
+/* the globe wants the height (a sphere); still under 30 rem so its chrome folds */
+.ph-map[data-globe='on'] .ph-map-box {
+  aspect-ratio: auto;
+  height: min(58dvh, 460px);
+  max-height: none;
+}
+
+.ph-globe {
+  position: absolute;
+  inset: 0;
+}
+
+.ph-map-actions {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+/* ── Consult: the screen (M-3g) ────────────────────────────────────────
+   One column the full height of the tab: the thread scrolls on its own; the
+   dock (the pin, the two controls, the composer) sits under it, so it rides
+   the keyboard with the shell (`--ph-vvh`); the bar is hidden while the
+   keyboard is up, so the dock is the last thing above it. */
+
+.ph-consult {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.ph-thread {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ph-thread-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: var(--ph-measure);
+  margin: 0 auto;
+  padding: 12px var(--ph-gutter-r) 16px var(--ph-gutter-l);
+}
+
+.ph-consult-empty .ph-body {
+  margin-top: 8px;
+}
+
+.ph-examples {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ph-example {
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: var(--surf-1);
+  color: var(--ink-1);
+  font-size: 15px;
+  line-height: 1.4;
+  text-align: left;
+}
+
+.ph-turn {
+  min-width: 0;
+}
+
+.ph-turn-user {
+  align-self: flex-end;
+  max-width: 85%;
+  padding: 8px 12px;
+  border-radius: 12px 12px 2px 12px;
+  background: var(--surf-3);
+}
+
+.ph-question {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ph-turn-assistant {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line-0);
+}
+
+.ph-turn-assistant:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.ph-turn-pending .ph-answer {
+  opacity: 0.85;
+}
+
+.ph-answer {
+  max-width: none;
+  font-size: 16px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.ph-answer :where(p, li) {
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.ph-offer {
+  border-color: var(--point);
+  color: var(--point);
+}
+
+/* the turn contract: one line, opens to the shared block */
+.ph-contract {
+  margin-top: 8px;
+}
+
+.ph-contract-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--line-0);
+  color: var(--ink-2);
+  font-size: 13px;
+  text-align: left;
+}
+
+.ph-contract-chevron {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.ph-contract-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+.ph-contract-partial {
+  color: var(--sev-medium);
+  font-weight: 600;
+}
+
+.ph-contract-full {
+  overflow-x: auto;
+  font-size: 13px;
+}
+
+/* the drive strip: what an answer opened, what stayed on the desktop */
+.ph-drive {
+  flex: none;
+  max-width: var(--ph-measure);
+  width: 100%;
+  margin: 0 auto;
+  padding: 8px var(--ph-gutter-r) 4px var(--ph-gutter-l);
+  border-top: 1px solid var(--line-1);
+  font-size: 14px;
+}
+
+.ph-drive-line {
+  margin: 0 0 4px;
+  color: var(--ink-1);
+}
+
+.ph-drive-refused {
+  margin: 0 0 4px;
+  padding: 0 0 0 12px;
+  border-left: 2px solid var(--sev-medium);
+  list-style: none;
+  color: var(--ink-2);
+}
+
+.ph-drive-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.ph-btn-stop {
+  border-color: var(--sev-critical);
+  color: var(--sev-critical);
+  background: none;
+}
+
+/* the dock: the pin, the controls, the composer */
+.ph-dock {
+  flex: none;
+  max-width: var(--ph-measure);
+  width: 100%;
+  margin: 0 auto;
+  padding: 0 var(--ph-gutter-r) 8px var(--ph-gutter-l);
+  border-top: 1px solid var(--line-1);
+  background: var(--surf-base);
+}
+
+.ph-asking {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  font-size: 14px;
+  border-bottom: 1px solid var(--line-0);
+}
+
+.ph-asking-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ph-asking .ph-icon-btn {
+  margin-right: -8px;
+}
+
+.ph-consult-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 6px;
+}
+
+.ph-select-wrap {
+  flex: none;
+}
+
+.ph-select {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--line-2);
+  border-radius: 22px;
+  background: var(--surf-2);
+  color: var(--ink-1);
+  font-size: 16px; /* 16 px: iOS does not zoom on focus */
+  font-variant-numeric: tabular-nums;
+}
+
+.ph-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  min-width: 0;
+  padding: 0 12px;
+  border: 1px solid var(--line-2);
+  border-radius: 22px;
+  background: none;
+  color: var(--ink-2);
+  font-size: 14px;
+  text-align: left;
+}
+
+.ph-switch-dot {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--ink-3);
+}
+
+.ph-switch[aria-checked='true'] {
+  border-color: var(--point);
+  color: var(--ink-1);
+}
+
+.ph-switch[aria-checked='true'] .ph-switch-dot {
+  border-color: var(--point);
+  background: var(--point);
+}
+
+.ph-switch-wide {
+  width: 100%;
+  margin: 4px 0;
+}
+
+.ph-consult-words {
+  margin: 4px 0 6px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--ink-3);
+}
+
+/* the keyboard is up: the thread gets the room the explaining line and the
+   two controls take (both are back the moment the keyboard goes) */
+.ph-app[data-kb='1'] .ph-consult-words,
+.ph-app[data-kb='1'] .ph-consult-controls {
+  display: none;
+}
+
+.ph-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.ph-question-box {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 48px;
+  max-height: 30dvh;
+  padding: 10px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: var(--surf-1);
+  color: var(--ink-1);
+  font-family: inherit;
+  font-size: 16px; /* 16 px: iOS does not zoom on focus */
+  line-height: 1.4;
+  resize: none;
+}
+
+/* Ask is Consult's action: the one accent */
+.ph-send {
+  flex: none;
+  min-width: 64px;
+  min-height: 48px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--point);
+  color: var(--surf-base);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.ph-send:disabled {
+  opacity: 0.4;
+}
+
+.ph-stop {
+  background: none;
+  border: 1px solid var(--sev-critical);
+  color: var(--sev-critical);
+}
+
+.ph-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* the Undo toast, over the screen a Consult answer opened */
+.ph-toast {
+  position: absolute;
+  left: var(--ph-gutter-l);
+  right: var(--ph-gutter-r);
+  bottom: calc(var(--ph-bar-h) + 12px + env(safe-area-inset-bottom, 0px));
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(var(--ph-measure) - 32px);
+  margin: 0 auto;
+  padding: 4px 4px 4px 14px;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  background: var(--surf-4);
+  color: var(--ink-1);
+  font-size: 14px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+}
+
+.ph-toast-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.ph-toast-undo {
+  border-color: var(--point);
+  color: var(--point);
+  background: none;
+  font-weight: 600;
+}
+
+.ph-app[data-kb='1'] .ph-toast {
+  bottom: 12px;
+}
+
+/* ── wide and landscape: the same shell, one centred column ───────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .ph-app * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

@@ -7,7 +7,7 @@ reminder. Same call shape as the spike test's
 through daprd's HTTP actor-method API (3500/v1.0/actors/...) — no SDK
 dependency needed in the operator shell.
 
-Sister script to ``scripts/bringup_register_multi_country_targets.py``: that
+Sister script to ``scripts/attic/bringup_register_multi_country_targets.py`` (retired): that
 script registers + reconciler activates the actors with reminders; this one
 short-circuits the first reminder fire so the validation window doesn't
 have to be 15 minutes long.

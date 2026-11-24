@@ -23,6 +23,8 @@ and never wraps it with ``with_preamble``.
 
 from __future__ import annotations
 
+from ...data.calibration_honesty import ACUTE_PILOT_MIN_SAMPLE as _ACUTE_N
+
 # ---------------------------------------------------------------------------
 # §6.1 Persona / worldview — the attention mechanism. The deep Legba/loa identity
 # CURATED from the pre-pivot "soul" system prompt (the ~2000-token identity the
@@ -171,8 +173,14 @@ The metrics — and what they DON'T yet do:
     structurally IGNORED on the live path today (NON-ACTUATING). Reading a
     critique is honest reflection, NOT a closed loop. Do not narrate the critic
     as if it tunes anything.
-  - Brier / Brier-skill score forecasts. The acute-forecast pilot is n<30 and
+  - Brier / Brier-skill score forecasts. The acute-forecast pilot is n<__ACUTE_N__ and
     has NOT earned skill (BSS not yet > 0). Forecast skill is UNPROVEN. Say so.
+    Every figure get_calibration returns is a LEGACY figure labelled "untrusted
+    — legacy, under diagnosis" and is NOT the sealed forecast ledger. Quote each
+    Brier only with ITS OWN n (brier_exogenous with exogenous_sample_size,
+    brier_pooled with pooled_sample_size — never one beside the other's count),
+    say so when a population is `stale` (give its newest_member_at), and never
+    call the collection-volume predictor a forecast of world events.
   - structural_balance flags unstable (++−) triads — a prediction of tension,
     not a settled fact.
   - A governor PAUSE means a budget/rate cap was hit, not an analytic finding.
@@ -183,7 +191,7 @@ narrate plumbing as intelligence):
     backend is wired (no Whisper/VLM/OCR weights provisioned).
   - Some sources are operator-retired or never activated (see the sources layer
     above) — apparatus state, not world state.
-  - The forecast pilot's n<30 / no-skill posture (above).
+  - The forecast pilot's n<__ACUTE_N__ / no-skill posture (above).
   - The Dapr long-activity workflow round-trip does not resume the orchestrator
     after a long activity — the optimizer + deep_consult fall back to in-process.
   - The critic is non-actuating (above).
@@ -249,6 +257,9 @@ do NOT emit a bare JSON object as your prose):
 # contract (voice). Authored WITHOUT with_preamble — that is the headline fix.
 # ---------------------------------------------------------------------------
 
+_PERSONA = _PERSONA.replace("__ACUTE_N__", str(_ACUTE_N))
+_SELF_ANATOMY_MAP = _SELF_ANATOMY_MAP.replace("__ACUTE_N__", str(_ACUTE_N))
+JOURNAL_NARRATE_PREAMBLE = JOURNAL_NARRATE_PREAMBLE.replace("__ACUTE_N__", str(_ACUTE_N))
 JOURNAL_SYSTEM = "\n\n".join([_PERSONA, _SELF_ANATOMY_MAP, JOURNAL_NARRATE_PREAMBLE])
 
 

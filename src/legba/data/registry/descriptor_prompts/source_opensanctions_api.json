@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.opensanctions.api": {
+      "source": "source_opensanctions_api.yaml",
+      "state": "draft"
+    }
+  }
+}

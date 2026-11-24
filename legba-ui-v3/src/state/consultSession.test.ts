@@ -27,6 +27,7 @@ import {
   toPersisted,
   turnsFromServer,
   useConsultSessions,
+  stripFinalFrame,
   usageFromFrame,
   type ChatTurn,
   type ConsultPanelState,
@@ -561,6 +562,18 @@ describe('applyFrame — spend, cap, and the answer as it forms', () => {
     expect(turn.steps).toEqual([])
   })
 
+  it('restarts the preview when a new segment starts streaming (W11-F132)', () => {
+    // A drilling round streams too: its preamble is not the answer, and the
+    // round that answers replaces it rather than appending to it.
+    let turn = pending()
+    turn = applyFrame(turn, { type: 'step', kind: 'answer_delta', segment: 'round-3', text: 'Let me check.' })
+    turn = applyFrame(turn, { type: 'step', kind: 'answer_delta', segment: 'round-4', text: 'The answer ' })
+    turn = applyFrame(turn, { type: 'step', kind: 'answer_delta', segment: 'round-4', text: 'forms.' })
+    expect(turn.answerPreview).toBe('The answer forms.')
+    expect(turn.answerSegment).toBe('round-4')
+    expect(turn.steps).toEqual([])
+  })
+
   it('leaves the turn untouched for a frame that says nothing', () => {
     const turn = pending()
     expect(applyFrame(turn, { type: 'step', kind: 'answer_delta' })).toBe(turn)
@@ -698,5 +711,34 @@ describe('replaceTurn — the re-synthesised answer', () => {
     store.replaceTurn(PANEL, 0, { role: 'assistant', content: 'nope' })
     store.replaceTurn(PANEL, 9, { role: 'assistant', content: 'nope' })
     expect(useConsultSessions.getState().panel(PANEL).transcript).toBe(before)
+  })
+})
+
+describe('stripFinalFrame — the live preview never shows the FINAL frame (W11 SWEEP-2)', () => {
+  const HEAD = 'uncertainty: 0.25\ncited_refs: 3f69f001-e65c-48ac-b5a3-99f128ecbcee\nwatch_candidates: a\n\n'
+  const BODY = '## Bottom line\nThe answer.'
+  it.each([
+    '<<<FINAL>>>',
+    '<<<FINAL>>',
+    '<<<FINAL>',
+    '<<<FINAL',
+    '<<< final >>>',
+    '**<<<FINAL>>>**',
+  ])('strips the marker form %s and its header block', (marker) => {
+    expect(stripFinalFrame(`${marker}\n${HEAD}${BODY}`)).toBe(BODY)
+  })
+  it('strips surrounding whitespace / newlines and a mid-text marker after narration', () => {
+    expect(stripFinalFrame(`\n  <<<FINAL>>  \n${HEAD}${BODY}`)).toBe(BODY)
+    expect(stripFinalFrame(`Composing the answer now.\n\n<<<FINAL>>>\n${HEAD}${BODY}`)).toBe(BODY)
+    expect(stripFinalFrame(`Composing the answer now. <<<FINAL>>>\n${HEAD}${BODY}`)).toBe(BODY)
+  })
+  it('holds back a tail that could still become the marker or a header', () => {
+    expect(stripFinalFrame('<<<FI')).toBe('')
+    expect(stripFinalFrame('<<<FINAL>>>\nuncertainty: 0.2\ncited_r')).toBe('')
+  })
+  it('leaves an answer with no frame, and a quoted marker mid-sentence, alone', () => {
+    expect(stripFinalFrame(BODY)).toBe(BODY)
+    const quoted = 'The sentinel <<<FINAL>>> opens a reply.\nMore.'
+    expect(stripFinalFrame(quoted)).toBe(quoted)
   })
 })

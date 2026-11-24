@@ -195,18 +195,30 @@ async def _pool(dsn):
         await p.close()
 
 
+async def _wipe_owned(conn) -> None:
+    await conn.execute("DELETE FROM evidence_archive")
+    await conn.execute("DELETE FROM signals")
+    await conn.execute("DELETE FROM target_descriptors")
+
+
 @pytest.fixture(autouse=True)
 async def _reset(dsn, restore_source_credibility_seed):
     async with _conn(dsn) as conn:
-        await conn.execute("DELETE FROM evidence_archive")
-        await conn.execute("DELETE FROM signals")
+        await _wipe_owned(conn)
         await conn.execute("DELETE FROM source_credibility")
-        await conn.execute("DELETE FROM target_descriptors")
     yield
+    # Two-sided (W11-F94): the setup wipe protects THIS module's next test,
+    # nothing protected the module AFTER it. Whichever test ran last left its
+    # rows in the shared session DB — test_research_geo_must_match_the_target
+    # leaves one live (web_retrieval) geo=['CA'] signal fetched now, which
+    # test_desk_baseline.py::test_spillover_from_adjacent_desk then counted as
+    # Canada's current volume (6.0, not 5.0; shuffled nightly 2026-10-15). The
+    # setup wipe emptied these tables, so this removes only this test's rows.
     # RESTORE the canonical source_credibility seed — the unscoped delete above
     # commits on the shared test DB, so leaving it wiped poisons every later
     # source_credibility test in the suite (09-05 merge-wave ordering pollution).
     async with _conn(dsn) as conn:
+        await _wipe_owned(conn)
         await restore_source_credibility_seed(conn)
 
 

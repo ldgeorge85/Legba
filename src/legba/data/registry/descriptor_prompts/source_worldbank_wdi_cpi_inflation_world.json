@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.worldbank.wdi_cpi_inflation_world": {
+      "source": "source_worldbank_wdi_cpi_inflation_world.yaml",
+      "state": "draft"
+    }
+  }
+}

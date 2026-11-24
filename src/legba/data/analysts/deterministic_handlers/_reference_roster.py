@@ -62,6 +62,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Sequence
 
+from ... import gazetteer as GZ
+from ... import profile_constants as _constants
+from ... import rosters as _rosters
+from ... import subject as SUBJECT
+from ..unit_names import label_name, parse_unit_label
 from . import _reference_store as STORE
 
 logger = logging.getLogger(__name__)
@@ -144,31 +149,52 @@ _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 # ---------------------------------------------------------------------------
 
 #: The live roster: targets whose dimension desks have produced recently. The
-#: population is DERIVED from what the fleet actually reads, so a country that
+#: population is DERIVED from what the fleet actually reads, so a subject that
 #: joins the read set joins this roster with no edit here and no list anywhere.
+#:
+#: INST-1 — THE ROSTER IS THE PROFILE'S, NOT THE COUNTRIES'. ``$4`` is
+#: :func:`reference_roster_tags` (the scored roster tags plus the profile's
+#: ``constants.reference_subject_tags``): a target whose live head is ACTIVE
+#: and carries one of them is on the roster, over the units it actually
+#: produced. A target with NO head descriptor at all is admitted as at the pin
+#: (fail-open: the roster never silently loses a producing desk because its
+#: descriptor row is missing); a head that is paused, draft or retired, or that
+#: carries none of the tags, is not.
+#: The head filter runs AFTER the aggregate — once per target, not once per
+#: finding row (the body is TOASTed; per-row it is ~15k detoasts a tick).
 ROSTER_SQL = """
-SELECT target_id, array_agg(DISTINCT analyst_id ORDER BY analyst_id) AS dims
-  FROM analyst_outputs
- WHERE kind = 'finding'
-   AND analyst_id = ANY($1::text[])
-   AND produced_at > $2::timestamptz - make_interval(days => $3::int)
- GROUP BY target_id
- ORDER BY target_id
+SELECT r.target_id, r.dims
+  FROM (
+        SELECT target_id,
+               array_agg(DISTINCT analyst_id ORDER BY analyst_id) AS dims
+          FROM analyst_outputs
+         WHERE kind = 'finding'
+           AND analyst_id = ANY($1::text[])
+           AND produced_at > $2::timestamptz - make_interval(days => $3::int)
+         GROUP BY target_id
+       ) AS r
+  LEFT JOIN target_descriptors td
+    ON td.descriptor_id = r.target_id AND td.is_head = TRUE
+ WHERE td.descriptor_id IS NULL
+    OR (COALESCE(td.state, 'active') = 'active'
+        AND (td.body -> 'scope' -> 'tags') ?| $4::text[])
+ ORDER BY r.target_id
 """
 
-#: The target's display name and geo, for the reference's SUBJECT line.
-TARGET_IDENTITY_SQL = """
-SELECT td.descriptor_id AS target_id,
-       td.body -> 'identity' ->> 'name' AS name,
-       ARRAY(SELECT jsonb_array_elements_text(td.body -> 'scope' -> 'geo')) AS geo
+#: One target's live head tags — which units the grader EXPECTS a head from
+#: (:func:`expected_units`).
+TARGET_TAGS_SQL = """
+SELECT ARRAY(SELECT jsonb_array_elements_text(td.body -> 'scope' -> 'tags')) AS tags
   FROM target_descriptors td
  WHERE td.is_head = TRUE
-   AND td.descriptor_id = ANY($1::text[])
+   AND td.descriptor_id = $1
 """
 
-ISO_NAMES_SQL = """
-SELECT iso2, name FROM iso_countries WHERE iso2 = ANY($1::text[])
-"""
+#: The target's declared subject fields and the gazetteer read, for the
+#: reference's SUBJECT line: the subject ladder's own statements
+#: (``legba.data.subject``, W10 SUBJECT-1).
+TARGET_IDENTITY_SQL = SUBJECT.HEADS_SQL
+ISO_NAMES_SQL = SUBJECT.GAZETTEER_SQL
 
 #: THE ATTEMPT LEDGER, read out of the lane's OWN receipts.
 #:
@@ -199,8 +225,82 @@ SELECT ao.produced_at AS produced_at,
 
 
 # ---------------------------------------------------------------------------
-# The roster
+# The roster (INST-1: the profile's subjects, not the countries)
 # ---------------------------------------------------------------------------
+
+
+def reference_roster_tags() -> tuple[str, ...]:
+    """The tags that put a subject on the CORRECTNESS roster: the profile's
+    scored roster tags, then its ``constants.reference_subject_tags``, in
+    declared order, once each."""
+    return tuple(dict.fromkeys(
+        (*_rosters.scored_roster_tags(), *_constants.reference_subject_tags())
+    ))
+
+
+def reference_units() -> tuple[str, ...]:
+    """The units the reference builder references and the grader grades, in
+    roster order: the scored subjects' units (``scored_subject_units``) plus
+    every unit scoped to a ``reference_subject_tags`` leg. With no reference
+    tag declared it IS ``scored_subject_units`` — the pin's set."""
+    base = set(_rosters.scored_subject_units())
+    extra = set(_constants.reference_subject_tags())
+    return tuple(
+        u for u in _rosters.unit_roster()
+        if u in base or _rosters.terms_for(u).scope_tag in extra
+    )
+
+
+def units_for_tags(
+    tags: Sequence[str], units: Sequence[str] | None = None
+) -> tuple[str, ...]:
+    """The units (of ``units``, default :func:`reference_units`) that fire on
+    a subject carrying ``tags`` — the roster's own fan-out rule: an unscoped
+    unit on any scored subject; a unit scoped to a roster LEG on that leg's
+    subjects; a unit narrowed WITHIN the scored legs (a scope tag that is not
+    a roster tag) on the scored subjects that carry it."""
+    have = set(tags)
+    scored = set(_rosters.scored_roster_tags())
+    legs = set(_rosters.subject_roster_tags())
+    on_scored = bool(have & scored)
+    out: list[str] = []
+    for unit in (reference_units() if units is None else units):
+        scope = _rosters.terms_for(unit).scope_tag
+        if scope is None:
+            fires = on_scored
+        elif scope in legs:
+            fires = scope in have
+        else:
+            fires = on_scored and scope in have
+        if fires:
+            out.append(unit)
+    return tuple(out)
+
+
+def on_scored_leg(units: Sequence[str]) -> bool:
+    """Does a subject that fires ``units`` sit on a SCORED leg — does it fire
+    any fixed scorecard dimension? The floor-1 subject composition is expected
+    exactly there."""
+    return bool(set(units) & set(_rosters.scored_unit_roster()))
+
+
+async def expected_units(
+    conn: Any, target_id: str, units: Sequence[str]
+) -> tuple[str, ...] | None:
+    """The units of ``units`` a head is EXPECTED from on ``target_id`` — its
+    live head's tags through :func:`units_for_tags`. ``None`` when the target
+    has no readable head: the caller then expects every unit, the pin's rule.
+    """
+    try:
+        row = await conn.fetchrow(TARGET_TAGS_SQL, target_id)
+    except Exception as exc:  # noqa: BLE001 — degrade to the pin's rule
+        logger.warning(
+            "reference_roster.tags_unreadable target=%s err=%s", target_id, exc
+        )
+        return None
+    if row is None:
+        return None
+    return units_for_tags([str(t) for t in (row["tags"] or [])], units)
 
 
 async def resolve_roster(
@@ -209,6 +309,7 @@ async def resolve_roster(
     t0: datetime,
     dimensions: Sequence[str],
     roster_window_days: int,
+    tags: Sequence[str] | None = None,
 ) -> dict[str, list[str]]:
     """``{target_id: [the dimensions THAT target actually carries]}``.
 
@@ -216,8 +317,14 @@ async def resolve_roster(
     something: a target with seven desks is thin on the seven it has, and
     banding an eighth dimension it does not read would manufacture a thin
     dimension that no live unit will ever be graded on.
+
+    ``tags`` (default :func:`reference_roster_tags`) selects the subjects —
+    see :data:`ROSTER_SQL`.
     """
-    rows = await conn.fetch(ROSTER_SQL, list(dimensions), t0, int(roster_window_days))
+    roster_tags = list(reference_roster_tags() if tags is None else tags)
+    rows = await conn.fetch(
+        ROSTER_SQL, list(dimensions), t0, int(roster_window_days), roster_tags
+    )
     return {
         str(r["target_id"]): [str(d) for d in (r["dims"] or [])]
         for r in rows
@@ -225,49 +332,102 @@ async def resolve_roster(
 
 
 async def target_identity(
-    conn: Any, target_ids: Sequence[str]
-) -> dict[str, dict[str, str]]:
+    conn: Any, target_ids: Sequence[str], *, detail: bool = False
+) -> dict[str, dict[str, Any]]:
     """``{target_id: {"name": …, "code": …}}`` — the reference's subject.
 
-    Degrades to the target id itself rather than failing: a reference for a
-    target whose descriptor is mid-rename is still a reference, and refusing to
-    build one over a display name would be the wrong trade.
+    THE SUBJECT LADDER (``legba.data.subject``, W10 SUBJECT-1): the code is the
+    descriptor's declared ``subject_code``, else its single ``scope.geo`` code,
+    else the target id; the name is the gazetteer's for that code, else the
+    descriptor's name, else the de-slugged id. A lane or a flow (several geo
+    codes) is therefore keyed by its own id, where the first geo code used to
+    name it after one riparian country, and a target whose descriptor fails to
+    answer resolves through the profile's declared subjects and then to its id
+    — never the id's last two characters.
+
+    Degrades rather than failing: a reference for a target whose descriptor is
+    mid-rename is still a reference, and refusing to build one over a display
+    name would be the wrong trade.
+
+    INST-1 — THE GAZETTEER RUNG IS THE PROFILE'S. The name rung reads the
+    gazetteer only for a code that IS one of the subject's declared geo codes
+    (where the pin filtered on a two-character code), and only when the
+    profile's gazetteer declares a ``polities`` section; a profile that
+    declares none reads it ABSENT (recorded by name, ``gazetteer.or_empty``)
+    and every subject is named by its descriptor. ``detail=True`` adds the
+    subject's ``kind``, whether it is a ``polity``, the ``noun`` the
+    instruction calls it by and the ``query_name`` its searches substitute
+    (:func:`subject_detail`).
     """
-    out: dict[str, dict[str, str]] = {}
     try:
         rows = await conn.fetch(TARGET_IDENTITY_SQL, list(target_ids))
     except Exception as exc:  # noqa: BLE001 — degrade, never lose the run
         logger.warning("reference_builder.identity_failed err=%s", exc)
         rows = []
-    codes: dict[str, str] = {}
-    for row in rows:
-        geo = [str(g).upper() for g in (row["geo"] or []) if str(g).strip()]
-        code = geo[0] if geo else ""
-        codes[str(row["target_id"])] = code
-        out[str(row["target_id"])] = {
-            "name": str(row["name"] or row["target_id"]),
-            "code": code,
-        }
-    iso = {c for c in codes.values() if len(c) == 2}
-    if iso:
+    codes = {
+        str(row["target_id"]): SUBJECT.subject_code(row) for row in rows
+    }
+    polities = GZ.or_empty("polities", consumer="reference_roster")
+    has_polities = bool(polities.universe or polities.curated)
+    gazetteer: dict[str, str] = {}
+    if rows and has_polities:
         try:
-            for row in await conn.fetch(ISO_NAMES_SQL, sorted(iso)):
-                for target_id, code in codes.items():
-                    if code == str(row["iso2"]) and target_id in out:
-                        out[target_id]["name"] = str(row["name"])
+            gazetteer = await SUBJECT.gazetteer_names(conn, {
+                codes[str(row["target_id"])] for row in rows
+                if codes[str(row["target_id"])] in SUBJECT.subject_geo(row)
+            })
         except Exception as exc:  # noqa: BLE001 — a nicer name is not worth a run
             logger.debug("reference_builder.iso_names_failed err=%s", exc)
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        tid = str(row["target_id"])
+        out[tid] = {
+            "name": SUBJECT.subject_name(row, gazetteer=gazetteer),
+            "code": codes[tid],
+        }
+        if detail:
+            out[tid].update(
+                subject_detail(row, out[tid], polity=codes[tid] in gazetteer)
+            )
     for target_id in target_ids:
-        # The LAST TWO CHARACTERS of the target id as the code, and not "":
-        # every roster id ends in its ISO2 (``country_g20_ar`` -> AR), the code
-        # becomes the reference's item prefix and the instruction's subject, and
-        # an empty one would silently mint ``RD-COUNTRY_G20_AR-C`` item ids for
-        # a target whose descriptor merely failed to answer.
-        out.setdefault(
-            str(target_id),
-            {"name": str(target_id), "code": str(target_id)[-2:].upper()},
-        )
+        tid = str(target_id)
+        if tid not in out:
+            subject = SUBJECT.resolve(tid)
+            out[tid] = {"name": subject.name, "code": subject.code}
+            if detail:
+                out[tid].update(subject_detail(
+                    subject, out[tid],
+                    polity=has_polities and subject.code in subject.geo,
+                ))
     return out
+
+
+def subject_detail(
+    target: Any, identity: Mapping[str, Any], *, polity: bool
+) -> dict[str, Any]:
+    """What the instruction and the query plan need beyond code and name.
+
+    ``noun`` is ``country`` for a polity (a subject named by the gazetteer's
+    polity rung — the exemplar's 32 desks, byte-identical to the pin's
+    instruction); otherwise the TIER half of the subject's label (``Lane —
+    Strait of Hormuz`` -> ``lane``), else ``subject``. ``query_name`` is the
+    name a search substitutes for ``{subject}``: a polity's gazetteer name, or
+    the NAME half of the label (``Strait of Hormuz``) — a query names the
+    place, never the tier.
+    """
+    name = str(identity.get("name") or "")
+    if polity:
+        noun, query_name = "country", name
+    else:
+        tier = parse_unit_label(name).tier.strip().lower()
+        noun = tier or "subject"
+        query_name = label_name(name) or name
+    return {
+        "kind": SUBJECT.subject_kind(target),
+        "polity": bool(polity),
+        "noun": noun,
+        "query_name": query_name,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -679,6 +839,7 @@ __all__ = [
     "DEFAULT_RETRY_BACKOFF_HOURS",
     "FAILED_STATUSES",
     "ISO_NAMES_SQL",
+    "TARGET_TAGS_SQL",
     "REASON_NAMED",
     "REASON_NEVER_ATTEMPTED",
     "REASON_OLDEST_ATTEMPT",
@@ -691,13 +852,19 @@ __all__ = [
     "apply_outcomes",
     "attempt_records",
     "due_targets",
+    "expected_units",
     "fold_attempts",
     "load_attempts",
     "named_targets",
+    "on_scored_leg",
     "order_due",
     "queue_line",
+    "reference_roster_tags",
+    "reference_units",
     "resolve_roster",
     "retry_backoff_hours",
+    "subject_detail",
     "target_identity",
     "unbuildable_targets",
+    "units_for_tags",
 ]

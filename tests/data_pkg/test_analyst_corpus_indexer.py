@@ -25,8 +25,12 @@ DETERMINISTIC and need no live substrate / OpenSearch — they cover:
 
 from __future__ import annotations
 
+import datetime as _dt
 from uuid import uuid4
 
+import pytest
+
+from legba.data import opensearch as _os
 from legba.data.analysts.deterministic import (
     OUTPUT_KIND_BY_SUB_HANDLER,
     SUB_HANDLERS,
@@ -208,3 +212,126 @@ def test_signal_to_doc_omits_non_string_text_and_archived_text():
     )
     assert "text" not in doc
     assert "archived_text" not in doc
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-06 — stamp only what the bulk call accepted. Through a flood-stage
+# block every item came back 403 and the whole batch was stamped anyway: 652
+# signals marked indexed that never reached the corpus.
+# ---------------------------------------------------------------------------
+
+def _err(doc_id: str, status: int, etype: str) -> dict:
+    return {"index": {"_index": "c", "_id": doc_id, "status": status,
+                      "error": {"type": etype, "reason": "x"}}}
+
+
+class _Conn:
+    def __init__(self, rows, executed):
+        self._rows = rows
+        self._executed = executed
+
+    async def fetch(self, sql, *args):
+        return self._rows
+
+    async def execute(self, sql, ids, seen):
+        self._executed.append(list(ids))
+        return f"UPDATE {len(ids)}"
+
+
+class _Acq:
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self._conn
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _Pool:
+    def __init__(self, rows):
+        self.executed: list[list] = []
+        self._conn = _Conn(rows, self.executed)
+
+    def acquire(self):
+        return _Acq(self._conn)
+
+
+def _rows(n: int) -> list[dict]:
+    now = _dt.datetime(2026, 11, 6, tzinfo=_dt.timezone.utc)
+    return [{"id": uuid4(), "payload": {"title": f"t{i}"}, "updated_at": now} for i in range(n)]
+
+
+def _store_with_errors(monkeypatch, errors_for):
+    """A real OpenSearchStore whose async_bulk returns per-item errors."""
+    async def fake_bulk(client, actions, raise_on_error, stats_only):
+        errs = errors_for([a["_id"] for a in actions])
+        return len(actions) - len(errs), errs
+
+    monkeypatch.setattr(_os, "async_bulk", fake_bulk)
+    store = _os.OpenSearchStore.__new__(_os.OpenSearchStore)
+    store._client = object()
+
+    async def ensure_index(name, mapping):
+        return False
+
+    store.ensure_index = ensure_index  # type: ignore[method-assign]
+    return store
+
+
+@pytest.mark.parametrize("status,etype", [
+    (403, "cluster_block_exception"),
+    (429, "es_rejected_execution_exception"),
+    (503, "unavailable_shards_exception"),
+])
+async def test_cluster_state_failures_leave_rows_unstamped(monkeypatch, caplog, status, etype):
+    rows = _rows(5)
+    bad = {str(rows[1]["id"]), str(rows[3]["id"])}
+    store = _store_with_errors(
+        monkeypatch, lambda ids: [_err(i, status, etype) for i in ids if i in bad],
+    )
+    pool = _Pool(rows)
+    with caplog.at_level("WARNING"):
+        counters = await corpus_indexer._sweep_batch(pool, store=store, index="c", batch_limit=10)
+    assert counters["indexed"] == 3
+    assert counters["failures"] == 2
+    assert counters["retry_pending"] == 2
+    stamped = {str(i) for i in pool.executed[0]}
+    assert stamped == {str(r["id"]) for r in rows} - bad
+    lines = [r for r in caplog.records if "corpus_indexer.bulk_errors" in r.getMessage()]
+    assert len(lines) == 1 and "errors=2" in lines[0].getMessage()
+
+
+async def test_a_wholly_blocked_batch_stamps_nothing(monkeypatch):
+    rows = _rows(4)
+    store = _store_with_errors(
+        monkeypatch, lambda ids: [_err(i, 403, "cluster_block_exception") for i in ids],
+    )
+    pool = _Pool(rows)
+    counters = await corpus_indexer._sweep_batch(pool, store=store, index="c", batch_limit=10)
+    assert counters["indexed"] == 0 and counters["retry_pending"] == 4
+    assert pool.executed == []
+
+
+async def test_a_poison_doc_is_still_stamped(monkeypatch):
+    """A mapping rejection is the doc's own fault: stamped so it cannot wedge
+    the newest-first sweep (the historical contract)."""
+    rows = _rows(3)
+    poison = str(rows[0]["id"])
+    store = _store_with_errors(
+        monkeypatch,
+        lambda ids: [_err(i, 400, "mapper_parsing_exception") for i in ids if i == poison],
+    )
+    pool = _Pool(rows)
+    counters = await corpus_indexer._sweep_batch(pool, store=store, index="c", batch_limit=10)
+    assert counters["indexed"] == 2 and counters["retry_pending"] == 0
+    assert {str(i) for i in pool.executed[0]} == {str(r["id"]) for r in rows}
+
+
+def test_bulk_item_failure_classifies():
+    assert _os.bulk_item_failure(_err("a", 403, "cluster_block_exception")) == ("a", 403, True)
+    assert _os.bulk_item_failure(_err("a", 429, "x")) == ("a", 429, True)
+    assert _os.bulk_item_failure(_err("a", 502, "x")) == ("a", 502, True)
+    assert _os.bulk_item_failure(_err("a", 400, "mapper_parsing_exception")) == ("a", 400, False)
+    assert _os.bulk_item_failure("garbage") == (None, None, False)

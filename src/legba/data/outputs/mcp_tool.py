@@ -59,6 +59,8 @@ from typing import Any, Awaitable, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from ..display_policy import READER, display_payload
+
 log = logging.getLogger("legba.data.outputs.mcp_tool")
 
 
@@ -358,7 +360,9 @@ class MCPToolRegistry:
             log.exception("mcp_tool dispatch failed: name=%s analyst=%s", tool_name, entry.analyst_id)
             return f"Error executing {tool_name}: {exc}"
 
-        return _format_text_result(result)
+        # X2-B4: MCP is a reader surface — the analyst's result passes the
+        # reader display policy before it becomes text.
+        return _format_text_result(display_payload(result, READER))
 
     # -- MCP message frame -----------------------------------------------
 

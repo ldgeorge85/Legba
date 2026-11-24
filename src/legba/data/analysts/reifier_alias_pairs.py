@@ -7,7 +7,7 @@ THE OBSERVATION
 The bake-off's floor stratum produced accepted verdicts like
 ``IRGC AffiliatedWith Revolutionary Guards Corps``,
 ``Council of the IMO PartOf IMO`` and ``Central Ben Hill County LocatedIn
-Georgia`` — **true, and worthless** (``docs/TYPING_BAKEOFF_2026-08-03.md`` §6.5).
+Georgia`` — **true, and worthless** (``docs/history/TYPING_BAKEOFF.md`` §6.5).
 No model filters them, because they *are* related. They are the same referent
 wearing two surfaces.
 
@@ -66,6 +66,7 @@ import logging
 from typing import Any
 
 from .._entity_resolve import resolve_keeper
+from ..principals import rule_handle
 
 logger = logging.getLogger(__name__)
 
@@ -97,11 +98,14 @@ SELECT id FROM entity_profiles
  LIMIT 1
 """
 
-_INSERT_SQL = """
+#: Who writes these rows (lane 9): the relationship reifier's alias-pair rule.
+_WRITTEN_BY = rule_handle("relationship_reifier")
+
+_INSERT_SQL = f"""
 INSERT INTO entity_judgement
     (pair_key, entity_a, entity_b, verdict, justification, decided_by,
-     model_id, confidence)
-VALUES ($1, $2::uuid, $3::uuid, $4, $5, $6, $7, $8)
+     model_id, confidence, written_by)
+VALUES ($1, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, legba_principal('{_WRITTEN_BY}'))
 ON CONFLICT (pair_key) DO NOTHING
 """
 

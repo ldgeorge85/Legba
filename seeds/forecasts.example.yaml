@@ -1,0 +1,82 @@
+# forecasts.example.yaml — the SCHEMA DOC for the forecast-ledger seed file.
+#
+# ST0-B. Copy to ``seeds/forecasts.yaml`` (gitignored — curated DATA never
+# ships, only the machinery does) and fill in the real rows. Every row below
+# is FICTIONAL. Load with ``scripts/load_forecasts.py`` (``--dry-run`` first);
+# seal with ``scripts/load_forecasts.py --seal`` (every question or none).
+#
+#   slug                  required — the natural key; re-running the loader
+#                         with an unchanged row writes nothing.
+#   question              required — one sentence a stranger could resolve.
+#   class                 optional, default "general" — conflict, diplomacy,
+#                         election, markets, politics, …
+#   resolver_kind         required — one of the decided six (docs/LEDGER.md):
+#                         event_reported | official_document | official_result
+#                         | series_threshold | count_threshold
+#                         | scheduled_event_status
+#   resolver_spec         required mapping — the keys its kind needs; ``also``
+#                         adds sub-conditions that must all hold
+#                         ({kind, spec, negate}).
+#   window                optional {start, end} — required for event_reported
+#                         unless the spec carries ``window``.
+#   due_at                required — ISO-8601; resolution is refused before it
+#                         unless early with evidence.
+#   grace_hours           optional, default 72 — after due + grace an open
+#                         question shows as overdue (never silently expired).
+#   condition             optional — the operator's conditional, verbatim.
+#   void_rules            optional — pre-registered: when the question voids.
+#   exogenous             optional, default true.
+#   subject_keys          optional — the desks whose reads form the evidence
+#                         packet every comparison arm sees.
+#   operator_probability  the operator's number (0..1, clamped 0.01..0.99), or
+#                         null while owed — the seal refuses until it is set.
+#   operator_rationale    optional — one line.
+#   operator_as_of        when the operator stated the number (ISO-8601);
+#                         per row, or once at the top level. Required with a
+#                         number: it is hashed, so it comes from the file,
+#                         never the run clock.
+#
+# A text field holding "<OPERATOR …>" is a placeholder: the seal refuses it.
+
+operator_as_of: "2027-02-20T00:00:00Z"
+
+forecasts:
+  - slug: FX1-klarvia-port-closure
+    question: >-
+      Dockworkers close the port of Klarvia to all cargo traffic for at least
+      24 consecutive hours between 2027-03-01 and 2027-03-31, as reported by
+      the Klarvian port authority or two independent outlets.
+    class: labour
+    resolver_kind: event_reported
+    resolver_spec:
+      class: port closure
+      actor: Klarvian dockworkers' union
+      target_area: port of Klarvia
+      sources: one primary official source or two independent reporting sources
+    window: {start: "2027-03-01", end: "2027-03-31T23:59:59Z"}
+    due_at: "2027-03-31T23:59:59Z"
+    grace_hours: 72
+    void_rules: >-
+      The port authority publishes nothing and no outlet reports on the port
+      by due + grace; the strike is called off before the window opens.
+    subject_keys: [country_kv]
+    operator_probability: 0.30
+    operator_rationale: "Two prior closures in five years; the contract expires 2027-02-28."
+
+  - slug: FX2-widget-index-threshold
+    question: >-
+      The fictional Global Widget Price Index (series GWPI) closes at or above
+      250 on 2027-04-30 (the last trading day before, if a holiday).
+    class: markets
+    resolver_kind: series_threshold
+    resolver_spec:
+      source: Fictional Widget Statistics Office
+      series: GWPI
+      op: ">="
+      value: 250
+      "on": "2027-04-30"
+    due_at: "2027-04-30T23:59:59Z"
+    grace_hours: 48
+    void_rules: The series is discontinued or not published by due + grace.
+    subject_keys: [flow_widgets]
+    operator_probability: null   # OWED — the seal refuses until it is set

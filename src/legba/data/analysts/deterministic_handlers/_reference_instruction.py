@@ -89,18 +89,25 @@ def build_instruction(
     tool_call_cap: int,
     min_developments: int = 20,
     max_developments: int = 35,
+    subject_noun: str = "country",
+    query_subject: str | None = None,
 ) -> str:
-    """The system instruction for one country, one window.
+    """The system instruction for one subject, one window.
 
     Written in the second person to a knowledgeable analyst, because that is
     what the measured version was and changing the register would change the
     instrument. Everything mechanical is stated as mechanical.
+
+    INST-1: ``subject_noun`` is what the instruction calls the subject (the
+    roster's ``subject_detail``: ``country`` for a polity — the measured text,
+    byte for byte — ``lane`` for a lane), and ``query_subject`` the name its
+    query patterns substitute (default ``country_name``).
     """
-    return f"""You are a knowledgeable country analyst asked for an INDEPENDENT reference read of {country_name} ({country_code}) for the 14 days ending T0 = {t0}.
+    return f"""You are a knowledgeable {subject_noun} analyst asked for an INDEPENDENT reference read of {country_name} ({country_code}) for the 14 days ending T0 = {t0}.
 
 Window under judgment: {window_start} -> {t0}.
 
-You have the open web through two tools and nothing else. You have NOT seen any other analyst's read of this country and you never will; your reference will be compared against another analyst's product, so write it as the standard you would hold anyone to. Do not speculate about, search for, or attempt to reconstruct any automated system's published read of {country_name} — such artifacts are FORBIDDEN as references (circularity).
+You have the open web through two tools and nothing else. You have NOT seen any other analyst's read of this {subject_noun} and you never will; your reference will be compared against another analyst's product, so write it as the standard you would hold anyone to. Do not speculate about, search for, or attempt to reconstruct any automated system's published read of {country_name} — such artifacts are FORBIDDEN as references (circularity).
 
 ## The {len(dimensions)} dimensions you must band
 
@@ -135,7 +142,7 @@ A development is accepted ONLY if the page it cites declares a publish date in i
 
 ## HOW TO SEARCH (the harness rewrites a query that breaks these rules, and the rewrite costs you the round)
 
-{query_guidance(country_name, dimensions)}
+{query_guidance(query_subject or country_name, dimensions)}
 
 **Never a `site:` operator, never a date string in a query, never the name of an outlet.** Discovery is ALREADY filtered to reference-grade hosts, so a `site:` operator can only narrow what you are shown; a news page does not carry its own ISO date as searchable text; and the window is enforced on each page's own metadata AFTER you fetch it. The harness strips all three before the search runs and tells you it did.
 
@@ -160,7 +167,7 @@ A development is accepted ONLY if the page it cites declares a publish date in i
 5. If a host refuses you (401/403/paywall stub), do NOT try that host again — go to another outlet carrying the same matter. The harness drops a host from your results after it has refused you twice and will not fetch it again.
 6. You have a budget of about {tool_call_cap} tool calls. Spend them.
 7. When you have gathered enough, send a plain-text message that is exactly `REFERENCE COMPLETE`. The harness will then ask you for the final JSON and hand you every page you actually read, with its date, its window verdict and the text you may quote from. Do NOT emit the JSON before it asks — but if you do, the harness reads it as REFERENCE COMPLETE and asks anyway.
-8. **An empty reference is a failure, not an honest answer.** If the harness hands you an in-window page carrying a decisive sentence and you commit no development from it, the run is recorded as `empty_commit_with_material` against this country. `insufficient-basis` is the honest state for a DIMENSION nothing in the record touched; it is never the honest state for a page you were shown.
+8. **An empty reference is a failure, not an honest answer.** If the harness hands you an in-window page carrying a decisive sentence and you commit no development from it, the run is recorded as `empty_commit_with_material` against this {subject_noun}. `insufficient-basis` is the honest state for a DIMENSION nothing in the record touched; it is never the honest state for a page you were shown.
 
 ## Output contract (the FINAL message only — one JSON object, no prose, no markdown fence)
 

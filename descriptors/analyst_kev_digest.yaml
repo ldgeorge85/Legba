@@ -1,0 +1,77 @@
+# KEV Digest analyst descriptor (lane K-2 — the cyber desk's register digest).
+#
+# A `deterministic`-kind META analyst, NO LLM, no paid route, no token budget.
+# It lists the CISA Known Exploited Vulnerabilities catalogue entries that
+# entered this collection SINCE THE LAST DIGEST, reading the signals the
+# register feed lands (source.cisa.kev, lane K-1: one signal per newly added
+# entry, the whole record in payload.item). One line per entry, copying the
+# record's own fields: CVE id, vendor / product, vulnerability name, date
+# added, remediation due date, and the known-ransomware-use flag exactly as
+# the feed gives it ("Known" / "Unknown"). Nothing inferred, no severity.
+#
+# Rule kev_digest/2026-11.1 (stamped in every finding):
+#   * "since the last digest" = signals created after the newest prior
+#     kev_digest finding's data.watermark; the first digest reaches back
+#     initial_lookback_hours (72);
+#   * canonical rows only (a tier-2 re-yield alias never re-lists), and a CVE
+#     id the previous digest listed is dropped;
+#   * a run with nothing new is trace-only (no feed row; the watermark stays
+#     on the last real digest, so nothing is skipped).
+#
+# Where it reads: GET /api/v1/findings?analyst_id=kev_digest — the existing
+# findings route, carrying the `unverified — structural` badge every
+# deterministic finding carries (provenance/kinds.py
+# STRUCTURAL_VERIFY_EXEMPT_ANALYSTS). The precedent is series_change: a
+# deterministic FINDING over a live sink, citing the rows it rests on
+# (derived_from = the digested signal ids). No new table, route or panel.
+#
+# What it does NOT say: the catalogue's later EDITS to an entry (a ransomware
+# flag flipped to Known, a due date moved) never reach this collection (K-1's
+# absence contract), so the digest never reports a change to an old entry.
+#
+# Cadence: 02:45 / 14:45 UTC, twenty minutes after the feed's own polls
+# (source_cisa_kev.yaml: "23 2,14 * * *", 180 s poll budget, 120 s jitter).
+#
+# State: draft in-tree; descriptors/LIFECYCLE.md records it `configured` on
+# the reference host. Activation is the orchestrator's flip at the roll
+# (docs/BRINGUP.md "The cyber desk reader (lane K-2)").
+
+identity:
+  id: kev_digest
+  name: KEV Digest
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: cyber_desk_k2
+
+subscription:
+  # No `targets` block -> META analyst: one run per cadence tick. The handler
+  # reads the register feed's signals directly via deps.pg_pool.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: kev_digest
+  budget_tokens_per_day: 0
+  options:
+    source_ids: [source.cisa.kev]
+    initial_lookback_hours: 72
+    max_entries: 200
+
+cadence:
+  fallback_schedule: "45 2,14 * * *"
+  cooldown_seconds: 39600
+
+outputs: []

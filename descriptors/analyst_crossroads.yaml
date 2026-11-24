@@ -105,6 +105,7 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
     narrate:
+      thinking: "on"   # T-2: the VOICE thinks; GATHER and PROPOSE stay on the plain alias
       factory_kind: stack_ref
       raw: llm.primary.openai_compat  # core plane — the crossroads VOICE
       expected_family: llm_provider
@@ -119,7 +120,7 @@ method:
       strategy: pause_until_next_window
 
 cadence:
-  fallback_schedule: "0 12 * * *"     # daily — 12:00 UTC, after the lens band
+  fallback_schedule: "15 12 * * *"   # T-2 stagger: off country_assessment's 12:00 burst (was 0 12 * * *)
   cooldown_seconds: 79200             # 22h — below the 24h interval (below-interval guard)
 
 grounding:

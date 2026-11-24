@@ -72,8 +72,11 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Sequence
 
+from .. import carried_state as _carried
 from .. import critic_fold
+from .. import head_integrity as _head
 from ..provenance.models import severity_delta_from_tags
+from .composition_stale_reads import UNIT_CADENCE_ROW_KEY, stamp_unit_cadence
 
 logger = logging.getLogger(__name__)
 
@@ -778,6 +781,9 @@ def select_floor_fallback(
     candidates: Sequence[Mapping[str, Any]],
     basis_rows: Sequence[Mapping[str, Any]],
     periphery_rows: Sequence[Mapping[str, Any]],
+    *,
+    now: datetime | None = None,
+    windows: float | None = None,
 ) -> list[dict[str, Any]]:
     """Pick the newest floor-PASSING head for each unit the floor withheld.
 
@@ -793,8 +799,18 @@ def select_floor_fallback(
     18 August" while the periphery shows the newer failing read of 20 August,
     dated and scored — the two halves the ATTRIBUTION table asked for.
 
-    Pure (no DB, no clock): the caller supplies the three row sets.
+    W11-F14 — THE AGE BAR. A promoted read is stamped ``fallback: true`` with
+    its ``age_h``, and a candidate older than N of its unit's own cadence
+    windows (``carried_state.fallback_verdict``; the cadence rides the row as
+    ``_unit_cadence_h``) is NEVER promoted: it comes back stamped
+    ``carried_state.CARRIED_ROW_KEY`` instead — a typed absence the coverage
+    ledger names, which ``_run`` keeps out of the basis. A candidate with no
+    known cadence is not measured and is promoted as before, with its age.
+
+    Pure (no DB): the caller supplies the three row sets (``now`` defaults to
+    the clock).
     """
+    anchor = now or _now()
     covered = {head_key(r) for r in basis_rows}
     by_key: dict[tuple[str, str], Mapping[str, Any]] = {}
     for row in periphery_rows:
@@ -820,7 +836,18 @@ def select_floor_fallback(
             continue
         seen.add(key)
         promoted = dict(row)
+        refused = _carried.fallback_verdict(
+            row, cadence_h=_as_float(row.get(UNIT_CADENCE_ROW_KEY)),
+            now=anchor, windows=windows,
+        )
+        if refused is not None:
+            promoted[_carried.CARRIED_ROW_KEY] = refused
+            out.append(promoted)
+            continue
+        age = head_age_hours(row, now=anchor)
         promoted[FLOOR_FALLBACK_KEY] = {
+            "fallback": True,
+            "age_h": None if age is None else round(age, 2),
             "newer_head_id": _coerce_uuid_text(newer.get("id")),
             "newer_head_produced_at": (
                 newer_age.isoformat() if newer_age is not None else None
@@ -864,6 +891,9 @@ COVERAGE_IN_BASIS: str = "in_basis"
 COVERAGE_BELOW_FLOOR: str = "below_floor"
 COVERAGE_UNVERIFIED: str = "unverified"
 COVERAGE_NO_HEAD: str = "no_head_in_horizon"
+#: W11-F14 — the unit HAS a head, and what it states is carried, not evidenced
+#: (``legba.data.carried_state``). A typed absence: never banded, never a gap.
+COVERAGE_CARRIED: str = _carried.CARRIED_UNSUPPORTED
 
 
 def build_coverage_ledger(
@@ -947,9 +977,12 @@ def _coverage_ledger(
         if aid and aid not in basis_by_unit:
             basis_by_unit[aid] = row
     peri_by_unit: dict[str, Mapping[str, Any]] = {}
+    carried_by_unit: dict[str, Mapping[str, Any]] = {}
     for row in periphery_rows:
         aid = key(row)
-        if aid and aid not in peri_by_unit:
+        if aid and isinstance(row.get(_carried.CARRIED_ROW_KEY), Mapping):
+            carried_by_unit.setdefault(aid, row)
+        elif aid and aid not in peri_by_unit:
             peri_by_unit[aid] = row
 
     ledger: list[dict[str, Any]] = []
@@ -957,6 +990,9 @@ def _coverage_ledger(
         unit_id = str(unit)
         row = basis_by_unit.get(unit_id)
         status = COVERAGE_IN_BASIS
+        if row is None and unit_id in carried_by_unit:
+            ledger.append(_carried_entry(unit_id, carried_by_unit[unit_id], now=now))
+            continue
         if row is None:
             row = peri_by_unit.get(unit_id)
             if row is None:
@@ -977,10 +1013,37 @@ def _coverage_ledger(
         eff = _as_float(row.get("effective_confidence"))
         if eff is not None:
             entry["effective_confidence"] = round(eff, 3)
-        if row.get(FLOOR_FALLBACK_KEY):
+        fallback = row.get(FLOOR_FALLBACK_KEY)
+        if fallback:
             entry["floor_fallback"] = True
+            if isinstance(fallback, Mapping) and fallback.get("age_h") is not None:
+                entry["fallback_age_h"] = fallback.get("age_h")
         ledger.append(entry)
     return ledger
+
+
+def _carried_entry(
+    unit_id: str, row: Mapping[str, Any], *, now: datetime | None
+) -> dict[str, Any]:
+    """W11-F14 — the ledger entry for a carried, unsupported unit: the head's
+    date and age, and the verdict's proof (the last evidencing read and its age,
+    or the refused fallback's age) verbatim."""
+    verdict = row[_carried.CARRIED_ROW_KEY]
+    hours = head_age_hours(row, now=now)
+    entry: dict[str, Any] = {
+        "unit": unit_id,
+        "status": COVERAGE_CARRIED,
+        "read_date": human_datetime(row.get("produced_at")),
+        "age_h": None if hours is None else round(hours, 2),
+    }
+    for field in (
+        "cause", "status", "head_id", "last_evidence_id", "last_evidence_at",
+        "last_evidence_age_h", "lookback_days", "windows", "limit_h",
+        "cadence_h", "head_age_h",
+    ):
+        entry["carried_status" if field == "status" else field] = verdict.get(field)
+    entry["last_evidence_date"] = human_datetime(verdict.get("last_evidence_at"))
+    return entry
 
 
 def render_coverage_ledger_block(
@@ -1038,6 +1101,12 @@ def render_coverage_ledger_block(
             "band, score or characterise the state of a unit in either of those "
             "two classes."
         )
+        if any(e.get("status") == COVERAGE_CARRIED for e in ledger):
+            lines.append(
+                "A unit listed CARRIED, UNSUPPORTED still states a status no "
+                "read has re-evidenced: name it as \"carried, unsupported\" "
+                "with its dates. NEVER restate, band or score that status."
+            )
     if not lines:
         return ""
     return "\n".join(["", *lines])
@@ -1062,6 +1131,12 @@ def _coverage_ledger_line(entry: Mapping[str, Any], *, floor_txt: str) -> str:
             f"- {unit}: NOT VERIFIED — newest read {when} ({age} old) never "
             "passed a faithfulness verify. Not a gap."
         )
+    if status == COVERAGE_CARRIED:
+        why = _carried.verdict_sentence({**entry, "status": entry.get("carried_status")})
+        return (
+            f"- {unit}: CARRIED, UNSUPPORTED — read of {when} ({age} old): "
+            f"{why}. Its block is withheld. Not a gap."
+        )
     fallback = " (the newest read that CLEARED the floor)" if entry.get("floor_fallback") else ""
     return f"- {unit}: in basis — read of {when}, {age} old{fallback}."
 
@@ -1074,6 +1149,14 @@ def _coverage_ledger_line(entry: Mapping[str, Any], *, floor_txt: str) -> str:
 # read-only and take the connection they were handed.
 
 
+#: The periphery CTE's columns (the basis gather's ``_cols``).
+_PERIPHERY_COLS: str = (
+    "f.id, f.kind, f.title, f.body, f.confidence, f.severity, f.data, "
+    "f.target_id, f.target_version, f.analyst_id, f.analyst_version, "
+    "f.produced_at, f.derived_from, f.schema_uri, f.run_id"
+)
+
+
 async def read_periphery_findings(
     conn,  # type: ignore[no-untyped-def]
     *,
@@ -1084,6 +1167,7 @@ async def read_periphery_findings(
     target_id: str | None = None,
     target_ids: Sequence[str] | None = None,
     include_meta: bool = False,
+    text_pattern: str | None = None,
 ) -> list[dict[str, Any]]:
     """C-TIER — gather the PERIPHERY tier: what the basis bar EXCLUDED.
 
@@ -1119,17 +1203,26 @@ async def read_periphery_findings(
         "f.kind = 'finding'",
         "f.analyst_id = ANY($1::TEXT[])",
         "f.produced_at > NOW() - make_interval(hours => $2)",
-        "f.superseded_by IS NULL",
     ]
+    # HEAD INTEGRITY: the row-content filters run only on LIVE rows, inside the
+    # basis gather's own live-head predicate (``head_integrity.live_head_select``:
+    # a head closed BY a failed parse is still live) — the complement must agree.
+    gated: list[str] = []
     if not include_meta:
-        where.append("(f.data -> 'data' ->> 'meta') IS DISTINCT FROM 'true'")
+        gated.append("(f.data -> 'data' ->> 'meta') IS DISTINCT FROM 'true'")
     if target_id is not None:
         params.append(str(target_id))
         where.append(f"f.target_id = ${len(params)}")
     elif target_ids is not None:
         params.append([str(t) for t in target_ids])
         where.append(f"f.target_id = ANY(${len(params)}::TEXT[])")
-    where.append(
+    theme = ""
+    if text_pattern is not None:
+        # The theme filter, the basis gather's own (``thematic_theme``) — applied
+        # AFTER the head fold there, so after it here too.
+        params.append(str(text_pattern))
+        theme = f" AND (f.title || ' ' || f.body) ~* ${len(params)}"
+    gated.append(
         "(f.data -> 'tags' ?| array['unstructured','coerce_failed']) IS NOT TRUE"
     )
     params.append(float(floor))
@@ -1138,20 +1231,18 @@ async def read_periphery_findings(
     periphery = (
         "(v.faithfulness_score IS NULL"
         f" OR LEAST(f.confidence, v.faithfulness_score) < ${len(params)})"
-    )
+    ) + theme
 
     # H17 — SET-BASED. The unit set + window + target scope bound the outer CTE;
     # ONE `DISTINCT ON` pass reads those ids' critiques through the expression
     # index. The LEFT join is what makes an UNVERIFIED head visible (the tier's
-    # whole point), and the head-fold DISTINCT ON stays outside the CTE because
-    # the head this gather wants is the newest row that is PERIPHERY-admissible.
+    # whole point). HEAD INTEGRITY: the CTE is already folded to the newest live
+    # row per key (``head_integrity.live_head_select``), exactly as the basis
+    # gather is, so a key is periphery only when its NEWEST head fails — never
+    # because an older open orphan does. The outer DISTINCT ON is kept as a belt.
     sql = f"""
     WITH f AS MATERIALIZED (
-        SELECT f.id, f.kind, f.title, f.body, f.confidence, f.severity, f.data,
-               f.target_id, f.target_version, f.analyst_id, f.analyst_version,
-               f.produced_at, f.derived_from, f.schema_uri, f.run_id
-          FROM analyst_outputs f
-         WHERE {' AND '.join(where)}
+        {_head.live_head_select(_PERIPHERY_COLS, where, gated=gated)}
     ), {critic_fold.faithfulness_score_cte()}
     SELECT * FROM (
         SELECT DISTINCT ON (f.analyst_id, f.target_id)
@@ -1241,6 +1332,9 @@ async def read_floor_fallback_heads(
             "meta.composition.floor_fallback_failed units=%s err=%s", wanted, exc
         )
         return []
+    # W11-F14 — the age bar reads each candidate's own cadence (one query, and
+    # only on the rare run where a unit was withheld at all).
+    await stamp_unit_cadence(conn, candidates)
     promoted = select_floor_fallback(candidates, basis_rows, periphery_rows)
     if promoted:
         logger.info(
@@ -1269,6 +1363,7 @@ def _stamp_horizon(
 
 __all__ = [
     "COVERAGE_BELOW_FLOOR",
+    "COVERAGE_CARRIED",
     "COVERAGE_IN_BASIS",
     "COVERAGE_NO_HEAD",
     "COVERAGE_UNVERIFIED",

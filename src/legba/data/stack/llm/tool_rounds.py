@@ -85,8 +85,13 @@ from typing import Any, Iterable, Mapping, Sequence
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "ARG_BLOCK_CAUSES",
+    "CAUSE_INVALID_ARG",
+    "CAUSE_RESULT_SHAPED_ARG",
+    "INJECTED_ARG_KEYS",
     "PROVIDER_ANTHROPIC",
     "PROVIDER_OPENAI_COMPAT",
+    "RESULT_SHAPED_ARG_KEYS",
     "TOOL_SCHEMAS",
     "ToolCall",
     "ToolSpec",
@@ -96,9 +101,12 @@ __all__ = [
     "is_write_tool",
     "parse_tool_calls",
     "provider_for_subprovider",
+    "register_tool_schema",
     "render_tools",
+    "split_arg_problem",
     "supports_native_tools",
     "tool_result_messages",
+    "validate_args",
     "visible_text",
 ]
 
@@ -260,7 +268,7 @@ TOOL_SCHEMAS: dict[str, ToolSpec] = {
     "read_document": _s(
         "read_document",
         "The FULL stored body of ONE signal by its id (a search_corpus / "
-        "search_signals row id).",
+        "search_signals row id), or of one finding by its list_findings id.",
         {"doc_id": _STR}, ("doc_id",),
     ),
     "query_facts": _s(
@@ -319,7 +327,7 @@ TOOL_SCHEMAS: dict[str, ToolSpec] = {
         "as it stood on that date.",
         {"subject": _STR, "object": _STR, "max_hops": _INT,
          "polarity_product": _INT, "limit": _INT, "families": _STRS,
-         "as_of": _STR},
+         "edge_families": _STRS, "as_of": _STR},
         ("subject", "object"),
     ),
     "find_proxy_chains": _s(
@@ -328,7 +336,7 @@ TOOL_SCHEMAS: dict[str, ToolSpec] = {
         "reified A->via->B cut-outs. The proxy path from A to B.",
         {"subject": _STR, "object": _STR, "max_hops": _INT,
          "polarity_product": _INT, "limit": _INT, "families": _STRS,
-         "as_of": _STR},
+         "edge_families": _STRS, "as_of": _STR},
         ("subject", "object"),
     ),
     "query_brokers": _s(
@@ -336,23 +344,41 @@ TOOL_SCHEMAS: dict[str, ToolSpec] = {
         "Entities that SIT ON paths between two entity sets (the broker "
         "between two camps), ranked by how many A->B paths run through them.",
         {"camp_a": _STRS, "camp_b": _STRS, "max_hops": _INT, "limit": _INT,
-         "families": _STRS, "as_of": _STR},
+         "families": _STRS, "edge_families": _STRS, "as_of": _STR},
         ("camp_a", "camp_b"),
     ),
     "list_findings": _s(
         "list_findings",
         "The platform's OWN prior assessments/findings. Check these FIRST to "
-        "build on and reconcile against earlier work; cite the output_id.",
-        {"target_id": _STR, "analyst_id": _STR, "severity": _STR,
-         "since_hours": _INT, "include_superseded": _BOOL,
-         "believed_as_of": _STR, "limit": _INT},
+        "build on and reconcile against earlier work; cite the output_id. "
+        "Default mode 'page': the newest live findings with full bodies, "
+        "newest first (since_hours is only a floor, so widening it returns "
+        "the same first page). mode='survey': one row per target, its newest "
+        "live read, digest only (about 240 characters), ordered by "
+        "target_id; use it to see EVERY target at once, then drill by "
+        "target_id (or read_document on a finding id) for the body. Both modes "
+        "page: rows_total is the true count; pass offset=next_offset for more.",
+        {"target_id": _STR, "target_ids": _STRS, "analyst_id": _STR,
+         "severity": _STR, "since_hours": _INT, "include_superseded": _BOOL,
+         "believed_as_of": _STR, "limit": _INT, "offset": _INT,
+         "mode": {"type": "string", "enum": ["page", "survey"]}},
     ),
     "list_situations": _s(
         "list_situations",
-        "Ongoing situation frames the platform has clustered. Use a "
-        "situation_id with query_hypotheses to pull its ACH rows. as_of "
-        "(ISO-8601) reads the frames that held on that date.",
-        {"status": _STR, "target_id": _STR, "since_hours": _INT,
+        "Ongoing situation frames the platform has clustered, newest and "
+        "hottest first. Use a situation_id with query_hypotheses to pull its "
+        "ACH rows. as_of (ISO-8601) reads the frames that held on that date.",
+        # ``status`` is an ENUM, not free text. It was declared a bare string,
+        # and on 2026-09-28 a core-plane run passed status="ok" — the reply
+        # envelope it had invented — which ran as a SQL predicate no row can
+        # match and came back count 0. The vocabulary is the clustering
+        # handler's own (``situation_clustering._situation_status``) and is
+        # kept in step with it by ``runtime.substrate_frame_reads``, which
+        # holds :data:`SITUATION_STATUSES` and names the same three values
+        # when a read comes back empty on a status outside them.
+        {"status": {"type": "string",
+                    "enum": ["active", "dormant", "closed"]},
+         "target_id": _STR, "since_hours": _INT,
          "as_of": _STR, "limit": _INT},
     ),
     "query_predictions": _s(
@@ -379,8 +405,19 @@ TOOL_SCHEMAS: dict[str, ToolSpec] = {
         "geo filters by ISO2 code(s); entity by actor name; since/until "
         "(ISO-8601) bound the event's occurrence span by overlap; as_of "
         "reads the events that held on that date.",
+        # ``lifecycle_state`` is an ENUM for the same reason ``list_situations
+        # .status`` is: an invented value ran as a SQL predicate no row can
+        # match. The five states are the events CHECK vocabulary
+        # (``legba.data.events.lifecycle.LIFECYCLE_STATES``, migration 0204),
+        # held in order by ``runtime.substrate_frame_reads
+        # .EVENT_LIFECYCLE_STATES``; this module is a LEAF and cannot import
+        # either, so ``tests/data_pkg/test_native_tool_rounds.py`` pins them.
         {"target_id": _STR, "geo": {"oneOf": [_STR, _STRS]},
-         "category": _STR, "lifecycle_state": _STR, "entity": _STR,
+         "category": _STR,
+         "lifecycle_state": {"type": "string",
+                             "enum": ["emerging", "developing", "active",
+                                      "evolving", "resolved"]},
+         "entity": _STR,
          "situation_id": _STR, "since": _STR, "until": _STR,
          "as_of": _STR, "include_origin": _STRS, "limit": _INT},
     ),
@@ -400,16 +437,48 @@ TOOL_SCHEMAS: dict[str, ToolSpec] = {
     ),
     "list_sources": _s(
         "list_sources",
-        "Ingest sources + freshness; tell 'no coverage on X' apart from 'a "
-        "quiet feed'.",
+        "Ingest sources + freshness (freshest first, whole-fleet summary "
+        "first); tell 'no coverage on X' apart from 'a quiet feed'. "
+        "last_poll_outcome 'empty' = the latest poll found no NEW items, not "
+        "dead; liveness is each row's `staleness`.",
         {"active_only": _BOOL, "silent_only": _BOOL, "silent_hours": _INT},
+    ),
+    # W11-F162 — the forecast ledger's due-date reader.
+    "list_due_resolvers": _s(
+        "list_due_resolvers",
+        "The sealed forecast ledger by due date: questions due (or overdue) "
+        "within horizon_days (default 14), the resolver that decides each, "
+        "every issuer's number, and the newest rule proposal with the human "
+        "judgement it waits on. A proposal is a rule's reading, not an "
+        "outcome; only a resolution is.",
+        {"horizon_days": _INT, "include_closed": _BOOL, "limit": _INT},
+    ),
+    # W11-F141 — the scheduled-events calendar (migration 0240): the
+    # operator-entered register of FUTURE dated things.
+    "list_scheduled_events": _s(
+        "list_scheduled_events",
+        "The platform's scheduled-events calendar — known FUTURE dated "
+        "things (summits, votes, deadlines, strikes), operator-entered. "
+        "window_start/window_end (ISO-8601) bound the window by overlap, "
+        "default now → +14 days. The coverage block is part of the answer: "
+        "n=0 means no events HELD for the window — never read it as "
+        "'nothing is scheduled'.",
+        {"window_start": _STR, "window_end": _STR, "scope": _STR,
+         "subject_keys": _STRS, "limit": _INT},
     ),
     # ---- web_access -------------------------------------------------------
     "web_search": _s(
         "web_search",
         "Query the operator-pinned search endpoint; returns {title, url, "
-        "snippet} results. Read-only — nothing is landed.",
-        {"query": _STR, "limit": _INT}, ("query",),
+        "snippet} results. Read-only — nothing is landed. `provider` pins one "
+        "rung of the provider ladder by component id or subprovider name; "
+        "omit it to take the ladder in order.",
+        # ``provider`` is READ by the handler (``web_tools.py``'s
+        # ``call.args.get("provider")``) and was never declared here. Under
+        # ``validate_args`` an undeclared argument is now a block, so the
+        # grammar has to state every key the handler honours or a working
+        # pin becomes a refusal.
+        {"query": _STR, "limit": _INT, "provider": _STR}, ("query",),
     ),
     "web_fetch": _s(
         "web_fetch",
@@ -431,9 +500,14 @@ TOOL_SCHEMAS: dict[str, ToolSpec] = {
     "propose_fact": _s(
         "propose_fact",
         "Write ONE proposed-grade fact. PROPOSES, does not assert truth; "
-        "derived_from lineage citing substrate UUIDs is REQUIRED.",
+        "derived_from lineage citing substrate UUIDs is REQUIRED. "
+        "valid_from/valid_until (ISO-8601, optional) bound the period the "
+        "fact is ABOUT.",
+        # valid_from / valid_until are read by ``write_tools.py`` and were
+        # never declared — see the ``web_search`` note above.
         {"subject": _STR, "predicate": _STR, "value": _STR,
-         "derived_from": _STRS, "confidence": {"type": "number"}},
+         "derived_from": _STRS, "confidence": {"type": "number"},
+         "valid_from": _STR, "valid_until": _STR},
         ("subject", "predicate", "value", "derived_from"),
     ),
     "request_source": _s(
@@ -471,7 +545,9 @@ TOOL_SCHEMAS: dict[str, ToolSpec] = {
         {"analyst_id": _STR, "quiet_hours": _INT, "limit": _INT},
     ),
     "get_source_health": _s(
-        "get_source_health", "Per-source ingestion health; silent sources.",
+        "get_source_health",
+        "Per-source ingestion health with a staleness verdict "
+        "(fresh/quiet/stale/dead vs the feed's cadence); silent sources.",
         {"silent_only": _BOOL, "silent_hours": _INT, "limit": _INT},
     ),
     "get_budget_status": _s(
@@ -539,6 +615,27 @@ TOOL_SCHEMAS: dict[str, ToolSpec] = {
          "as_of": _STR, "collection_id": _STR, "limit": _INT},
         ("series_id", "subjects", "from", "to"),
     ),
+    # ---- substrate_read: the LIVE series read (E2) -------------------------
+    # NOW, not history: the rows a source's poller writes (origin_class
+    # 'live'). A separate tool so the history tools above stay history-only;
+    # the bounds are in the schema (limit max, the window cap in the text) and
+    # enforced again by the reader (runtime/_observations_live_read.py).
+    "live_series": _s(
+        "live_series",
+        "LIVE numeric series written by the platform's pollers (chokepoint "
+        "transits, central-bank policy rates) — NOT the curated history the "
+        "series_history tool reads. Without series_id (or without subject) "
+        "it lists the live series held: source_id, series_id, subject, unit, "
+        "period, newest period and newest record/load time. With series_id "
+        "and subject it reads that series over a valid window from/to "
+        "(YYYY-MM-DD; default the last 90 days; at most 366 days), oldest "
+        "period first, EVERY revision, each row labelled live with its "
+        "source_id, record_time (provider revision or first fetch) and "
+        "loaded_at. At most 500 rows (truncated says when the cap bit).",
+        {"series_id": _STR, "subject": _STR, "source_id": _STR,
+         "from": _STR, "to": _STR,
+         "limit": {"type": "integer", "minimum": 1, "maximum": 500}},
+    ),
 }
 
 
@@ -558,6 +655,34 @@ WRITE_TOOLS: frozenset[str] = frozenset({
 })
 
 
+#: Tools a provider registered through :func:`register_tool_schema` with
+#: ``writes=True``. Kept apart from :data:`WRITE_TOOLS` (a frozen literal the
+#: tests pin) and read by :func:`is_write_tool` beside it.
+_REGISTERED_WRITE_TOOLS: set[str] = set()
+
+
+def register_tool_schema(spec: ToolSpec, *, writes: bool = False) -> None:
+    """Add ``spec`` to :data:`TOOL_SCHEMAS` — the entry point a tool provider
+    outside this module uses (C-1b's ``workstation_drive`` tools first; the
+    C-2a write frame next).
+
+    Idempotent for the SAME spec (a re-import registers nothing new); a
+    DIFFERENT spec under a name already present raises, because two grammars
+    for one tool name would make :func:`validate_args` check against whichever
+    import happened last. ``writes=True`` makes :func:`is_write_tool` answer
+    True for it, so a loop that orders writes serially orders it too.
+    """
+    existing = TOOL_SCHEMAS.get(spec.name)
+    if existing is not None and existing != spec:
+        raise ValueError(
+            f"tool schema {spec.name!r} is already registered with a different "
+            "grammar; a tool name has exactly one schema"
+        )
+    TOOL_SCHEMAS[spec.name] = spec
+    if writes:
+        _REGISTERED_WRITE_TOOLS.add(spec.name)
+
+
 def is_write_tool(name: str) -> bool:
     """Does ``name`` mutate substrate? Unknown names are treated as writes.
 
@@ -565,7 +690,11 @@ def is_write_tool(name: str) -> bool:
     slower and always correct, rather than the concurrent path, which is faster
     and wrong if the tool turns out to write.
     """
-    return name not in TOOL_SCHEMAS or name in WRITE_TOOLS
+    return (
+        name not in TOOL_SCHEMAS
+        or name in WRITE_TOOLS
+        or name in _REGISTERED_WRITE_TOOLS
+    )
 
 
 def _fallback_spec(name: str) -> ToolSpec:
@@ -772,6 +901,313 @@ def visible_text(response: Any) -> str:
     an attribute and one of them eventually reaching for the wrong one.
     """
     return str(getattr(response, "content", "") or "")
+
+
+# ---------------------------------------------------------------------------
+# Validating the arguments that came BACK
+# ---------------------------------------------------------------------------
+#
+# The grammar above was rendered TO the model and never checked ON the reply:
+# :func:`_coerce_args` returned whatever arrived and every dispatcher reads it
+# with ``args.get()``, so an argument the schema does not declare was dropped
+# in silence and an argument it does declare was honoured whatever it said.
+#
+# 2026-09-28 00:58Z, consult session 96d7bfc2 on the core plane: the model's
+# FIRST tool call was ``list_situations`` with
+# ``{"result": [six fabricated situation rows], "status": "ok",
+#   "metadata": {}}`` — it had written the reply it expected into the call it
+# was making. ``result`` and ``metadata`` went on the floor; ``status="ok"``
+# became a SQL predicate (no situation carries that status), the read returned
+# count 0, the loop marked the round ``ok``, and the answer cited the six ids
+# the model had invented. Nothing in the platform said a word.
+#
+# :func:`validate_args` is the check. It runs at ONE place on the governed
+# path (``agency.Agency._run_pack_tool``, between the handler check and the
+# governor) so a refusal is a normal BLOCK: a ``governor_events`` row, the
+# arguments on the run receipt, and ``tool_blocked: <cause>: <detail>`` handed
+# back to the model in the tool message, which is a round it can recover from.
+
+
+#: Top-level argument names that name a tool's OUTPUT rather than its input.
+#: Checked FIRST and reported on their own, because "you wrote a result into
+#: the arguments" is a different mistake from "that argument does not exist"
+#: and only the first one tells the model what it actually did wrong.
+RESULT_SHAPED_ARG_KEYS: frozenset[str] = frozenset({
+    "result", "results", "data", "items", "rows", "output", "response",
+    "count", "refs", "metadata",
+})
+
+#: Keys the PLATFORM adds to a call's arguments after the model wrote them.
+#: They are never part of a rendered schema and must never be read as the
+#: model's own work: ``scope_predicate`` is injected caller-side by the
+#: consult / deep-consult loops so a planner cannot override an operator
+#: scope, and ``_raw`` / ``_value`` are what :func:`_coerce_args` leaves
+#: behind when a provider sent an unparseable argument payload. Whitelisting
+#: ``_raw`` hides nothing: a call carrying only ``_raw`` still fails the
+#: required-argument check below, by name.
+INJECTED_ARG_KEYS: frozenset[str] = frozenset({
+    "scope_predicate", "_raw", "_value",
+})
+
+#: The model wrote a tool RESULT into the tool's ARGUMENTS.
+CAUSE_RESULT_SHAPED_ARG = "result_shaped_arg"
+#: An unknown argument, a missing required one, or a coarse type mismatch.
+CAUSE_INVALID_ARG = "invalid_arg"
+
+#: Every cause :func:`validate_args` can report — the caller's block-cause
+#: vocabulary, so a cause cannot appear in a governor event without appearing
+#: here first.
+ARG_BLOCK_CAUSES: frozenset[str] = frozenset({
+    CAUSE_RESULT_SHAPED_ARG, CAUSE_INVALID_ARG,
+})
+
+
+def _names(names: Iterable[str]) -> str:
+    return ", ".join(sorted(str(n) for n in names))
+
+
+def _declared_schema(spec: Any) -> Mapping[str, Any] | None:
+    """``spec``'s object schema, or ``None`` when nothing was declared.
+
+    ``None`` — validation is SKIPPED — for a tool that resolved to
+    :func:`_fallback_spec`: that spec exists precisely because the tool has no
+    authored grammar, it is rendered ``additionalProperties: True``, and
+    refusing arguments against a schema we never stated would block a working
+    tool for the crime of not being in :data:`TOOL_SCHEMAS`.
+    """
+    schema = getattr(spec, "json_schema", None)
+    if not isinstance(schema, Mapping):
+        return None
+    if schema.get("additionalProperties") is True:
+        return None
+    if not isinstance(schema.get("properties"), Mapping):
+        return None
+    return schema
+
+
+def _string_parses_as(value: Any, declared: str) -> bool:
+    """Is ``value`` a string that parses cleanly to ``declared``?
+
+    The type check is deliberately COARSE. Every dispatcher on both loops
+    coerces its own scalars (``int(args.get("limit", 20))``,
+    ``str(args.get("include_superseded", False)).lower() in ("true", "1")``),
+    so a model that wrote ``"20"`` for an integer has made no mistake this
+    validator should spend a round on. A value that does NOT parse — an object
+    where a number was declared, a list where a string was — is a real
+    mismatch and is reported.
+    """
+    if not isinstance(value, str):
+        return False
+    s = value.strip()
+    if declared == "boolean":
+        return s.lower() in ("true", "false", "1", "0")
+    try:
+        int(s, 10) if declared == "integer" else float(s)
+    except ValueError:
+        return False
+    return True
+
+
+def _type_matches(value: Any, schema: Mapping[str, Any]) -> bool:
+    branches = schema.get("oneOf") or schema.get("anyOf")
+    if isinstance(branches, (list, tuple)) and branches:
+        return any(
+            _type_matches(value, b) for b in branches if isinstance(b, Mapping)
+        )
+    declared = schema.get("type")
+    if not isinstance(declared, str):
+        return True
+    if declared == "object":
+        return isinstance(value, Mapping)
+    if declared == "array":
+        # A bare string where a list is declared is the HANDLERS' own
+        # documented tolerance — ``substrate_read._subjects`` reads
+        # ``subjects: "US"`` as one subject and
+        # ``write_tools._coerce_derived_from`` reads a single id as a
+        # one-element list, both on the stated grounds that refusing it would
+        # spend a round teaching the model JSON. The validator does not
+        # overrule them.
+        return isinstance(value, (list, tuple, str))
+    if declared == "boolean":
+        return isinstance(value, bool) or _string_parses_as(value, declared)
+    if declared == "integer":
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, int):
+            return True
+        if isinstance(value, float):
+            return value.is_integer()
+        return _string_parses_as(value, declared)
+    if declared == "number":
+        if isinstance(value, bool):
+            return False
+        return isinstance(value, (int, float)) or _string_parses_as(
+            value, declared)
+    if declared == "string":
+        return isinstance(value, str)
+    return True
+
+
+def validate_args(spec: Any, args: Any) -> str | None:
+    """Check one tool call's arguments against the grammar we rendered.
+
+    Returns ``None`` when the call is well formed, or ``"<cause>: <detail>"``
+    where ``<cause>`` is one of :data:`ARG_BLOCK_CAUSES` and ``<detail>`` is
+    written FOR THE MODEL — it names the tool, what was wrong, and the
+    arguments the tool actually declares. :func:`split_arg_problem` takes the
+    two apart for the caller's block event.
+
+    ``spec`` is the :class:`ToolSpec` for the call — ``TOOL_SCHEMAS.get(name)``
+    is the intended lookup, and a tool with no entry (``None``, or the
+    permissive :func:`_fallback_spec`) is NOT validated.
+
+    Order matters. A result-shaped key is reported first and alone: it is the
+    live failure this function was written for, and telling the model "no such
+    argument ``result``" would understate what it did.
+    """
+    if not isinstance(args, Mapping):
+        return None
+    schema = _declared_schema(spec)
+    if schema is None:
+        return None
+    name = str(getattr(spec, "name", "") or "tool")
+    props: Mapping[str, Any] = schema["properties"]
+    declared = _names(props) or "(none — this tool takes no arguments)"
+
+    undeclared = [
+        str(k) for k in args
+        if str(k) not in props and str(k) not in INJECTED_ARG_KEYS
+    ]
+    result_shaped = [k for k in undeclared if k.lower() in RESULT_SHAPED_ARG_KEYS]
+    if result_shaped:
+        return (
+            f"{CAUSE_RESULT_SHAPED_ARG}: {name} was called with "
+            f"{_names(result_shaped)} — those name a tool's OUTPUT and you "
+            "have written the result you expected into the call's INPUT. The "
+            "tool has not run yet and nothing you put there is real. Call "
+            f"{name} again with its declared arguments only ({declared}), "
+            "then read the actual result from the tool message that comes "
+            "back."
+        )
+    if undeclared:
+        return (
+            f"{CAUSE_INVALID_ARG}: {name} has no argument "
+            f"{_names(undeclared)}; its declared arguments are {declared}."
+        )
+
+    required = schema.get("required")
+    if isinstance(required, (list, tuple)):
+        missing = [str(r) for r in required if args.get(str(r)) is None]
+        if missing:
+            return (
+                f"{CAUSE_INVALID_ARG}: {name} requires {_names(missing)}; "
+                f"its declared arguments are {declared}."
+            )
+
+    for key, value in args.items():
+        prop = props.get(str(key))
+        if not isinstance(prop, Mapping) or value is None:
+            continue
+        if not _type_matches(value, prop):
+            want = prop.get("type") or "one of its declared forms"
+            return (
+                f"{CAUSE_INVALID_ARG}: {name} argument {key!r} must be "
+                f"{want}, got {type(value).__name__}."
+            )
+        enum = prop.get("enum")
+        if (
+            isinstance(enum, (list, tuple)) and enum
+            and isinstance(value, str) and value not in enum
+        ):
+            return (
+                f"{CAUSE_INVALID_ARG}: {name} argument {key!r} must be one of "
+                f"{_names(enum)}; got {value!r}."
+            )
+    if schema.get("additionalProperties") is False:
+        for key, value in args.items():
+            prop = props.get(str(key))
+            if isinstance(prop, Mapping) and value is not None:
+                problem = _closed_problem(name, prop, value, str(key))
+                if problem is not None:
+                    return problem
+    return None
+
+
+def _closed_problem(name: str, schema: Mapping[str, Any], value: Any, path: str) -> str | None:
+    """The DEEP check, for a schema that declares itself closed.
+
+    Only a tool whose top-level schema says ``additionalProperties: false``
+    reaches here (the ``workstation_drive`` tools, C-1b), so every schema
+    authored before it is validated exactly as it was. Below the top level the
+    check is strict where the shallow one is tolerant on purpose: a nested
+    object must be an object, an array must be a list (no bare-string
+    tolerance — no handler down here reads one), undeclared nested keys and
+    missing nested required keys are refused, and enums, string lengths and
+    item counts are enforced.
+    """
+    declared = schema.get("type")
+    where = f"{name} argument {path!r}"
+    if declared == "object":
+        if not isinstance(value, Mapping):
+            return f"{CAUSE_INVALID_ARG}: {where} must be an object, got {type(value).__name__}."
+        props = schema.get("properties") if isinstance(schema.get("properties"), Mapping) else {}
+        if schema.get("additionalProperties") is False:
+            extra = [str(k) for k in value if str(k) not in props]
+            if extra:
+                return (
+                    f"{CAUSE_INVALID_ARG}: {where} has no field {_names(extra)}; "
+                    f"its fields are {_names(props) or '(none)'}."
+                )
+        for req in schema.get("required") or ():
+            if value.get(str(req)) is None:
+                return f"{CAUSE_INVALID_ARG}: {where} requires {req!r}."
+        for key, sub in value.items():
+            prop = props.get(str(key))
+            if isinstance(prop, Mapping) and sub is not None:
+                problem = _closed_problem(name, prop, sub, f"{path}.{key}")
+                if problem is not None:
+                    return problem
+        return None
+    if declared == "array":
+        if not isinstance(value, (list, tuple)):
+            return f"{CAUSE_INVALID_ARG}: {where} must be a list, got {type(value).__name__}."
+        lo, hi = schema.get("minItems"), schema.get("maxItems")
+        if isinstance(lo, int) and len(value) < lo:
+            return f"{CAUSE_INVALID_ARG}: {where} needs at least {lo} item(s)."
+        if isinstance(hi, int) and len(value) > hi:
+            return f"{CAUSE_INVALID_ARG}: {where} takes at most {hi} item(s)."
+        items = schema.get("items")
+        if isinstance(items, Mapping):
+            for idx, item in enumerate(value):
+                problem = _closed_problem(name, items, item, f"{path}[{idx}]")
+                if problem is not None:
+                    return problem
+        return None
+    if not _type_matches(value, schema):
+        return f"{CAUSE_INVALID_ARG}: {where} must be {declared or 'one of its declared forms'}."
+    if declared == "string" and isinstance(value, str):
+        enum = schema.get("enum")
+        if isinstance(enum, (list, tuple)) and enum and value not in enum:
+            return f"{CAUSE_INVALID_ARG}: {where} must be one of {_names(enum)}; got {value!r}."
+        lo, hi = schema.get("minLength"), schema.get("maxLength")
+        if isinstance(lo, int) and len(value) < lo:
+            return f"{CAUSE_INVALID_ARG}: {where} must not be empty."
+        if isinstance(hi, int) and len(value) > hi:
+            return f"{CAUSE_INVALID_ARG}: {where} is longer than {hi} characters."
+    return None
+
+
+def split_arg_problem(problem: str) -> tuple[str, str]:
+    """``"<cause>: <detail>"`` from :func:`validate_args` → ``(cause, detail)``.
+
+    A string that does not start with a known cause is reported whole under
+    :data:`CAUSE_INVALID_ARG` rather than being silently reshaped — a block
+    event must never carry a cause nobody declared.
+    """
+    cause, sep, detail = str(problem).partition(": ")
+    if not sep or cause not in ARG_BLOCK_CAUSES:
+        return CAUSE_INVALID_ARG, str(problem)
+    return cause, detail
 
 
 # ---------------------------------------------------------------------------

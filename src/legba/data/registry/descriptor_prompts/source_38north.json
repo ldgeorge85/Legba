@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.38north.analysis": {
+      "source": "source_38north.yaml",
+      "state": "draft"
+    }
+  }
+}

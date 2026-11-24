@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:integrity_sweep": {
+      "source": "analyst_integrity_sweep.yaml",
+      "state": "active"
+    }
+  }
+}

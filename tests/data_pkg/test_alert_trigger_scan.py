@@ -878,9 +878,15 @@ async def test_semantics_mismatch_classifies_as_migration_not_deterioration(
         {"dimension": "escalation", "from_band": "watch", "to_band": "critical"}
     ]
     assert "re-derived under new semantics" in row["title"]
-    # The outward payload carries the same informational severity.
-    assert len(dispatcher.payloads) == 1
-    assert dispatcher.payloads[0].severity == "low"
+    # L-1: the alert is raised at the same informational severity; ``low`` is
+    # under the page rule's ``medium`` for band moves (as it was under the ntfy
+    # floor), so it is logged on the alert log and never handed to delivery.
+    assert dispatcher.payloads == []
+    async with pg_pool.acquire() as conn:
+        ev = await conn.fetchrow(
+            "SELECT severity, decision FROM alert_events WHERE kind = 'band_crossing' "
+            "ORDER BY raised_at DESC LIMIT 1")
+    assert (ev["severity"], ev["decision"]) == ("low", "logged")
 
     # Never refires (the watermark advanced, now carrying the new stamps).
     r3 = await _run(pg_pool)
@@ -1037,6 +1043,30 @@ async def test_verified_finding_bar_and_no_refire(pg_pool, clean_slate):
     )
 
 
+async def test_verified_finding_that_earned_no_lead_does_not_page(pg_pool, clean_slate):
+    """Lane N-U: a high-severity verified ASSEMBLY that earned no lead (tag
+    ``lead:none`` — "5 verified desk reads, 0 not carried") is a roll-up of
+    reads already paged on their own, not news. It is never a candidate; a
+    sibling with a real lead still fires. Real SQL path."""
+    await _run(pg_pool)  # seed all classes
+    async with pg_pool.acquire() as conn:
+        rollup = await _insert_finding(
+            conn, analyst_id="country_composition", sev_tag="high", confidence=0.9)
+        led = await _insert_finding(
+            conn, analyst_id="country_composition", sev_tag="high", confidence=0.9)
+        for fid, lead in ((rollup, "none"), (led, "breaking")):
+            await conn.execute(
+                "UPDATE analyst_outputs SET data = jsonb_set(data, '{tags}', "
+                " (data -> 'tags') || to_jsonb($2::text)) WHERE id = $1",
+                fid, f"lead:{lead}")
+            await _insert_faith_critique(conn, fid, 0.85)
+    await _run(pg_pool)
+    async with pg_pool.acquire() as conn:
+        fired = {_row_data(r).get("finding_id") for r in await _alert_rows(conn)}
+    assert str(led) in fired
+    assert str(rollup) not in fired
+
+
 async def test_late_verify_still_fires_within_window(pg_pool, clean_slate):
     """A finding whose critique lands AFTER a scan has passed it still fires —
     the per-finding-id watermark (not a time cursor) is the no-refire key."""
@@ -1175,17 +1205,27 @@ async def test_steady_state_guard_delta_tag_rose_still_pages(pg_pool, clean_slat
 
 
 async def test_steady_state_guard_band_change_always_pages(pg_pool, clean_slate):
+    # W1 F-5 — this test owns its desk. It used to write to the shared
+    # ``country_g20_us``, which the session-scoped test DB can carry as a
+    # ``g20``-tagged desk head from another file, with high-severity findings
+    # from earlier tests still inside the 24h window. With exactly one such
+    # finding standing, f1 + f2 take the desk's ``high_sev_findings_24h`` from
+    # 1 to 3 (MIN_CURRENT_FINDINGS) and the BASELINE trigger's rising edge pages
+    # alongside the band change: ``fired == 2`` under shuffle seed 736526730,
+    # ``1`` alone. A desk id no other test can have written has no head row and
+    # no leftover findings, so only the trigger under test can fire.
+    desk = f"country_guardband_{uuid4().hex[:8]}"
     await _run(pg_pool)
     async with pg_pool.acquire() as conn:
         f1 = await _insert_finding(
-            conn, target="country_g20_us", sev_tag="high", confidence=0.9
+            conn, target=desk, sev_tag="high", confidence=0.9
         )
         await _insert_faith_critique(conn, f1, 0.80)
     await _run(pg_pool)
 
     async with pg_pool.acquire() as conn:
         f2 = await _insert_finding(
-            conn, target="country_g20_us", sev_tag="critical", confidence=0.9,
+            conn, target=desk, sev_tag="critical", confidence=0.9,
             delta_tag="steady",
         )
         await _insert_faith_critique(conn, f2, 0.80)
@@ -2312,7 +2352,7 @@ def test_production_deficit_is_registered_in_every_per_class_registry():
 def test_gauge_thresholds_are_declared_handler_options():
     """A ``gauge_*`` knob not declared in HANDLER_OPTIONS is DROPPED whole at
     descriptor-resolution time, so an operator retune would silently no-op."""
-    from legba.data.analysts.handler_options import HANDLER_OPTIONS
+    from legba.data.option_catalog.handler_options import HANDLER_OPTIONS
     from legba.data.registry.production_gauge import GaugeConfig
 
     declared = {
@@ -2524,23 +2564,26 @@ async def test_production_deficit_unverified_posture_is_honest(
 async def test_daily_page_budget_caps_fleet_wide_pages_and_marks_the_rest(
     pg_pool, clean_slate
 ):
-    """Five real band-crossing candidates on one desk, budget=2 — every row
-    still WRITES (SUPPRESS/DEFER never means DROP), only 2 actually page."""
+    """Five real band-crossing candidates on one desk — every row still
+    WRITES (SUPPRESS/DEFER never means DROP); only the budget's slots page.
+
+    X4 ALERTS: one tick's band moves are ONE push and ONE budget unit, so the
+    five rows share one fate. A budget of 0 defers the unit (all five marked,
+    nothing pages); a budget of 1 pages it as one payload carrying all of them
+    (``test_alert_x4_db.test_the_budget_counts_one_batch_as_one_page``)."""
     desk = await _seed_five_deteriorations(pg_pool)
     dispatcher = _FakeDispatcher()
-    r = await _run(pg_pool, dispatcher, per_desk_cap=20, daily_page_budget=2)
+    r = await _run(pg_pool, dispatcher, per_desk_cap=20, daily_page_budget=0)
     assert r.finding.data["fired"] == 5
-    assert r.finding.data["budget_deferred"] == 3
-    assert len(dispatcher.payloads) == 2, "only the budget's slots actually page"
+    assert r.finding.data["budget_deferred"] == 5
+    assert dispatcher.payloads == [], "a deferred unit never pages"
 
     async with pg_pool.acquire() as conn:
         rows = await _alert_rows(conn)
     my_rows = [row for row in rows if row["target_id"] == desk]
     assert len(my_rows) == 5
     deferred = [row for row in my_rows if _row_data(row)["budget_deferred"] is True]
-    paged = [row for row in my_rows if _row_data(row)["budget_deferred"] is False]
-    assert len(deferred) == 3
-    assert len(paged) == 2
+    assert len(deferred) == 5
 
     async with pg_pool.acquire() as conn:
         tag_rows = await conn.fetch(
@@ -2561,28 +2604,29 @@ async def test_daily_page_budget_persists_already_paged_across_scans(
 ):
     """``already_paged_today`` is read LIVE from the alert ledger every scan,
     not held in memory — a second scan the same UTC day still respects what
-    an earlier scan already spent."""
+    an earlier scan already spent. (X4: the first scan's five band moves are
+    ONE page — the ledger counts distinct pushes, not rows.)"""
     await _seed_five_deteriorations(pg_pool)
-    r1 = await _run(pg_pool, per_desk_cap=20, daily_page_budget=3)
+    r1 = await _run(pg_pool, per_desk_cap=20, daily_page_budget=1)
     assert r1.finding.data["already_paged_today"] == 0
-    assert r1.finding.data["budget_deferred"] == 2
+    assert r1.finding.data["budget_deferred"] == 0
 
     desk2 = f"desk_x1_{uuid4().hex[:8]}"
     async with pg_pool.acquire() as conn:
         await _insert_scorecard(conn, desk2, {"escalation": "watch"})
-    await _run(pg_pool, per_desk_cap=20, daily_page_budget=3)  # seed desk2's class
+    await _run(pg_pool, per_desk_cap=20, daily_page_budget=1)  # seed desk2's class
     async with pg_pool.acquire() as conn:
         await _insert_scorecard(conn, desk2, {"escalation": "high"})
-    r2 = await _run(pg_pool, per_desk_cap=20, daily_page_budget=3)
-    assert r2.finding.data["already_paged_today"] == 3, (
-        "the first scan's 3 real pages are still on the ledger"
+    r2 = await _run(pg_pool, per_desk_cap=20, daily_page_budget=1)
+    assert r2.finding.data["already_paged_today"] == 1, (
+        "the first scan's one real page (five rows, one push) is on the ledger"
     )
     assert r2.finding.data["budget_deferred"] == 1  # the one new candidate
 
 
 async def test_daily_page_budget_env_var_reaches_the_handler(pg_pool, clean_slate, monkeypatch):
     """No ``daily_page_budget`` option at all — falls back to the env var."""
-    monkeypatch.setenv(ats._DAILY_PAGE_BUDGET_ENV, "1")
+    monkeypatch.setenv(ats._DAILY_PAGE_BUDGET_ENV, "0")
     await _seed_five_deteriorations(pg_pool)
     deps = _Deps(pg_pool, _FakeDispatcher())
     options = {
@@ -2595,42 +2639,43 @@ async def test_daily_page_budget_env_var_reaches_the_handler(pg_pool, clean_slat
         "geo_convergence_enabled": True,
     }
     r = await ats.handle([], options, deps)
-    assert r.finding.data["daily_page_budget"] == 1
-    assert r.finding.data["budget_deferred"] == 4
+    # X4: the five band moves are one unit — a budget of 0 defers all five.
+    assert r.finding.data["daily_page_budget"] == 0
+    assert r.finding.data["budget_deferred"] == 5
 
 
 async def test_kind_cap_is_day_cumulative_across_scans_db(pg_pool, clean_slate):
     """The DB-level proof that the kind cap is a DAY total, not a per-scan
-    total: 5 band_crossing candidates in one scan hit the default cap of 3
-    (2 deferred); a SECOND scan later that day, for a DIFFERENT desk, offers
-    only ONE new band_crossing candidate — nowhere near 3 on its own — but it
-    is still deferred, because band_crossing already spent its 3 slots in
-    the FIRST scan (``already_paged_today_by_kind``, read live from the
-    ledger, not held in memory across scans)."""
+    total: 5 band_crossing candidates in one scan are ONE push (X4) and take
+    ONE band_crossing slot; with a per-kind cap of 1, a SECOND scan later that
+    day, for a DIFFERENT desk, offers ONE new band_crossing candidate — but it
+    is deferred, because band_crossing already spent its slot in the FIRST
+    scan (``already_paged_today_by_kind``, read live from the ledger as
+    distinct pushes, not held in memory across scans)."""
     await _seed_five_deteriorations(pg_pool)
     r1 = await _run(
-        pg_pool, per_desk_cap=20, daily_page_budget=10, budget_per_kind_cap=3
+        pg_pool, per_desk_cap=20, daily_page_budget=10, budget_per_kind_cap=1
     )
     assert r1.finding.data["fired"] == 5
-    assert r1.finding.data["budget_deferred"] == 2, "the kind cap bites first"
+    assert r1.finding.data["budget_deferred"] == 0, "one unit, one slot"
 
     desk2 = f"desk_x1_{uuid4().hex[:8]}"
     async with pg_pool.acquire() as conn:
         await _insert_scorecard(conn, desk2, {"escalation": "watch"})
     await _run(
-        pg_pool, per_desk_cap=20, daily_page_budget=10, budget_per_kind_cap=3
+        pg_pool, per_desk_cap=20, daily_page_budget=10, budget_per_kind_cap=1
     )  # seed desk2's class
     async with pg_pool.acquire() as conn:
         await _insert_scorecard(conn, desk2, {"escalation": "high"})
     r2 = await _run(
-        pg_pool, per_desk_cap=20, daily_page_budget=10, budget_per_kind_cap=3
+        pg_pool, per_desk_cap=20, daily_page_budget=10, budget_per_kind_cap=1
     )
     assert r2.finding.data["fired"] == 1
     assert r2.finding.data["budget_deferred"] == 1, (
         "band_crossing already spent its per-kind cap earlier TODAY, even "
         "though this scan's own batch never approached the cap by itself"
     )
-    assert r2.finding.data["already_paged_today_by_kind"].get(ats.TRIGGER_BAND) == 3
+    assert r2.finding.data["already_paged_today_by_kind"].get(ats.TRIGGER_BAND) == 1
 
 
 # ---------------------------------------------------------------------------

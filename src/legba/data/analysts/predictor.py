@@ -41,6 +41,7 @@ L-105 lands the optimizer's signature surface.
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import json
 import logging
@@ -557,7 +558,7 @@ async def _generate_narrative(
         response = await llm.chat_complete(
             [{"role": "user", "content": prompt}],
             max_tokens=400,
-            temperature=0.2,
+            temperature=HOUSE_TEMPERATURE,
             system=(
                 "You are a careful intelligence analyst. Cite contributing "
                 "signal IDs verbatim and never invent ones not provided."

@@ -53,6 +53,7 @@ substrate stub (no mocks at the substrate boundary).
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import asyncio
 import json
@@ -61,6 +62,8 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping
 from uuid import UUID, uuid4
+
+from .deep_consult_usage import STAGE_USAGE_KEY, accounted_stage, deep_usage
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +90,12 @@ class DeepConsultWorkflowInput:
     llm_component_id: str = ""             # method.llm.primary StackRef (stamped at submit)
     budget_tokens_per_day: int | None = None
     max_acquire_rounds: int = 12           # acquire/analyze tool-call cap (> chat default)
+    # Roll-86 follow-up: NOT an output cap any more. Kept, and still stamped
+    # at submit, so every in-flight / replayed input deserializes unchanged; it
+    # is now only the budget gate's per-run token estimate and the consult
+    # loop's output reservation inside its derived INPUT ceiling. No provider
+    # sends a caller's max_tokens (the plan / extraction ``min(2048, …)``
+    # clamps are gone): a wire that requires one gets the model's maximum.
     max_analyze_tokens: int = 8192
     emit_facts: bool = True                # gated by write_fact existence (PIECE 2)
     emit_hypotheses: bool = True
@@ -96,6 +105,20 @@ class DeepConsultWorkflowInput:
     # them to the consult ReAct loop, which renders the same block. Empty for
     # every pre-pin run, so an in-flight workflow input deserializes unchanged.
     pinned_context: list[dict[str, str]] = field(default_factory=list)
+    # The asker's display class (X2-B4 / W11-F68b), stamped at submit from the
+    # consult request. "" = unstamped = operator (the only caller admitted
+    # today), so an in-flight workflow input deserializes unchanged. Anything
+    # else fails CLOSED to the reader renderer in the tool context.
+    display_class: str = ""
+    # Q-1 — the turn contract's inputs (``consult_contract``), forwarded to the
+    # analyze stage's consult loop. Defaults keep an in-flight input valid.
+    window: dict[str, Any] | None = None
+    grounding_mode: str = ""
+    on_screen: dict[str, Any] | None = None
+    # T-1 — the deep_consult descriptor's ``method.llm.thinking`` (stamped at
+    # submit). ``consult_thinking`` decides per stage: plan and analyze think,
+    # extraction does not. False keeps an in-flight input valid and unchanged.
+    thinking: bool = False
 
 
 @dataclass
@@ -139,6 +162,11 @@ class DeepConsultStageDeps:
     # embedders that hand-build deps; the production resolver ALWAYS binds it and
     # fails loud if it can't). Mirrors ConsultOnDemandDeps.agency_binding.
     agency_binding: Any | None = None
+    # Q-2 — the by-id LLM resolver the analyze stage's settle-point JUDGE is
+    # built through (``consult_judging``; the consult judge route, $0 in-house
+    # by default). None ⇒ the deep turn is labelled ``not_judged:
+    # no_judge_route``, as every deep turn was before Q-2.
+    judge_resolver: Any | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -156,11 +184,12 @@ Respond with ONLY strict JSON, no prose:
    "tool_plan": [{"tool": "search_signals", "args": {"query": "..."}}, ...]}
 Tools available to the acquire stage:
   Finished intelligence — the platform's OWN prior products; reach for these FIRST so the analysis builds on (and reconciles against) earlier work rather than re-deriving from the raw firehose:
-  - list_findings([target_id], [analyst_id], [severity], [since_hours], [include_superseded], [limit]) — recent LIVE assessments/findings (analyst products; superseded revisions excluded unless include_superseded=true; effective_confidence already folds in the critic). Cite the output_id.
+  - list_findings([target_id], [analyst_id], [severity], [since_hours], [include_superseded], [limit], [offset], [mode]) — recent LIVE assessments/findings (analyst products; superseded revisions excluded unless include_superseded=true; effective_confidence already folds in the critic). Cite the output_id. mode="survey" returns one row per target (its newest live read, digest only) so every target is visible in one call; drill by target_id for the body. rows_total is the true count; offset pages.
   - list_situations([status], [target_id], [since_hours], [limit]) — ongoing clustered situation frames (analysis-derived). A situation_id pairs with query_hypotheses to pull its ACH rows.
-  - query_predictions([target_id], [status], [limit]) — event-volume forecasts (forecast_method='naive_mean' = no trend fit, low-confidence; 'auto_arima' = fitted). The feed is FROZEN (writer retired 2026-07-01) — rows are historical, never a current forecast. Cite the output_id.
   - list_targets() — the monitored targets and their ids (e.g. country_g20_ir); resolve a place/topic to a valid target_id before list_findings / query_hypotheses.
-  - list_sources([active_only], [silent_only]) — the ingest sources and their freshness/coverage; use to tell 'no source coverage on X' apart from 'a quiet feed' before concluding the substrate is silent.
+  - list_sources([active_only], [silent_only]) — the ingest sources and their freshness/coverage; use to tell 'no source coverage on X' apart from 'a quiet feed' before concluding the substrate is silent. last_poll_outcome='empty' = the latest poll found no NEW items (quiet, NOT dead); read the `summary` and each row's `staleness`.
+  - list_due_resolvers([horizon_days], [include_closed], [limit]) — the sealed forecast ledger by due date: each question's resolver, every issuer's number, the newest rule proposal and the judgement it waits on (a proposal is not an outcome).
+  - get_source_health([silent_only], [silent_hours], [limit]) — per-source liveness with a `staleness` verdict (fresh/quiet/stale/dead against the feed's cadence); use before claiming a source or the fleet is down.
   Raw substrate:
   - search_signals(query, [limit]) — full-text signal search (title + summary).
   - query_facts([subject], [predicate], [value], [limit]) — fact store.
@@ -173,6 +202,14 @@ Plan FINISHED-INTELLIGENCE calls first (list_findings / list_situations, resolvi
 async def _run_plan(
     wf_input: DeepConsultWorkflowInput, deps: DeepConsultStageDeps,
 ) -> dict[str, Any]:
+    """plan, under its own run account: its call's receipt rides on in the
+    output's ``stage_usage`` (``deep_consult_usage``)."""
+    return await accounted_stage("plan", lambda: _plan_body(wf_input, deps))
+
+
+async def _plan_body(
+    wf_input: DeepConsultWorkflowInput, deps: DeepConsultStageDeps,
+) -> dict[str, Any]:
     """plan — one LLM turn that decomposes the question into a tool plan.
 
     REUSES :func:`consult_on_demand._reason_via_llm` (the SAME
@@ -180,6 +217,7 @@ async def _run_plan(
     :func:`consult_on_demand._extract_json`.  No new planner, no new inference
     code — this is one call onto the existing LLM plane.
     """
+    from ...data.analysts import consult_thinking as _think
     from ...data.analysts.consult_on_demand import _extract_json, _reason_via_llm
 
     started = time.monotonic()
@@ -205,9 +243,12 @@ async def _run_plan(
         content, usage = await _reason_via_llm(
             deps.llm,
             messages=[{"role": "user", "content": user}],
-            max_tokens=min(2048, wf_input.max_analyze_tokens),
-            temperature=0.2,
+            max_tokens=int(wf_input.max_analyze_tokens),  # never sent: no output caps
+            temperature=HOUSE_TEMPERATURE,
             system_prompt=_PLAN_SYSTEM_PROMPT,
+            thinking=_think.ConsultThinking.decide(
+                wf_input.thinking, first={}, arm=False, llm=deps.llm,
+            ).for_role(_think.ROLE_DEEP_PLAN),
         )
     except Exception as exc:  # noqa: BLE001 — surface as a clean plan-skip
         logger.warning("deep_consult.plan.llm_error err=%s", exc)
@@ -395,6 +436,8 @@ async def _run_acquire(
             "plan_usage": plan.get("plan_usage"),
             "plan_seconds": plan.get("plan_seconds"),
         },
+        # the plan call's receipt, on to analyze (``deep_consult_usage``)
+        STAGE_USAGE_KEY: plan.get(STAGE_USAGE_KEY),
     }
 
 
@@ -405,6 +448,18 @@ async def _run_acquire(
 
 
 async def _run_analyze(
+    acquired: dict[str, Any], deps: DeepConsultStageDeps,
+) -> dict[str, Any]:
+    """analyze, under its own run account; its output's ``usage`` is the whole
+    run's receipt (plan + analyze calls), the shape a chat turn carries."""
+    out = await accounted_stage("analyze", lambda: _analyze_body(acquired, deps))
+    stages = {**(acquired.get(STAGE_USAGE_KEY) or {}), **(out.get(STAGE_USAGE_KEY) or {})}
+    out[STAGE_USAGE_KEY] = stages
+    out["usage"] = deep_usage(stages, deps.llm, acquire_seconds=acquired.get("acquire_seconds"))
+    return out
+
+
+async def _analyze_body(
     acquired: dict[str, Any], deps: DeepConsultStageDeps,
 ) -> dict[str, Any]:
     """analyze — bounded synthesis over the acquired evidence.
@@ -473,7 +528,7 @@ async def _run_analyze(
             budget_decision = {"outcome": "check_failed", "error": str(exc)}
 
     # ---- Drive the consult ReAct loop over the acquired evidence ----------
-    evidence_brief = _evidence_brief(evidence)
+    evidence_brief = _evidence_brief(evidence, display_class=wf_input.display_class)
     question = wf_input.question
     if evidence_brief:
         question = (
@@ -492,15 +547,41 @@ async def _run_analyze(
         # worker-local substrate_read binding acquire uses. None (tests) ⇒ the
         # consult loop falls back to its own direct-port dispatch, unchanged.
         agency_binding=deps.agency_binding,
+        # Q-1: the contract's reads use the stage pool; ``pg_pool`` stays unset so
+        # the chat-only watch mint does not run on the deep path.
+        turn_contract=True,
+        contract_pool=deps.pg_pool,
+        # Q-2 — deep turns are JUDGED at the settle point like chat turns (the
+        # record-only pass then applies the judge's list), reading evidence
+        # through ``judge_pool``; ``pg_pool`` stays unset (no watch mint here).
+        judge_resolver=deps.judge_resolver,
+        judge_pool=deps.pg_pool,
+        # T-1: the re-entrant loop's rounds and synthesis think as a chat
+        # turn's do (``consult_thinking``); its repair call does not.
+        thinking=bool(wf_input.thinking),
     )
+    contract_inputs = {
+        k: v for k, v in (
+            ("window", wf_input.window), ("grounding_mode", wf_input.grounding_mode or None),
+            ("on_screen", wf_input.on_screen),
+            # Q-2: the contract reads the ASKER's question — the row's
+            # ``question`` below also carries the evidence brief, whose dates
+            # would otherwise be read as the window ("since 2026-11-01 …").
+            ("contract_question", wf_input.question),
+        ) if v
+    }
     try:
         method_result = await consult_run_method(
             inputs=[{
+                **contract_inputs,
                 "question": question,
                 "scope_predicate": wf_input.scope_predicate,
                 # Same rows the plan stage saw — the synthesis turn must not
                 # be the one place in the deep run where the pins go missing.
                 "pinned_context": wf_input.pinned_context,
+                # W11-F68b: the synthesis loop renders its own tool results
+                # through the same class-keyed renderer.
+                "display_class": wf_input.display_class,
             }],
             options={"analyst_id": wf_input.analyst_id},
             deps=consult_deps,
@@ -542,7 +623,7 @@ async def _run_analyze(
             deps.llm,
             answer=consult.answer,
             evidence_brief=evidence_brief,
-            max_tokens=min(2048, int(wf_input.max_analyze_tokens)),
+            max_tokens=int(wf_input.max_analyze_tokens),  # never sent: no output caps
             want_facts=wf_input.emit_facts,
             want_hypotheses=wf_input.emit_hypotheses,
         )
@@ -562,6 +643,11 @@ async def _run_analyze(
         "uncertainty": float(consult.uncertainty),
         "unanswered_aspects": list(consult.unanswered_aspects),
         "cited_substrate_refs": all_refs,
+        # Q-2 — the turn contract and the settle-point verdict travel with the
+        # answer to the finding row, so the deep turn stores them as a chat
+        # turn does (they died here before). ``judged_refs`` are the refs the
+        # verdict's digest was taken over (the loop's, not the acquire union).
+        **_contract_carry(consult.data, loop_refs),
         "candidate_facts": cand_facts,
         "candidate_hypotheses": cand_hyps,
         "analyze_diagnostics": {
@@ -574,6 +660,20 @@ async def _run_analyze(
         },
         "acquire_diagnostics": _acquire_diag(acquired),
     }
+
+
+def _contract_carry(data: Mapping[str, Any], judged_refs: list[str]) -> dict[str, Any]:
+    """``contract`` / ``verification`` off the consult payload, JSON-safe (the
+    workflow serialises the stage output), plus ``judged_refs``; absent ones
+    are left out."""
+    out: dict[str, Any] = {}
+    for key in ("contract", "verification"):
+        value = data.get(key)
+        if isinstance(value, Mapping):
+            out[key] = json.loads(json.dumps(value, default=str))
+    if out:
+        out["judged_refs"] = list(judged_refs)
+    return out
 
 
 _CANDIDATE_SYSTEM_PROMPT = (
@@ -616,7 +716,7 @@ async def _extract_candidates_via_llm(
             llm,
             messages=[{"role": "user", "content": user}],
             max_tokens=max_tokens,
-            temperature=0.1,
+            temperature=HOUSE_TEMPERATURE,
             system_prompt=_CANDIDATE_SYSTEM_PROMPT,
         )
     except Exception as exc:  # noqa: BLE001 — extraction is best-effort
@@ -641,15 +741,25 @@ def _acquire_diag(acquired: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _evidence_brief(evidence: list[dict[str, Any]], *, cap: int = 6000) -> str:
-    """Compact the acquired tool results into a prompt-sized brief."""
+def _evidence_brief(
+    evidence: list[dict[str, Any]], *, cap: int = 6000, display_class: str = "",
+) -> str:
+    """Compact the acquired tool results into a prompt-sized brief.
+
+    W11-F68b: each result renders through ``tool_context_renderer`` — the one
+    class-keyed renderer every consult context uses — so a reader class never
+    puts archived publisher text into the deep-consult context.
+    """
+    from ...data.analysts.consult_tool_rendering import tool_context_renderer
+
+    render = tool_context_renderer({"display_class": display_class or None})
     parts: list[str] = []
     for ev in evidence:
         tool = ev.get("tool")
         result = ev.get("result")
         rows = result.get("rows") if isinstance(result, Mapping) else None
         n = len(rows) if isinstance(rows, list) else 0
-        snippet = json.dumps(result, default=str)[:1200]
+        snippet = render(result, 1200)
         parts.append(f"[{tool}] ({n} rows) {snippet}")
     brief = "\n".join(parts)
     return brief[:cap]
@@ -773,6 +883,13 @@ async def _run_synthesize(
                 "uncertainty": uncertainty,
                 "unanswered_aspects": analyzed.get("unanswered_aspects") or [],
                 "scope_predicate": wf_input.scope_predicate,
+                # Q-2 — the turn contract and the settle-point verdict; the
+                # status poll stores them on the deep session's answer turn.
+                **{k: analyzed[k] for k in ("contract", "verification", "judged_refs")
+                   if analyzed.get(k) is not None},
+                # the run's receipt (plan + analyze calls); the status poll
+                # writes it on the turn as a chat turn's (``deep_consult_usage``)
+                **({"usage": analyzed["usage"]} if analyzed.get("usage") else {}),
             },
         },
     )

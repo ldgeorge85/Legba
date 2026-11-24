@@ -51,13 +51,35 @@ method:
     # if a descriptor ever exceeds that).
     primary:
       factory_kind: stack_ref
-      raw: llm.anthropic.opus_4_7
+      raw: llm.primary.openai_compat   # 2026-10-03 DEC-17a: the free core plane is the default; Opus/Fable by explicit pick (consult_api override)
       expected_family: llm_provider
     max_tokens: 32768
+    # T-1 (2026-11-14, the owner: "Deep is just thinking on … use it for a lot,
+    # especially consult"). On the core plane the tool rounds, the forced final
+    # and a recovery synthesis call the component's thinking alias; the
+    # contract's repair call does not (data/analysts/consult_thinking.py). On a
+    # plane with no thinking alias (the paid pick) the turn runs as before and
+    # its trace says so. Quoted: an unquoted YAML `on` is a boolean.
+    thinking: "on"
+  # W11-F133 — consult 6cd91190 (2026-10-29): the forced final died on a
+  # transient network error after 19 minutes and the actor's default transient
+  # retry (3 attempts) re-ran the WHOLE consult from scratch on the same
+  # request id — 19 more rounds, 162 tool calls, re-spent unasked, and that run
+  # failed too. A consult runs ONCE: its failure (or its partial answer) goes to
+  # the operator, who decides whether to ask again.
+  retry:
+    transient:
+      max_attempts: 1
   # Opus 4.7 plane (above). 1M/day throttled the daily driver after ~5 broad
   # consults (~150-250k tokens each across 10 rounds); raised to 5M for headroom
   # (the wall-clock loop budget also trims per-consult usage). Tune to taste —
   # this is a real Opus cost ceiling.
+  options:
+    # 2026-10-29 W11-F133: a core-plane consult outran the model window (229k of
+    # 262k tokens over 19 rounds with compaction pinned off) and vLLM refused the
+    # call; the ceiling withholds the oldest refs instead. 262,144 − 32,768 out −
+    # a margin. Remove once the loop derives it from the component (lane F133).
+    context_ceiling_tokens: 200000
   budget_tokens_per_day: 0
 
 cadence:
@@ -76,9 +98,20 @@ cadence:
 # in runtime/dapr_host.py builds ONE AgencyToolBinding, over substrate_read
 # only, so this grant is INERT until that path binds the web_access pack too —
 # it is a descriptor-side preparation, not an activation.
+#
+# C-1b — `workstation_drive` is the grant leg for "present a case": the nine
+# workstation actions an ARMED turn (ConsultRequest.present_case) may emit. The
+# runtime binds it beside substrate_read (runtime/consult_bindings.py); an
+# unarmed turn is never offered its tools, and an armed turn without the
+# binding fails loud (409 case_unavailable) rather than answering plainly.
 action_packs:
   - pack_id: substrate_read
   - pack_id: web_access
+  - pack_id: workstation_drive
+  # C-2b-1 — the write plane (bound only for a turn the operator armed with
+  # allow_writes; the registry's LEGBA_CONSULT_WRITES and the pack's own state
+  # are the kill switches). The operator PUTs this grant after the roll.
+  - pack_id: consult_write
 
 outputs:
   - kind: a2a_skill

@@ -5,7 +5,7 @@
  * The honest, source-first rollup is computed from the target's own signals
  * (`GET /api/v1/signals?target_id=…`) grouped by `source_id`, left-joined
  * with the source descriptor registry
- * (`GET /api/v1/registry/descriptors?family=source&head_only=true`) for the
+ * (RA-1: the reader's roster, `GET /api/v1/v3/roster?family=source`) for the
  * friendly name + handler kind.
  *
  * v2 parity (Sources scored a per-source health table):
@@ -25,6 +25,7 @@ import { PanelChrome } from '@/components/PanelChrome'
 import { apiGet, ApiError } from '@/lib/api'
 import type { PanelProps } from '@/types'
 import { cn } from '@/lib/cn'
+import { SOURCE_ROSTER_ROUTE } from '@/lib/deskNames'
 
 interface SignalGeo {
   lat?: number
@@ -45,6 +46,8 @@ export interface SignalForRollup {
 export interface SourceDescriptor {
   descriptor_id: string
   name?: string | null
+  /** RA-1: the roster row's handler kind (`/v3/roster?family=source`). */
+  kind?: string | null
   body?: { identity?: { id?: string; kind?: string; name?: string } } & Record<
     string,
     unknown
@@ -102,7 +105,7 @@ export function rollupSources(
       r = {
         source_id: s.source_id,
         name: d?.name ?? d?.body?.identity?.name ?? null,
-        kind: d?.body?.identity?.kind ?? null,
+        kind: d?.kind ?? d?.body?.identity?.kind ?? null,
         total: 0,
         last24h: 0,
         geocoded: 0,
@@ -138,7 +141,7 @@ export default function TargetSourcesPanel({ registration, scope }: PanelProps) 
     queryFn: async () => {
       try {
         return await apiGet<Page<SignalForRollup>>(
-          `/signals?target_id=${encodeURIComponent(target_id)}&limit=500`,
+          `/signals?target_id=${encodeURIComponent(target_id)}&limit=500&fields=full`,
         )
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) return { data: [], next_cursor: null }
@@ -153,9 +156,9 @@ export default function TargetSourcesPanel({ registration, scope }: PanelProps) 
     queryKey: ['source-descriptors'],
     queryFn: async () => {
       try {
-        return await apiGet<SourceDescriptor[]>(
-          `/registry/descriptors?family=source&head_only=true`,
-        )
+        // RA-1: the reader's roster (id, name, kind, identity.id), not the
+        // admin's whole descriptor list
+        return await apiGet<SourceDescriptor[]>(SOURCE_ROSTER_ROUTE)
       } catch (e) {
         if (e instanceof ApiError && (e.status === 404 || e.status >= 500)) return []
         throw e
@@ -225,7 +228,7 @@ function SourceRowView({ rollup: r }: { rollup: SourceRollup }) {
     >
       <td className="py-1 pr-2">
         <div className="truncate max-w-[16rem]">{r.name ?? r.source_id}</div>
-        <div className="font-mono text-[10px] text-slate-500 truncate max-w-[16rem]">
+        <div className="font-mono text-label text-slate-500 truncate max-w-[16rem]">
           {r.source_id}
           {r.kind ? (
             <span className="ml-1 text-slate-600">· {r.kind}</span>

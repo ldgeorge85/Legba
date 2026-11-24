@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:indicator_tracker": {
+      "source": "analyst_indicator_tracker.yaml",
+      "state": "active"
+    }
+  }
+}

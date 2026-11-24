@@ -37,7 +37,23 @@ import {
   type IDockviewPanelProps,
 } from 'dockview-react'
 import ConsultPanel from '@/panels/system/Consult'
-import { applyPreset, findPreset } from '@/lib/layoutPresets'
+
+/**
+ * A dock RE-SEED — what a preset pick did before the U-2 shell, and what a
+ * surface switch and Reset do now: `api.clear()`, then the views laid back
+ * down. (Consult itself is a fixed column since U-2, but the store-held
+ * conversation is what makes that safe, and this suite still pins it.)
+ */
+type Placement = { kind: string; position?: { referencePanel: string; direction: 'right' | 'below' | 'within' } }
+const RESEED: Placement[] = [
+  { kind: 'system.findings' },
+  { kind: 'system.consult', position: { referencePanel: 'system.findings', direction: 'below' } },
+  { kind: 'system.provenance', position: { referencePanel: 'system.findings', direction: 'right' } },
+]
+function reseed(api: DockviewApi, open: (kind: string, position?: Placement['position']) => void) {
+  api.clear()
+  for (const p of RESEED) open(p.kind, p.position)
+}
 import {
   CONSULT_PAGE_LOAD_ID,
   parseConsultPanels,
@@ -249,7 +265,7 @@ describe('consult panel inside the real Dockview runtime', () => {
     expect(await screen.findByTestId('consult-question')).toBeInTheDocument()
   })
 
-  it('applyPreset really does destroy the panel (the mechanism under test)', async () => {
+  it('a re-seed really does destroy the panel (the mechanism under test)', async () => {
     stubFetch({})
     const api = await mountDock()
     openConsult(api)
@@ -288,13 +304,11 @@ describe('consult panel inside the real Dockview runtime', () => {
     await screen.findByTestId('consult-live-steps')
 
     // The operator picks a layout preset mid-turn.
-    const preset = findPreset('workspace')
-    expect(preset).toBeDefined()
     act(() => {
       // The opener mirrors `App.tsx`'s `addSingleton`, positions included —
       // without them every preset panel stacks as tabs in one group and
       // Dockview renders only the active one.
-      applyPreset(api, preset!, (kind, position) => {
+      reseed(api, (kind, position) => {
         api.addPanel({
           id: kind,
           component: kind === 'system.consult' ? 'default' : 'other',

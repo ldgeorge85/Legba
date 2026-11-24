@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:verify_backfill": {
+      "source": "analyst_verify_backfill.yaml",
+      "state": "active"
+    }
+  }
+}

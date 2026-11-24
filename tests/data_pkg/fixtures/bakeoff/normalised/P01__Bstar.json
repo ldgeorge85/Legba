@@ -1,0 +1,450 @@
+{
+ "arm": "B",
+ "cut": {
+  "dropped": [
+   0,
+   2,
+   3,
+   4,
+   6,
+   8,
+   9,
+   10,
+   13,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20,
+   21,
+   23,
+   24,
+   25,
+   26,
+   27,
+   28,
+   29,
+   30,
+   32,
+   34,
+   36,
+   38,
+   39,
+   40,
+   41,
+   42,
+   43,
+   44,
+   45,
+   46,
+   47,
+   48,
+   49,
+   50,
+   51,
+   52,
+   54,
+   55,
+   56,
+   57,
+   58,
+   60,
+   61,
+   62,
+   63,
+   65,
+   66,
+   67,
+   68,
+   69,
+   70,
+   71,
+   74,
+   75,
+   76,
+   77,
+   79,
+   80,
+   81,
+   82,
+   83,
+   84,
+   85,
+   86,
+   87,
+   88,
+   89,
+   90,
+   91,
+   92,
+   94,
+   95,
+   96,
+   97,
+   98,
+   100,
+   101,
+   102,
+   103,
+   104
+  ],
+  "sentences_in": 105,
+  "top": 59,
+  "words_in": 2145,
+  "words_out": 300
+ },
+ "question_id": "P01",
+ "receipts": [
+  {
+   "documents": [],
+   "r": "R1"
+  },
+  {
+   "documents": [],
+   "r": "R2"
+  },
+  {
+   "documents": [],
+   "r": "R3"
+  },
+  {
+   "documents": [],
+   "r": "R4"
+  },
+  {
+   "documents": [],
+   "r": "R5"
+  },
+  {
+   "documents": [],
+   "r": "R6"
+  },
+  {
+   "documents": [],
+   "r": "R7"
+  },
+  {
+   "documents": [],
+   "r": "R8"
+  },
+  {
+   "documents": [],
+   "r": "R9"
+  },
+  {
+   "documents": [],
+   "r": "R10"
+  },
+  {
+   "documents": [],
+   "r": "R11"
+  },
+  {
+   "documents": [],
+   "r": "R12"
+  },
+  {
+   "documents": [],
+   "r": "R13"
+  },
+  {
+   "documents": [],
+   "r": "R14"
+  },
+  {
+   "documents": [],
+   "r": "R15"
+  },
+  {
+   "documents": [],
+   "r": "R16"
+  },
+  {
+   "documents": [],
+   "r": "R17"
+  },
+  {
+   "documents": [],
+   "r": "R18"
+  },
+  {
+   "documents": [],
+   "r": "R19"
+  },
+  {
+   "documents": [],
+   "r": "R20"
+  },
+  {
+   "documents": [],
+   "r": "R21"
+  },
+  {
+   "documents": [],
+   "r": "R22"
+  },
+  {
+   "documents": [],
+   "r": "R23"
+  },
+  {
+   "documents": [],
+   "r": "R24"
+  },
+  {
+   "documents": [],
+   "r": "R25"
+  },
+  {
+   "documents": [],
+   "r": "R26"
+  },
+  {
+   "documents": [],
+   "r": "R27"
+  },
+  {
+   "documents": [],
+   "r": "R28"
+  },
+  {
+   "documents": [],
+   "r": "R29"
+  },
+  {
+   "documents": [],
+   "r": "R30"
+  },
+  {
+   "documents": [],
+   "r": "R31"
+  },
+  {
+   "documents": [],
+   "r": "R32"
+  },
+  {
+   "documents": [],
+   "r": "R33"
+  },
+  {
+   "documents": [],
+   "r": "R34"
+  },
+  {
+   "documents": [],
+   "r": "R35"
+  },
+  {
+   "documents": [],
+   "r": "R36"
+  },
+  {
+   "documents": [],
+   "r": "R37"
+  },
+  {
+   "documents": [],
+   "r": "R38"
+  },
+  {
+   "documents": [],
+   "r": "R39"
+  },
+  {
+   "documents": [],
+   "r": "R40"
+  },
+  {
+   "documents": [],
+   "r": "R41"
+  },
+  {
+   "documents": [],
+   "r": "R42"
+  },
+  {
+   "documents": [],
+   "r": "R43"
+  },
+  {
+   "documents": [],
+   "r": "R44"
+  },
+  {
+   "documents": [],
+   "r": "R45"
+  },
+  {
+   "documents": [],
+   "r": "R46"
+  },
+  {
+   "documents": [],
+   "r": "R47"
+  },
+  {
+   "documents": [],
+   "r": "R48"
+  },
+  {
+   "documents": [],
+   "r": "R49"
+  },
+  {
+   "documents": [],
+   "r": "R50"
+  },
+  {
+   "documents": [],
+   "r": "R51"
+  },
+  {
+   "documents": [],
+   "r": "R52"
+  },
+  {
+   "documents": [],
+   "r": "R53"
+  },
+  {
+   "documents": [],
+   "r": "R54"
+  },
+  {
+   "documents": [],
+   "r": "R55"
+  },
+  {
+   "documents": [],
+   "r": "R56"
+  },
+  {
+   "documents": [],
+   "r": "R57"
+  },
+  {
+   "documents": [],
+   "r": "R58"
+  },
+  {
+   "documents": [],
+   "r": "R59"
+  },
+  {
+   "documents": [],
+   "r": "R60"
+  },
+  {
+   "documents": [],
+   "r": "R61"
+  },
+  {
+   "documents": [],
+   "r": "R62"
+  },
+  {
+   "documents": [],
+   "r": "R63"
+  },
+  {
+   "documents": [],
+   "r": "R64"
+  },
+  {
+   "documents": [],
+   "r": "R65"
+  },
+  {
+   "documents": [],
+   "r": "R66"
+  },
+  {
+   "documents": [],
+   "r": "R67"
+  },
+  {
+   "documents": [],
+   "r": "R68"
+  },
+  {
+   "documents": [],
+   "r": "R69"
+  },
+  {
+   "documents": [],
+   "r": "R70"
+  },
+  {
+   "documents": [],
+   "r": "R71"
+  },
+  {
+   "documents": [],
+   "r": "R72"
+  },
+  {
+   "documents": [],
+   "r": "R73"
+  },
+  {
+   "documents": [],
+   "r": "R74"
+  },
+  {
+   "documents": [],
+   "r": "R75"
+  },
+  {
+   "documents": [],
+   "r": "R76"
+  },
+  {
+   "documents": [],
+   "r": "R77"
+  },
+  {
+   "documents": [],
+   "r": "R78"
+  },
+  {
+   "documents": [],
+   "r": "R79"
+  },
+  {
+   "documents": [],
+   "r": "R80"
+  },
+  {
+   "documents": [],
+   "r": "R81"
+  },
+  {
+   "documents": [],
+   "r": "R82"
+  },
+  {
+   "documents": [],
+   "r": "R83"
+  },
+  {
+   "documents": [],
+   "r": "R84"
+  },
+  {
+   "documents": [],
+   "r": "R85"
+  },
+  {
+   "documents": [],
+   "r": "R86"
+  },
+  {
+   "documents": [],
+   "r": "R87"
+  }
+ ],
+ "schema": "legba.bakeoff.normalised/1",
+ "text": "The arc: what actually changed. That war became the template. Saudi tankers began rerouting around Africa [R8]. Judgment (confidence ~0.75): the Hormuz closure demonstrated to every revisionist actor that a mid-sized power can hold global energy hostage at acceptable cost. That demonstration effect — not any single ideology or bloc — is the organizing dynamic of the current period. Military: wide, shallow, and structurally stuck. world read as of 28 Sep leads on Russian drone-and-missile strikes on Ukrainian cities keeping escalation risk high, with Russia's high-intensity war posture unchanged [R13]. Economics: an energy-shock economy, not a demand recession. Some of that is weather (a US nor'easter, Hurricane Polo, typhoons) rather than geopolitics [R26] — but the convergence is real. Trade: tariffs are now furniture, and the leverage has moved to minerals. The news value is now in absence of change. (b) Critical minerals, not tariffs, are the binding constraint. Judgment (confidence ~0.8): the escalation ladder in US–China economics now runs through inputs, not through tariff rates. (c) And yet — the Washington summit produced détente. Judgment (~0.7): the guns-vs-butter fight is the next European political cleavage, and it maps onto the nativist-right surge below. Social movement: two different revolts, one common cause. India's Gen Z \"Cockroach\" movement forced a cabinet minister out after 36 days of protest [R62] and is now threatening renewed nationwide action over the election commission [R63]. Social contention is now a contested operational domain, not just an outcome. Direction of travel — 6 to 12 months. Economics stays supply-shocked, not demand-crashed (~0.6). A verified, sustained pause in Russian strikes — names this as the single biggest swing factor in its own world read [R76]. The forecast feed is frozen (writer retired 2026-07-01) — the answer has not used any prediction row as a current forecast [R81].\n\nStated confidence: 0.65"
+}

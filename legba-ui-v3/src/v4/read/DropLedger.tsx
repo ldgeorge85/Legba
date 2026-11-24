@@ -20,7 +20,7 @@
 import { useState } from 'react'
 import { selectRow } from '@/state/selection'
 import { emitRead } from '@/lib/readTelemetry'
-import type { AssemblyPayload, DropRow } from '@/lib/assemblyModel'
+import { floorSentence, type AssemblyPayload, type DropRow } from '@/lib/assemblyModel'
 import { plural, score } from './readFormat'
 
 /** The closed why-class enum, in the reader's words. */
@@ -35,7 +35,16 @@ const WHY_COPY: Record<string, string> = {
   not_a_candidate: 'never a candidate for this surface',
 }
 
-function DropRows({ rows, testid }: { rows: DropRow[]; testid: string }) {
+function DropRows({
+  rows,
+  testid,
+  grain,
+}: {
+  rows: DropRow[]
+  testid: string
+  /** W4 F-3 — the floor's grain, when the record carries one. */
+  grain?: string | null
+}) {
   if (rows.length === 0) return null
   return (
     <ul className="mt-2 space-y-1.5" data-testid={testid}>
@@ -50,13 +59,24 @@ function DropRows({ rows, testid }: { rows: DropRow[]; testid: string }) {
             className="text-left text-ink-2 underline decoration-dotted underline-offset-2 hover:text-ink-1"
             title="Open this head in the Inspector"
           >
-            {r.rank !== null && <span className="font-mono text-ink-3">#{r.rank} </span>}
+            {r.displaced_by_floor ? (
+              <span className="font-mono text-ink-3">
+                #{r.order_rank ?? '—'} by order{' '}
+              </span>
+            ) : (
+              r.rank !== null && <span className="font-mono text-ink-3">#{r.rank} </span>
+            )}
             {r.desk} · {r.target_name ?? r.target_id ?? 'no target'}
           </button>
           <span className="text-ink-3">
             {r.severity ? ` · ${r.severity}` : ''}
             {r.cited_mass !== null ? ` · cited-mass ${score(r.cited_mass)}` : ''}
             {` · ${WHY_COPY[r.why] ?? r.why}`}
+            {r.displaced_by_floor && (
+              <span data-testid="read-drop-displaced">
+                {` · displaced by the ${grain ?? 'selection'} floor`}
+              </span>
+            )}
           </span>
           {r.title && <div className="text-ink-3">{r.title}</div>}
         </li>
@@ -71,6 +91,11 @@ export default function DropLedger({ assembly }: { assembly: AssemblyPayload }) 
   if (!drops) return null
   const c = drops.counts
   const noHeadUnits = assembly.coverage.filter((u) => u.status === 'no_head_in_horizon')
+  // W4 F-3 — the floor line, read off the persisted `assembly.floor`. Absent on
+  // every record without one (country, thematic, every pre-floor world read).
+  const floor = assembly.floor ?? null
+  const floorLine = floorSentence(floor)
+  const displaced = drops.not_selected.filter((r) => r.displaced_by_floor).length
 
   return (
     <section className="read-col mb-8" data-band="ledger" data-testid="read-drop-ledger">
@@ -81,6 +106,11 @@ export default function DropLedger({ assembly }: { assembly: AssemblyPayload }) 
       </div>
 
       <p className="text-sm leading-relaxed text-ink-2" data-testid="read-drop-summary">
+        {floorLine && (
+          <>
+            <span data-testid="read-floor-line">{floorLine}</span>{' '}
+          </>
+        )}
         {c.candidates > 0 && (
           <>
             {plural(c.candidates, 'lead span was', 'lead spans were')} candidates for this read;{' '}
@@ -139,12 +169,24 @@ export default function DropLedger({ assembly }: { assembly: AssemblyPayload }) 
               <div className="text-label uppercase tracking-wider text-ink-3">
                 Ranked below the line
               </div>
-              <p className="mt-1 text-xs text-ink-3">
-                Selection is a strict prefix of the order, so &ldquo;a higher-ranked block was left
-                out&rdquo; cannot happen by construction. The disclosure that carries weight is this
-                list: what the order put below the cut, and by how much.
-              </p>
-              <DropRows rows={drops.not_selected} testid="read-drops-notselected" />
+              {floor && floor.promoted.length > 0 ? (
+                <p className="mt-1 text-xs text-ink-3" data-testid="read-floor-note">
+                  Selection is the {floor.grain} floor plus a strict prefix of the order: one block
+                  per {floor.grain} is guaranteed, the rest is the order&rsquo;s top. {displaced}{' '}
+                  below {displaced === 1 ? 'was' : 'were'} displaced by the floor.
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-ink-3">
+                  Selection is a strict prefix of the order, so &ldquo;a higher-ranked block was
+                  left out&rdquo; cannot happen by construction. The disclosure that carries weight
+                  is this list: what the order put below the cut, and by how much.
+                </p>
+              )}
+              <DropRows
+                rows={drops.not_selected}
+                testid="read-drops-notselected"
+                grain={floor?.grain}
+              />
             </div>
           )}
           {drops.trimmed.length > 0 && (
@@ -193,10 +235,46 @@ export function CoverageLine({ assembly }: { assembly: AssemblyPayload }) {
   const parts = [...byStatus.entries()]
     .sort((a, b) => b[1] - a[1])
     .map(([status, n]) => `${n} ${status.replace(/_/g, ' ')}`)
+  // W11 — the quoted reads the composition itself marked stale (older than the
+  // unit's cadence × the stale-read multiple). Unmarked rows say nothing: an
+  // unmeasured read is never presented as fresh, nor as stale.
+  const stale = rows.filter((r) => r.stale === true && r.age_h !== null)
+  // W11-F14 — units whose head states a status nothing re-evidenced in N windows.
+  const carried = rows.filter((r) => r.status === 'carried_unsupported')
   return (
     <p className="mt-3 text-xs leading-relaxed text-ink-3" data-testid="read-coverage">
       Coverage, from the persisted ledger and not from prose: {rows.length} roster units accounted
       for &mdash; {parts.join(', ')}.
+      {stale.length > 0 && (
+        <span className="text-amber-300" data-testid="read-coverage-stale">
+          {' '}
+          Quoted stale ({stale.length}):{' '}
+          {stale
+            .map(
+              (r) =>
+                `${r.unit_name ?? r.unit} read ${Math.round(r.age_h as number)} h old` +
+                (r.cadence_h != null ? ` (cadence ${Math.round(r.cadence_h)} h)` : ''),
+            )
+            .join('; ')}
+          .
+        </span>
+      )}
+      {carried.length > 0 && (
+        <span data-testid="read-coverage-carried">
+          {' '}
+          Carried, unsupported ({carried.length}):{' '}
+          {carried
+            .map(
+              (r) =>
+                `${r.unit_name ?? r.unit} ` +
+                (r.last_evidence_age_h != null
+                  ? `last re-evidenced ${Math.round(r.last_evidence_age_h)} h ago`
+                  : 'not re-evidenced in the lookback'),
+            )
+            .join('; ')}
+          .
+        </span>
+      )}
     </p>
   )
 }

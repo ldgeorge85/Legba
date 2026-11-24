@@ -229,6 +229,7 @@ from ..._geo_routing import (
     MAX_ROUTED_TARGETS_IN_RECEIPT,
     count_routed_elsewhere,
 )
+from ... import profile_constants as _profile_constants
 from ..research_regime import research_evidence_enabled
 from . import _research_dispatch
 
@@ -274,6 +275,11 @@ _MAX_FRAME_EVIDENCE_ROWS = 40_000
 #: Cap on exemplar signal refs carried per alert (lineage stays skimmable —
 #: alert_trigger_scan._MAX_DERIVED_REFS is the ceiling the writer applies).
 _MAX_EXEMPLARS_PER_CLUSTER = 3
+
+#: The class an entity must canonicalize to before it folds into a cluster:
+#: the instance profile's anchor class (SPLIT-3, ``profile_constants``; the
+#: frame anchor's class gate reads the same value). ``None`` folds nothing.
+_ANCHOR_CLASS: str | None = _profile_constants.anchor_class()
 
 #: Watermark rows age out on ``updated_at``. A STANDING breach is refreshed
 #: every scan, so only genuinely dead (target, entity) pairs are pruned.
@@ -471,7 +477,9 @@ def cluster_entities(
         canonical, canon_class = canonicalize_entity(
             surface, str(row.get("ner_class") or "")
         )
-        if canon_class != "country":
+        # SPLIT-3: the fold's class is the profile's anchor class (a profile
+        # that declares none folds nothing).
+        if _ANCHOR_CLASS is None or canon_class != _ANCHOR_CLASS:
             continue
         fold = identity_fold(canonical)
         if len(fold) < 3 or is_home_country(canonical, home_blob):
@@ -937,6 +945,7 @@ async def scan_coverage_floor(
     every sibling scan returns, so ``alert_trigger_scan.handle`` folds it in
     with no special-casing.
     """
+    from ... import rosters as _rosters
     from .alert_trigger_scan import (
         _DESKS_SQL,
         _MAX_DERIVED_REFS,
@@ -990,7 +999,7 @@ async def scan_coverage_floor(
             stats["skipped_interval"] = 1
             return [], [], seeded, stats
 
-        desks = await conn.fetch(_DESKS_SQL, _MAX_DESKS)
+        desks = await conn.fetch(_DESKS_SQL, _MAX_DESKS, list(_rosters.scored_roster_tags()))
         desk_ids = [str(r["descriptor_id"]) for r in desks]
         if not desk_ids:
             return [], [], seeded, stats

@@ -8,21 +8,25 @@
 # analyst_outputs.data->'data'->'indicators'). This analyst DIFFS those
 # indicators run-over-run per (target_id, source unit analyst_id), joining
 # entries by their `id` slug, and emits an honest summary FINDING whenever an
-# indicator's status FLIPS — most importantly a not_observed -> triggered
+# indicator's status FLIPS and the new status HOLDS — most importantly a not_observed -> triggered
 # activation (a pre-registered warning signpost firing).
 #
 # Target-agnostic + META: the diff is an observation-level property of the shared
 # finding pool, not a per-target interpretation. The subscription declares NO
 # `targets` selector, so the cadence heartbeat is a SINGLE global run (not a
 # per-target fan-out) — see dapr_actors.AnalystActor._cadence_targets. The
-# handler pulls the two most-recent indicator-bearing findings per unit-stream
-# directly via deps.pg_pool (it ignores the materialized input slice).
+# handler pulls the indicator-bearing findings newer than each unit-stream's
+# watermark directly via deps.pg_pool (it ignores the materialized input slice).
 #
-# Honesty / idempotency (the findings-feed dedup lesson): the summary finding is
-# a per-run RECEIPT. The handler sets AnalystMethodResult.force_trace_only=True
-# when NO indicator flipped (or the flip set is byte-identical to the last
-# EMITTED summary — the same two source runs re-swept) so an idempotent re-run
-# does NOT repeat a feed row. Only a genuine status transition reaches the feed.
+# Honesty / idempotency (W11-F55, X3): a per-stream watermark
+# (alert_trigger_watermarks, class indicator_tracker) means every source run
+# is walked once. Each consecutive-run change is recorded as a RAW flip in
+# indicator_flips (migration 0237) and never fed; a change counts — a
+# DEBOUNCED flip — only once the new status has held (method.options
+# hysteresis_runs, default 2, or hysteresis_hours, default one cadence of the
+# source unit; docs/TUNABLES.md §3). The summary finding is a per-run RECEIPT
+# carrying only the debounced flips that run inserted; a run that inserted
+# none sets force_trace_only, so an idempotent re-run never repeats a feed row.
 #
 # Method:
 #   * kind = deterministic — pure code, NO LLM, token usage always zero.
@@ -35,8 +39,8 @@
 # Cadence:
 #   * fallback_schedule = "15-59/30 * * * *" — every 30 min, OFFSET 15 min so the
 #     unit findings it diffs are fresh (the units + their compositions land
-#     earlier in the tick). The diff is idempotent, so a re-sweep of an unchanged
-#     pair is a no-op receipt (trace-only).
+#     earlier in the tick). The walk is watermarked, so a re-sweep with no new
+#     source run writes nothing and is a no-op receipt (trace-only).
 #   * cooldown_seconds = 600 — a 10-min floor between runs (the sweep is cheap
 #     and idempotent, and indicator status is slow-changing).
 #
@@ -58,8 +62,8 @@ identity:
 
 subscription:
   # No `targets` block → META analyst: one global sweep per cadence tick over the
-  # whole shared finding pool. The handler pulls the two most-recent
-  # indicator-bearing findings per (target_id, analyst_id) directly via
+  # whole shared finding pool. The handler pulls the indicator-bearing findings
+  # newer than each (target_id, analyst_id) stream's watermark directly via
   # deps.pg_pool (it ignores the materialized input slice / time window).
   other_analysts: []
   substrate:

@@ -59,16 +59,20 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "GROUNDING_HISTORY",
     "HISTORY_CITE_RULE",
+    "HISTORY_DETAIL_RECEIPT_KEY",
     "HISTORY_EVIDENCE_CHARS",
     "HISTORY_LOOKBACK_YEARS",
     "HISTORY_SERIES_CAP",
     "HISTORY_SERIES_MAX_CAP",
+    "HISTORY_WITNESS_KEY",
     "history_block_lines",
+    "history_receipt_detail",
     "observation_citation",
     "observation_citations",
     "ordinal_span",
     "observation_evidence_text",
     "read_desk_history",
+    "read_desk_history_witnessed",
     "stale_tense_marker",
 ]
 
@@ -136,6 +140,7 @@ async def read_desk_history(  # type: ignore[no-untyped-def]
     limit: int = HISTORY_SERIES_CAP,
     valid_from: date | None = None,
     as_of: datetime | None = None,
+    witness: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """The latest period HELD for each series this DESK has, one row per series.
 
@@ -150,11 +155,23 @@ async def read_desk_history(  # type: ignore[no-untyped-def]
     it is the absence of a holding, and no block renders for it. ``[]`` also
     when nothing is loaded at all. Both are honest absences and neither is an
     error.
+
+    ``witness`` (SW-2) is an optional sink the read fills with what it
+    MEASURED — ``subjects_resolved`` (the desk's ``(collection, subject)``
+    pairs) and ``series_rows`` (the lines returned) — so the per-run receipt
+    can say WHICH absence it was. A key the read never reached keeps whatever
+    the caller set; it is never zero-filled.
     """
     if not target_id:
+        if witness is not None:
+            witness.update(subjects_resolved=0, series_rows=0)
         return []
     pairs = await _obs.desk_subjects(conn, desk=str(target_id))
+    if witness is not None:
+        witness["subjects_resolved"] = len(pairs)
     if not pairs:
+        if witness is not None:
+            witness["series_rows"] = 0
         return []
     floor = valid_from or date(
         datetime.now(timezone.utc).year - HISTORY_LOOKBACK_YEARS, 1, 1
@@ -180,7 +197,122 @@ async def read_desk_history(  # type: ignore[no-untyped-def]
             enriched["collection_version"] = pair.get("collection_version")
             out.append(enriched)
     out.sort(key=lambda r: (str(r.get("series_id") or ""), str(r.get("subject") or "")))
-    return out[: max(1, min(int(limit), HISTORY_SERIES_MAX_CAP))]
+    out = out[: max(1, min(int(limit), HISTORY_SERIES_MAX_CAP))]
+    if witness is not None:
+        witness["series_rows"] = len(out)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# The per-run WITNESS (SW-2)
+#
+# ``grounding_history_ref`` alone said only that a history row reached the
+# slice. The 7g-2 pilot then ran its granted desks for a week citing zero
+# observations, with a trace that kept 32k of a ~170k-char prompt, so nobody
+# could read back whether the block was offered, resolved the desk, returned
+# rows or rendered. The witness answers all four on the run's own trace and on
+# the finding, without re-running the gather and without the full prompt.
+# ---------------------------------------------------------------------------
+
+#: Key on the HISTORY synthetic row carrying what its read measured. The row is
+#: emitted whenever the grant is ON — with an EMPTY payload when the read
+#: returned nothing — so "offered, nothing held" is distinguishable from "not
+#: offered" downstream. An empty-payload row renders NOTHING (the prompt is the
+#: no-history prompt byte for byte) and counts 0 on ``grounding_history_ref``.
+HISTORY_WITNESS_KEY: str = "_history_witness"
+
+#: The trace / finding key the detail rides under, beside ``grounding_history_ref``.
+HISTORY_DETAIL_RECEIPT_KEY: str = "grounding_history_detail"
+
+
+async def read_desk_history_witnessed(  # type: ignore[no-untyped-def]
+    conn, *, target_id: str, limit: int = HISTORY_SERIES_CAP
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """:func:`read_desk_history` plus what it measured — never raises.
+
+    BEST-EFFORT, the gather's contract: a failed read logs, yields no rows and
+    says ``read_failed`` in the witness rather than reading as "no holding".
+    """
+    witness: dict[str, Any] = {
+        "offered": True,
+        "subjects_resolved": None,
+        "series_rows": None,
+        "read_failed": False,
+    }
+    try:
+        rows = await read_desk_history(
+            conn, target_id=str(target_id), limit=limit, witness=witness
+        )
+    except Exception as exc:  # pragma: no cover — best-effort enrichment
+        logger.warning(
+            "unit_grounding.history.failed target_id=%s err=%s "
+            "— this run reads WITHOUT its historical series",
+            target_id, exc,
+        )
+        witness["read_failed"] = True
+        rows = []
+    return rows, witness
+
+
+def history_receipt_detail(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    stamped: Sequence[tuple[int, Mapping[str, Any]]] | None = None,
+) -> dict[str, Any]:
+    """``grounding_history_detail`` for one run, from its grounding rows.
+
+    ``{offered, subjects_resolved, series_rows, rendered, reason}`` with
+    ``reason`` one of ``not_offered`` / ``no_subjects`` / ``no_rows`` /
+    ``read_failed`` / ``rendered``. ``stamped`` is the section render's
+    ``(ordinal, row)`` list: given, ``rendered`` is whether the history row is
+    IN it — the bytes the model read. Without it (the ORIENT step, before the
+    render) it is what the render will do: a payload with entries always
+    renders. A count the read never reached stays ``None`` — not measured is
+    not zero.
+    """
+    # Lazy: ``unit_grounding`` imports THIS module at its top.
+    from .unit_grounding import GROUNDING_PAYLOAD_KEY, UNIT_GROUNDING_ROW_KEY
+
+    row = next(
+        (
+            r for r in rows
+            if isinstance(r, Mapping)
+            and r.get(UNIT_GROUNDING_ROW_KEY) == GROUNDING_HISTORY
+        ),
+        None,
+    )
+    if row is None:
+        return {
+            "offered": False,
+            "subjects_resolved": None,
+            "series_rows": None,
+            "rendered": False,
+            "reason": "not_offered",
+        }
+    witness = row.get(HISTORY_WITNESS_KEY)
+    witness = witness if isinstance(witness, Mapping) else {}
+    payload = row.get(GROUNDING_PAYLOAD_KEY)
+    series_rows = ordinal_span(payload) if isinstance(payload, (list, tuple)) else 0
+    if stamped is None:
+        rendered = series_rows > 0
+    else:
+        rendered = any(r is row for _n, r in stamped)
+    subjects = witness.get("subjects_resolved")
+    if rendered:
+        reason = "rendered"
+    elif witness.get("read_failed"):
+        reason = "read_failed"
+    elif subjects == 0:
+        reason = "no_subjects"
+    else:
+        reason = "no_rows"
+    return {
+        "offered": True,
+        "subjects_resolved": subjects if isinstance(subjects, int) else None,
+        "series_rows": series_rows,
+        "rendered": rendered,
+        "reason": reason,
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.wto.news": {
+      "source": "source_wto_news.yaml",
+      "state": "draft"
+    }
+  }
+}

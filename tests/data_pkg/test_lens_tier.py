@@ -29,6 +29,11 @@ DAILY 09:00–11:30 UTC band, and they ship ``state: draft`` — the orchestrato
 promotes. The chorus diff's roster is fenced at the four FUNCTION-typed faculties
 (``LENS_DIFF_ROSTER_IDS``) so the leans landing cannot silently re-scope an active
 analyst whose persona declares a four-prior aperture verbatim.
+
+2026-10-04 — W9 SPLIT-2 moved the six leans' prose into the geopolitics profile
+(``legba_geopolitics.lens_*``); the five epistemic lenses stay in
+``legba.prompts``. Every module lookup below goes through
+``LENS_PROMPT_MODULE_PATHS`` (:func:`_lens_module`), never a spelled package.
 """
 from __future__ import annotations
 
@@ -52,6 +57,15 @@ from legba.data.analysts.journal_assessor import (
 )
 
 _REPO = Path(__file__).resolve().parents[2]
+
+
+def _lens_module(aid: str):
+    """The persona module of a lens id, through the kind's own path map."""
+    import importlib
+
+    from legba.data.analysts.journal_assessor import LENS_PROMPT_MODULE_PATHS
+
+    return importlib.import_module(LENS_PROMPT_MODULE_PATHS[aid].partition(":")[0])
 
 _ROWS = [
     {"id": "x1", "title": "Strikes hit the port", "source_id": "s1",
@@ -83,7 +97,7 @@ _LENS_DESCRIPTORS = {
 # spaced and clear of the faculties' Monday 06:30–08:30 window.
 _EXPECTED_CRONS = {
     "lens_trend": "30 6 * * 1",
-    "lens_baserate": "0 7 * * 1",
+    "lens_baserate": "15 7 * * 1",  # T-2: off escalation's 07:00 desk burst
     "lens_capability": "30 7 * * 1",
     "lens_intent": "0 8 * * 1",
     "lens_diff": "30 8 * * 1",
@@ -375,19 +389,25 @@ def test_lens_roster_constants_partition_cleanly() -> None:
     # every lens id has a descriptor and a persona-module path
     from legba.data.analysts.journal_assessor import LENS_PROMPT_MODULE_PATHS
 
-    for aid in LENS_ANALYST_IDS:
+    for aid in LENS_FACULTY_ANALYST_IDS:
         assert aid in _LENS_DESCRIPTORS
         assert LENS_PROMPT_MODULE_PATHS[aid] == f"legba.prompts.{aid}:LENS_SYSTEM"
+    # W9 SPLIT-2: the leans' prose is the geopolitics profile's package
+    for aid in LENS_LEAN_ANALYST_IDS:
+        assert aid in _LENS_DESCRIPTORS
+        assert LENS_PROMPT_MODULE_PATHS[aid] == f"legba_geopolitics.{aid}:LENS_SYSTEM"
+    # ...and every descriptor names exactly the path the kind maps it to
+    for aid in LENS_ANALYST_IDS:
+        body = yaml.safe_load((_REPO / _LENS_DESCRIPTORS[aid]).read_text())
+        assert body["method"]["prompt_module"] == LENS_PROMPT_MODULE_PATHS[aid], aid
 
 
 def test_faculty_prompt_module_resolves_prior_and_id() -> None:
     """Each lens module (faculty AND lean) exports the SAME three names; the prior
     block resolves, names ITS OWN id, and is non-trivial (the persona RENDERS it;
     the user prompt echoes it)."""
-    import importlib
-
     for aid in LENS_ANALYST_IDS:
-        mod = importlib.import_module(f"legba.prompts.{aid}")
+        mod = _lens_module(aid)
         assert mod.LENS_ID == aid
         assert isinstance(mod.LENS_PRIOR_BLOCK, str) and "DECLARED PRIOR" in mod.LENS_PRIOR_BLOCK
         assert "BLIND SPOT" in mod.LENS_PRIOR_BLOCK  # the load-bearing field
@@ -405,20 +425,15 @@ def test_every_lens_system_carries_the_shared_persona_and_its_own_prior() -> Non
     must carry the shared LENS_PERSONA / LENS_TASK / narrate contract verbatim,
     plus its own prior and NOBODY else's. A lean that hand-rolled its system
     prompt (or imported the wrong prior) fails here."""
-    import importlib
-
     from legba.prompts.lens_common import (
         LENS_NARRATE_PREAMBLE,
         LENS_PERSONA,
         LENS_TASK,
     )
 
-    priors = {
-        aid: importlib.import_module(f"legba.prompts.{aid}").LENS_PRIOR_BLOCK
-        for aid in LENS_ANALYST_IDS
-    }
+    priors = {aid: _lens_module(aid).LENS_PRIOR_BLOCK for aid in LENS_ANALYST_IDS}
     for aid in LENS_ANALYST_IDS:
-        system = importlib.import_module(f"legba.prompts.{aid}").LENS_SYSTEM
+        system = _lens_module(aid).LENS_SYSTEM
         assert LENS_PERSONA in system, aid
         assert LENS_TASK in system, aid
         assert LENS_NARRATE_PREAMBLE in system, aid
@@ -456,3 +471,23 @@ def test_get_lens_reads_tool_registered() -> None:
     reg = ToolRegistry()
     register_journal_read_tools(reg)
     assert "get_lens_reads" in set(reg.names)
+
+
+def test_lens_prior_header_parses_every_lens_persona() -> None:
+    """W2 S-batch — every faculty/lean prior block yields a non-empty one-line
+    header (what a lens row stamps as ``data.lens_prior``); a non-faculty tier's
+    empty block and a header-less block yield None, never an invented label."""
+    from legba.data.analysts.journal_assessor import LENS_ANALYST_IDS
+    from legba.prompts.lens_baserate import LENS_PRIOR_BLOCK
+    from legba.prompts.lens_common import lens_prior_header
+
+    for aid in LENS_ANALYST_IDS:
+        block = _lens_module(aid).LENS_PRIOR_BLOCK
+        header = lens_prior_header(block)
+        assert header and "\n" not in header, aid
+        assert header.startswith("the "), (aid, header)
+    assert lens_prior_header(LENS_PRIOR_BLOCK) == (
+        "the Historian; asks how often this actually happens"
+    )
+    assert lens_prior_header("") is None
+    assert lens_prior_header("no header here") is None

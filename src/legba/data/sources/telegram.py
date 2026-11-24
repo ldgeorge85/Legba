@@ -73,7 +73,9 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..schemas.source import SourceClass
+from ..schemas.source_claim import ClaimDeclaration
 from ._contract import Signal, SourceContext, SourceHealth
+from .message_receipt import MESSAGE_RECEIPT_FORMAT, capture_telegram_message, message_address
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +293,17 @@ class TelegramChannelSourceConfig(BaseModel):
                     "over the descriptor default per-signal, keyed by the "
                     "message's own `payload.channel.username`.",
     )
+    claims: dict[str, ClaimDeclaration] = Field(
+        default_factory=dict,
+        description="C-2 — the claim declaration of every channel `classes` "
+                    "marks `claim`: {claimant, claimant_path?, verb, "
+                    "claimant_aliases?, sign_off?} (data/schemas/source_claim.py), "
+                    "the same block a claim source carries at scope.claim. A "
+                    "channel marked `claim` needs one; a declaration for a "
+                    "channel not marked `claim` is refused. The descriptor "
+                    "cannot be active while any claim channel lacks its own "
+                    "recorded sign_off (claim_support.claim_activation_refusal).",
+    )
     lookback_hours: int = Field(
         default=24,
         ge=1,
@@ -482,8 +495,28 @@ class TelegramChannelSourceConfig(BaseModel):
     ) -> dict[str, SourceClass]:
         """Normalize override keys the same way ``channels`` handles are
         normalized, so ``"@Almasirah_En"`` and ``"Almasirah_En"`` collide on
-        the same entry instead of silently coexisting as two dead keys."""
+        the same entry instead of silently coexisting as two dead keys.
+
+        C-2: a channel marked ``claim`` is a claim source of its own — its
+        declaration (claimant, sign-off) is ``claims[<channel>]`` and is
+        checked below; its rows are stamped, cleaned and refused as support
+        exactly like a claim source's (``claim_support.claim_stamp_for``)."""
         return {_strip_channel_prefix(k): c for k, c in v.items()}
+
+    @field_validator("claims", mode="before")
+    @classmethod
+    def _claims_lenient(cls, v: Any) -> Any:
+        """Parse each declaration the way the descriptor's ``scope.claim`` is
+        parsed (a YAML/JSON timestamp string for ``sign_off.at``)."""
+        if isinstance(v, dict):
+            return {
+                _strip_channel_prefix(str(k)): (
+                    d if isinstance(d, ClaimDeclaration)
+                    else ClaimDeclaration.model_validate(d, strict=False)
+                )
+                for k, d in v.items()
+            }
+        return v
 
     @model_validator(mode="after")
     def _classes_keys_must_reference_a_configured_channel(
@@ -499,6 +532,20 @@ class TelegramChannelSourceConfig(BaseModel):
             raise ValueError(
                 "config.classes references channel(s) not present "
                 f"in config.channels: {unknown}"
+            )
+        # C-2: a claim channel and its declaration come together.
+        marked = {k for k, c in self.classes.items() if c == "claim"}
+        undeclared = sorted(marked - set(self.claims))
+        if undeclared:
+            raise ValueError(
+                f"config.classes marks channel(s) {undeclared} 'claim' with no "
+                "config.claims.<channel> declaration naming the claimant"
+            )
+        stray = sorted(set(self.claims) - marked)
+        if stray:
+            raise ValueError(
+                f"config.claims declares channel(s) {stray} that config.classes "
+                "does not mark 'claim'"
             )
         return self
 
@@ -1950,6 +1997,10 @@ class TelegramChannelSourceHandler:
         }
         if cfg.include_media and media_descriptor is not None:
             payload["media"] = media_descriptor
+        # B-1: the message as the client received it is this signal's receipt
+        # (MTProto is not HTTP — the egress tee never sees it). Text and
+        # metadata only; no media is fetched (message_receipt.py).
+        capture_telegram_message(msg, channel_info)
 
         return Signal(
             signal_id=uuid4(),
@@ -1968,6 +2019,21 @@ class TelegramChannelSourceHandler:
                 "message_id": int(msg_id),
             },
         )
+
+    # B-1: each message's receipt is the message as received, kept at
+    # ``<channel url>#message=<id>``; the link names it exactly and says the
+    # capture IS the item.
+    @staticmethod
+    def receipt_address(record: Any) -> str | None:
+        prov = getattr(record, "raw_provenance", None) or {}
+        handle = prov.get("channel_username") or prov.get("channel_id")
+        if handle is None or prov.get("message_id") is None:
+            return None
+        return message_address({"username": handle}, prov["message_id"])[1]
+
+    @staticmethod
+    def receipt_locator(record: Any) -> dict[str, Any]:
+        return {"whole": True, "format": MESSAGE_RECEIPT_FORMAT}
 
     @staticmethod
     def _classify_media(

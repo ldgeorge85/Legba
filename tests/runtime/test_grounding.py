@@ -360,7 +360,7 @@ async def test_resolver_applies_current_facts_gate_in_sql():
     assert "f.superseded_by IS NULL" in facts_sql
     assert "f.valid_until IS NULL OR f.valid_until > now()" in facts_sql
     # Curated/seed provenance is preferred in the ORDER BY.
-    assert "source_type IN ('seed','curated')" in facts_sql
+    assert "source_type IN ('seed','curated','operator')" in facts_sql
 
 
 @pytest.mark.asyncio
@@ -438,7 +438,7 @@ async def test_resolver_facts_sql_filters_to_trusted_provenance():
     )
     assert "source_type = ANY($2::text[])" in facts_sql
     # The trusted set is the 2nd bound param == the default seed/curated gate.
-    assert list(facts_params[1]) == ["seed", "curated"]
+    assert list(facts_params[1]) == ["seed", "curated", "operator"]
 
 
 @pytest.mark.asyncio
@@ -462,7 +462,7 @@ async def test_resolver_nexuses_sql_filters_to_trusted_provenance():
         (sql, p) for sql, p in pool.log if "FROM entity_edges" in sql
     )
     assert "e.source_type = ANY($2::text[])" in nexus_sql
-    assert list(nexus_params[1]) == ["seed", "curated"]
+    assert list(nexus_params[1]) == ["seed", "curated", "operator"]
     assert "e.edge_family = ANY($4::text[])" in nexus_sql
     assert list(nexus_params[3]) == list(_GROUNDING_EDGE_FAMILIES)
     assert "cooccurrence" not in _GROUNDING_EDGE_FAMILIES
@@ -474,16 +474,16 @@ def test_trusted_source_types_default_and_env_override(monkeypatch):
 
     # Default when unset.
     monkeypatch.delenv("LEGBA_GROUNDING_TRUSTED_SOURCE_TYPES", raising=False)
-    assert trusted_source_types() == ("seed", "curated")
+    assert trusted_source_types() == ("seed", "curated", "operator")
     # Blank / whitespace → safe default (never an empty admit-nothing set).
     monkeypatch.setenv("LEGBA_GROUNDING_TRUSTED_SOURCE_TYPES", "   ")
-    assert trusted_source_types() == ("seed", "curated")
+    assert trusted_source_types() == ("seed", "curated", "operator")
     # Custom comma list — lowercased + trimmed, order preserved.
     monkeypatch.setenv("LEGBA_GROUNDING_TRUSTED_SOURCE_TYPES", "Seed, Wikidata ,curated")
     assert trusted_source_types() == ("seed", "wikidata", "curated")
     # All-empty tokens collapse back to the safe default.
     monkeypatch.setenv("LEGBA_GROUNDING_TRUSTED_SOURCE_TYPES", ", ,")
-    assert trusted_source_types() == ("seed", "curated")
+    assert trusted_source_types() == ("seed", "curated", "operator")
 
 
 # ---------------------------------------------------------------------------

@@ -96,6 +96,42 @@ class _PolicySpec:
     purge: PurgeFn
     build_finding: FindingFn
     zero_counters: Mapping[str, int]
+    #: When set, deletion is OFF unless this env var is truthy. The policy
+    #: row, TTL and every other lever are untouched; only the DELETE is
+    #: withheld. (An env var, not a run option: the handler-options catalog is
+    #: frozen and shared by both retention policies.)
+    delete_switch_env: str | None = None
+
+
+def _truthy(raw: Any) -> bool:
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _delete_allowed(spec: "_PolicySpec") -> bool:
+    if spec.delete_switch_env is None:
+        return True
+    return _truthy(os.getenv(spec.delete_switch_env, ""))
+
+
+def _finding_deletion_off(
+    policy_name: str, *, ttl_days: int, switch: str
+) -> FindingPayload:
+    title = (
+        f"{policy_name}: deletion is switched off ({switch} not set) - "
+        f"nothing purged, rows kept"
+    )
+    return FindingPayload(
+        title=title[:2048],
+        body=f"deletion=off\nttl_days={ttl_days}",
+        confidence=1.0,
+        evidence=[],
+        tags=["deterministic", policy_name, "deletion_off"],
+        data={
+            "sub_handler": policy_name,
+            "ttl_days": ttl_days,
+            "deletion": "off",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -354,6 +390,10 @@ _POLICIES: dict[str, _PolicySpec] = {
         purge=_purge_traces,
         build_finding=_finding_traces,
         zero_counters={"traces_purged": 0, "critiques_cascaded": 0},
+        # Owner decision 2026-11-15: traces are kept forever (fingerprint in
+        # the row, bulk later as a compressed object - see SEAMS). The old
+        # 45-day delete is reachable only by this explicit switch.
+        delete_switch_env="LEGBA_ANALYST_TRACES_DELETE_ENABLED",
     ),
 }
 
@@ -424,6 +464,20 @@ async def handle_policy(
     ttl_days = int(raw_ttl)
 
     counters: dict[str, int] = dict(spec.zero_counters)
+    if (
+        pool is not None
+        and enabled
+        and ttl_days > 0
+        and not _delete_allowed(spec)
+    ):
+        return AnalystMethodResult(
+            finding=_finding_deletion_off(
+                policy_name,
+                ttl_days=ttl_days,
+                switch=spec.delete_switch_env or "",
+            ),
+            usage={"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0},
+        )
     if pool is not None and enabled and ttl_days > 0:
         batch_limit = int(options.get("batch_limit", batch_size_default))
         try:

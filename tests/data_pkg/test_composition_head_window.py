@@ -1030,3 +1030,24 @@ def test_composition_window_does_not_import_the_synthesizer():
     assert "meta_findings_synthesizer" not in source.replace(
         "``meta_findings_synthesizer", "«doc"
     ).replace("meta_findings_synthesizer._REF_MARKER_RE", "«doc")
+
+
+@pytest.mark.asyncio
+async def test_run_marks_stale_unit_reads_on_the_real_binding_path():
+    """W11 SWEEP-2 — rows carrying their unit's cadence (stamped at read time by
+    ``composition_stale_reads.stamp_unit_cadence``) come out of the compose with
+    each head marked and the record's ``stale_unit_reads`` count."""
+    from legba.data.analysts.composition_stale_reads import UNIT_CADENCE_ROW_KEY
+
+    llm = _CannedLLM()
+    rows = [
+        _row(analyst_id="escalation", age_hours=42.0, horizon=336),
+        _row(analyst_id="energy_security", age_hours=5.0, horizon=336),
+    ]
+    for r in rows:
+        r[UNIT_CADENCE_ROW_KEY] = 11.0
+    result = await synth.run_method(rows, dict(_COUNTRY_OPTS), _Deps(llm))
+    heads = {h["analyst_id"]: h for h in result.finding.data["head_ages"]["heads"]}
+    assert heads["escalation"]["stale"] is True  # 42 h > 11 h x 3
+    assert heads["energy_security"]["stale"] is False
+    assert result.finding.data["stale_unit_reads"] == 1

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.checkpoint_research.news": {
+      "source": "source_checkpoint_research.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -1,0 +1,206 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# K-1 (2026-11-14) — the CYBER desk: a thematic target with NO PLACE.
+#
+# `theme_*` = a desk defined by what it is about rather than where (a sibling
+# of `lane_*` / `flow_*`, whose shape rationale is in target_lane_hormuz.yaml).
+# Cyber events often have no place — a vulnerability in a vendor's product, an
+# outage of a global cloud service, an intrusion attributed to an actor with
+# no stated location — so geography cannot be this desk's selector.
+#
+# ── SELECTION: two arms, OR-ed, IN SQL, before the LIMIT ───────────────────
+#   1. the TAG arm, `scope.signal_tags: [geopolitics.topic:cyber]` — every
+#      signal from the desk's own feeds (the CISA catalogue and advisories,
+#      NCSC, CERT-FR, CERT-EU, BSI, three trade outlets, four provider status
+#      feeds) carries that key, stamped at ingest from each source's
+#      `scope.classifications` (W10 TAX-2);
+#   2. the TEXT arm, `scope.signal_text_terms` (lane K-1,
+#      data/signal_slice_scope.py) — any OTHER signal whose title + summary
+#      names one of the terms below: the general-news report of a ransomware
+#      attack on a hospital, a national outage blamed or not blamed on a
+#      cyberattack, a CVE identifier. Word-start, case-insensitive; a space or
+#      hyphen in a term matches either or nothing ("cyber attack" =
+#      cyberattack / cyber-attack); "cve-" matches every CVE identifier.
+#   Rendered: `(tags && $n OR <title+summary> ~* $m)`. Measured read-only on
+#   the reference host 2026-11-13: 5,068 canonical signals in 24 h; an early
+#   draft of the term list matched 35, about 85% on-topic in a 72 h title
+#   sample (the misses: "leaked government data" stories, a Scottish-bog
+#   summary). EXPLAIN ANALYZE of the rendered 24 h statement: an index range
+#   scan on fetched_at, ~5,400 rows filtered, 0.46-0.55 s, 59 rows. The desk's own feeds
+#   would add roughly 40-60 signals a day.
+#
+# WHY NOT `scope.predicate` (the lanes' refiner): the slice reader applies a
+# predicate AFTER a recency LIMIT (360 rows) over whatever the SQL selected; a
+# no-geo desk with only a predicate would read the newest 360 rows of the
+# whole tenant (about 1.7 hours) and filter those. The two arms above are the
+# SQL selector, so the whole window is searched. No predicate is declared.
+#
+# WHY NOT a `sources[].source_id` pin (flow_container_freight's choice): a pin
+# ANDs with everything (`source_id = ANY(...)`) and would blind the desk to
+# the text arm's general-news rows. The selector below is resolved by the
+# subscription engine, NOT by the slice reader (it reads only explicit ids).
+#
+# NO `scope.geo`: deliberate. The slice reader's per-source diversity cap
+# still applies (a target with no geo, no ids and no predicate takes the
+# broad-pool path: at most 15 rows per source in the 120-row slice), so a
+# busy advisory feed cannot monopolise the window.
+#
+# ── JOINING THE OTHER DESKS WITHOUT DOUBLE-COUNTING ─────────────────────────
+# A signal is ONE row whatever reads it. "Hackers hit Osaka city email" files
+# under JP by the in-body geocoder and carries no cyber tag: it is in Japan's
+# desk slice (geo) AND this desk's slice (text arm) — the same signal id in
+# both, never a copy. The canonical-only clause keeps re-polled aliases out of
+# both. Above the slices, two desks citing one signal is shared evidence, not
+# corroboration: the composition tier's T7 correlation guard and the
+# cross-source coalescer already treat a shared signal id as one source. A
+# signal with no place (a KEV entry, an AWS incident) is in this desk only.
+#
+# ── NO `g20` / `watch` / `supply_chain` / `nuclear_watch` / `region` TAG ────
+# Those tags fan whole unit families onto a desk (country units, the
+# disruption unit, proliferation_watch, region composition). `cyber` and
+# `theme` fan nothing today: NO unit subscribes to this desk yet. The units it
+# needs, and which existing kinds map, are in the lane report and
+# planning/reviews/CYBER_DESK_2026-11-14/ (owner decision; nothing here
+# pretends a unit exists).
+#
+# ── ABSENCE CONTRACT (what this desk does NOT collect) ─────────────────────
+#   * claims channels (hacktivist / ransomware leak-site / persona channels):
+#     none, until the owner chooses from the reviewed shortlist; an actor's
+#     claim reaches this desk only as a trade outlet or agency reports it;
+#   * provider status HISTORY: the Azure feed lists open incidents only and
+#     the Google feeds keep recent ones; an incident opened and closed between
+#     two polls, or older than the feed's window, is absent;
+#   * Microsoft 365 service health (needs a tenant's Graph API access) and
+#     Cloudflare (its public history feed is dominated by scheduled per-site
+#     maintenance) — not collected;
+#   * the KEV catalogue's EDITS to existing entries (a register sink is a
+#     declared seam): only newly added entries arrive;
+#   * national CERTs other than the US, UK, French, EU and German ones; the
+#     BSI's CERT-Bund advisory firehose (WID); vendor security bulletins;
+#   * paywalled or members-only threat intelligence.
+#
+# Ships `state: draft`. LIFECYCLE.md holds it `configured` on the reference
+# host until a unit is chosen: registered, inspectable, read by nothing.
+
+identity:
+  id: theme_cyber
+  name: "Theme — Cyber (operations, vulnerabilities, advisories, outages)"
+  schema_uri: legba/target/2.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  inherits: []
+  state: draft
+  owner: cyber_desk_k1
+  created: "2026-11-14T00:00:00Z"
+
+scope:
+  domain: thematic
+  themes: [cyber, vulnerability, advisory, outage, attribution]
+  geo: []
+  entity_classes:
+    - country
+    - organization
+    - corporation
+    - infrastructure
+    - international_org
+    - event_series
+    - person
+    - armed_group
+    - concept
+  relationship_types:
+    - HostileTo
+    - Targets
+    - OperatesIn
+    - LocatedIn
+    - PartOf
+    - SubsidiaryOf
+    - PartnersWith
+  time_horizon_days: 90
+  # THE TAG ARM (SQL): the desk's own feeds.
+  signal_tags: ["geopolitics.topic:cyber"]
+  # THE TEXT ARM (SQL, OR-ed with the tag arm): any other signal naming one of
+  # these. Kept to cyber-specific words; generic ones ("outage", "breach",
+  # "vulnerability", "apt") would admit weather, finance and aptitude stories,
+  # and so would "ground stop" (tried: on 2026-11-13 it added 30 of 89 rows, the
+  # FAA story — which reaches the desk anyway wherever a report weighs a
+  # cyberattack as the cause — but on an ordinary day it is weather).
+  signal_text_terms:
+    # operations and their tools
+    - cyber attack
+    - cyber assault
+    - cyber espionage
+    - cyber operation
+    - cyber incident
+    - cyber threat
+    - cyber war
+    - cybercrim
+    - cyber security
+    - ransomware
+    - malware
+    - spyware
+    - wiper malware
+    - botnet
+    - infostealer
+    - phishing
+    - hacker
+    - hacked
+    - hacking
+    - hacktivist
+    - ddos
+    - denial of service
+    - data breach
+    - zero day
+    - exploited vulnerabilit
+    # identifiers and the agencies that issue them
+    - cve-
+    - cisa
+    - ncsc
+    - anssi
+    - cert-fr
+    - cert-eu
+    - cert-bund
+    - enisa
+    # named actors with no common-word homonym
+    - apt28
+    - apt29
+    - apt41
+    - lazarus group
+    - sandworm
+    - volt typhoon
+    - salt typhoon
+    - scattered spider
+    - lockbit
+    - killnet
+    # outages whose cause the desk exists to weigh
+    - global outage
+    - internet outage
+    - internet shutdown
+    - it outage
+    - cloud outage
+    - service outage
+    - network outage
+    - systems outage
+  # `cyber` = the family key a future cyber unit would subscribe to;
+  # `theme` = the desk family. Neither fans any unit today.
+  tags: [cyber, theme]
+
+sources:
+  - source_selector:
+      tags: [cyber_desk]
+      owner_tenant: shared
+    subscription:
+      canonical_only: true
+  - source_selector:
+      tags: [news]
+      kinds: [rss]
+      owner_tenant: shared
+    subscription:
+      canonical_only: true
+
+allowed_action_packs: []
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  routing: []

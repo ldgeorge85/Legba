@@ -1,0 +1,15 @@
+{
+  "prompts": {
+    "situation_tracker": {
+      "chars": 540,
+      "sha256": "884c9861aa3a19eb81bb54236d6a7bf4d49433139b24bb5423f55a64e30a2254",
+      "source": "analyst_situation_tracker.yaml"
+    }
+  },
+  "states": {
+    "analyst:situation_tracker": {
+      "source": "analyst_situation_tracker.yaml",
+      "state": "draft"
+    }
+  }
+}

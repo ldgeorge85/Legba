@@ -38,8 +38,22 @@
  * without ALSO triggering the ambient parent — the identical
  * `stopPropagation` discipline `FeedAddToExport` already applies for the same
  * reason. Leave it off (the default) when there is no such ambient parent.
+ *
+ * INTERNALS (UI-B1/tokens, UI-D1 §7): the floating box is now the `Tooltip`
+ * primitive (`src/ui/tooltip.tsx`, Radix underneath) instead of a CSS
+ * `:hover`/`:focus-within` reveal. The contract above is unchanged — hover,
+ * keyboard focus and a tap all reveal it; `interactiveParent` still stops the
+ * ambient parent firing — and three things improve: the box is positioned
+ * against the viewport and flips at its edge (the CSS box was clipped by any
+ * `overflow: hidden` tile and ran off the right of narrow panels), Escape
+ * dismisses it, and it portals into the shell's overlay host so it paints
+ * above neighbouring tiles. The explainer text is ALSO kept in the DOM as a
+ * visually-hidden description the trigger names with `aria-describedby`, so a
+ * screen reader announces it on focus exactly as before, open or not, and the
+ * same `data-testid` still finds it.
  */
 import { useId, type ReactNode } from 'react'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/ui/tooltip'
 
 export interface InfoTipProps {
   /** The plain-language explainer sentence(s), written for a first-time
@@ -69,30 +83,39 @@ export function InfoTip({
   interactiveParent = false,
 }: InfoTipProps) {
   const id = useId()
+  const popoverTestId = testId ? `${testId}-popover` : 'info-tip-popover'
   return (
-    <span
-      tabIndex={0}
-      aria-describedby={id}
-      className={`group/infotip relative inline-flex cursor-help items-center rounded outline-none focus-visible:ring-1 focus-visible:ring-line-strong ${className ?? ''}`}
-      data-testid={testId}
-      onClick={interactiveParent ? (e) => e.stopPropagation() : undefined}
-      onKeyDown={
-        interactiveParent
-          ? (e) => {
-              if (e.key === 'Enter' || e.key === ' ') e.stopPropagation()
-            }
-          : undefined
-      }
-    >
-      {children}
-      <span
-        id={id}
-        role="tooltip"
-        data-testid={testId ? `${testId}-popover` : 'info-tip-popover'}
-        className={`pointer-events-none absolute left-0 top-full z-50 mt-1 hidden w-64 max-w-[80vw] rounded-lg border border-line-strong bg-surf-3 p-2 text-[10px] font-normal normal-case leading-relaxed text-ink-2 shadow-xl group-hover/infotip:block group-focus-within/infotip:block ${popoverClassName ?? ''}`}
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          tabIndex={0}
+          aria-describedby={id}
+          className={`relative inline-flex cursor-help items-center rounded-control ${className ?? ''}`}
+          data-testid={testId}
+          onClick={interactiveParent ? (e) => e.stopPropagation() : undefined}
+          onKeyDown={
+            interactiveParent
+              ? (e) => {
+                  if (e.key === 'Enter' || e.key === ' ') e.stopPropagation()
+                }
+              : undefined
+          }
+        >
+          {children}
+          {/* The accessible description: always present, never visible. */}
+          <span id={id} className="sr-only" data-testid={popoverTestId}>
+            {text}
+          </span>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent
+        side="bottom"
+        align="start"
+        data-testid={`${popoverTestId}-floating`}
+        className={`w-64 text-label font-normal normal-case leading-relaxed ${popoverClassName ?? ''}`}
       >
         {text}
-      </span>
-    </span>
+      </TooltipContent>
+    </Tooltip>
   )
 }

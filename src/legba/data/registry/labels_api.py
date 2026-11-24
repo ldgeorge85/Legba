@@ -18,7 +18,8 @@ Two endpoints, both bearer-gated, mounted under ``/api/v1`` so they resolve at:
     supports >=10 labels for one unit).
 
 REGISTRY-IMAGE SAFE (deploy hazard): the registry image is SLIM. This module
-imports ONLY stdlib + fastapi + pydantic + ``.api`` (RegistryAPIDeps /
+imports ONLY stdlib + fastapi + pydantic + the stdlib-only ``principals`` leaf
++ ``.api`` (RegistryAPIDeps /
 require_bearer) — never the deterministic-handler package or anything that
 transitively pulls pycountry / networkx. Wiring convention mirrors
 ``journal_api.py`` (a small router via ``build_labels_router(deps)`` over the
@@ -35,7 +36,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from .. import correctness_axis
+from ..principals import handle_for_actor
 from .api import RegistryAPIDeps, require_bearer
+from .route_roles import recorded_author
 
 DEFAULT_LIMIT = 100
 MAX_LIMIT = 1000
@@ -262,14 +265,14 @@ def build_labels_router(deps: RegistryAPIDeps) -> APIRouter:
         principal: str = Depends(require_bearer),
     ) -> LabelOut:
         source_ids = _validate_source_ids(body.canonical_source_ids)
-        labeled_by = body.labeled_by or principal
+        labeled_by = recorded_author(principal, body.labeled_by or principal)
         async with deps.descriptor_registry.pg.acquire() as conn:
             row = await conn.fetchrow(
                 f"""
                 INSERT INTO unit_reference_labels
                     (unit_analyst_id, target_id, reference_answer,
-                     canonical_source_ids, labeled_by)
-                VALUES ($1, $2, $3, $4::uuid[], $5)
+                     canonical_source_ids, labeled_by, written_by)
+                VALUES ($1, $2, $3, $4::uuid[], $5, legba_principal($6))
                 RETURNING {_COLS}
                 """,
                 body.unit_analyst_id,
@@ -277,6 +280,7 @@ def build_labels_router(deps: RegistryAPIDeps) -> APIRouter:
                 body.reference_answer,
                 source_ids,
                 labeled_by,
+                handle_for_actor(principal),
             )
         return _hydrate(row)
 

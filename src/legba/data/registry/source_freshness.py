@@ -42,6 +42,7 @@ error/silent/paused read).
 """
 from __future__ import annotations
 
+import functools
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
@@ -79,7 +80,19 @@ def cadence_interval_minutes(cron_expr: Optional[str]) -> Optional[float]:
     croniter unavailable, or the walk could not complete)."""
     if not cron_expr or not str(cron_expr).strip():
         return None
-    expr = str(cron_expr).strip()
+    return _cadence_interval_minutes(str(cron_expr).strip())
+
+
+@functools.lru_cache(maxsize=4096)
+def _cadence_interval_minutes(expr: str) -> Optional[float]:
+    """:func:`cadence_interval_minutes`'s walk, memoized per expression.
+
+    N-W (2026-11-13): the walk starts at a FIXED epoch, so its answer is a
+    pure function of the expression — but ``production_gauge`` called it
+    once per source per pass (a ``*/5`` cadence is ~4,300 croniter steps),
+    and the runtime's loop-lag monitor caught that holding the event loop
+    2-3 s every ten minutes. Each distinct expression now walks once per
+    process."""
     try:
         from croniter import croniter
     except ImportError:  # pragma: no cover — croniter is a hard dep in-tree

@@ -90,6 +90,8 @@ from .composition_window import (
     human_date,
 )
 
+from ._tradecraft import CARRIED_ANCHOR_BLOCK_NOTE
+
 logger = logging.getLogger(__name__)
 
 
@@ -152,10 +154,15 @@ the judge grades a ledger-backed clause against. A block that renders longer
 than its capture is a block whose tail the model can read and the judge cannot,
 which false-demotes a faithful claim about a line the model was actually shown.
 So the line bound is DERIVED from the capture bound rather than chosen: ten
-lines at :data:`LEDGER_TITLE_CHARS` plus the header fits inside 2400 with room
+lines at :data:`LEDGER_TITLE_CHARS` plus the header fits inside 2400
 (``tests/data_pkg/test_window_ledger.py`` asserts it, so a future edit to the
 header or the line format trips a test instead of silently truncating a judge's
-evidence). The desk-scoped form has its own, wider capture and keeps the
+evidence). THE SLACK IS NOW 14 CHARS, not the comfortable margin this note
+described before Q4 (2026-09-28) spent 187 of it on the CARRIED-ANCHOR fence
+line — the one line in the block that says what the other ten may not be used
+for. The next header or line-format edit does not get to shave it further: it
+RE-DERIVES this cap downward, which is what "derived from the capture bound"
+has always meant. The desk-scoped form has its own, wider capture and keeps the
 plan's 20.
 
 What ten lines COSTS at unit scope: with one line per (unit, calendar day) and
@@ -505,6 +512,27 @@ def ledger_block_lines(
         "licensed record of what was already established in this window; it is "
         "NOT this cycle's evidence and nothing in it is new.",
     ]
+    # Q4 (2026-09-28) — THE CARRIED DATED ANCHOR fence, rendered where the
+    # memory is. UNIT SCOPE ONLY, and that is deliberate on both legs.
+    #
+    # WHY THE UNIT: the carry defect the fence exists to stop is the unit
+    # tier's (consult review §A — the France ``leadership_transition`` head
+    # asserting a hand-over "on 28 September 2026" that no signal in its
+    # 120-row slice names, re-fed for three months by this block and the prior
+    # read). The DESK-scoped form is the composition floor's, and adding the
+    # line there would move region and world prompt bytes for a defect this
+    # lane did not measure at those tiers.
+    #
+    # WHAT IT COSTS, stated because the number is derived: the unit-scope
+    # worst case (``LEDGER_UNIT_TOTAL_CAP`` lines at ``LEDGER_TITLE_CHARS``)
+    # was 2,199 chars against the 2,400-char capture, i.e. 201 chars of slack.
+    # This line spends 187 of them, leaving 14. ``test_window_ledger`` pins the
+    # invariant, so the NEXT header or line-format edit trips a test and must
+    # re-derive ``LEDGER_UNIT_TOTAL_CAP`` rather than silently truncate a
+    # judge's evidence. The fence is worth the slack: it is the one line in
+    # the block that says what the other ten may NOT be used for.
+    if scope == "unit":
+        lines.append(f"    {CARRIED_ANCHOR_BLOCK_NOTE}")
     for e in entries:
         lines.append(
             f"    - {e.get('read_date') or '(undated)'} :: {e.get('analyst_id')} "

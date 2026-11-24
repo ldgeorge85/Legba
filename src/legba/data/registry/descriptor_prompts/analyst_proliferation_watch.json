@@ -1,0 +1,15 @@
+{
+  "prompts": {
+    "proliferation_watch": {
+      "chars": 25321,
+      "sha256": "d5e0cee5197074654f665ded20a79404c5f405fe7891d25235eed52f14809292",
+      "source": "analyst_proliferation_watch.yaml"
+    }
+  },
+  "states": {
+    "analyst:proliferation_watch": {
+      "source": "analyst_proliferation_watch.yaml",
+      "state": "active"
+    }
+  }
+}

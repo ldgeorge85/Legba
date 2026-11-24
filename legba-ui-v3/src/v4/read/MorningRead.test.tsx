@@ -30,7 +30,7 @@ import countryAssessmentRow from './__fixtures__/assessment.country.json'
 import { __resetReadLayout, getReadLayout } from '@/lib/readLayout'
 import { __pendingReadEvents, __resetReadTelemetry } from '@/lib/readTelemetry'
 import { projectAssembly, type ReadFindingRow } from '@/lib/assemblyModel'
-import { scopeFromRow } from '@/lib/scopeFromReport'
+import { scopeFromRow, scopeFromTarget } from '@/lib/scopeFromReport'
 import { resetScope, useScope } from '@/state/scope'
 
 type Row = Record<string, unknown>
@@ -314,20 +314,57 @@ describe('the Assessment band', () => {
     )
     const badge = within(band).getByTestId('read-assessment-badge').textContent ?? ''
     // Every number carries its population; none is bare.
-    expect(badge).toMatch(/0\.4805/)
+    expect(badge).toMatch(/Claim accuracy, externally graded: 48 %/)
     expect(badge).toMatch(/n=77/)
-    expect(badge).toMatch(/PRE-assembly prose tier/)
-    // Pre-D-3 there is no fidelity-to-spine number. It is stated as unmeasured,
+    expect(badge).toMatch(/earlier form of this prose/)
+    // Pre-D-3 there is no fidelity number. It is stated as unmeasured,
     // never rendered as 0.00 — which would read as a measured failure.
-    expect(badge).toMatch(/not measured yet/)
+    expect(badge).toMatch(/How faithful this read is to its sources is not measured yet\./)
     expect(badge).not.toMatch(/0\.00/)
+  })
+
+  it('speaks reader words in the badge — no engine vocabulary or programme codes (U-1)', async () => {
+    await renderWithChannel()
+    const band = screen.getByTestId('read-assessment')
+    const badge = within(band).getByTestId('read-assessment-badge').textContent ?? ''
+    const label = within(band).getByTestId('read-assessment-label').textContent ?? ''
+    for (const text of [badge, label]) {
+      expect(text).not.toMatch(/\bspine\b|\barm\b|\btier\b|standing loop|population/i)
+      expect(text).not.toMatch(/\bC-A\b|\bR3\b/)
+    }
+    // The programme code and the exact figure stay reachable on hover.
+    expect(within(band).getByTitle(/0\.4805/)).toBeTruthy()
+  })
+
+  it('renders the voice through the markdown renderer — no raw **BLUF:** or [[ref:N]] on the page (W11-F37)', async () => {
+    // The live world_assessment 6644b208 (10-08) carried `**`, `## ` and
+    // `[[ref:` in its body; the band showed them as text.
+    const md = JSON.parse(JSON.stringify(ASSESSMENT)) as Record<string, unknown>
+    md.body = '**BLUF:** holds at elevated. [[ref:1]]\n\n## The reading\n\nPatrol cadence rose.'
+    stubFetch({ world_assessor: [WORLD], world_assessment: [md as unknown as Row] })
+    render(wrap(<MorningRead />))
+    await screen.findByTestId('read-assessment')
+    const body = screen.getByTestId('read-assessment-body')
+    expect(body.getAttribute('data-render')).toBe('markdown')
+    expect(body.textContent).not.toMatch(/\*\*BLUF/)
+    // The marker is a chip (unresolved here — the fixture backs no [[ref:1]]),
+    // never bare prose: shown and honest, not literal noise.
+    const chip = body.querySelector('[data-testid="citation-unresolved"], [data-testid="citation-chip"]')
+    expect(chip?.getAttribute('data-marker') ?? chip?.textContent).toMatch(/ref:1/)
+    expect(body.querySelector('strong')?.textContent).toMatch(/BLUF/)
+    expect(body.querySelector('h2')?.textContent).toMatch(/The reading/)
+    expect(body.textContent).toMatch(/Patrol cadence rose/)
   })
 
   it('marks the unsupported-by-spine spans inline, with their notes', async () => {
     await renderWithChannel()
-    const marks = screen.getAllByTestId('read-unsupported')
-    expect(marks.length).toBe(2)
-    expect(marks.map((m) => m.getAttribute('data-class')).sort()).toEqual(['fact', 'rank'])
+    // Through the markdown renderer (W11-F37) each mark is a glyph right after
+    // its span — ᵃ, ᵇ — never a span element of its own; the notes list still
+    // carries one entry per mark, lettered the same way.
+    const bodyText = screen.getByTestId('read-assessment-body').textContent ?? ''
+    expect(bodyText).toContain('ᵃ')
+    expect(bodyText).toContain('ᵇ')
+    expect(bodyText).not.toContain('ᶜ')
     const notes = screen.getByTestId('read-unsupported-notes').textContent ?? ''
     expect(notes).toMatch(/RANK/)
     expect(notes).toMatch(/FACT/)
@@ -349,10 +386,10 @@ describe('the Assessment band', () => {
     render(wrap(<MorningRead />))
     await screen.findByTestId('read-assessment')
     const badge = screen.getByTestId('read-assessment-badge').textContent ?? ''
-    expect(badge).toMatch(/Fidelity to the spine/)
+    expect(badge).toMatch(/How faithful this read is to its sources/)
     expect(badge).toMatch(/1\.00/)
     // It never pools with the record's 1.0-by-construction number.
-    expect(badge).toMatch(/its own population/)
+    expect(badge).toMatch(/measured on this read alone/)
   })
 
   it('hands the concentration verdict to the voice as an arithmetic fact', async () => {
@@ -397,11 +434,14 @@ describe('the country Assessment band', () => {
   it('renders the country voice under the country record, same band, same look', async () => {
     await renderCountry({ country_assessment: [COUNTRY_ASSESSMENT] })
     const band = await screen.findByTestId('read-assessment')
-    // The heading is the one the operator learned on the world read…
-    expect(within(band).getByRole('heading', { level: 2 }).textContent).toMatch(/The Assessment/)
+    // The heading is the one the operator learned on the world read… (the
+    // band's own h2 — the voice's markdown body may carry h2s of its own now)
+    expect(within(band).getAllByRole('heading', { level: 2 })[0]?.textContent).toMatch(
+      /The Assessment/,
+    )
     // …and the label line says WHICH voice this is.
     expect(within(band).getByTestId('read-assessment-label').textContent).toMatch(
-      /Country assessment · written from the spine above/,
+      /Country assessment · written from the record above/,
     )
     expect(within(band).getByTestId('read-assessment-label').textContent).toMatch(/not the record/)
     expect(within(band).getByTestId('read-assessment-title').textContent).toMatch(
@@ -413,9 +453,14 @@ describe('the country Assessment band', () => {
     // Fenced to THIS record: no mismatch note, and no stray-ordinal note.
     expect(within(band).queryByTestId('read-assessment-spine-mismatch')).toBeNull()
     expect(within(band).queryByTestId('read-assessment-stray')).toBeNull()
-    // The machinery the world band already has works unchanged at country grain.
-    expect(within(band).getAllByTestId('read-unsupported').map((m) => m.getAttribute('data-class')))
-      .toEqual(['rank', 'fact'])
+    // The machinery the world band already has works unchanged at country grain
+    // (inline glyphs through the markdown path, W11-F37; the notes name the classes).
+    const countryBody = within(band).getByTestId('read-assessment-body').textContent ?? ''
+    expect(countryBody).toContain('ᵃ')
+    expect(countryBody).toContain('ᵇ')
+    const countryNotes = within(band).getByTestId('read-unsupported-notes').textContent ?? ''
+    expect(countryNotes).toMatch(/RANK/)
+    expect(countryNotes).toMatch(/FACT/)
     expect(within(band).getByTestId('read-assessment-leadtest').textContent).toMatch(
       /handed to this voice as a fact/,
     )
@@ -491,6 +536,26 @@ describe('the country Assessment band', () => {
         /analyst_id=country_composition&target_id=country_watch_tw/.test(u),
       ),
     ).toBe(true)
+  })
+
+  it('X3/D3 — a SUBJECT scope (a rail click) puts that subject’s own read on the page', async () => {
+    const fetchMock = stubFetch({ world_assessor: [WORLD], country_composition: [COUNTRY] })
+    useScope.getState().setScope(scopeFromTarget('country_watch_tw', 'Taiwan', 'operator'))
+    render(wrap(<MorningRead />)) // mounted on the WORLD spine; the subject scope wins
+    await screen.findByTestId('morning-read')
+    expect(screen.getByTestId('read-kicker').textContent).toMatch(/country read/)
+    expect(
+      urls(fetchMock).some((u) => /analyst_id=country_composition&target_id=country_watch_tw/.test(u)),
+    ).toBe(true)
+  })
+
+  it('X3/D3 — a subject with no read on record says so, in the profile’s noun', async () => {
+    stubFetch({ world_assessor: [WORLD] })
+    useScope.getState().setScope(scopeFromTarget('lane_hormuz', 'Strait of Hormuz', 'operator'))
+    render(wrap(<MorningRead />))
+    const empty = await screen.findByTestId('read-empty-subject')
+    expect(empty.textContent).toContain('No composition on record for this desk.')
+    expect(empty.textContent).toContain('Strait of Hormuz')
   })
 
   it('scoping to the VOICE reads the record it was written from', async () => {
@@ -609,5 +674,128 @@ describe('read telemetry (D2e)', () => {
     await renderWorld()
     fireEvent.click(screen.getAllByTestId('read-open-head')[0])
     await waitFor(() => expect(kinds()).toContain('finding_open'))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// X4 READPATH (W11-F53) — a read with no verify verdict says which kind
+// ---------------------------------------------------------------------------
+
+describe('the unverified state', () => {
+  it('a judged read carries no unverified mark', async () => {
+    await renderWorld()
+    expect(screen.queryByTestId('read-unverified')).toBeNull()
+  })
+
+  it('a read served minutes after production, before its verdict, reads `judge pending`', async () => {
+    const fresh = {
+      ...WORLD,
+      verification: null,
+      verification_state: {
+        score_state: 'pending',
+        since: '2026-10-09T03:12:00+00:00',
+        judge_window_s: 900,
+        reason: 'awaiting_verify',
+      },
+    }
+    stubFetch({ world_assessor: [fresh] })
+    render(wrap(<MorningRead />))
+    const mark = within(await screen.findByTestId('read-unverified')).getByTestId('unverified-state')
+    expect(mark.textContent).toBe('unverified · judge pending')
+    expect(mark.getAttribute('data-basis')).toBe('registry')
+  })
+
+  it('a read whose verdict never landed reads `not judged`, never as a plain current read', async () => {
+    const lost = {
+      ...WORLD,
+      verification: null,
+      verification_state: {
+        score_state: 'absent',
+        since: '2026-10-09T04:41:26+00:00',
+        judge_window_s: 900,
+        reason: 'no_verdict',
+      },
+    }
+    stubFetch({ world_assessor: [lost] })
+    render(wrap(<MorningRead />))
+    const mark = within(await screen.findByTestId('read-unverified')).getByTestId('unverified-state')
+    expect(mark.textContent).toBe('unverified · not judged')
+    // The title is still the read's own — the mark is beside it, not instead of it.
+    expect(screen.getByTestId('read-title').textContent).toBe(String(WORLD.title))
+  })
+})
+
+describe('U-5 — the read asks for the weight it renders', () => {
+  /** A stub that honours `limit` and answers `fields=summary` with summary-weight rows. */
+  function stubWeighted(byAnalyst: Record<string, Row[]>) {
+    const fetchMock = vi.fn(async (url: string) => {
+      const u = String(url)
+      const analyst = /analyst_id=([^&]+)/.exec(u)?.[1] ?? ''
+      const limit = Number(/[?&]limit=(\d+)/.exec(u)?.[1] ?? '50')
+      let rows = (byAnalyst[analyst] ?? []).slice(0, limit)
+      if (/fields=summary/.test(u)) {
+        rows = rows.map((r) => ({
+          id: r.id,
+          analyst_id: r.analyst_id,
+          target_id: r.target_id,
+          kind: r.kind,
+          title: r.title,
+          created_at: r.created_at,
+          produced_at: r.produced_at,
+          severity: r.severity,
+          confidence: r.confidence,
+        }))
+      }
+      return { ok: true, status: 200, json: async () => ({ data: rows }), text: async () => '' } as unknown as Response
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+  const asked = (m: ReturnType<typeof stubWeighted>) => m.mock.calls.map((c) => String(c[0]))
+
+  function twoRuns(): Row[] {
+    const older = JSON.parse(JSON.stringify(WORLD)) as Row
+    older.id = 'older-run'
+    older.produced_at = '2026-09-02T12:00:00Z'
+    older.title = 'The older read'
+    return [WORLD, older]
+  }
+
+  it('lands on ONE full record and a summary history — never the full dozen', async () => {
+    const m = stubWeighted({ world_assessor: twoRuns(), world_assessment: [ASSESSMENT] })
+    render(wrap(<MorningRead />))
+    await screen.findByTestId('read-history')
+    const urls = asked(m)
+    expect(urls.some((u) => /analyst_id=world_assessor&limit=1&fields=full$/.test(u))).toBe(true)
+    expect(urls.some((u) => /analyst_id=world_assessor&limit=12&fields=summary$/.test(u))).toBe(true)
+    expect(urls.some((u) => /analyst_id=world_assessor&limit=12&fields=full$/.test(u))).toBe(false)
+    // the voice for the newest record: the channel's newest few, not its dozen
+    expect(urls.some((u) => /analyst_id=world_assessment&limit=3&fields=full$/.test(u))).toBe(true)
+    // the record on screen is the full one
+    expect(screen.getByTestId('read-title').textContent).toBe(String(WORLD.title))
+    expect(screen.getByTestId('read-record')).toBeTruthy()
+  })
+
+  it('opening the history reads the full dozen, and the rows name lead, blocks and drops again', async () => {
+    const m = stubWeighted({ world_assessor: twoRuns() })
+    render(wrap(<MorningRead />))
+    const history = await screen.findByTestId('read-history')
+    // before: the summary row names the run by its title
+    expect(screen.getByTestId('read-history-row').textContent).toMatch(/The older read/)
+    const details = history.querySelector('details')!
+    details.open = true
+    fireEvent(details, new Event('toggle'))
+    await waitFor(() => expect(asked(m).some((u) => /analyst_id=world_assessor&limit=12&fields=full$/.test(u))).toBe(true))
+    await waitFor(() => expect(screen.getByTestId('read-history-row').textContent).toMatch(/blocks/))
+  })
+
+  it('a scope naming a PRIOR run reads the full page and opens that run, not the newest first', async () => {
+    const runs = twoRuns()
+    const m = stubWeighted({ world_assessor: runs })
+    useScope.getState().setScope(scopeFromRow(runs[1] as unknown as ReadFindingRow))
+    render(wrap(<MorningRead />))
+    await waitFor(() => expect(screen.getByTestId('read-title').textContent).toBe('The older read'))
+    expect(asked(m).some((u) => /analyst_id=world_assessor&limit=12&fields=full$/.test(u))).toBe(true)
+    expect(screen.getByTestId('read-superseded')).toBeTruthy()
   })
 })

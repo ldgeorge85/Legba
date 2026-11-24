@@ -47,6 +47,7 @@ export type AbsenceKind =
   | 'below_floor'
   | 'layer_declared_absent'
   | 'history_gap'
+  | 'carried_unsupported'
 
 export interface AbsenceProof {
   what_was_checked: string
@@ -85,7 +86,7 @@ export interface AbsenceResponse {
   scope: string
   /** When this READ happened — never an item's `as_of`. */
   read_at: string
-  /** The eight kinds with the route's own one-line meaning for each. */
+  /** The nine kinds with the route's own one-line meaning for each. */
   kinds: Record<string, string>
   absences: AbsenceItem[]
   /** Kinds that could not be read for this scope, each with its reason.
@@ -93,7 +94,7 @@ export interface AbsenceResponse {
   not_measured: string[]
 }
 
-/** Short human labels for the eight kinds — the glossary's own wording. */
+/** Short human labels for the nine kinds — the glossary's own wording. */
 export const ABSENCE_KIND_LABEL: Record<AbsenceKind, string> = {
   not_collected: 'not collected',
   collected_but_silent: 'collected but silent',
@@ -103,10 +104,11 @@ export const ABSENCE_KIND_LABEL: Record<AbsenceKind, string> = {
   below_floor: 'below floor',
   layer_declared_absent: 'layer declared absent',
   history_gap: 'history gap',
+  carried_unsupported: 'carried, unsupported',
 }
 
 /**
- * The eight kinds in the ROUTE's own declaration order, explicit rather than
+ * The nine kinds in the ROUTE's own declaration order, explicit rather than
  * inferred from an object's key order — a reader surface that renders the
  * vocabulary must render all of it, in the order the vocabulary is published,
  * and a silently reordered `Object.keys` is not that guarantee.
@@ -118,6 +120,11 @@ export const ABSENCE_KIND_LABEL: Record<AbsenceKind, string> = {
  * (`ref_kind: 'collection_load'`), which no reader surface resolves to a
  * selection — so it renders as text, exactly as `scorecard` and `map_version`
  * already do, rather than as a click that would 404.
+ *
+ * `carried_unsupported` (W11-F14) is the ninth: the unit HAS a current read,
+ * and the status it states is carried — none of its indicators triggered and
+ * its last read whose indicators did is older than N of its cadence windows.
+ * Its proof `ref` is that last evidencing finding.
  */
 export const ABSENCE_KIND_ORDER: readonly AbsenceKind[] = [
   'not_collected',
@@ -128,6 +135,7 @@ export const ABSENCE_KIND_ORDER: readonly AbsenceKind[] = [
   'below_floor',
   'layer_declared_absent',
   'history_gap',
+  'carried_unsupported',
 ]
 
 /**

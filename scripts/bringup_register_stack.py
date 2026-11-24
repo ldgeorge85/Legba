@@ -22,7 +22,7 @@ from _token import resolve_token  # noqa: E402
 
 
 BASE = registry_base()
-TOKEN = resolve_token()
+TOKEN = resolve_token(principal="operator")  # X2-B1: the vault is operator-only
 
 # Model-serving endpoints + served model names are deployment config, not
 # committed values. The defaults below are neutral placeholders; a real
@@ -31,19 +31,14 @@ TOKEN = resolve_token()
 LLM_API_ENDPOINT = os.environ.get("LEGBA_LLM_API_ENDPOINT", "https://llm.example.internal")
 NLP_API_ENDPOINT = os.environ.get("LEGBA_NLP_API_ENDPOINT", "https://nlp.example.internal")
 LLM_MODEL_NAME = os.environ.get("LEGBA_LLM_MODEL_NAME", "gpt-oss-120b")
+LLM_THINKING_MODEL_NAME = os.environ.get("LEGBA_LLM_THINKING_MODEL_NAME", "").strip()
 EMBED_MODEL_NAME = os.environ.get("LEGBA_EMBED_MODEL_NAME", "bge-m3")
-# The Anthropic critic/consult model. Was a HARDCODED dead id
-# (`claude-sonnet-4-20250514`) which Anthropic now 404s — every critic grade
-# hard-failed for ~5 days (no trace, no critique). Make it env-overridable like
-# the primary, with a CURRENT valid default. Heterogeneous to the OpenAI-compat
-# primary plane (the critic's whole point); bump to an Opus id via env for a
-# stronger judge. Keep this a live, valid Anthropic model id.
-# 2026-06-24: operator bumped the whole Anthropic plane (consult + deep_consult
-# + country_assessor + critics, all sharing the `llm.anthropic.opus_4_7`
-# component id) to Opus 4.8 — the strongest judge. Default reflects that; still
-# env-overridable. (Component id kept as `opus_4_7` to avoid re-pointing 6
-# descriptors; the id is just a label — the model_name below is authoritative.)
-CONSULT_MODEL_NAME = os.environ.get("LEGBA_CONSULT_MODEL_NAME", "claude-opus-4-8")
+# The Anthropic consult plane (`llm.anthropic.opus_4_7`, the id historical) is
+# no longer an inline body here: its reviewable home is
+# descriptors/stack_component_llm_anthropic_opus_4_7.yaml, loaded through
+# `_STACK_DESCRIPTOR_FILES` below (lane W11-G1, 2026-11-05: pinned to Claude
+# Opus 5.5 for the bake-off). The old `LEGBA_CONSULT_MODEL_NAME` env default
+# (claude-opus-4-8) was two models stale and is gone with it.
 
 
 def _t(s: str) -> dict:
@@ -90,6 +85,16 @@ COMPONENTS: list[tuple[str, dict]] = [
                 # plane. Self-hosted, so NO price_* fields — receipts cost
                 # $0.00, the correct posture for our own GPUs.
                 "max_concurrent": _n(12),
+                # T-1: the alias serving the same model with thinking on, from
+                # LEGBA_LLM_THINKING_MODEL_NAME (the gateway: `deep`). Unset =
+                # no field = the component cannot think (a thinking call is
+                # refused loud). The core plane's concurrency bound is the
+                # process gate (LEGBA_CORE_LLM_MAX_CONCURRENT), not the
+                # max_concurrent above.
+                **(
+                    {"thinking_model_name": _t(LLM_THINKING_MODEL_NAME)}
+                    if LLM_THINKING_MODEL_NAME else {}
+                ),
             },
         },
     ),
@@ -229,31 +234,6 @@ COMPONENTS: list[tuple[str, dict]] = [
                 "tier": _dd("fallback", ["primary", "fallback", "cheap"]),
                 "price_input_per_m": _n(0),
                 "price_output_per_m": _n(0),
-            },
-        },
-    ),
-    (
-        "llm.anthropic.opus_4_7",
-        {
-            "id": "llm.anthropic.opus_4_7",
-            "name": "Anthropic Claude Opus 4.8 (heterogeneous critic/consult judge)",
-            "schema_uri": "legba/stack/llm_provider/1.0.0",
-            "state": "active",
-            "owner": "lewis@local",
-            "config": {
-                # Base host only — `_chat_endpoint_path` prepends `/v1/...`.
-                "api_endpoint": _t("https://api.anthropic.com"),
-                "api_key": _s("llm.anthropic.api_key"),
-                "model_name": _t(CONSULT_MODEL_NAME),
-                "max_tokens": _n(8192),
-                # 2026-08-15: raised from the 60s schema default for the 32k
-                # streamed consult budget. The handler streams every
-                # generation, so httpx applies this per CHUNK (a live stream
-                # resets it with every delta) — this is the stall ceiling,
-                # sized for the worst prefill gap before message_start on a
-                # long cached transcript, NOT a generation wall-time cap.
-                "timeout_seconds": _n(300),
-                "tier": _dd("fallback", ["primary", "fallback", "cheap"]),
             },
         },
     ),
@@ -506,8 +486,27 @@ COMPONENTS: list[tuple[str, dict]] = [
 DESCRIPTORS_DIR = Path(__file__).resolve().parents[1] / "descriptors"
 _STACK_DESCRIPTOR_FILES = [
     "stack_component_search_brave.yaml",
-    "stack_component_llm_judge_openrouter_mistral_large.yaml",
+    # stack_component_llm_judge_openrouter_mistral_large.yaml — RETIRED 2026-10-23
+    # (OpenRouter credits gone 10-17; the slot moved to the Lightning grader below).
+    # The file stays as the reviewable history of that lane; a fresh bring-up
+    # must not seed a dead paid lane.
     "stack_component_llm_anthropic_fable_5_1.yaml",
+    # W11-G1 (2026-11-05): the default consult plane and the bake-off's frontier
+    # model — the id is historical, the YAML pins claude-opus-5-5.
+    "stack_component_llm_anthropic_opus_4_7.yaml",
+    # Cutover 2026-10-22 (ai1 → the innoai gateway): the judge on the box, its
+    # second family, and the third-family grader. Reviewable homes of the bodies.
+    "stack_component_llm_verify_innoai_gemma.yaml",
+    "stack_component_llm_judge_innoai_lightning_think.yaml",
+    # W11-G1: the bake-off GOLD DRAFTER (gemma-think, thinking on). Draft;
+    # activated for the gold step only (scripts/bakeoff/README.md).
+    "stack_component_llm_verify_innoai_gemma_think.yaml",
+    "stack_component_llm_grader_innoai_lightning.yaml",
+    # W11-F108: the decision model (POST /decide), the bearing gate's shadow.
+    "stack_component_llm_decide_innoai_clef_flash.yaml",
+    # W11-F107: the NLP plane on the gateway (entities/relations/classify).
+    # Draft; the runtime binds it only when LEGBA_NLP_COMPONENT_ID names it.
+    "stack_component_nlp_innoai_gateway.yaml",
 ]
 
 

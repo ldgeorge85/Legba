@@ -93,6 +93,8 @@ RECEIPT_URL = (
     "https://legba.example.org/api/v1/lineage/finding/"
     "7e0b0f37-0000-0000-0000-000000000000"
 )
+#: Roll 84: the console page that opens the record — the tap target.
+CONSOLE_URL = "https://legba.example.org/#rec=finding:7e0b0f37-0000-0000-0000-000000000000"
 
 
 def _payload(
@@ -102,6 +104,7 @@ def _payload(
     target_id: str | None = "ua",
     confidence: float | None = 0.91,
     receipt_url: str | None = RECEIPT_URL,
+    console_url: str | None = CONSOLE_URL,
     alert_row_id: str | None = "7e0b0f37-0000-0000-0000-000000000000",
 ) -> AlertSinkPayload:
     return AlertSinkPayload(
@@ -116,6 +119,7 @@ def _payload(
         alert_row_id=alert_row_id,
         receipt_path="/api/v1/lineage/finding/7e0b0f37-0000-0000-0000-000000000000",
         receipt_url=receipt_url,
+        console_url=console_url,
     )
 
 
@@ -216,7 +220,7 @@ async def test_2xx_publishes_native_ntfy_message() -> None:
     lines = body.split("\n")
     assert lines[0] == "Coup-risk spike"
     assert lines[1] == "high · ua · confidence 0.91 · faithfulness=0.83"
-    assert lines[2] == RECEIPT_URL             # receipt link on its own line
+    assert lines[2] == CONSOLE_URL             # the console page on its own line
 
     # ntfy headers.
     h = call["headers"]
@@ -224,7 +228,7 @@ async def test_2xx_publishes_native_ntfy_message() -> None:
     assert h["X-Title"] == "Legba: high - ua"
     assert h["X-Priority"] == "4"
     assert h["X-Tags"] == "warning,escalations"
-    assert h["X-Click"] == RECEIPT_URL
+    assert h["X-Click"] == CONSOLE_URL         # a page, never the JSON receipt
     assert "Authorization" not in h            # no token configured
 
 
@@ -257,11 +261,20 @@ async def test_channel_tag_is_sanitised() -> None:
 async def test_no_receipt_url_no_click_header_relative_path_in_body() -> None:
     http = _Http([_Resp(200)])
     sink = _sink(http)
-    await sink.deliver(_payload(receipt_url=None))
+    await sink.deliver(_payload(receipt_url=None, console_url=None))
     call = http.calls[0]
     assert "X-Click" not in call["headers"]    # relative path is no tap target
     lines = call["content"].decode("utf-8").split("\n")
     assert lines[-1].startswith("/api/v1/lineage/finding/")
+
+
+async def test_tap_target_is_never_the_json_receipt() -> None:
+    """Roll 84: with a receipt URL but no console address, no X-Click — a
+    tap must open a page, and the lineage route answers JSON."""
+    http = _Http([_Resp(200)])
+    sink = _sink(http)
+    await sink.deliver(_payload(console_url=None))
+    assert "X-Click" not in http.calls[0]["headers"]
 
 
 async def test_bearer_token_header_when_configured() -> None:
@@ -411,15 +424,17 @@ async def test_real_wire_native_publish(ntfy_topic_url: str) -> None:
         assert result.target == "127.0.0.1"
 
         req = _NtfyHandler.received[0]
-        assert req["path"] == "/legba-alerts"
+        # X4 ALERTS: the configured URL locates the server; an escalation is
+        # published on the `world` topic beside the pre-split one.
+        assert req["path"] == "/world"
         assert req["headers"]["x-title"] == "Legba: high - ua"
         assert req["headers"]["x-priority"] == "4"
         assert req["headers"]["x-tags"] == "warning,escalations"
-        assert req["headers"]["x-click"] == RECEIPT_URL
+        assert req["headers"]["x-click"] == CONSOLE_URL
         assert req["headers"]["authorization"] == "Bearer tk_wire"
         body = req["body"].decode("utf-8")
         assert body.split("\n")[0] == "Coup-risk spike"
-        assert RECEIPT_URL in body
+        assert CONSOLE_URL in body
     finally:
         if sink._http is not None:
             await sink._http.aclose()

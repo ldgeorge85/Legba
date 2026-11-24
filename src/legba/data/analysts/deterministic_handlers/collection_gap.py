@@ -128,9 +128,12 @@ import logging
 from collections import Counter, defaultdict
 from typing import Any, Mapping, Sequence
 
+from ...principals import rule_handle
 from ...provenance.models import FindingPayload
+from ... import subject as _subject
 from ....runtime.analyst_method import AnalystMethodResult
 from . import scorecard_banding
+from ...taxon_families import COLLECTION_GAP_KIND, bind_taxon
 
 logger = logging.getLogger(__name__)
 
@@ -414,18 +417,19 @@ def aggregate_gaps(
 
 
 def _desk_iso2(desk: Any) -> str | None:
-    """Best-effort ISO2 for a ``country_<tier>_<iso2>`` desk id (e.g.
-    ``country_g20_ml`` -> ``ML``) — the SAME target-id convention
-    :func:`legba.runtime.grounding.world_context_country_filter_values` reads
-    off the identical id shape (kept independent here: a deterministic-handler
-    module stays DB/runtime-import-free on its pure side). Returns ``None``
-    for a non-country or malformed id — the caller then matches candidates on
-    ``source_class`` alone (no geo filter), never raises."""
-    if not isinstance(desk, str) or not desk.startswith("country"):
+    """The desk's ISO2 — its subject code when that code is the ONE geo code
+    the profile declares for it (``country_g20_ml`` -> ``ML``), through the
+    subject ladder (``legba.data.subject``, DB-free: the profile's declared
+    subjects), never parsed out of the id. Returns ``None`` for a desk with no
+    single declared geo (a region, a lane, a flow) or an unknown id — the
+    caller then matches candidates on ``source_class`` alone (no geo filter),
+    never raises."""
+    if not isinstance(desk, str) or not desk.strip():
         return None
-    token = desk.rsplit("_", 1)[-1].strip()
-    if len(token) == 2 and token.isalpha():
-        return token.upper()
+    code = _subject.subject_code(desk.strip())
+    geo = _subject.subject_geo(desk.strip())
+    if code in geo and len(code) == 2 and code.isalpha():
+        return code.upper()
     return None
 
 
@@ -666,14 +670,17 @@ _EXISTING_NATURAL_KEYS_SQL = (
     "WHERE natural_key = ANY($1::text[])"
 )
 
-_INSERT_REQUIREMENT_SQL = """
+#: Who writes these rows (lane 9): this deterministic rule, named once.
+_WRITTEN_BY = rule_handle("collection_gap")
+
+_INSERT_REQUIREMENT_SQL = f"""
     INSERT INTO collection_requirements
         (natural_key, origin, desk, dimension, topic, rationale,
          evidence_kind, evidence_id, source_classes_wanted,
          candidate_sources, suggested_fetch_url, fillable, unfillable_reason,
-         priority_rank)
+         priority_rank, written_by)
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::uuid, $9::text[], $10::jsonb,
-            $11, $12, $13, $14)
+            $11, $12, $13, $14, legba_principal('{_WRITTEN_BY}'))
     ON CONFLICT (natural_key) DO NOTHING
 """
 
@@ -786,6 +793,24 @@ async def write_requirements(
     if stats is not None:
         stats.setdefault("existing", 0)
         stats.setdefault("failed", 0)
+    # The origin is the registered ``collection_gap_kind`` family (W7
+    # TAXON-1), bound at write time. The family is CHECK-bound (migration
+    # 0193), so an unclassified origin is REFUSED by name here — never written
+    # as ``unclassified`` into a column whose CHECK would reject it. Counted
+    # as ``failed`` (it could not be written). Unreachable today: every origin
+    # this module and A-4 write is a family value.
+    kept: list[dict[str, Any]] = []
+    for row in rows:
+        if bind_taxon(COLLECTION_GAP_KIND, row.get("origin")).bound:
+            kept.append(row)
+            continue
+        logger.warning(
+            "collection_gap.requirement_refused origin_unclassified origin=%r key=%s",
+            row.get("origin"), row.get("natural_key"),
+        )
+        if stats is not None:
+            stats["failed"] += 1
+    rows = kept
     if not rows:
         return 0
     try:

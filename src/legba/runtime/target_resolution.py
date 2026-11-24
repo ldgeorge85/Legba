@@ -45,12 +45,17 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ..data import frames as _frames
+from ..data import rosters as _rosters
+
 #: Tokens that describe a frame's KIND rather than its subject. Matching these
 #: against the gazetteer would drag in unrelated desks, so they never become
-#: gazetteer probes.
+#: gazetteer probes. The profile's subject-roster tags are generic in the same
+#: way and join this set at run time (``rosters.subject_roster_tags()``,
+#: ROSTER-1) — the literal no longer spells them.
 _GENERIC_TOKENS = frozenset({
     "thematic", "situation", "geopolitical", "news", "region", "frame",
-    "watch", "g20", "supply_chain", "conflict", "war", "military", "crisis",
+    "conflict", "war", "military", "crisis",
     "security", "economic", "energy", "political", "global", "world",
     "country", "lane", "flow", "maritime", "chokepoint", "shipping",
 })
@@ -128,9 +133,10 @@ def _gazetteer_probes(scope: dict[str, Any]) -> list[str]:
     """SQL ``LIKE`` probes for the frame's subject tokens, generic ones removed."""
     tokens: list[str] = []
     seen: set[str] = set()
+    generic = _GENERIC_TOKENS | {t.lower() for t in _rosters.subject_roster_tags()}
     for raw in (*_str_list(scope.get("themes")), *_str_list(scope.get("tags"))):
         token = raw.lower().strip()
-        if len(token) < _MIN_TOKEN_CHARS or token in _GENERIC_TOKENS:
+        if len(token) < _MIN_TOKEN_CHARS or token in generic:
             continue
         if token in seen:
             continue
@@ -162,9 +168,9 @@ async def resolve_member_targets(conn: Any, target_id: str) -> dict[str, Any]:
         "scope_themes": _str_list(scope.get("themes")),
     }
 
-    rows = await conn.fetch(_TAG_MEMBERS_SQL, str(target_id))
-    if rows:
-        out["members"] = [str(r["descriptor_id"]) for r in rows][:MAX_MEMBERS]
+    tag_members = await _tag_members(conn, str(target_id))
+    if tag_members:
+        out["members"] = tag_members[:MAX_MEMBERS]
         out["via"] = "tag_membership"
         return out
 
@@ -189,6 +195,20 @@ async def resolve_member_targets(conn: Any, target_id: str) -> dict[str, Any]:
                 return out
 
     return out
+
+
+async def _tag_members(conn: Any, target_id: str) -> list[str]:
+    """Rung 1, tag membership (W7-F3). ``LEGBA_FRAME_FAMILY`` off: the
+    id-as-tag read, verbatim. On: an id registered in the ``frame`` family
+    resolves through its member rule over its whole subtree
+    (``frames.resolve_members``); an id the family does not register (a
+    ``situation_*`` frame) keeps the id-as-tag convention, which never needed
+    a prefix."""
+    if _frames.frame_family_enabled():
+        catalog = await _frames.load_frame_catalog(conn)
+        if catalog.loaded and catalog.composite_frame(target_id) is not None:
+            return await _frames.resolve_members(target_id, conn, catalog=catalog)
+    return [str(r["descriptor_id"]) for r in await conn.fetch(_TAG_MEMBERS_SQL, target_id)]
 
 
 def unresolved_note(resolution: dict[str, Any], target_id: str) -> str:

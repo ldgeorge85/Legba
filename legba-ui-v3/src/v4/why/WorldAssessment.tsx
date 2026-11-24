@@ -281,7 +281,7 @@ export default function WorldAssessment() {
     queryKey: ['world-assessment-findings'],
     refetchInterval: 5 * 60_000,
     queryFn: () =>
-      apiGet<FindingsResponse>(`/findings?analyst_id=${ASSESSOR_ID}&limit=${RUN_LIMIT}`),
+      apiGet<FindingsResponse>(`/findings?analyst_id=${ASSESSOR_ID}&limit=${RUN_LIMIT}&fields=full`),
   })
 
   // Newest-first list of world_assessor runs → the current read + its history.
@@ -410,7 +410,7 @@ export function CompactWorldAssessment() {
     // Same key AND same request as the full one-pager — a differing `limit`
     // behind a shared cache key would make the two disagree about the window.
     queryFn: () =>
-      apiGet<FindingsResponse>(`/findings?analyst_id=${ASSESSOR_ID}&limit=${RUN_LIMIT}`),
+      apiGet<FindingsResponse>(`/findings?analyst_id=${ASSESSOR_ID}&limit=${RUN_LIMIT}&fields=full`),
   })
   const assessment = useMemo<WorldAssessmentT | null>(() => {
     const rows = data?.data ?? []

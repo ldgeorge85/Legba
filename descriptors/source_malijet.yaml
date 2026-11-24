@@ -20,8 +20,7 @@
 # Douentza/Bandiagara and at Aguelhoc; a JNIM/EIS clash near the Burkina
 # border; storm-damage emergency response (13 dead, 355 households); a
 # tramadol/contraband seizure in Bamako; President Goïta receiving the US
-# ambassador. Keyless, `robots.txt` explicitly AI/crawler-permissive (see
-# LICENCE note).
+# ambassador. Keyless, `robots.txt` allows the feed path (see ROBOTS below).
 #
 # NOT PURE DOMESTIC — RECORDED SO IT IS NOT REDISCOVERED AS A SURPRISE:
 # roughly 60% of the sampled 50 items are Mali-domestic; the rest is genuine
@@ -52,20 +51,8 @@
 # constraints on domestic press independence — priced in honestly at
 # credibility-registration time, not here.
 #
-# LICENCE/ROBOTS POSTURE: `robots.txt` present and UNUSUALLY explicit about
-# AI/LLM crawler policy (own comment, translated: "Malijet — robots policy
-# oriented toward AI discoverability & citation. Search engines AND AI
-# assistants (index/retrieval bots) are ALLOWED... training crawlers are also
-# deliberately allowed (rare Francophone/Sahel corpus — being known to models
-# helps recommendation) — restrict only under a content-licensing
-# agreement"). `User-agent: *` block disallows only `/admin`, `/livewire`,
-# `/horizon`, `/recherche` — nothing on the feed path. Explicitly names
-# `ClaudeBot` / `Claude-SearchBot` / `Claude-User` among the allowed agents.
-# No formal machine-readable licence (CC/etc.) found, so `scope.license_class`
-# is still left UNSET per the LIC-2 honest-absence convention (this robots
-# posture is a strong openness SIGNAL, not itself a licence grant) — lands
-# ingested signals at teaser depth until an operator reviews it, but this is
-# the single best-disposed candidate in the batch for that review.
+# ROBOTS: the `User-agent: *` block disallows only `/admin`, `/livewire`,
+# `/horizon`, `/recherche` — nothing on the feed path.
 #
 # state: draft — bulk registration creates NO live actor; activation
 # (draft -> configured -> active) is the operator's after the route is

@@ -24,13 +24,17 @@ normalized to `stop` / `length` / `tool_calls`.
 Prompt caching: `cache_control` breakpoints on the stable prefix — see
 `_apply_cache_control` and the `CACHE_*` classvars.
 
-Pricing (USD per 1M tokens, mid-2026 list price; override via subclass or
-env if Anthropic publishes a change before the registry's pricing-update
-task lands):
+Pricing (USD per 1M tokens; the published list price, platform.claude.com
+pricing page read 2026-11-05 — W11-F136(b); override via subclass or env if
+Anthropic publishes a change before the registry's pricing-update task lands).
+Family-prefix keys; the LONGEST matching key wins (``base.estimate_cost``), so
+``claude-opus-5-5`` never rolls up under ``claude-opus-5``:
 
-  * claude-opus-5        : input 15 / output 75 / cache_read 1.50 / cache_write 18.75 (Opus tier assumed; verify list price)
-  * claude-opus-4-8      : input 15 / output 75 / cache_read 1.50 / cache_write 18.75
-  * claude-opus-4-7      : input 15 / output 75 / cache_read 1.50 / cache_write 18.75
+  * claude-fable-5       : input 10 / output 50 / cache_read 0.25 / cache_write 12.50
+  * claude-opus-5-5      : input 4  / output 20 / cache_read 0.20 / cache_write 5.00
+  * claude-opus-5        : input 5  / output 25 / cache_read 0.50 / cache_write 6.25
+  * claude-opus-4-8      : input 5  / output 25 / cache_read 0.50 / cache_write 6.25
+  * claude-opus-4-7      : input 5  / output 25 / cache_read 0.50 / cache_write 6.25
   * claude-sonnet-4-6    : input 3  / output 15  / cache_read 0.30 / cache_write 3.75
   * claude-sonnet-4-5    : input 3  / output 15  / cache_read 0.30 / cache_write 3.75
   * claude-haiku-3-5     : input 0.80 / output 4 / cache_read 0.08 / cache_write 1.00
@@ -41,11 +45,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
 from typing import Any, AsyncIterator, ClassVar, Mapping
 
 import httpx
 
+from legba.shared.model_output_limits import (
+    ANTHROPIC_MAX_OUTPUT_TOKENS_BY_PREFIX,
+    ANTHROPIC_MAX_OUTPUT_TOKENS_DEFAULT,
+    anthropic_max_output_tokens,
+)
 from .base import (
     HardLLMFailure,
     LLMProviderHandler,
@@ -56,7 +66,7 @@ from .base import (
     TransientLLMFailure,
     estimate_cost,
 )
-from .stream_observer import publish_text_delta
+from .stream_observer import publish_text_delta, publish_tool_use_start
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +78,16 @@ _STOP_REASON_MAP = {
     "stop_sequence": "stop",
     "tool_use": "tool_calls",
 }
+
+#: The Messages API's own words when input + ``max_tokens`` exceed the context
+#: window ("input length and `max_tokens` exceed context limit: 188240 + 21333 >
+#: 200000, decrease input length or `max_tokens` and try again"): its exact
+#: input count and the window, read by the one window retry in ``_call_chat``.
+_WINDOW_400 = re.compile(r"exceed context limit:\s*(\d+)\s*\+\s*(\d+)\s*>\s*(\d+)")
+#: The pre-flight input count's ratio: the house estimate
+#: (``data/analysts/_llm_budget.CHARS_PER_TOKEN``) over the ASCII-escaped wire
+#: JSON, so non-Latin text counts high rather than low.
+_CHARS_PER_TOKEN = 4
 
 #: The marker Anthropic reads as "cache the prefix ending here". `ephemeral` is
 #: the 5-minute TTL — the right one for a tool loop whose rounds are seconds
@@ -163,28 +183,25 @@ class AnthropicProviderHandler(LLMProviderHandler):
         "claude-fable-5",
     )
 
-    #: Anthropic's DOCUMENTED per-request output ceilings (`max_tokens` upper
-    #: bound) by model-family prefix, verified against the published model
-    #: catalog 2026-08-15: the Opus 4.7/4.8 and Sonnet 4.6 lines take up to
-    #: 128K output tokens per request (streaming required for large outputs —
-    #: which this handler now always does); Sonnet 4.5 caps at 64K and the
-    #: legacy Haiku 3.5 at 8192. A caller's `max_tokens` above the ceiling is
-    #: CLAMPED with a loud log (see `_log_clamped_max_tokens`) rather than
-    #: allowed to 400 at the provider. The deployed consult budget (32768)
-    #: sits well under the Opus ceiling, so the clamp is a guard rail, not an
-    #: expected path.
-    MAX_OUTPUT_TOKENS_BY_PREFIX: ClassVar[Mapping[str, int]] = {
-        "claude-opus-5": 128_000,  # probed 2026-09-16: "130000 > 128000 … maximum … for claude-opus-5"
-        "claude-fable-5": 128_000,  # probed 2026-09-16: same ceiling message for claude-fable-5-1
-        "claude-opus-4-8": 128_000,
-        "claude-opus-4-7": 128_000,
-        "claude-sonnet-4-6": 128_000,
-        "claude-sonnet-4-5": 64_000,
-        "claude-haiku-3-5": 8_192,
-    }
-    #: Ceiling for models with no prefix match above — the current-generation
-    #: documented maximum.
-    MAX_OUTPUT_TOKENS_DEFAULT: ClassVar[int] = 128_000
+    #: Roll-86 follow-up (no output caps): the model's maximum output is
+    #: declared in ONE place, ``legba.shared.model_output_limits`` (the
+    #: documented per-model ceilings). The Messages API requires a
+    #: ``max_tokens``, so every call sends that maximum; a caller's
+    #: ``max_tokens`` (a descriptor's ``method.llm.max_tokens``, the deep
+    #: consult's old 2048 plan clamp) never reaches the wire.
+    MAX_OUTPUT_TOKENS_BY_PREFIX: ClassVar[Mapping[str, int]] = ANTHROPIC_MAX_OUTPUT_TOKENS_BY_PREFIX
+    MAX_OUTPUT_TOKENS_DEFAULT: ClassVar[int] = ANTHROPIC_MAX_OUTPUT_TOKENS_DEFAULT
+
+    #: W11-F133 — the documented standard context window (input + output) of
+    #: the current Claude models. This handler never sends the long-context
+    #: beta header, so 200k is the window every call it makes runs in. Read by
+    #: the consult loop to derive its input ceiling when the descriptor sets
+    #: none (``consult_context_ceiling.derive_ceiling``).
+    CONTEXT_WINDOW_TOKENS: ClassVar[int] = 200_000
+
+    def context_window_tokens(self) -> int | None:
+        """:attr:`CONTEXT_WINDOW_TOKENS` — Anthropic exposes no window listing."""
+        return self.CONTEXT_WINDOW_TOKENS
 
     # ---- Prompt caching --------------------------------------------------
     #
@@ -230,35 +247,37 @@ class AnthropicProviderHandler(LLMProviderHandler):
         #: a 10-round consult must surface the dead knob without emitting ten
         #: identical warnings.
         self._temperature_drop_logged: set[str] = set()
-        #: Models already logged for a clamped over-ceiling `max_tokens` — see
-        #: `_log_clamped_max_tokens`. Same once-per-model discipline.
-        self._max_tokens_clamp_logged: set[str] = set()
 
     PRICE_TABLE: ClassVar[Mapping[str, ModelPrice]] = {
         # Use family-prefix keys so any minor revision rolls up under the same
         # price tier (e.g. claude-opus-4-7-20260301).
+        # List prices, platform.claude.com pricing page read 2026-11-05
+        # (W11-F136(b)); cache_write is the 5-minute write. The 2026-09-16
+        # table carried $15 / $75 "floors" for every Opus / Fable row, which
+        # overstated Opus 4.7 three-fold (bake-off design §0, defect A-F2).
         "claude-fable-5": ModelPrice(
-            # Fable 5.x sits ABOVE Opus in the Claude 5 family; list price NOT known
-            # here (2026-09-16) — Opus tier used as a floor so the estimate is not $0.
-            # Verify and revise.
-            input_per_m=15.0, output_per_m=75.0,
-            cache_read_per_m=1.50, cache_write_per_m=18.75,
+            input_per_m=10.0, output_per_m=50.0,
+            cache_read_per_m=0.25, cache_write_per_m=12.50,
+        ),
+        # Opus 5.5 — the bake-off frontier model (served by the historical
+        # component id ``llm.anthropic.opus_4_7``). Must out-match the
+        # ``claude-opus-5`` key below: ``estimate_cost`` takes the LONGEST
+        # matching prefix, so the row order here does not matter.
+        "claude-opus-5-5": ModelPrice(
+            input_per_m=4.0, output_per_m=20.0,
+            cache_read_per_m=0.20, cache_write_per_m=5.0,
         ),
         "claude-opus-5": ModelPrice(
-            # Opus tier ASSUMED for accounting (2026-09-16); verify against the
-            # published list price and revise — an unknown model would otherwise
-            # estimate $0 (estimate_cost returns 0.0 on a table miss).
-            input_per_m=15.0, output_per_m=75.0,
-            cache_read_per_m=1.50, cache_write_per_m=18.75,
+            input_per_m=5.0, output_per_m=25.0,
+            cache_read_per_m=0.50, cache_write_per_m=6.25,
         ),
         "claude-opus-4-8": ModelPrice(
-            # Opus pricing tier (same as 4-7); update if Anthropic revises it.
-            input_per_m=15.0, output_per_m=75.0,
-            cache_read_per_m=1.50, cache_write_per_m=18.75,
+            input_per_m=5.0, output_per_m=25.0,
+            cache_read_per_m=0.50, cache_write_per_m=6.25,
         ),
         "claude-opus-4-7": ModelPrice(
-            input_per_m=15.0, output_per_m=75.0,
-            cache_read_per_m=1.50, cache_write_per_m=18.75,
+            input_per_m=5.0, output_per_m=25.0,
+            cache_read_per_m=0.50, cache_write_per_m=6.25,
         ),
         "claude-sonnet-4-6": ModelPrice(
             input_per_m=3.0, output_per_m=15.0,
@@ -365,14 +384,11 @@ class AnthropicProviderHandler(LLMProviderHandler):
         reasoning_effort: str | None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        ceiling = self._max_output_ceiling(model)
-        if max_tokens > ceiling:
-            self._log_clamped_max_tokens(model, max_tokens, ceiling)
-            max_tokens = ceiling
         payload: dict[str, Any] = {
             "model": model,
             "messages": list(messages),
-            "max_tokens": max_tokens,
+            # the API requires it: the model's maximum, never the caller's value
+            "max_tokens": self._max_output_ceiling(model),
             # ALWAYS stream on the wire (accumulated back to one response in
             # `_call_chat_streaming`): a live stream keeps the HTTP connection
             # alive for the whole generation, so a large output budget can no
@@ -407,7 +423,51 @@ class AnthropicProviderHandler(LLMProviderHandler):
         for k, v in kwargs.items():
             payload.setdefault(k, v)
         self._apply_cache_control(payload)
+        payload["max_tokens"] = self._max_tokens_for_window(model, payload)
         return payload
+
+    # ---- Context window: an API VALIDITY constraint, NOT an output cap ----
+    #
+    # Roll 87. The Messages API requires ``max_tokens`` and REJECTS a request
+    # whose input plus ``max_tokens`` exceeds the model's context window (400,
+    # nothing generated). Sending the model's maximum (128,000) with a large
+    # prompt (a late consult round: 100k+ tokens) would therefore fail the call
+    # outright. So: the model's maximum, unless the counted input leaves less
+    # room than that in the window; then the largest value the window allows.
+    # That is the most output a valid request can ask for — no output cap is
+    # imposed, nothing smaller is sent for any other reason, and the call's
+    # receipt records that it happened (``_wire_receipt_fields``).
+
+    def _counted_input_tokens(self, payload: Mapping[str, Any]) -> int:
+        """The request's input tokens, counted before sending (house estimate)."""
+        body = json.dumps(
+            [payload.get("system"), payload.get("messages"), payload.get("tools")], default=str,
+        )
+        return (len(body) + _CHARS_PER_TOKEN - 1) // _CHARS_PER_TOKEN
+
+    def _max_tokens_for_window(self, model: str, payload: Mapping[str, Any]) -> int:
+        """The model's maximum, or the window's room when the input leaves less."""
+        ceiling = self._max_output_ceiling(model)
+        room = self.context_window_tokens() - self._counted_input_tokens(payload)
+        # room <= 0: the input alone exceeds the window; no max_tokens makes it
+        # valid, so the model's maximum goes and the API's own 400 says why.
+        return room if 0 < room < ceiling else ceiling
+
+    @staticmethod
+    def _window_room(exc: HardLLMFailure) -> int | None:
+        """The window's room by the API's OWN count, from its window 400."""
+        if exc.status != 400:
+            return None
+        m = _WINDOW_400.search(f"{exc} {exc.body or ''}")
+        return int(m.group(3)) - int(m.group(1)) if m else None
+
+    def _wire_receipt_fields(self, payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        """Sparse receipt fields: present only when the window limited max_tokens."""
+        sent, ceiling = payload.get("max_tokens"), self._max_output_ceiling(str(payload.get("model") or ""))
+        if isinstance(sent, int) and sent < ceiling:
+            return {"max_tokens_sent": sent, "max_tokens_model_max": ceiling,
+                    "max_tokens_limited_by": "context_window"}
+        return None
 
     # ---- Dead-knob hygiene -----------------------------------------------
 
@@ -436,36 +496,12 @@ class AnthropicProviderHandler(LLMProviderHandler):
 
     def _max_output_ceiling(self, model: str) -> int:
         """The documented per-request output ceiling for `model`."""
-        for prefix, ceiling in self.MAX_OUTPUT_TOKENS_BY_PREFIX.items():
-            if model.startswith(prefix):
-                return ceiling
-        return self.MAX_OUTPUT_TOKENS_DEFAULT
+        return anthropic_max_output_tokens(model)
 
-    def _log_clamped_max_tokens(
-        self, model: str, requested: int, ceiling: int,
-    ) -> None:
-        """WARN once per handler per model that an over-ceiling `max_tokens`
-        was CLAMPED to Anthropic's documented per-request output limit.
-
-        Loud on purpose: a descriptor asking for more than the model line can
-        serve is a configuration error the operator should see and fix (lower
-        the descriptor's ``method.llm.max_tokens``), not a silent adjustment.
-        Clamping — instead of letting the provider 400 the call — keeps the
-        consult answering while the config is wrong.
-        """
-        if model in self._max_tokens_clamp_logged:
-            return
-        self._max_tokens_clamp_logged.add(model)
-        logger.warning(
-            "anthropic.max_tokens.CLAMPED component=%s model=%s requested=%d "
-            "ceiling=%d — Anthropic's documented per-request output limit for "
-            "this model line is %d tokens; sending the ceiling instead of "
-            "letting the provider 400. Lower the caller's max_tokens "
-            "(descriptor method.llm.max_tokens) to silence this. "
-            "(logged once per model)",
-            self._instance_id or "<unconfigured>", model, requested, ceiling,
-            ceiling,
-        )
+    def model_max_output_tokens(self, model: str | None = None) -> int | None:
+        """The documented maximum output of ``model`` (default: the configured one)."""
+        name = model or str(getattr(getattr(self._cfg, "model_name", None), "raw", "") or "")
+        return self._max_output_ceiling(name)
 
     # ---- Prompt caching --------------------------------------------------
 
@@ -540,6 +576,32 @@ class AnthropicProviderHandler(LLMProviderHandler):
         payload["messages"] = [*messages[:-1], {**dict(last), "content": marked}]
 
     async def _call_chat(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Wire the payload; ONE retry when the API rejects it for the window.
+
+        The pre-flight count (``_max_tokens_for_window``) is an estimate; when
+        the API's own count says input + ``max_tokens`` exceeds the window (a
+        400, pre-stream, nothing generated or billed) the call is resent once
+        with the largest ``max_tokens`` that count allows. The payload is
+        updated in place so the call's receipt records the value sent.
+        """
+        try:
+            return await self._call_chat_cache_fallback(payload)
+        except HardLLMFailure as exc:
+            room, sent = self._window_room(exc), payload.get("max_tokens")
+            if room is None or not isinstance(payload, dict) or not isinstance(sent, int) or not 0 < room < sent:
+                raise
+            logger.warning(
+                "anthropic.max_tokens.window component=%s model=%s sent=%d room=%d — the API "
+                "counted input + max_tokens over the context window; resending once with the "
+                "window's room (an API validity constraint, not an output cap)",
+                self._instance_id or "<unconfigured>", payload.get("model"), sent, room,
+            )
+            payload["max_tokens"] = room
+            return await self._call_chat_cache_fallback(
+                payload if self._cache_control_ok else _strip_cache_control(payload),
+            )
+
+    async def _call_chat_cache_fallback(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         """Wire the payload, with a one-shot fallback if caching is rejected.
 
         Prompt caching is an optimization; a consult must never fail because a
@@ -731,6 +793,9 @@ class AnthropicProviderHandler(LLMProviderHandler):
                         ]
                     elif btype == "tool_use":
                         tool_json_parts[idx] = []
+                        # Lets a caller cut mid-round tell a tool round's
+                        # preamble from an answer (``stream_observer``).
+                        publish_tool_use_start()
                 elif etype == "content_block_delta":
                     idx = int(event.get("index") or 0)
                     delta = event.get("delta")
@@ -749,6 +814,7 @@ class AnthropicProviderHandler(LLMProviderHandler):
                         publish_text_delta(chunk)
                     elif dtype == "input_json_delta":
                         blocks.setdefault(idx, {"type": "tool_use"})
+                        publish_tool_use_start()
                         tool_json_parts.setdefault(idx, []).append(
                             str(delta.get("partial_json") or ""),
                         )

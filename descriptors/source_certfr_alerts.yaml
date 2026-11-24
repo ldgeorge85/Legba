@@ -1,0 +1,90 @@
+# K-1 cyber desk (2026-11-14) — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# CERT-FR, the French government CERT run by ANSSI — its ALERTS feed only
+# (CERTFR-YYYY-ALE-NNN: actively exploited or imminent-threat vulnerabilities).
+# The site moved from cert.ssi.gouv.fr to cert.cyber.gouv.fr in 2026: the old
+# feed URL 301-redirects there; this descriptor names the new address.
+# Probed 2026-11-13 (one GET each for /feed/, /alerte/feed/, /cti/feed/,
+# generic client identity): HTTP 200, application/xml, 40 items. The alerts
+# feed is NOT newest-first and keeps alerts back to 2015, each dated by its
+# original publication; an update is retitled "[MàJ] ..." and keeps that
+# date. The date-ordered cursor admits only items dated inside the look-back,
+# so the first poll backfills the last three days (usually none) and updates
+# to old alerts are NOT re-ingested (a limitation, said here).
+#
+# NOT the combined /feed/: it also carries the routine "avis" (vendor patch
+# notices, ~20 a day), which would bury the alerts and duplicate the vendor
+# vulnerability coverage of source.cisa.kev / source.cisa.advisories.
+#
+# Geography: deliberately NO declared geo — an alert's subject is a vendor's
+# product. French: titles and summaries are in French; language_detect and
+# the multilingual NER read them as such.
+#
+# robots.txt: `User-agent: *` with no
+# rule covering the feeds. Credibility: cyber.gouv.fr 0.90 / gov. Every two
+# hours.
+#
+# Desk routing: scope.classifications `geopolitics.topic:cyber` is stamped on
+# every signal (W10 TAX-2) — the cyber desk's tag arm (target_cyber.yaml).
+
+identity:
+  id: source.certfr.alerts
+  name: CERT-FR (ANSSI) — alertes de sécurité
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: cyber_desk_k1
+  created: "2026-11-14T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [fr]
+  tags: [cyber, advisory, alert, gov, fr, cyber_desk]
+  classifications: ["geopolitics.topic:cyber"]
+  source_class: official
+  license_class: open_gov_attribution
+  attribution: "Source : CERT-FR / ANSSI (cert.cyber.gouv.fr)"
+  access_class: public          # free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "33 */2 * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.cert.cyber.gouv.fr/alerte/feed/"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor (the conservative default of the official-feed drafts).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

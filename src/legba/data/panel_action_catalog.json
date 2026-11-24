@@ -1,0 +1,882 @@
+{
+  "bind_subject": [
+    {
+      "name": "subject",
+      "ref_kinds": [
+        "target"
+      ],
+      "required": true,
+      "type": "ref"
+    }
+  ],
+  "bind_unit": [
+    {
+      "name": "subject",
+      "ref_kinds": [
+        "analyst"
+      ],
+      "required": true,
+      "type": "ref"
+    }
+  ],
+  "common_actions": {
+    "close": [],
+    "focus": [],
+    "open": [
+      {
+        "name": "place",
+        "required": false,
+        "type": "enum",
+        "values": [
+          "stage",
+          "panel"
+        ]
+      }
+    ]
+  },
+  "source": "panel-registry/contracts.ts",
+  "source_sha256": "748f7926c9cff35ac02f9b125bf73b7f73ff45b1502a7779c92abe8d851a93a0",
+  "version": "panel_action_catalog/1",
+  "views": {
+    "analysis.contentions": {
+      "actions": {},
+      "binds": [],
+      "declared": false,
+      "home": "stage",
+      "id": "analysis.contentions",
+      "side": "operator"
+    },
+    "slot:coverage": {
+      "actions": {},
+      "binds": [],
+      "declared": true,
+      "home": "panel",
+      "id": "slot:coverage",
+      "side": "reader"
+    },
+    "slot:subject_field": {
+      "actions": {},
+      "binds": [],
+      "declared": true,
+      "home": "panel",
+      "id": "slot:subject_field",
+      "side": "reader"
+    },
+    "slot:subject_forecasts": {
+      "actions": {},
+      "binds": [
+        "subject"
+      ],
+      "declared": true,
+      "home": "panel",
+      "id": "slot:subject_forecasts",
+      "side": "reader"
+    },
+    "subject.page": {
+      "actions": {
+        "bind": [
+          {
+            "name": "subject",
+            "ref_kinds": [
+              "target"
+            ],
+            "required": true,
+            "type": "ref"
+          }
+        ],
+        "select": [
+          {
+            "name": "ref",
+            "ref_kinds": [
+              "finding",
+              "signal",
+              "event",
+              "situation",
+              "report",
+              "entity",
+              "source",
+              "analyst",
+              "journal_entry"
+            ],
+            "required": true,
+            "type": "ref"
+          }
+        ],
+        "set_tab": [
+          {
+            "name": "tab",
+            "required": true,
+            "type": "enum",
+            "values": [
+              "brief",
+              "evidence",
+              "claims",
+              "signals",
+              "situations",
+              "sources",
+              "graph",
+              "runtime"
+            ]
+          }
+        ]
+      },
+      "binds": [
+        "subject"
+      ],
+      "declared": true,
+      "home": "stage",
+      "id": "subject.page",
+      "side": "reader"
+    },
+    "system.alerts_watches": {
+      "actions": {
+        "select": [
+          {
+            "name": "ref",
+            "ref_kinds": [
+              "finding",
+              "signal",
+              "event",
+              "situation",
+              "report",
+              "entity",
+              "source",
+              "analyst",
+              "journal_entry"
+            ],
+            "required": true,
+            "type": "ref"
+          }
+        ],
+        "set_tab": [
+          {
+            "name": "tab",
+            "required": true,
+            "type": "enum",
+            "values": [
+              "watches",
+              "triggers",
+              "deliveries"
+            ]
+          }
+        ]
+      },
+      "binds": [
+        "alert"
+      ],
+      "declared": true,
+      "home": "panel",
+      "id": "system.alerts_watches",
+      "side": "reader"
+    },
+    "system.consult": {
+      "actions": {},
+      "binds": [
+        "subject",
+        "record",
+        "window"
+      ],
+      "declared": true,
+      "home": "panel",
+      "id": "system.consult",
+      "side": "reader"
+    },
+    "system.entities": {
+      "actions": {},
+      "binds": [],
+      "declared": false,
+      "home": "stage",
+      "id": "system.entities",
+      "side": "operator"
+    },
+    "system.eval_boards": {
+      "actions": {},
+      "binds": [],
+      "declared": false,
+      "home": "stage",
+      "id": "system.eval_boards",
+      "side": "operator"
+    },
+    "system.eval_scorecard": {
+      "actions": {},
+      "binds": [],
+      "declared": true,
+      "home": "panel",
+      "id": "system.eval_scorecard",
+      "side": "reader"
+    },
+    "system.findings": {
+      "actions": {},
+      "binds": [],
+      "declared": false,
+      "home": "stage",
+      "id": "system.findings",
+      "side": "operator"
+    },
+    "system.flow": {
+      "actions": {},
+      "binds": [],
+      "declared": false,
+      "home": "stage",
+      "id": "system.flow",
+      "side": "operator"
+    },
+    "system.goldset": {
+      "actions": {},
+      "binds": [],
+      "declared": false,
+      "home": "stage",
+      "id": "system.goldset",
+      "side": "operator"
+    },
+    "system.graph_walk": {
+      "actions": {},
+      "binds": [],
+      "declared": false,
+      "home": "stage",
+      "id": "system.graph_walk",
+      "side": "operator"
+    },
+    "system.inspector": {
+      "actions": {
+        "open_record": [
+          {
+            "name": "ref",
+            "ref_kinds": [
+              "finding",
+              "signal",
+              "event",
+              "situation",
+              "fact",
+              "hypothesis",
+              "observation"
+            ],
+            "required": true,
+            "type": "ref"
+          },
+          {
+            "name": "cite",
+            "required": false,
+            "type": "number"
+          }
+        ],
+        "select": [
+          {
+            "name": "ref",
+            "ref_kinds": [
+              "finding",
+              "signal",
+              "event",
+              "situation",
+              "report",
+              "entity",
+              "source",
+              "analyst",
+              "journal_entry"
+            ],
+            "required": true,
+            "type": "ref"
+          }
+        ]
+      },
+      "binds": [
+        "record",
+        "source"
+      ],
+      "declared": true,
+      "home": "stage",
+      "id": "system.inspector",
+      "side": "reader"
+    },
+    "system.journal": {
+      "actions": {},
+      "binds": [],
+      "declared": false,
+      "home": "stage",
+      "id": "system.journal",
+      "side": "operator"
+    },
+    "system.journal_gate": {
+      "actions": {},
+      "binds": [],
+      "declared": false,
+      "home": "stage",
+      "id": "system.journal_gate",
+      "side": "operator"
+    },
+    "system.judge_stats": {
+      "actions": {},
+      "binds": [],
+      "declared": false,
+      "home": "stage",
+      "id": "system.judge_stats",
+      "side": "operator"
+    },
+    "system.layer_divergence": {
+      "actions": {},
+      "binds": [],
+      "declared": false,
+      "home": "stage",
+      "id": "system.layer_divergence",
+      "side": "operator"
+    },
+    "system.ledgers": {
+      "actions": {},
+      "binds": [],
+      "declared": false,
+      "home": "stage",
+      "id": "system.ledgers",
+      "side": "operator"
+    },
+    "system.optimizer": {
+      "actions": {},
+      "binds": [],
+      "declared": false,
+      "home": "stage",
+      "id": "system.optimizer",
+      "side": "operator"
+    },
+    "system.provenance": {
+      "actions": {},
+      "binds": [],
+      "declared": false,
+      "home": "stage",
+      "id": "system.provenance",
+      "side": "operator"
+    },
+    "system.read_scoreboard": {
+      "actions": {},
+      "binds": [],
+      "declared": false,
+      "home": "stage",
+      "id": "system.read_scoreboard",
+      "side": "operator"
+    },
+    "system.register": {
+      "actions": {},
+      "binds": [],
+      "declared": false,
+      "home": "stage",
+      "id": "system.register",
+      "side": "operator"
+    },
+    "system.registry": {
+      "actions": {},
+      "binds": [],
+      "declared": false,
+      "home": "stage",
+      "id": "system.registry",
+      "side": "operator"
+    },
+    "system.report_export": {
+      "actions": {},
+      "binds": [],
+      "declared": false,
+      "home": "stage",
+      "id": "system.report_export",
+      "side": "operator"
+    },
+    "system.search": {
+      "actions": {},
+      "binds": [],
+      "declared": false,
+      "home": "stage",
+      "id": "system.search",
+      "side": "operator"
+    },
+    "system.settings": {
+      "actions": {},
+      "binds": [],
+      "declared": false,
+      "home": "stage",
+      "id": "system.settings",
+      "side": "operator"
+    },
+    "system.source_health": {
+      "actions": {
+        "select": [
+          {
+            "name": "ref",
+            "ref_kinds": [
+              "finding",
+              "signal",
+              "event",
+              "situation",
+              "report",
+              "entity",
+              "source",
+              "analyst",
+              "journal_entry"
+            ],
+            "required": true,
+            "type": "ref"
+          }
+        ]
+      },
+      "binds": [
+        "source"
+      ],
+      "declared": true,
+      "home": "panel",
+      "id": "system.source_health",
+      "side": "reader"
+    },
+    "system.status": {
+      "actions": {},
+      "binds": [],
+      "declared": false,
+      "home": "stage",
+      "id": "system.status",
+      "side": "operator"
+    },
+    "system.timeline": {
+      "actions": {},
+      "binds": [],
+      "declared": false,
+      "home": "stage",
+      "id": "system.timeline",
+      "side": "operator"
+    },
+    "system.wall": {
+      "actions": {
+        "set_tab": [
+          {
+            "name": "tab",
+            "required": true,
+            "type": "enum",
+            "values": [
+              "overview",
+              "movers"
+            ]
+          }
+        ],
+        "set_window": [
+          {
+            "name": "span",
+            "required": true,
+            "type": "enum",
+            "values": [
+              "6h",
+              "24h",
+              "7d",
+              "30d"
+            ]
+          }
+        ]
+      },
+      "binds": [
+        "window"
+      ],
+      "declared": true,
+      "home": "panel",
+      "id": "system.wall",
+      "side": "reader"
+    },
+    "v4.map": {
+      "actions": {
+        "fly_to": [
+          {
+            "name": "ref",
+            "ref_kinds": [
+              "target",
+              "finding",
+              "signal",
+              "event",
+              "situation",
+              "entity",
+              "place"
+            ],
+            "required": false,
+            "type": "ref"
+          },
+          {
+            "name": "lon",
+            "required": false,
+            "type": "number"
+          },
+          {
+            "name": "lat",
+            "required": false,
+            "type": "number"
+          },
+          {
+            "name": "zoom",
+            "required": false,
+            "type": "number"
+          },
+          {
+            "name": "west",
+            "required": false,
+            "type": "number"
+          },
+          {
+            "name": "south",
+            "required": false,
+            "type": "number"
+          },
+          {
+            "name": "east",
+            "required": false,
+            "type": "number"
+          },
+          {
+            "name": "north",
+            "required": false,
+            "type": "number"
+          }
+        ],
+        "home": [],
+        "select": [
+          {
+            "name": "ref",
+            "ref_kinds": [
+              "target",
+              "finding",
+              "signal",
+              "event",
+              "situation",
+              "entity",
+              "place"
+            ],
+            "required": true,
+            "type": "ref"
+          }
+        ],
+        "set_layer": [
+          {
+            "name": "layer",
+            "required": true,
+            "type": "enum",
+            "values": [
+              "change",
+              "blanks",
+              "series",
+              "forecasts",
+              "events",
+              "at_sea"
+            ]
+          },
+          {
+            "name": "on",
+            "required": true,
+            "type": "boolean"
+          }
+        ],
+        "set_window": [
+          {
+            "name": "span",
+            "required": false,
+            "type": "enum",
+            "values": [
+              "6h",
+              "24h",
+              "7d",
+              "30d"
+            ]
+          },
+          {
+            "name": "from",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "to",
+            "required": false,
+            "type": "string"
+          }
+        ]
+      },
+      "binds": [
+        "place",
+        "subject",
+        "window"
+      ],
+      "declared": true,
+      "home": "panel",
+      "id": "v4.map",
+      "side": "reader"
+    },
+    "v4.morning_read": {
+      "actions": {
+        "select": [
+          {
+            "name": "ref",
+            "ref_kinds": [
+              "finding",
+              "signal",
+              "event",
+              "situation",
+              "report",
+              "entity",
+              "source",
+              "analyst",
+              "journal_entry"
+            ],
+            "required": true,
+            "type": "ref"
+          }
+        ],
+        "set_window": [
+          {
+            "name": "span",
+            "required": true,
+            "type": "enum",
+            "values": [
+              "6h",
+              "24h",
+              "7d",
+              "30d"
+            ]
+          }
+        ]
+      },
+      "binds": [
+        "window"
+      ],
+      "declared": true,
+      "home": "stage",
+      "id": "v4.morning_read",
+      "side": "reader"
+    },
+    "view:forecasts": {
+      "actions": {
+        "filter": [
+          {
+            "name": "show",
+            "required": true,
+            "type": "enum",
+            "values": [
+              "open",
+              "resolved",
+              "all"
+            ]
+          }
+        ],
+        "set_window": [
+          {
+            "name": "span",
+            "required": true,
+            "type": "enum",
+            "values": [
+              "6h",
+              "24h",
+              "7d",
+              "30d"
+            ]
+          }
+        ],
+        "show_forecast": [
+          {
+            "name": "forecast",
+            "required": true,
+            "type": "string"
+          }
+        ]
+      },
+      "binds": [
+        "forecast",
+        "window"
+      ],
+      "declared": true,
+      "home": "stage",
+      "id": "view:forecasts",
+      "side": "reader"
+    },
+    "view:proof": {
+      "actions": {
+        "show_run": [
+          {
+            "name": "run",
+            "required": true,
+            "type": "string"
+          }
+        ]
+      },
+      "binds": [],
+      "declared": true,
+      "home": "panel",
+      "id": "view:proof",
+      "side": "reader"
+    },
+    "view:resolutions": {
+      "actions": {
+        "show_forecast": [
+          {
+            "name": "forecast",
+            "required": true,
+            "type": "string"
+          }
+        ]
+      },
+      "binds": [
+        "forecast"
+      ],
+      "declared": true,
+      "home": "panel",
+      "id": "view:resolutions",
+      "side": "operator"
+    },
+    "view:track_record": {
+      "actions": {},
+      "binds": [],
+      "declared": true,
+      "home": "panel",
+      "id": "view:track_record",
+      "side": "reader"
+    },
+    "view:watch_alerts": {
+      "actions": {
+        "filter_alerts": [
+          {
+            "name": "group",
+            "required": false,
+            "type": "enum",
+            "values": [
+              "reader",
+              "all",
+              "fired",
+              "quiet",
+              "changed",
+              "desk",
+              "forecast",
+              "system"
+            ]
+          },
+          {
+            "name": "severity",
+            "required": false,
+            "type": "enum",
+            "values": [
+              "any",
+              "info",
+              "low",
+              "medium",
+              "high",
+              "critical"
+            ]
+          },
+          {
+            "name": "paged",
+            "required": false,
+            "type": "enum",
+            "values": [
+              "any",
+              "paged",
+              "logged"
+            ]
+          },
+          {
+            "name": "state",
+            "required": false,
+            "type": "enum",
+            "values": [
+              "any",
+              "open",
+              "closed"
+            ]
+          }
+        ],
+        "select_alert": [
+          {
+            "name": "alert",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "set_window": [
+          {
+            "name": "span",
+            "required": true,
+            "type": "enum",
+            "values": [
+              "6h",
+              "24h",
+              "7d",
+              "30d"
+            ]
+          }
+        ]
+      },
+      "binds": [
+        "alert",
+        "source",
+        "window"
+      ],
+      "declared": true,
+      "home": "stage",
+      "id": "view:watch_alerts",
+      "side": "reader"
+    },
+    "view:watch_edits": {
+      "actions": {
+        "open_flag": [
+          {
+            "name": "flag",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "set_tab": [
+          {
+            "name": "tab",
+            "required": true,
+            "type": "enum",
+            "values": [
+              "flags",
+              "record"
+            ]
+          }
+        ]
+      },
+      "binds": [
+        "source"
+      ],
+      "declared": true,
+      "home": "panel",
+      "id": "view:watch_edits",
+      "side": "reader"
+    },
+    "view:watch_silences": {
+      "actions": {
+        "filter_silences": [
+          {
+            "name": "side",
+            "required": true,
+            "type": "enum",
+            "values": [
+              "any",
+              "looked",
+              "could_not_look",
+              "unknown"
+            ]
+          }
+        ],
+        "select": [
+          {
+            "name": "ref",
+            "ref_kinds": [
+              "finding",
+              "signal",
+              "event",
+              "situation",
+              "report",
+              "entity",
+              "source",
+              "analyst",
+              "journal_entry"
+            ],
+            "required": true,
+            "type": "ref"
+          }
+        ]
+      },
+      "binds": [
+        "source"
+      ],
+      "declared": true,
+      "home": "panel",
+      "id": "view:watch_silences",
+      "side": "reader"
+    }
+  }
+}

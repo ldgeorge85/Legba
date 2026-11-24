@@ -111,9 +111,17 @@ _PER_CLASS_CAP: Mapping[str, int] = {
 LIVENESS_EXEMPT_CLASSES = frozenset(
     {
         "llm_route_dead",
+        # JUDGE-2 (W11b): a hosted route's 401/402/403/404, paged at once.
+        "llm_route_auth_failed",
         "liveness_stall",
         "analyst_cadence_stall",
         "source_cadence_stall",
+        # X1/B5: the search plane answering degraded — edge-triggered, one
+        # page per provider per transition (search_degraded_watch.py).
+        "search_degraded",
+        # X4 ALERTS: the alert plane's own volume page, one per topic per
+        # transition (alert_volume_watch.py).
+        "alert_volume_high",
     }
 )
 
@@ -261,14 +269,25 @@ def apply_daily_page_budget(
     skip freed up — diversity is the point. If no other kind has a candidate
     left, that slot goes UNUSED rather than backfilled with more of the
     capped kind — the cap would mean nothing if it did.
+
+    X4 ALERTS — a PUSH BATCH is one unit. Candidates sharing
+    ``data['push_batch']`` (this tick's band moves — :mod:`._band_push_batch`)
+    go out as ONE push, so they take ONE slot: the batch's best-ranked member
+    decides for every member, and the rest follow without consuming anything.
     """
     remaining = max(0, budget - already_paged_today)
     kind_counts: dict[str, int] = dict(already_paged_today_by_kind or {})
     ranked = sorted(candidates, key=budget_sort_key)
     deferred = 0
     taken = 0
+    batch_decision: dict[str, bool] = {}
     for cand in ranked:
         kind = cand.trigger_class
+        batch = cand.data.get("push_batch")
+        if batch and batch in batch_decision:
+            cand.data["budget_deferred"] = batch_decision[batch]
+            deferred += int(batch_decision[batch])
+            continue
         if is_page_budget_exempt(kind):
             # A LIVENESS class passes through: not deferred, and it does not
             # consume a slot either — the budget is a cap on how much of the
@@ -285,6 +304,8 @@ def apply_daily_page_budget(
         else:
             cand.data["budget_deferred"] = True
             deferred += 1
+        if batch:
+            batch_decision[batch] = cand.data["budget_deferred"]
     return deferred
 
 
@@ -335,8 +356,10 @@ async def handle_kill_switch(
 #: (``data->'data'->>...`` — the ``AlertPayload`` model_dump wraps
 #: ``cand.data`` one level in, see ``_row_data`` in the test suite for the
 #: same unwrap) so an operator's live `psql` query and this count agree.
+#: X4 ALERTS: a page is a PUSH — the rows of one push batch (one tick's band
+#: moves) count once (``count(DISTINCT push_batch-or-row-id)``).
 _COUNT_PAGED_TODAY_SQL = """
-    SELECT count(*)::int AS n
+    SELECT count(DISTINCT COALESCE(data -> 'data' ->> 'push_batch', id::text))::int AS n
       FROM analyst_outputs
      WHERE kind = 'alert'
        AND analyst_id = $1
@@ -367,7 +390,7 @@ async def count_paged_today(conn: Any, analyst_id: str, day_start_utc: Any) -> i
 #: fleet-wide replay script reads it.
 _COUNT_PAGED_TODAY_BY_KIND_SQL = """
     SELECT COALESCE(data -> 'data' ->> 'trigger_class', 'geo_convergence') AS trigger_class,
-           count(*)::int AS n
+           count(DISTINCT COALESCE(data -> 'data' ->> 'push_batch', id::text))::int AS n
       FROM analyst_outputs
      WHERE kind = 'alert'
        AND analyst_id = $1

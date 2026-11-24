@@ -366,6 +366,51 @@ def test_selection_is_a_strict_prefix_of_the_order() -> None:
 
 
 # ---------------------------------------------------------------------------
+# CONSULT_REVIEW_2026-09-28 §B.5 — the tier-aware carry cut
+# ---------------------------------------------------------------------------
+
+
+def test_select_carried_country_and_thematic_are_byte_identical_to_the_flat_cut() -> None:
+    """The cap change touches WORLD only: country and thematic keep the exact
+    ``candidates[:BLOCK_CAP]`` prefix that shipped."""
+    rows = [_row(f"h{i}") for i in range(11)]
+    ap.attach_cited_salience(rows, MAGS)
+    ordered = sorted(rows, key=ap.order_key)
+    assert ap.select_carried(ordered, tier=ap.TIER_COUNTRY) == ordered[: ap.BLOCK_CAP]
+    assert ap.select_carried(ordered, tier=ap.TIER_THEMATIC) == ordered[: ap.BLOCK_CAP]
+
+
+def test_select_carried_widens_the_world_cap_to_sixteen() -> None:
+    """The world tier's own, wider cap — still a strict prefix of the order."""
+    assert ap.WORLD_BLOCK_CAP == 16
+    rows = [_row(f"h{i}") for i in range(20)]
+    ap.attach_cited_salience(rows, MAGS)
+    ordered = sorted(rows, key=ap.order_key)
+    carried = ap.select_carried(ordered, tier=ap.TIER_WORLD)
+    assert carried == ordered[: ap.WORLD_BLOCK_CAP]
+    assert len(carried) == 16
+
+
+def test_select_carried_the_eea5b823_shape_carries_sixteen_of_thirty_three() -> None:
+    """The live shape the review measured: 33 world candidates. The flat
+    ``BLOCK_CAP`` (8) cut carried 8 and dropped 25; the tier-aware cap carries
+    16 and drops 17."""
+    rows = [_row(f"h{i}") for i in range(33)]
+    ap.attach_cited_salience(rows, MAGS)
+    ordered = sorted(rows, key=ap.order_key)
+    carried = ap.select_carried(ordered, tier=ap.TIER_WORLD)
+    assert len(carried) == 16
+    assert len(ordered) - len(carried) == 17
+
+
+def test_select_carried_honors_an_explicit_cap_override() -> None:
+    rows = [_row(f"h{i}") for i in range(11)]
+    ap.attach_cited_salience(rows, MAGS)
+    ordered = sorted(rows, key=ap.order_key)
+    assert len(ap.select_carried(ordered, tier=ap.TIER_WORLD, cap=3)) == 3
+
+
+# ---------------------------------------------------------------------------
 # §1.3 — the three numbers collapse to one
 # ---------------------------------------------------------------------------
 
@@ -473,7 +518,8 @@ def test_a_no_conflict_declaration_always_says_what_it_checked() -> None:
 
 
 def test_a_detected_pair_is_declared_and_never_explained() -> None:
-    up = _row("a", body="**BLUF:** Oil exports through the corridor rose sharply.\n")
+    up = _row("a", analyst_id="energy_security",
+              body="**BLUF:** Oil exports through the corridor rose sharply.\n")
     down = _row(
         "b", analyst_id="energy_security",
         body="**BLUF:** Oil exports through the corridor fell sharply.\n",
@@ -504,16 +550,20 @@ def test_a_detected_pair_is_declared_and_never_explained() -> None:
 
 
 def _up_down_pair():
-    """One head pointing UP and one pointing DOWN on the same dimension."""
+    """One head pointing UP and one pointing DOWN about ONE unit.
+
+    N-C (2026-11-11): a tension is one entity AND one variable at every tier,
+    so the pair is two reads of one desk on one country (``tension_pairing``)."""
     up = _row(
         "carried",
+        analyst_id="energy_security",
         target_id="country_g20_us",
         body="**BLUF:** Oil exports through the corridor rose sharply.\n",
     )
     down = _row(
         "dropped",
         analyst_id="energy_security",
-        target_id="country_g20_cn",
+        target_id="country_g20_us",
         body="**BLUF:** Oil exports through the corridor fell sharply.\n",
     )
     return up, down
@@ -528,9 +578,8 @@ def test_a_carried_pair_statement_is_byte_identical_to_the_pre_w1_template() -> 
     assert t["kind"] == "carried_pair"
     assert t["b_carried"] is True and t["b_why"] is None
     assert t["statement"] == (
-        "narrative_coordination on country_g20_us and energy_security on "
-        "country_g20_cn describe the same dimension in the same window and "
-        "point in opposite directions."
+        "Two energy_security reads on country_g20_us describe the same "
+        "dimension in the same window and point in opposite directions."
     )
 
 
@@ -555,7 +604,8 @@ def test_a_tension_against_an_uncarried_head_says_so_in_its_own_statement() -> N
     for banned in ("because", "which drives", "indicating", "underpinning"):
         assert banned not in t["statement"]
     # The uncarried side is exactly the head the ledger dropped.
-    assert t["b_ref"]["target_id"] == "country_g20_cn"
+    assert t["b_ref"]["target_id"] == "country_g20_us"
+    assert t["b_ref"]["finding_id"] == "dropped"
     assert any(
         d["finding_id"] == "dropped" for d in payload["drops"]["shown_not_carried"]
     )
@@ -662,6 +712,69 @@ def test_no_connective_in_the_vocabulary_asserts_a_state_of_the_world() -> None:
         for verb in (" rises", " rising", " escalat", " threat", " risk is",
                      " worsen", " improv", " likely", " suggests"):
             assert verb not in low, f"connective {c!r} asserts a state of the world"
+
+
+def test_w4_f3_the_floor_connectives_are_in_the_closed_vocabulary() -> None:
+    """W4 F-3 — four new fixed strings, the version does NOT move (D3)."""
+    for phrase in (
+        "carried, floor honoured",
+        "carried, floor NOT honoured",
+        "kept by the floor",
+        "order rank",
+    ):
+        assert phrase in ar.CONNECTIVES, phrase
+    assert ap.CONNECTIVE_VOCABULARY_VERSION == "connective.v1"
+
+
+def _floored_world():
+    from legba.data.analysts import assembly_floor as af
+
+    from .test_assembly_floor import _rows
+
+    sel = af.floor_select(_rows(), tier=ap.TIER_WORLD, apply_floor=True)
+    payload = ap.build_assembly(
+        tier=ap.TIER_WORLD, as_of="2026-10-02T00:20:00+00:00",
+        candidates=sel.order, carried=sel.carried,
+    )
+    return payload, af.stamp_floor(payload, sel.ledger)
+
+
+def test_w4_f3_the_world_floor_line_sits_under_the_as_of_line() -> None:
+    bare, floored = _floored_world()
+    body = ar.render_assembly_body(floored)
+    lines = body.splitlines()
+    assert lines[0].startswith("*As of 2026-10-02T00:20:00; assembled from 16 ")
+    assert lines[1] == "*6 regions carried, floor honoured — 1 kept by the floor.*"
+    assert lines[2] == ""
+    kept = [ln for ln in lines if "kept by the floor (" in ln]
+    assert len(kept) == 1 and kept[0].startswith("[[ref:16]] · ")
+    assert " — kept by the floor (order rank 17), " in kept[0]
+    assert kept[0].endswith("h old")
+    # ADDITIVE: strip the two floor additions and the body is the floorless one.
+    stripped = "\n".join(
+        ln.split(" — kept by the floor (")[0]
+        for i, ln in enumerate(lines) if i != 1
+    ) + "\n"
+    assert stripped == ar.render_assembly_body(bare)
+    assert body.rstrip().endswith("<!-- connectives: connective.v1 -->")
+
+
+def test_w4_f3_a_missed_group_renders_floor_not_honoured() -> None:
+    _, floored = _floored_world()
+    for g in floored["floor"]["groups"]:
+        if g["group_id"] == "region_americas":
+            g["carried"] = 0
+    floored["floor"]["promoted"] = []
+    line = ar.render_assembly_body(floored).splitlines()[1]
+    assert line == "*5 of 6 regions carried, floor NOT honoured: Americas.*"
+
+
+def test_w4_f3_no_floor_line_off_the_world_tier() -> None:
+    _, floored = _floored_world()
+    country = dict(floored, tier=ap.TIER_COUNTRY)
+    assert "floor honoured" not in ar.render_assembly_body(country)
+    no_floor = {k: v for k, v in floored.items() if k != "floor"}
+    assert ar.render_assembly_body(no_floor).splitlines()[1] == ""
 
 
 def test_the_title_is_deterministic_in_all_three_lead_shapes() -> None:

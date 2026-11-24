@@ -23,7 +23,9 @@ from datetime import date
 from enum import Enum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator,
+)
 
 from .lifecycle import LifecycleState
 from .target import OutputBinding, AnalystId
@@ -293,6 +295,27 @@ class SubscriptionBlock(BaseModel):
         default_factory=lambda: {"direct_queries": False}
     )
 
+    @field_validator("substrate", mode="after")
+    @classmethod
+    def _check_signal_tag_keys(cls, v: dict[str, Any]) -> dict[str, Any]:
+        """W8 TAX-1 — the two typed keys of the open ``substrate`` dict:
+        ``signal_tags`` (a list of tag strings, ``<family>:<value>`` or a bare
+        legacy value, ≤ 64) and ``untagged_fallback`` (bool; absent = true).
+        Shape only; the registry refuses an unloaded family by name at PUT."""
+        tags = v.get("signal_tags")
+        if tags is not None:
+            if not isinstance(tags, list) or len(tags) > 64 or not all(
+                isinstance(t, str) and t.strip() and t == t.strip() and len(t) <= 200
+                for t in tags
+            ):
+                raise ValueError(
+                    "subscription.substrate.signal_tags must be a list of at most "
+                    "64 non-empty, unpadded tag strings (<=200 chars each)"
+                )
+        if "untagged_fallback" in v and not isinstance(v["untagged_fallback"], bool):
+            raise ValueError("subscription.substrate.untagged_fallback must be a bool")
+        return v
+
 
 class FieldMapping(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid", populate_by_name=True)
@@ -427,11 +450,35 @@ class GatherBlock(BaseModel):
         Hard cap on GATHER tool-call rounds (1..6; default 1). Wired into
         ``deps.max_rounds`` by the deps-builder, mirroring consult's
         ``options['max_tool_rounds']`` lever.
+    thinking:
+        T-2: ``"on"``/``"off"`` for the GATHER rounds only (absent = inherit
+        ``method.llm.thinking``). Lets a seat think on its synthesis and not on
+        its tool rounds. Parsed by ``legba.shared.thinking_choice``; read only
+        by the kinds that gather (refused elsewhere at registration).
     """
 
     model_config = ConfigDict(strict=True, extra="forbid")
 
     max_rounds: int = Field(default=1, ge=1, le=6)
+    # ``bool`` too: an unquoted YAML ``off`` reads as False.
+    thinking: str | bool | None = None
+
+    @field_validator("thinking", mode="after")
+    @classmethod
+    def _parse_thinking(cls, v: str | bool | None) -> str | bool | None:
+        from legba.shared.thinking_choice import parse_thinking
+
+        parse_thinking(v)
+        return v
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_thinking(self, handler: Any) -> Any:
+        # An undeclared ``thinking`` is left out of the dump, so every
+        # descriptor written before T-2 keeps its content hash (its version).
+        data = handler(self)
+        if isinstance(data, dict) and data.get("thinking") is None:
+            data.pop("thinking", None)
+        return data
 
 
 def _env_limited_dep(exc: ModuleNotFoundError) -> str | None:
@@ -453,7 +500,7 @@ def _load_options_catalog() -> tuple[Any, Any] | None:
     cannot import their chain (a non-legba dependency is absent — the
     registry image ships lighter than the runtime)."""
     try:
-        from ..analysts.handler_options import (
+        from ..option_catalog.handler_options import (
             resolve_handler_options,
             resolve_kind_options,
         )
@@ -576,7 +623,7 @@ class MethodBlock(BaseModel):
     # time, so ~60 documented thresholds fleet-wide were unreachable dead
     # config. This is the missing channel. The runtime merges the validated
     # subset into the run options at fire time (``dapr_actors``) — see
-    # ``legba.data.analysts.handler_options`` for the per-sub-handler catalog,
+    # ``legba.data.option_catalog.handler_options`` for the per-sub-handler catalog,
     # the reserved-key list and the loud-degrade contract.
     #
     # Deliberately a free-form ``dict[str, Any]`` (mirroring ``llm`` above and
@@ -626,7 +673,47 @@ class MethodBlock(BaseModel):
         if self.kind == "deterministic" and not self.impl:
             raise ValueError("method.kind=deterministic requires impl")
         self._check_options_structure()
+        self._check_house_temperature()
+        self._check_thinking_option()
         return self
+
+    def _check_thinking_option(self) -> None:
+        """``thinking`` (T-1, T-2) is ``"on"``/``"off"`` at ``method.llm``,
+        ``method.gather`` and ``method.llm.narrate`` — and nowhere else.
+
+        A ``thinking`` inside any other nested block (``verify``, ``judge``,
+        ...) would be read by nothing (or could name a plane with no thinking
+        alias) and is refused rather than registered. Whether the KIND reads a
+        per-block choice is checked on the descriptor
+        (:meth:`AnalystDescriptor._check_thinking_kind`), which sees
+        ``identity.kind``.
+        """
+        from legba.shared.thinking_choice import thinking_declaration_errors
+
+        # kind=None: the kind check needs identity.kind; the descriptor runs it.
+        errors = thinking_declaration_errors(None, self.llm, self.gather)
+        if errors:
+            raise ValueError("; ".join(errors))
+
+    def _check_house_temperature(self) -> None:
+        """Refuse any ``method.llm`` temperature other than the house 1.0.
+
+        The platform rule (2026-11-13) is temperature 1.0 on every model call;
+        a descriptor may omit the field (the builder default is the house
+        value) or restate 1.0, nothing else. Checked at the block level and one
+        level into nested dict values (``narrate`` / ``verify`` blocks).
+        """
+        from legba.shared.sampling import validate_house_temperature
+
+        def _scan(block: Any, where: str) -> None:
+            if not isinstance(block, dict):
+                return
+            if block.get("temperature") is not None:
+                validate_house_temperature(block["temperature"], where=where + ".temperature")
+
+        _scan(self.llm, "method.llm")
+        for key, val in (self.llm or {}).items():
+            _scan(val, f"method.llm.{key}")
 
     def _check_options_structure(self) -> None:
         """X-1 — structural gate on ``method.options`` (registration-time).
@@ -650,7 +737,7 @@ class MethodBlock(BaseModel):
         Everything CATALOG-level — an unknown key for this handler, a value
         outside its declared range — is deliberately NOT refused here. Those
         degrade loudly at fire time (see
-        :func:`legba.data.analysts.handler_options.resolve_handler_options`)
+        :func:`legba.data.option_catalog.handler_options.resolve_handler_options`)
         so that a knob renamed in a later release cannot brick activation for
         descriptor rows already in the registry.
         """
@@ -881,8 +968,20 @@ class AnalystDescriptor(BaseModel):
         ):
             raise ValueError("critic analyst method.kind must be an LLM kind")
         self._check_options_kind()
+        self._check_thinking_kind()
         self._warn_on_dead_options()
         return self
+
+    def _check_thinking_kind(self) -> None:
+        """T-2 — a per-block thinking choice (``method.gather.thinking``,
+        ``method.llm.narrate.thinking``) only on a kind whose builder reads it
+        (``thinking_choice.KINDS_READING_ROLE``); refused otherwise."""
+        from legba.shared.thinking_choice import thinking_declaration_errors
+
+        kind = str(getattr(self.identity.kind, "value", self.identity.kind))
+        errors = thinking_declaration_errors(kind, self.method.llm, self.method.gather)
+        if errors:
+            raise ValueError("; ".join(errors))
 
     def _check_options_kind(self) -> None:
         """X-1/QW1-B — WHICH kinds may carry ``method.options`` at all.
@@ -909,7 +1008,7 @@ class AnalystDescriptor(BaseModel):
         if self.method.kind == "deterministic":
             return
         try:
-            from ..analysts.handler_options import ANALYST_KIND_OPTIONS
+            from ..option_catalog.handler_options import ANALYST_KIND_OPTIONS
         except ModuleNotFoundError as exc:
             if _env_limited_dep(exc):
                 # Same environment split as _warn_on_dead_options: the catalog
@@ -1026,16 +1125,35 @@ class IndicatorEntry(BaseModel):
     citations:
         The finding's own ASCII ``[N]`` signal-marker INDICES (the ints keying
         ``data['citations']``) that a ``triggered`` indicator rests on.
+    shape / reference (X4 LEVEL, W11-F36):
+        Absent on a CHANGE-shaped indicator (every indicator before X4, and
+        every one a unit does not declare — the dump drops ``None``, so those
+        entries stay byte-identical). A LEVEL-shaped indicator carries
+        ``shape='level'`` and the ``reference`` it is measured against (the
+        ``method.options.level_indicators`` declaration, stamped by the
+        handler, never the model), and its fired state is
+        ``observed_at_level``: the condition stands at the level THIS window,
+        on a cited report — evidence for a standing status, not a change.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=1, max_length=128)
     statement: str = Field(min_length=1, max_length=2048)
-    status: Literal["triggered", "not_observed", "expired"]
+    status: Literal["triggered", "not_observed", "expired", "observed_at_level"]
     horizon_date: date
     first_seen: date
     citations: list[int] = Field(default_factory=list, max_length=64)
+    shape: Literal["change", "level"] | None = None
+    reference: str | None = Field(default=None, min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def _level_shape(self) -> "IndicatorEntry":
+        if self.status == "observed_at_level" and self.shape != "level":
+            raise ValueError("status 'observed_at_level' is only for a level-shaped indicator")
+        if (self.shape == "level") != (self.reference is not None):
+            raise ValueError("a level-shaped indicator carries a reference, and only it does")
+        return self
 
 
 def validate_indicators(value: Any) -> list[dict[str, Any]]:
@@ -1061,7 +1179,7 @@ def validate_indicators(value: Any) -> list[dict[str, Any]]:
     for i, entry in enumerate(value):
         if not isinstance(entry, dict):
             raise ValueError(f"data.indicators[{i}] must be an object")
-        out.append(IndicatorEntry(**entry).model_dump(mode="json"))
+        out.append(IndicatorEntry(**entry).model_dump(mode="json", exclude_none=True))
     return out
 
 

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.imf.portwatch_chokepoints": {
+      "source": "source_imf_portwatch_chokepoints.yaml",
+      "state": "draft"
+    }
+  }
+}

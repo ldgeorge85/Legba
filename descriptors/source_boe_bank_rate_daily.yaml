@@ -1,0 +1,128 @@
+# I-5 series-kind capabilities (2026-11-14) — the Bank of England's Bank Rate
+# (Bank of England Database series IUDBEDR, official Bank Rate), daily, as a
+# SERIES. Ships DRAFT; the reference host walks it to CONFIGURED
+# (descriptors/LIFECYCLE.md), never active — activation is the owner's call.
+# Kind: series_api.
+#
+# WHY: the UK policy rate from the issuing central bank (the review's
+# Area E row, "add"). X-1 could not write it: the CSV dates read
+# "01 Oct 2026" (I-5: date format `day_mon_year`, an English three-letter
+# month matched exactly) and the date-from parameter wants "01/Oct/2026"
+# (I-5: since format `day_mon_year_slashed`).
+#
+# THE ENDPOINT. The Bank of England Database CSV export,
+# /boeapps/database/_iadb-fromshowcolumns.asp with csv.x=yes, SeriesCodes=
+# IUDBEDR, CSVF=TN, UsingCodes=Y, VPD=Y, VFD=N, Dateto=now and Datefrom — the
+# parameters of the URL the review checked 2026-11-14 (one GET, generic
+# client identity, Datefrom=01/Oct/2026): 200, application/csv, header
+# `DATE,IUDBEDR`, rows "01 Oct 2026,3.75", one per business day. Datefrom is
+# now the since parameter: every poll asks from today - (1 + 14) days, the
+# first from today - 400 days.
+#
+# SUBJECT. The United Kingdom (`GB`, subject_kind country). UNIT: percent.
+# READER: series_change/2026-11.3 proposes `boe.iadb.*=policy_rate` (every
+# change is an event); registering it is a roll step. The BIS policy-rate
+# series also carries a GB row at one remove; this is the primary.
+#
+# robots.txt allows the path for `*`.
+# Class: official (a central bank).
+
+identity:
+  id: source.boe.bank_rate_daily
+  name: Bank of England — Bank Rate, daily (IADB IUDBEDR, series)
+  kind: series_api
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: i5_series_kind_capabilities
+  created: "2026-11-14T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [GB]
+  languages: [en]
+  tags: [central_banks, monetary_policy, interest_rates, markets, series, uk]
+  source_class: official
+  license_class: open_gov_attribution   # Open Government Licence (database data)
+  attribution: "Source: Bank of England Database, series IUDBEDR (Official Bank Rate); contains public sector information licensed under the Open Government Licence v3.0"
+  access_class: public
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "7 17 * * *"             # daily, after a 12:00 UK decision is in the database
+  cooldown_seconds: 3600
+  jitter_seconds: 120
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.bankofengland.co.uk/boeapps/database/_iadb-fromshowcolumns.asp"
+  params:
+    factory_kind: list
+    raw:
+      - ["csv.x", "yes"]
+      - ["Dateto", "now"]
+      - ["SeriesCodes", "IUDBEDR"]
+      - ["CSVF", "TN"]
+      - ["UsingCodes", "Y"]
+      - ["VPD", "Y"]
+      - ["VFD", "N"]
+  since_param:
+    factory_kind: dict
+    value_kind: text
+    raw:
+      name: Datefrom
+      format: day_mon_year_slashed
+  format:
+    factory_kind: text
+    raw: csv
+  date_field:
+    factory_kind: text
+    raw: DATE
+  date_format:
+    factory_kind: text
+    raw: day_mon_year
+  outputs:
+    factory_kind: list
+    raw:
+      - series: boe.iadb.bank_rate
+        value_field: IUDBEDR
+        subject: GB
+        unit: percent
+        period: day
+        subject_kind: country
+        methodology_version: boe-iadb-iudbedr/1
+  lag_days:
+    factory_kind: number
+    raw: 1
+  revision_days:
+    factory_kind: number
+    raw: 14
+  backfill_days:
+    factory_kind: number
+    raw: 400
+
+sink:
+  family: observation
+  config:
+    series:
+      - id: boe.iadb.bank_rate
+        field: IUDBEDR
+        unit: percent
+        period: day
+        subject_kind: country
+        methodology_version: boe-iadb-iudbedr/1
+        description: "Bank of England official Bank Rate, per cent per year, in force on the business day (subject GB)"
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  media: reference
+
+deps: {}
+
+subscription_policy: open

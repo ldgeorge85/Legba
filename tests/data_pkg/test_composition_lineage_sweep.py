@@ -271,6 +271,9 @@ async def test_frame_gauge_queries_all_four_composition_tiers():
     after the demotion the gauge can only say something about a tier that still
     AUTHORS a title, and there are now exactly two of those — the world voice
     and the per-country one.
+
+    W5 (2026-11-07) adds hybrid_threat_composition beside
+    escalation_composition: the second thematic tier, gauged like the first.
     """
     conn = _LineageConn(roots=[], nodes={}, catalog=set(), gauge=[])
     await composition_lineage_sweep.handle([], {}, _Deps(_Pool(conn)))
@@ -281,6 +284,7 @@ async def test_frame_gauge_queries_all_four_composition_tiers():
         "region_composition",
         "country_composition",
         "escalation_composition",
+        "hybrid_threat_composition",
         "world_assessment",
         "country_assessment",
     }

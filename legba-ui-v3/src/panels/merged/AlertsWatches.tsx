@@ -19,27 +19,34 @@
  * registry.ts HIDDEN_KINDS — so a saved layout referencing any of the old ids
  * keeps resolving exactly as before.
  */
-import { useState } from 'react'
 import type { PanelProps } from '@/types'
-import { initialTab, PanelTabStrip, type PanelTabDef } from '@/components/PanelTabs'
+import { PanelTabStrip, type PanelTabDef } from '@/components/PanelTabs'
 import { PanelTierProvider } from '@/components/PanelTierContext'
 import { PanelEmbedProvider } from '@/components/PanelEmbedContext'
 import WatchlistPanel from '@/panels/system/Watchlist'
 import AlertCenterPanel from '@/panels/system/AlertCenter'
 import EscalationsPanel from '@/panels/system/Escalations'
+import { useMergedTab } from './useMergedTab'
+import { useBelowAdmin } from '@/auth/roles'
 
 type Tab = 'watches' | 'triggers' | 'deliveries'
 
-const TABS: readonly PanelTabDef[] = [
+export const ALERTS_WATCHES_TABS: readonly PanelTabDef[] = [
   { id: 'watches', label: 'Watches' },
   { id: 'triggers', label: 'Triggers', badge: 'preview' },
   { id: 'deliveries', label: 'Deliveries' },
 ]
+const TABS = ALERTS_WATCHES_TABS
+
+export const DELIVERIES_NEEDS_ADMIN =
+  'Where each page was delivered (the channels and their failures) is read by an admin. Your watches are in the first tab.'
 
 export default function AlertsWatchesMerged(props: PanelProps) {
   // system.watchlist / system.alert_center / system.escalations retired onto
-  // the watches / triggers / deliveries tabs (aliases.ts).
-  const [tab, setTab] = useState<Tab>(() => initialTab(props.initialTab, TABS, 'watches') as Tab)
+  // the watches / triggers / deliveries tabs (aliases.ts). UI-B6: through
+  // `useMergedTab`, so an `open_panel {tab}` switches an already-open tile.
+  const [tab, setTab] = useMergedTab<Tab>('system.alerts_watches', props.initialTab, TABS, 'watches')
+  const belowAdmin = useBelowAdmin()
   return (
     <div className="flex h-full w-full flex-col bg-surf-2">
       <div className="flex items-center gap-2 border-b border-line bg-surf-3 px-density py-1.5">
@@ -66,7 +73,16 @@ export default function AlertsWatchesMerged(props: PanelProps) {
               <AlertCenterPanel {...props} />
             </PanelTierProvider>
           )}
-          {tab === 'deliveries' && <EscalationsPanel {...props} />}
+          {tab === 'deliveries' &&
+            (belowAdmin ? (
+              // RA-1: deliveries name the page sinks and their failures — the
+              // engine's own plumbing, an admin's read. No request below admin.
+              <p className="p-3 text-body text-ink-2" data-testid="alerts-watches-deliveries-reader">
+                {DELIVERIES_NEEDS_ADMIN}
+              </p>
+            ) : (
+              <EscalationsPanel {...props} />
+            ))}
         </PanelEmbedProvider>
       </div>
     </div>

@@ -254,13 +254,24 @@ async def test_get_calibration_reads_nested_metrics_from_live_writer_shape(pg_po
             "forecast_acute_sample_size": 3, "forecast_acute_ready": False,
             "forecast_acute_degenerate": False,
             "forecast_acute_status": "accumulating (n=3/30)",
+            "populations": {
+                "headline_exogenous": {
+                    "brier": 0.3976, "n": 537,
+                    "newest_member_at": "2026-07-01T00:00:00+00:00",
+                },
+            },
         })
     out = await port.get_calibration()
     assert out["available"] is True
-    assert out["brier"] == 0.3976
+    # Lane E: each Brier beside ITS OWN n; the pooled count is renamed and is
+    # never beside a Brier that is not over it; the figure is stale + labelled.
+    assert "brier" not in out and "sample_size" not in out
     assert out["brier_exogenous"] == 0.3976
     assert out["exogenous_sample_size"] == 537
-    assert out["sample_size"] == 600
+    assert out["pooled_sample_size"] == 600
+    assert out["stale"] is True
+    assert out["newest_member_at"].startswith("2026-07-01")
+    assert out["label"] == "untrusted — legacy, under diagnosis"
     assert out["calibration_thin"] is False
     assert out["forecast_unproven"] is True
     assert out["refs"] == [str(oid)]
@@ -285,7 +296,8 @@ async def test_get_calibration_ignores_legacy_kind_and_superseded_rows(pg_pool, 
 
     async with pg_pool.acquire() as conn:
         live = await _insert_calibration_finding(conn, {
-            "brier": 0.2, "exogenous_sample_size": 10, "sample_size": 20,
+            "brier": 0.2, "brier_exogenous": 0.2,
+            "exogenous_sample_size": 10, "sample_size": 20,
         })
         # a SUPERSEDED calibration finding (points at the live head) is skipped
         await _insert_calibration_finding(
@@ -296,7 +308,10 @@ async def test_get_calibration_ignores_legacy_kind_and_superseded_rows(pg_pool, 
     out = await port.get_calibration()
     assert out["available"] is True
     assert out["id"] == str(live)
-    assert out["brier"] == 0.2
+    # a pre-lane-E (unscoped) finding withholds its mixed Brier, keeps it aside
+    assert out["legacy_finding_format"] is True
+    assert out["brier_exogenous"] is None
+    assert out["legacy_unscoped"]["brier_exogenous"] == 0.2
 
 
 @pytest.mark.asyncio

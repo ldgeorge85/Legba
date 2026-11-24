@@ -93,8 +93,8 @@ from ..data.provenance.kinds import (
     structural_claims_verify_opt_in,
 )
 from ..data.provenance.models import FindingPayload
-from ..data.provenance.output_graph import make_conn_age_output_hook
 from ..data.provenance.receipts import RuntimeReceiptChain
+from ..data.slice_coverage import coverage_options as _slice_coverage_options
 from ..data.analysts.deterministic_handlers.finding_supersession import (
     fold_prior_composition_heads,
     fold_prior_correlation_heads,
@@ -108,6 +108,7 @@ from ..data.run_accounting import (
     bind_run_accounting as _bind_run_accounting,
     current_llm_calls as _current_llm_calls,
     current_prompt_rendered as _current_prompt_rendered,
+    current_prompt_tail as _current_prompt_tail,
     current_tool_calls as _current_tool_calls,
     llm_call_watermark as _llm_call_watermark,
     llm_calls_since as _llm_calls_since,
@@ -118,6 +119,7 @@ from ..data.schemas.target import TargetDescriptor
 from .actor_turn import TurnBudgetExceeded, bounded_turn_op
 from .analyst_method import AnalystMethodResult, LLMAnalystRunner
 from .budget import BudgetEnforcer
+from . import hard_fail_alert as _hard_fail_alert
 from .dapr_cron import cron_to_reminder_timing
 from .deps import StandardDeps
 from .lifecycle import ACTIVE, DRAFT, PAUSED, RETIRED, LifecycleEvent, LifecycleFSM
@@ -125,6 +127,7 @@ from .logging_setup import (
     bind_run_log_context as _bind_run_log_context,
     reset_run_log_context as _reset_run_log_context,
 )
+from .pack_staleness import cached_pack_refs as _cached_pack_refs  # W11-F161
 
 logger = logging.getLogger(__name__)
 
@@ -370,7 +373,7 @@ def _merge_descriptor_options(
     kind = str(getattr(getattr(identity, "kind", None), "value", None)
                or getattr(identity, "kind", "") or "")
 
-    from ..data.analysts.handler_options import (
+    from ..data.option_catalog.handler_options import (
         ANALYST_KIND_OPTIONS,
         resolve_handler_options,
         resolve_kind_options,
@@ -774,13 +777,6 @@ _GATHER_BINDING_KINDS: frozenset[str] = frozenset(
     {"inline_target", "journal_assessor", "inquiry"}
 )
 
-#: Opt-in flag for the AGE :DerivedFrom output-lineage mirror (D3). OFF by
-#: default — the relational derived_from[] array + recursive-CTE lineage is the
-#: source of truth; the graph edge is enrichment, and the per-write MERGE is
-#: only paid when an operator sets this.
-_AGE_DERIVED_FROM_ENV = "LEGBA_AGE_DERIVED_FROM"
-
-
 def _fallback_enabled() -> bool:
     """Honor ``LEGBA_DEPS_FALLBACK_ENABLED`` (default true).
 
@@ -789,16 +785,6 @@ def _fallback_enabled() -> bool:
     """
     raw = os.environ.get(_DEPS_FALLBACK_ENV, "1").strip().lower()
     return raw in {"", "1", "true", "yes", "on"}
-
-
-def _age_derived_from_enabled() -> bool:
-    """Honor ``LEGBA_AGE_DERIVED_FROM`` (default OFF).
-
-    Only "1"/"true"/"yes"/"on" enable the AGE output-lineage edge mirror;
-    unset/empty/anything-else keeps it off (relational lineage unaffected).
-    """
-    raw = os.environ.get(_AGE_DERIVED_FROM_ENV, "0").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
 
 
 def _descriptor_declares_verify(descriptor: Any) -> bool:
@@ -985,32 +971,6 @@ def evict_analyst_deps_for_descriptor(descriptor_id: str) -> int:
     return len(stale)
 
 
-def _cached_pack_refs(deps: "_AnalystDeps") -> dict[str, str]:
-    """Collect ``{pack_id: cached_version}`` baked into one cached deps entry's
-    GATHER bindings (``gather_binding`` / ``gather_write_bindings`` /
-    ``escalation``). Best-effort attribute probing — a binding shape this
-    function doesn't recognize is silently skipped, never raised (this is a
-    diagnostic sweep, not a correctness gate)."""
-    out: dict[str, str] = {}
-
-    def _stamp(binding: Any) -> None:
-        pack = getattr(binding, "pack", None)
-        identity = getattr(pack, "identity", None)
-        pack_id = getattr(identity, "id", None)
-        version = getattr(identity, "version", None)
-        if pack_id and version:
-            out[str(pack_id)] = str(version)
-
-    _stamp(deps.gather_binding)
-    write = deps.gather_write_bindings or {}
-    for binding in (write.get("bindings") or {}).values():
-        _stamp(binding)
-    escalation = deps.escalation
-    if escalation is not None:
-        _stamp(getattr(escalation, "binding", None))
-    return out
-
-
 async def warn_stale_pack_deps(
     fetch_pack_version: Callable[[str], Awaitable[str | None]],
 ) -> int:
@@ -1073,6 +1033,12 @@ async def warn_stale_pack_deps(
                     "pack head.",
                     actor_id, pack_id, cached_version[:16], head_version[:16],
                 )
+    # W11-F161: one line per sweep, so a roll can tell "swept, clean" from
+    # "not swept yet" (scripts/rolling_deploy.sh --walk waits for it).
+    logger.info(
+        "dapr_actors.pack_staleness.sweep cached_actors=%d packs=%d stale=%d",
+        len(per_actor), len(unique_pack_ids), stale_count,
+    )
     return stale_count
 
 
@@ -1603,7 +1569,9 @@ class TargetActor(Actor, TargetActorInterface, Remindable):
 
 from .actor_retry import (  # noqa: F401  -- re-export: public API stability (#93)
     _classify_exception,
-    _retry_delay_seconds,
+    _effective_transient_attempts,
+    _invoke_with_transient_retry,
+    _retry_delay_seconds, _transient_retry_delay,
 )
 
 
@@ -2645,6 +2613,8 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                     "slice_window_hours": resolve_slice_window_hours(
                         deps_bundle.descriptor
                     ),
+                    # Lane N-B: a watermark slice's coverage stamp + REAL window.
+                    **_slice_coverage_options(inputs),
                 }
                 # Stage 4 (gather_only): thread the descriptor's
                 # ``subscription.substrate.gather_only`` flag so the inline_target
@@ -2904,42 +2874,40 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                 # Transient retry loop. Other exception kinds (budget, hard)
                 # break out of the retry early. Defaults preserve current
                 # behavior (3 attempts, exponential backoff up to 60s).
-                method_result = None
-                last_exc: BaseException | None = None
-                max_attempts = transient_policy.max_attempts
-                for attempt in range(1, max_attempts + 1):
-                    attempts_made = attempt
-                    try:
-                        method_result = await _invoke_run_method(
-                            active_run_method,
-                            inputs,
-                            options,
-                            active_kind_deps,
-                        )
-                        last_exc = None
-                        break
-                    except BaseException as exc:
-                        last_exc = exc
-                        bucket = _classify_exception(exc)
-                        if bucket != "transient":
-                            # Non-transient — let the outer handler classify.
-                            raise
-                        if attempt >= max_attempts:
-                            # Out of attempts — raise so the outer handler
-                            # records HARD_FAIL / DLQ per hard_policy.
-                            raise
-                        delay = _retry_delay_seconds(transient_policy, attempt)
-                        logger.warning(
-                            "dapr_actors.analyst.transient_retry "
-                            "actor_id=%s attempt=%d/%d delay_s=%.2f err=%s",
-                            actor_id, attempt, max_attempts, delay, exc,
-                        )
-                        await asyncio.sleep(delay)
-                if method_result is None and last_exc is not None:
-                    # Defensive — should never reach here, the loop either
-                    # sets method_result or re-raises. Re-raise to keep the
-                    # outer handler in charge of classification.
-                    raise last_exc
+                #
+                # W11-F133 (consult 6cd91190): a streaming, user-facing run
+                # (deps carry ``step_publish``) runs ONCE — its failure or its
+                # partial is the operator's, never a silent re-run of the whole
+                # consult on the same request id. The loop itself lives in
+                # ``actor_retry._invoke_with_transient_retry`` (moved verbatim).
+                max_attempts = _effective_transient_attempts(
+                    transient_policy, active_kind_deps,
+                )
+                if max_attempts < transient_policy.max_attempts:
+                    logger.info(
+                        "dapr_actors.analyst.transient_retry_disabled "
+                        "actor_id=%s kind=%s reason=streaming_user_facing_run "
+                        "descriptor_max_attempts=%d",
+                        actor_id, deps_bundle.descriptor.identity.kind,
+                        transient_policy.max_attempts,
+                    )
+
+                def _note_attempt(n: int) -> None:
+                    nonlocal attempts_made
+                    attempts_made = n
+
+                method_result = await _invoke_with_transient_retry(
+                    lambda: _invoke_run_method(
+                        active_run_method,
+                        inputs,
+                        options,
+                        active_kind_deps,
+                    ),
+                    policy=transient_policy,
+                    max_attempts=max_attempts,
+                    actor_id=actor_id,
+                    on_attempt=_note_attempt,
+                )
 
                 # X-1 receipt: which descriptor-declared knobs took effect this
                 # run, and which were dropped. No options declared → no step
@@ -2959,16 +2927,16 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                         for d in explicit_derived
                     ]
 
-                # F1: record against ``active_budget`` — the CHOSEN plane's
-                # enforcer for a consult/deep override (else the cached primary),
-                # so a free-core run is metered at $0 and never billed to the Opus
-                # ledger. Default path: active_budget IS deps_bundle.budget.
+                # F1/B.10: ``active_budget`` records this run (CHOSEN plane's
+                # enforcer, or cached primary) with its own cost estimate as override.
+                cost_override = getattr(method_result, "cost_estimate_usd", None)
                 if active_budget is not None and method_result.usage:
                     await active_budget.record(
                         conn,
                         prompt_tokens=int(method_result.usage.get("prompt_tokens", 0)),
                         completion_tokens=int(method_result.usage.get("completion_tokens", 0)),
                         reasoning_tokens=int(method_result.usage.get("reasoning_tokens", 0)),
+                        cost_estimate_usd_override=cost_override,
                     )
 
                 # Shared terminal-frame publisher (Piece 1, D5). Both the chat
@@ -3103,6 +3071,7 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                     else _select_output_payload(method_result, output_kind)
                 )
                 output_row = None
+                _prepub_block = None
                 if trace_only:
                     # TRACE-ONLY: skip the redundant analyst_outputs FINDING
                     # receipt entirely. The kind's run_method already ran its
@@ -3123,15 +3092,13 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                     # write_analyst_output returns ``(OutputRow, dlq_entry|None)``.
                     # The DLQ entry is None on the happy path; for the spike we
                     # surface the finding row's id directly.
-                    #
-                    # AGE :DerivedFrom mirror (opt-in, D3) — when enabled, MERGE
-                    # the output-lineage edges on the SAME conn (atomic with the
-                    # INSERT, best-effort). Default OFF: relational derived_from[]
-                    # is the lineage source of truth, so no per-write graph cost.
-                    age_hook = (
-                        make_conn_age_output_hook(conn)
-                        if _age_derived_from_enabled()
-                        else None
+                    # Lane N-D: a journal entry is VERIFIED BEFORE IT PUBLISHES
+                    # (marks + flags land on the row); no-op for every other kind.
+                    _pre_id, _prepub_block, output_payload = await verify_journal_before_publish(
+                        conn, deps=deps_bundle, output_kind=output_kind,
+                        payload=output_payload, run_id=run_id, options=options,
+                        declares_verify=_descriptor_declares_verify(deps_bundle.descriptor),
+                        trace_steps=getattr(method_result, "intermediate_steps", None),
                     )
                     output_row, _dlq = await write_analyst_output(
                         conn,
@@ -3139,7 +3106,8 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                         kind=output_kind,
                         output_payload=output_payload,
                         derived_from=derived_ids,
-                        age_hook=age_hook,
+                        row_id=_pre_id,
+                        handed_refs=getattr(method_result, "handed_refs", None),  # DM-A
                     )
                     if output_row is None:
                         rec["last_error"] = "analyst_output_validation_failed"
@@ -3372,9 +3340,7 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                     ]
                     # RUST-5: last LLM call at this watermark — usually the
                     # synthesis call (GATHER precedes it, judge leg follows).
-                    _acct_prompt_rendered, _acct_prompt_sha256 = (
-                        _current_prompt_rendered()
-                    )
+                    _acct_prompt_rendered, _acct_prompt_sha256 = _current_prompt_rendered()
                     receipt_hash, prev_receipt_hash = (
                         await deps_bundle.receipt_chain.record(
                             run_id=run_id,
@@ -3387,7 +3353,7 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                             ),
                             target_id=target_id,
                             input_row_refs=derived_ids,
-                            input_payload=None,
+                            input_payload=_current_prompt_tail(),
                             prompt_module_hash=getattr(
                                 method_result, "prompt_module_hash", None
                             ),
@@ -3464,7 +3430,9 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                 # excluded; the verify_inline_target_finding scope guard's
                 # "citations present" check is the belt to this suspenders (the
                 # honest-empty composition writes no citations key → no-op).
-                verification_block: dict[str, Any] | None = None
+                verification_block: dict[str, Any] | None = (
+                    None if trace_only else _prepub_block
+                )
                 if (
                     not trace_only
                     and output_row is not None
@@ -3480,19 +3448,9 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                                 )
                             )
                         )
-                        # V1 (journal verify profile, the chronicle gate): the
-                        # JOURNAL output kind — both journal tiers share
-                        # identity.kind — opted in via the SAME method.llm.verify
-                        # declaration the compositions carry. The helper reshapes
-                        # the entry's cited FACT claims into the standard [N] +
-                        # bridge form; perspective claims never enter (§10). The
-                        # critique lands with analyzed_output_id = the journal
-                        # ENTRY id; the entry row itself is NEVER mutated.
-                        or (
-                            output_kind == OutputKind.JOURNAL
-                            and deps_bundle.descriptor.identity.kind in ("journal_assessor", "inquiry")  # noqa: E501 — Program 5: the inquiry kind's entries ride the SAME V1 journal verify profile
-                            and _descriptor_declares_verify(deps_bundle.descriptor)
-                        )
+                        # V1 (journal verify profile): the JOURNAL kind is verified
+                        # BEFORE the write now (verify_journal_before_publish,
+                        # lane N-D) — same pass, moved, so it is absent here.
                         # Continuity P2 (plan D3): the SITUATION_UPDATE kind goes
                         # through the FULL gate. Its delta claim ("this escalates
                         # the situation we were watching") is an assertion about
@@ -3938,8 +3896,14 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                 # the absence of cooldown_until.
                 rec["last_outcome"] = ActorRunOutcome.HARD_FAIL.value
             else:
-                # dlq_and_alert (default).
+                # dlq_and_alert (default): DLQ row + outward alert.
                 rec["last_outcome"] = ActorRunOutcome.HARD_FAIL.value
+                await _hard_fail_alert.dead_letter_and_alert(
+                    getattr(deps_bundle.deps, "pg_pool", None),
+                    analyst_id=deps_bundle.descriptor.identity.id,
+                    version=deps_bundle.descriptor.identity.version,
+                    run_id=run_id, actor_id=actor_id, exc=exc,
+                )
             await self._set_record(rec)
             await self._state_manager.save_state()
             return {
@@ -4042,6 +4006,7 @@ from .actor_critic import (  # noqa: F401  -- re-export: public API stability (#
     _resolve_critic_context,
     _critic_descriptor_pinned_analyst_id,
     verify_inline_target_finding,
+    verify_journal_before_publish,
     verify_structural_claims_finding,
 )
 

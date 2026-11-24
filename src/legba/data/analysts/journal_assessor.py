@@ -59,6 +59,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 from uuid import UUID
 
+from ...prompts.lens_common import lens_prior_header
+from ..lens_family import lean_lens_ids, lean_prompt_module
+from .. import profile_constants as _profile_constants
+from ..calibration_honesty import ACUTE_PILOT_MIN_SAMPLE
+from ..journal_evidence import (
+    FIELD_NOTES_FALLBACK_KIND, field_notes_fallback_record, notes_degenerate_reason, notes_prompt,
+)
 from ...runtime.substrate_query_port import _ASSESSMENT_PRODUCER_ANALYSTS
 from .journal_leak_guards import (  # noqa: F401 — re-export
     _NARRATE_RETRY_PROSE_ONLY_INSTRUCTION,
@@ -93,6 +100,7 @@ from .journal_clusters import (  # noqa: F401 — re-export
     coverage_roster_block,
     journal_window,
 )
+from .journal_prepublish import strip_verify_marks
 from .journal_slice import (  # noqa: F401 — re-export
     ROUTINE_PRODUCT_SOURCES,
     _JOURNAL_FRESH_RESERVE,
@@ -114,7 +122,10 @@ from .journal_propose_phase import (  # noqa: F401 — re-export
     _propose_phase,
     _propose_phase_prompt,
 )
-from ..provenance.consumption import CONSUMPTION_CONTEXT_JOURNAL
+from ..provenance.consumption import (
+    CONSUMPTION_CONTEXT_JOURNAL,
+    CONSUMPTION_CONTEXT_JOURNAL_GATHERED,
+)
 from ..provenance.kinds import OutputKind
 from ..provenance.models import JournalPayload
 from .agency.journal_propose import JOURNAL_PROPOSE_TOOLS
@@ -184,10 +195,12 @@ LENS_FACULTY_ANALYST_IDS: tuple[str, ...] = (
 # four above are typed by FUNCTION (what cognitive move the read makes), these
 # six are typed by STANCE (which way of weighing the tower the read commits to).
 # They run DAILY in the 09:00–11:30 UTC band, off the burst window.
-LENS_LEAN_ANALYST_IDS: tuple[str, ...] = (
-    "lens_left", "lens_right", "lens_centre",
-    "lens_pragmatist", "lens_militarist", "lens_isolationist",
-)
+# W9 SPLIT-2 (DEC-14): they are the geopolitics exemplar's, not the platform's —
+# their prose lives in the profile (legba_geopolitics.lens_*) and their ids are
+# the `geopolitics.lens` vocabulary family, read here with the six-id literal
+# (lens_family.LEAN_LENS_FALLBACK) as the documented fallback. Built at import:
+# the roster the process started with.
+LENS_LEAN_ANALYST_IDS: tuple[str, ...] = lean_lens_ids()
 
 #: Every lens id on this kind — faculties THEN leans. Drives entry_kind
 #: distillation, the persona-module map and the declared-prior lookup, all of
@@ -208,8 +221,11 @@ LENS_DIFF_ROSTER_IDS: tuple[str, ...] = LENS_FACULTY_ANALYST_IDS
 # / LENS_ID), so the descriptor's prompt_module string alone selects the persona
 # — no per-faculty branch. The prior block is imported directly by run_method
 # (persona-module-only wiring, §2.4 — NO options-contract / dapr_actors change).
+# The faculties live in the platform package; the leans in the profile's
+# (W9 SPLIT-2: legba_geopolitics.<id>, lens_family.lean_prompt_module).
 LENS_PROMPT_MODULE_PATHS: dict[str, str] = {
-    aid: f"legba.prompts.{aid}:LENS_SYSTEM" for aid in LENS_ANALYST_IDS
+    **{aid: f"legba.prompts.{aid}:LENS_SYSTEM" for aid in LENS_FACULTY_ANALYST_IDS},
+    **{aid: f"{lean_prompt_module(aid)}:LENS_SYSTEM" for aid in LENS_LEAN_ANALYST_IDS},
 }
 LENS_DIFF_ANALYST_ID = "lens_diff"
 LENS_DIFF_PROMPT_MODULE_PATH = "legba.prompts.lens_diff:LENS_DIFF_SYSTEM"
@@ -229,7 +245,9 @@ def _lens_prior_block_for(analyst_id: str | None) -> str:
     try:
         import importlib
 
-        module = importlib.import_module(f"legba.prompts.{analyst_id}")
+        module = importlib.import_module(
+            LENS_PROMPT_MODULE_PATHS[analyst_id].partition(":")[0]
+        )
         block = getattr(module, "LENS_PRIOR_BLOCK", "")
         return block if isinstance(block, str) else ""
     except Exception as exc:  # degrade-not-drop — persona module still has it
@@ -444,7 +462,11 @@ def build_journal_verify_inputs(payload: Any) -> tuple[str, list[str]]:
         if kept >= _JOURNAL_VERIFY_MAX_CLAIMS:
             break
         kept += 1
-        span = _cited_sentences_only(str(getattr(claim, "text_span", "") or ""))
+        # Lane N-D: a re-verify of a published entry grades the writer's words,
+        # not the pre-publish marks (``journal_prepublish``) laid over them.
+        span = _cited_sentences_only(
+            strip_verify_marks(str(getattr(claim, "text_span", "") or ""))
+        )
         seen_in_span: set[str] = set()
 
         def _sub(m: "re.Match[str]") -> str:
@@ -499,14 +521,13 @@ def _salience_tag(sal: Any) -> str:
     return f"(salience {m:.2f}{ev}) "
 
 
-# T-1 (M13): the non-Latin routing set the NER filter translates FROM (kept in
-# sync with ``filters/ner.py`` / ``reenrich_ner``'s ``_DEFAULT_TRANSLATE_LANGS``).
+# T-1 (M13): the non-Latin routing set the NER filter translates FROM — the
+# instance profile's ``constants.translation_languages`` (SPLIT-3), the one value
+# ``filters/ner.py`` / ``reenrich_ner`` / ``reenrich_translation`` read too.
 # A row whose payload language is in this set but that carries NO ``title_en`` is
 # rendered raw (non-English) — the narrator must be warned so it never attributes
 # a quote/office to a transliterated surface (T-2).
-_TRANSLATE_LANGS: frozenset[str] = frozenset({
-    "ar", "fa", "he", "ru", "uk", "zh", "ja", "ko", "hi", "th", "ur",
-})
+_TRANSLATE_LANGS: frozenset[str] = frozenset(_profile_constants.translation_languages())
 
 
 def _row_payload(row: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -1339,6 +1360,7 @@ async def _field_notes(
     analyst_id: str | None,
     steps: list[dict[str, Any]],
     instruction: str | None = None,
+    orientation: str | None = None,
 ) -> tuple[str, dict[str, int]]:
     """The §4.3 seam: an in-persona LLM step that rewrites the gathered context
     into rich, cited field notes (dropping raw tool JSON). Returns
@@ -1349,12 +1371,20 @@ async def _field_notes(
     handoff text instead of the per-tier map lookup — the ``inquiry`` kind reuses
     this function rather than copying it, and its voice belongs in its own
     module. ``None`` (every journal tier) keeps the map lookup byte-identical.
+
+    N-G (11-13): notes that are short, uncited or carry control text
+    (``journal_evidence.notes_degenerate_reason``) are discarded like an empty
+    reply; ``orientation`` is one more tool orientation to strip from the prompt.
     """
     if instruction is None:
         instruction = _FIELD_NOTES_INSTRUCTION_FOR.get(
             _entry_kind_for_analyst(analyst_id), _FIELD_NOTES_INSTRUCTION
         )
-    prompt = base_prompt + instruction
+    # N-G: this call is offered NO tools, so the gather-phase "call
+    # get_journal_delta" orientation is stripped and the step is told so.
+    prompt = notes_prompt(
+        base_prompt, instruction, (orientation, *_MEMORY_ORIENTATION_FOR.values()),
+    )
     try:
         # PER-PHASE LLM SPLIT (§4.1): the VOICE seam runs on the narrate handler
         # (Opus when the descriptor sets method.llm.narrate; falls back to the
@@ -1372,12 +1402,17 @@ async def _field_notes(
         return base_prompt, {
             "prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0,
         }
+    notes = (notes or "").strip()
+    # N-G notes gate: a stub, an uncited reply or a pseudo tool call is not a
+    # handoff — NARRATE gets the full gathered context instead (recorded).
+    reason = notes_degenerate_reason(notes)
     steps.append({
         "phase": "field_notes",
-        "kind": "in_voice_cited",
-        "notes_chars": len(notes or ""),
+        "kind": FIELD_NOTES_FALLBACK_KIND if reason else "in_voice_cited",
+        "notes_chars": len(notes),
+        **({"reason": reason} if reason else {}),
     })
-    return (notes or "").strip() or base_prompt, usage
+    return (base_prompt if reason else notes), usage
 
 
 # ---------------------------------------------------------------------------
@@ -2187,8 +2222,10 @@ _JOURNAL_READ_TOOL_SCHEMAS: dict[str, str] = {
         "reflection, not a closed loop)."
     ),
     "get_calibration": (
-        "get_calibration() — forecast/calibration tracking, incl. the "
-        "segregated brier_forecast_acute pilot (n<30, no proven skill yet)."
+        "get_calibration() — LEGACY calibration figures (labelled untrusted, "
+        "under diagnosis; NOT the sealed forecast ledger): each Brier has its "
+        "own n, stale populations say so, plus the segregated "
+        f"brier_forecast_acute pilot (n<{ACUTE_PILOT_MIN_SAMPLE}, no proven skill yet)."
     ),
     "get_run_health": (
         "get_run_health([analyst_id], [quiet_hours=24], [limit=200]) — what "
@@ -2429,6 +2466,7 @@ async def run_method(
     # rewrite can turn a [N] the narrator wrote against a gathered doc into a
     # durable [[ref:uuid]] (J4 — otherwise the [N] dies at render).
     gather_citation_extension: dict[int, dict[str, Any]] = {}
+    _gather_refs: Any = []
     if active_binding is not None:
         # 5-tuple return (Piece 1 added ``citation_extension``). The journal cites
         # via its own ``[[ref:uuid]]`` mechanism (_reflect_claims). The gathered
@@ -2696,9 +2734,15 @@ async def run_method(
     # prior_version is DELIBERATELY omitted from a lens row — the row's own
     # analyst_version column IS the prior version (DL-2); stance_faithfulness is a
     # VERIFY-TIME judgment stamped into a side critique row, not here.
+    # W2 S-batch: a lens row also stamps its declared prior's one-line header
+    # (``data.lens_prior``) from the SAME block this run echoed, so readers name
+    # the prior the row was written under; absent when the header won't parse.
     row_data: dict[str, Any] = {}
     if entry_kind == "lens":
         row_data = {"lens_id": analyst_id}
+        _prior = lens_prior_header(lens_prior_block)
+        if _prior:
+            row_data["lens_prior"] = _prior
     elif entry_kind == "lens_diff":
         row_data = {"matrix": await _compute_lens_diff_matrix(
             active_binding, steps=steps
@@ -2708,6 +2752,10 @@ async def run_method(
     # of whatever the tier already set, never clobbers it.
     if _ref_repairs:
         row_data = {**row_data, "ref_repairs": _ref_repairs}
+    # N-G — the row says when NARRATE wrote from the full context because the
+    # field-notes handoff was discarded.
+    if _fn_fallback := field_notes_fallback_record(steps):
+        row_data = {**row_data, "field_notes_fallback": _fn_fallback}
 
     title = _derive_title(
         body,
@@ -2769,6 +2817,17 @@ async def run_method(
             )
         except (ValueError, AttributeError, TypeError):
             continue  # malformed row id — the render tolerated it; so do we
+    # N-T — what GATHER read (the journal's memory included) is recorded too,
+    # under its own context, so a later correction can find this entry.
+    _slice_ids = {u for u, _ in consumed_edges}
+    for _ref in _gather_refs or ():
+        try:
+            _u = UUID(str(_ref))
+        except (ValueError, AttributeError, TypeError):
+            continue
+        if _u not in _slice_ids:
+            _slice_ids.add(_u)
+            consumed_edges.append((_u, CONSUMPTION_CONTEXT_JOURNAL_GATHERED))
 
     return AnalystMethodResult(
         finding=payload,            # the runtime forwards this to write_analyst_output(kind=JOURNAL)

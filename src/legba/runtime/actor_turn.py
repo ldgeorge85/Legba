@@ -55,6 +55,8 @@ import os
 import time
 from typing import Any, Awaitable
 
+from .actor_turn_witness import actor_turn_witness, current_turn_actor
+
 logger = logging.getLogger(__name__)
 
 
@@ -189,8 +191,18 @@ async def bounded_turn_op(
     ``budget_exceeded`` sends the operator to the wrong knob and hides a real
     remote fault. ``expired()`` answers precisely which deadline fired; an inner
     timeout propagates untouched, as any other error would.
+
+    SW-8: when this runs INSIDE the turn of the actor it names (the witness
+    middleware's context says so), ``op`` is marked as that turn's current
+    phase for its duration, so a heal deadline that fires meanwhile can name
+    the activation phase that overran. A caller-side op on the same actor id —
+    the reconciler's own ``reconcile.activate`` — runs in no turn and marks
+    nothing.
     """
     budget = turn_op_timeout_seconds() if timeout is None else timeout
+    witness = actor_turn_witness() if current_turn_actor() == actor_id else None
+    if witness is not None:
+        witness.enter_phase(actor_id, op)
     try:
         async with asyncio.timeout(budget) as cm:
             return await awaitable
@@ -203,6 +215,9 @@ async def bounded_turn_op(
             op, actor_id, budget,
         )
         raise TurnBudgetExceeded(op, actor_id, budget) from exc
+    finally:
+        if witness is not None:
+            witness.exit_phase(actor_id, op)
 
 
 async def bounded_turn_op_or(

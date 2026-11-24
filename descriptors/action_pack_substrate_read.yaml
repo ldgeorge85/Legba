@@ -108,6 +108,19 @@ tools:
     config: {}
   - name: list_sources
     config: {}
+  # W11-F141 — the scheduled-events calendar (migration 0240): the
+  # operator-entered register of FUTURE dated things (summits, votes,
+  # deadlines, strikes). Read-only; reuses this pack's kind.
+  - name: list_scheduled_events
+    config: {}
+  # W11-F162 — the forecast ledger's due-date reader (migrations 0242/0244):
+  # what resolves next, each issuer's number, the newest rule proposal.
+  - name: list_due_resolvers
+    config: {}
+  # W11-F152 — per-source health with a staleness verdict, so the consult can
+  # tell a quiet feed from a dead one (list_sources is the thin version).
+  - name: get_source_health
+    config: {}
   # 7g-2 — the COLLECTION series reads. HISTORY, not now: the only tools in
   # this pack that read `observations`, the bitemporal store a curated holding
   # loads once and nothing schedules. Read-only; every row carries its valid
@@ -115,6 +128,13 @@ tools:
   - name: series_history
     config: {}
   - name: series_compare
+    config: {}
+  # E2 — the LIVE numeric series (observations rows with origin_class 'live',
+  # collection 'live:<source_id>', written by a source's ObservationSink). A
+  # SEPARATE, labelled reader: the two history tools above never select a live
+  # row (migration 0246; SEAMS #57/#62) and stay that way. Bounded: 500 rows,
+  # a 366-day valid window; every row carries its source_id and both times.
+  - name: live_series
     config: {}
 
 prompt_fragments:
@@ -140,6 +160,13 @@ prompt_fragments:
     These rows are HISTORY, never current reporting: a figure valid for 2016
     is never evidence about now, and citing one obliges you to state its
     valid period.
+  - >-
+    For the FUTURE as scheduled dates: list_scheduled_events reads the
+    platform's calendar of operator-entered events (summits, votes,
+    deadlines, strikes), defaulting to the next 14 days and matched by
+    overlap. Its coverage block is part of the answer — n=0 says no events
+    are held for that window, which is a statement about the register, not
+    the world.
 
 rules:
   - "Never fabricate substrate refs — cite only UUIDs the tools returned."
@@ -147,6 +174,10 @@ rules:
     A number from series_history / series_compare is a HISTORICAL
     observation. State its valid period whenever you use it, and never
     present it as a current value.
+  - >-
+    A number from live_series is a LIVE observation from a named source.
+    Cite it with its valid period, its source_id, its record_time and
+    loaded_at, and never splice it into a historical series as if one.
 
 governor:
   budget_account: substrate_read

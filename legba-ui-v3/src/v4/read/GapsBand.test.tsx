@@ -14,9 +14,9 @@
  *   * one glossary affordance, carrying the shared definition
  */
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { render, screen, cleanup, within, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, within, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import type { ReactElement } from 'react'
+import { useState, type ReactElement } from 'react'
 
 import GapsBand, { useGapViews } from './GapsBand'
 import { TYPED_ABSENCE_GLOSSARY_NOTE, type AbsenceItem } from '@/lib/absenceModel'
@@ -309,5 +309,40 @@ describe('the glossary link', () => {
     const link = screen.getByTestId('morning-read-gaps-glossary')
     expect(link.getAttribute('title')).toBe(TYPED_ABSENCE_GLOSSARY_NOTE)
     expect(screen.getAllByTestId('morning-read-gaps-glossary')).toHaveLength(1)
+  })
+})
+
+describe('U-5 — the per-desk reads wait for the band', () => {
+  /** The band the way `JudgmentBands` gates it: reads start when the band comes near. */
+  function GatedHarness({ cards }: { cards: CountryScorecard[] }) {
+    const [near, setNear] = useState(false)
+    const views = useGapViews(cards, { enabled: near })
+    return <GapsBand {...views} state="ready" onNear={() => setNear(true)} />
+  }
+
+  it('asks /v3/absence nothing until the band is near the viewport, then reads each desk', async () => {
+    let fire: ((hit: boolean) => void) | null = null
+    class FakeIO {
+      constructor(cb: (e: Array<{ isIntersecting: boolean }>) => void) {
+        fire = (hit) => cb([{ isIntersecting: hit }])
+      }
+      observe() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('IntersectionObserver', FakeIO)
+    const mock = stubAbsence({})
+    render(wrap(<GatedHarness cards={[card('country_g20_br'), card('country_g20_ar')]} />))
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30))
+    })
+    const absenceCalls = () => mock.mock.calls.filter((c) => String(c[0]).includes('/v3/absence')).length
+    expect(absenceCalls()).toBe(0)
+    // the desks wait, and the band's count is not a partial sum
+    expect(screen.getAllByTestId('morning-read-gaps-desk-loading').length).toBeGreaterThan(0)
+    await act(async () => {
+      fire!(true)
+    })
+    await waitFor(() => expect(absenceCalls()).toBe(2))
+    await waitFor(() => expect(screen.queryByTestId('morning-read-gaps-desk-loading')).toBeNull())
   })
 })

@@ -385,6 +385,33 @@ async def test_faithfulness_mean_reports_its_judge_population():
 
 
 @pytest.mark.asyncio
+async def test_a_carried_ungraded_critique_is_counted_never_averaged():
+    """SW-9 — a memory-only finding's critique carries the capped gate number
+    (0.5) as its confidence. Averaging it would count an ungraded row as a
+    graded one; it is counted beside the mean instead."""
+    data_by_unit = {
+        "escalation": {
+            "findings": [],
+            "labels": [],
+            "faithfulness": [
+                {"confidence": 1.0, "score_state": "scored"},
+                {"confidence": 0.5, "score_state": "carried_ungraded"},
+                {"confidence": 0.8},  # pre-SW-9 row: no state, an ordinary score
+            ],
+        },
+    }
+    deps = _FakeDeps(_FakePool(_FakeConn(data_by_unit)))
+    result = await ucs.handle(
+        [], {"sub_handler": "unit_correctness_scorer", "units": ["escalation"]}, deps
+    )
+    esc = result.finding.data["units"]["escalation"]
+    assert esc["faithfulness"] == pytest.approx(0.9)  # mean(1.0, 0.8) only
+    pop = esc["faithfulness_population"]
+    assert pop["n_scored"] == 2
+    assert pop["carried_ungraded"] == 1
+
+
+@pytest.mark.asyncio
 async def test_faithfulness_population_is_honest_when_the_pull_fails():
     """A failed pull must still name the pipeline, never imply a measured 0."""
     from legba.data.provenance.verify import JUDGE_PIPELINE_VERSION

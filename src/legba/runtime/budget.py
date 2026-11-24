@@ -339,8 +339,16 @@ class BudgetEnforcer:
         cache_write_tokens: int = 0,
         bucket: date | None = None,
         runs_increment: int = 1,
+        cost_estimate_usd_override: Decimal | float | None = None,
     ) -> BudgetLedgerRow:
-        """Upsert the budget_ledger row. Wraps provenance.budget.record_budget."""
+        """Upsert the budget_ledger row. Wraps provenance.budget.record_budget.
+
+        ``cost_estimate_usd_override`` (CONSULT_REVIEW_2026-09-28 B.10):
+        passthrough for a caller (e.g. a consult run's own ``SpendGuard``
+        total) that already knows this run's cost more precisely than the
+        (provider, model, tokens) recomputation — see
+        ``provenance.budget.record_budget`` for why.
+        """
         return await record_budget(
             conn,
             analyst_id=self.analyst_id,
@@ -354,6 +362,7 @@ class BudgetEnforcer:
             cache_write_tokens=cache_write_tokens,
             bucket=bucket,
             runs_increment=runs_increment,
+            cost_estimate_usd_override=cost_estimate_usd_override,
         )
 
     @staticmethod

@@ -112,8 +112,9 @@ async def test_calibration_runs_over_seeded_hypotheses(pg_pool):
     assert all(r["claim_kind"] == "hypothesis" for r in mine)
     # Exogenous outcomes read straight off resolved_outcome (1/1/0).
     assert sorted(r["outcome"] for r in mine) == [0, 1, 1]
-    # Claimed confidence derived from |evidence_balance| > 0.5.
-    assert all(r["claimed_confidence"] > 0.5 for r in mine)
+    # Claimed confidence is SIGNED (lane E): balance +3 -> 0.95, -3 -> 0.05,
+    # +2 -> 0.8 — strong evidence AGAINST a thesis is low confidence IN it.
+    assert sorted(round(r["claimed_confidence"], 2) for r in mine) == [0.05, 0.8, 0.95]
 
     # The full handler runs over a real sample. D16 — `subsequent_facts` is the
     # WEAK/LEXICAL tier (a substring direction proxy), so these resolutions are

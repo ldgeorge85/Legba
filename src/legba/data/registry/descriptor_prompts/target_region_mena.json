@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:region_mena": {
+      "source": "target_region_mena.yaml",
+      "state": "active"
+    }
+  }
+}

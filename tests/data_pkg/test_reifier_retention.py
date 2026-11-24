@@ -66,10 +66,22 @@ def _migration_statement() -> str:
 # ---------------------------------------------------------------------------
 
 
+#: C-1 (2026-11-14) added this clause to the shared selection so a claim row
+#: never counts as an independent source. Migration 0160 ran once, long before
+#: any claim row existed, and an applied migration is never edited; so the pin
+#: is: the migration IS the module statement minus exactly this clause.
+_C1_CLAIM_CLAUSE = (
+    "       -- C-1: a claim row never counts as an independent source.\n"
+    "       AND COALESCE(s.payload->'claim'->>'source_class', '') <> 'claim'\n"
+)
+
+
 def test_migration_sql_is_the_module_sql():
     """THE anti-drift pin. A migration cannot import Python, so the statement is
     inlined — and inlined code rots. If someone edits either side, this is red."""
-    assert _migration_statement() == retirement_update_sql().strip()
+    module = retirement_update_sql().strip()
+    assert module.count(_C1_CLAIM_CLAUSE) == 1
+    assert _migration_statement() == module.replace(_C1_CLAIM_CLAUSE, "")
 
 
 def test_the_migration_uses_the_recommended_thresholds():

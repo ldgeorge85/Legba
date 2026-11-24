@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.federalreserve.speeches": {
+      "source": "source_federalreserve_speeches.yaml",
+      "state": "draft"
+    }
+  }
+}

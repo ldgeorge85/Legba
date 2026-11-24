@@ -58,6 +58,7 @@ from legba.data.stack.search.liveness import (
     DEFER_BASE_SECONDS,
     DEFER_ESCALATE_AFTER,
     DEFER_MAX_SECONDS,
+    DEFER_OPERATOR_HOLD_SECONDS,
     control_probe_ttl_seconds,
 )
 
@@ -615,6 +616,30 @@ async def test_a_transient_failure_defers_but_a_hard_one_does_not(cache):
     )
     assert hard.status == "failed"
     assert deferral_from_tool_output(hard.output) is None
+
+
+async def test_a_credits_class_hard_failure_defers_and_escalates_uncharged(cache):
+    """SW-6 (single rung): HTTP 402 / a credits body is the one hard class that
+    carries a deferral — escalate from the first failure, an operator hold, $0."""
+    class _Paid(_Provider):
+        async def search(self, query, *, limit=5, **opts):
+            self.calls.append(query)
+            raise HardSearchFailure(
+                "serper HTTP 400", status=400,
+                body='{"message":"Not enough credits","statusCode":400}',
+            )
+
+    paid = _Paid()
+    result = await web_search_tool(_call(), _pack(), _ctx(paid, cache))
+    assert result.status == "failed"
+    assert result.cost_usd == 0.0
+    assert result.error.startswith("serper HTTP 400: ")
+    assert "Not enough credits" in result.error
+    advice = deferral_from_tool_output(result.output)
+    assert advice is not None and advice.escalate is True
+    assert advice.consecutive_failures == 1
+    assert advice.retry_after_seconds == DEFER_OPERATOR_HOLD_SECONDS
+    assert cache.deferred_until("search.searxng.local") is not None
 
 
 async def test_the_tool_never_retries_a_failed_search_in_place(cache):

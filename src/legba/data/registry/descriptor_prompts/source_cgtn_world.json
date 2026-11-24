@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.cgtn.world": {
+      "source": "source_cgtn_world.yaml",
+      "state": "draft"
+    }
+  }
+}

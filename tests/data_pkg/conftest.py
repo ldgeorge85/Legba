@@ -43,6 +43,11 @@ from legba.data.config import PostgresConfig
 from legba.data.migrate import apply_primary_migrations
 
 from tests._env_isolation_shared_flags import RUNTIME_SHARED_PROGRAM_FLAG_DEFAULTS
+from tests._pg_test_server_guard import (
+    TestServerRefusedError,
+    assert_test_server,
+    isolation_declared,
+)
 
 
 REPO_ROOT = Path("/usr/local/deployments/active/legba")
@@ -91,6 +96,13 @@ def _ensure_containers_up() -> None:
 
 @pytest.fixture(scope="session", autouse=True)
 def substrate_up():
+    # N-V: outside the isolated test stack there is nothing to bring up — the
+    # 127.0.0.1 ports on the host are PRODUCTION's, and `docker compose up` of
+    # the root compose file would start production services. Postgres-backed
+    # tests then fail on the guard's refusal; pure tests run.
+    if not isolation_declared():
+        yield
+        return
     _ensure_containers_up()
     _ensure_pivot_test_db()
     yield
@@ -269,6 +281,21 @@ _PROGRAM_FLAG_DEFAULTS: tuple[tuple[str, str, str], ...] = (
      "sibling knob; live .env carries 100000000, i.e. the guard lifted"),
     ("LEGBA_CONSULT_MAX_COST_USD_PER_RUN", "3.00 (consult_spend_guard.DEFAULT_MAX_COST_USD_PER_RUN)",
      "sibling knob; live .env carries 1000000, i.e. the ceiling lifted"),
+    # Q-1: the per-TURN ceiling (now enforced by consult_turn_cost) and the
+    # turn contract's default window — a leaked live value would move every
+    # stop and every window line a contract test asserts.
+    ("LEGBA_CONSULT_TURN_COST_CEILING_USD", "unset = no per-turn ceiling",
+     "Q-1: per-turn ceiling on a priced route; stop drilling + synthesise"),
+    ("LEGBA_CONSULT_DEFAULT_WINDOW_HOURS", "168 (consult_window.DEFAULT_WINDOW_HOURS)",
+     "Q-1: the declared default window when no window is stated or pinned"),
+    # 2026-10-29 (W11-F132, run 9b902fec): the registry's invoke timeout is
+    # now DERIVED from the loop's budget + final floor, so both clocks and the
+    # pin itself are pinned here — a leaked live value moves every assertion
+    # on the derived floor.
+    ("LEGBA_CONSULT_FINAL_FLOOR_SECONDS", "240.0 (consult_clocks.DEFAULT_FINAL_FLOOR_SECONDS)",
+     "sibling knob; live .env carries 900"),
+    ("LEGBA_CONSULT_INVOKE_TIMEOUT_SECONDS", "900 (consult_runs.invoke_timeout_seconds)",
+     "the registry's pin, floored at budget + final floor + 300; live .env carries 4500"),
 )
 #: Deliberately NOT in this list, checked and excluded rather than missed:
 #: ``LEGBA_ALERT_NTFY_MIN_SEVERITY`` / ``LEGBA_ALERT_NTFY_URL`` (single
@@ -323,6 +350,16 @@ def _ensure_pivot_test_db() -> None:
 
 async def _ensure_pivot_test_db_async() -> None:
     admin_dsn = "postgresql://legba:legba@127.0.0.1:5432/postgres"
+    # N-V: never CREATE or migrate on a server that has not proven it is the
+    # isolated test stack (on the host, 127.0.0.1:5432 is the LIVE server).
+    # Called standalone by scripts/run_tests_in_container.sh too, outside
+    # pytest, so the check is explicit here rather than left to the root
+    # conftest's connection wrapper.
+    try:
+        await assert_test_server()
+    except TestServerRefusedError as exc:
+        print(f"[legba tests] legba_pivot_test bootstrap skipped: {exc}")
+        return
     try:
         conn = await asyncpg.connect(admin_dsn)
     except Exception:
@@ -364,6 +401,7 @@ async def test_pg_config() -> PostgresConfig:
     admin_dsn = "postgresql://legba:legba@127.0.0.1:5432/postgres"
     db_name = f"legba_test_{uuid4().hex[:10]}"
 
+    await assert_test_server()   # N-V: raises before any CREATE DATABASE
     conn = await asyncpg.connect(admin_dsn)
     try:
         await conn.execute(f'CREATE DATABASE "{db_name}"')

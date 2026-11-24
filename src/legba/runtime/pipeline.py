@@ -25,6 +25,11 @@ Supported filter kinds (full Phase 4 set, per L-150..L-155):
     OFF by default; a descriptor must name this kind to enable the SLM
     disambiguator. When unnamed, substrate identity rides the lexical
     composite-key path (``entity_resolution`` sub-handler + migration 0035).
+  * ``keyword_gate``        -> :class:`KeywordGateHandler` (W3 SRC-3) — the
+    droppable whole-word include/exclude gate. Declared under a source's
+    ``pipeline.ingestion_filters``; SourceCore applies it BEFORE
+    ``run_baseline`` (so before ``pipeline.enrichment`` and its NER POSTs).
+    See :mod:`legba.data.filters.keyword_gate` for the ordering contract.
 
 The Phase 5a spike's [tier_1, tier_2] choice translates into one
 ``Dedupe4TierHandler`` instance per stage with the non-selected tiers
@@ -162,6 +167,8 @@ _KNOWN_KINDS: frozenset[str] = frozenset({
     "fact_extractor",
     # OFF by default: only present in the pipeline when a descriptor names it.
     "slm_entity_resolve",
+    # W3 SRC-3 — droppable keyword gate (ingestion_filters, pre-enrichment).
+    "keyword_gate",
 })
 
 
@@ -176,7 +183,6 @@ def build_filter_handler(
     embedding_service: Any | None = None,
     secrets_resolve: Callable[[str], Awaitable[bytes]] | None = None,
     llm_handler_factory: Callable[[str], Awaitable[Any]] | None = None,
-    graph_store: Any | None = None,
 ) -> StreamHandler:
     """Construct one filter handler from a descriptor PipelineStage.
 
@@ -220,10 +226,6 @@ def build_filter_handler(
         disambiguator). Default ``None`` so every existing caller works
         unchanged — the default ``relation`` backend never needs it, and
         ``slm_entity_resolve`` is OFF unless a descriptor names it.
-    graph_store:
-        AGE-capable store (``PostgresStore``-shaped, exposes ``cypher()``).
-        Optional; used only by ``fact_extractor`` when ``emit_graph_edges``
-        is set. Facts-first: a missing store just skips the edge leg.
 
     Raises
     ------
@@ -239,6 +241,9 @@ def build_filter_handler(
 
     if kind == "language_detect":
         return _build_language_detect(config)
+
+    if kind == "keyword_gate":
+        return _build_keyword_gate(config)
 
     if kind in ("dedupe_tier_1", "dedupe_tier_2", "dedupe_tier_4"):
         if redis_client is None:
@@ -326,7 +331,6 @@ def build_filter_handler(
             pg_pool=pg_pool,
             nlp_client_factory=nlp_client_factory,
             llm_handler_factory=llm_handler_factory,
-            graph_store=graph_store,
         )
 
     if kind == "slm_entity_resolve":
@@ -362,6 +366,24 @@ def _build_language_detect(config: Mapping[str, Any]) -> LanguageDetectHandler:
     """Construct a LanguageDetectHandler. Default config when unspecified."""
     cfg = LanguageDetectConfig(**dict(config)) if config else LanguageDetectConfig()
     return LanguageDetectHandler(config=cfg)
+
+
+def _build_keyword_gate(config: Mapping[str, Any]) -> StreamHandler:
+    """Construct a KeywordGateHandler (drops: returns None like the dedupers).
+
+    No deps. Ordering on the source-first runtime: SourceCore builds the
+    ``keyword_gate`` stages of ``pipeline.ingestion_filters`` through THIS
+    builder and runs them on each raw signal BEFORE ``run_baseline`` — i.e.
+    before ``pipeline.enrichment`` (language_detect / ner_multilingual /
+    fact_extractor / geocode). A dropped item is never enriched, written or
+    fanned out. ``pipeline.enrichment`` itself is annotate-only (the host's
+    enrichment stage falls back to the unenriched signal on ``None``), so the
+    source schema refuses a ``keyword_gate`` there. An empty gate (no include
+    and no exclude terms) raises — it would silently admit everything.
+    """
+    from ..data.filters.keyword_gate import KeywordGateConfig, KeywordGateHandler
+
+    return KeywordGateHandler(KeywordGateConfig(**dict(config or {})))
 
 
 def _build_dedupe_single_tier(
@@ -647,7 +669,6 @@ def _build_fact_extractor(
     pg_pool: Any,
     nlp_client_factory: Callable[[], "NlpServiceClient"] | None = None,
     llm_handler_factory: Callable[[str], Awaitable[Any]] | None = None,
-    graph_store: Any | None = None,
 ) -> StreamHandler:
     """Construct a FactExtractorHandler (anchor §5 PIECE 2).
 
@@ -698,7 +719,6 @@ def _build_fact_extractor(
         pg_pool=pg_pool,
         nlp_client=nlp_client,
         llm_handler_factory=llm_handler_factory,
-        graph_store=graph_store,
         relationship_validator=relationship_validator,
     )
 

@@ -801,9 +801,13 @@ def test_live_runtime_container_a2a_mount_xfail() -> None:
     """
     base_url = _live_runtime_url()
     if base_url is None:
+        # X1-A4: a PRODUCTION probe. The suite's isolated namespace cannot
+        # reach the live runtime by design, so this is a declared opt-in
+        # (strict mode's external-URL exemption), not a broken rig.
         pytest.skip(
-            "live runtime not reachable on localhost:6090 or the public "
-            "edge — set LEGBA_RUNTIME_A2A_URL (or LEGBA_PUBLIC_DOMAIN) to probe."
+            "LEGBA_RUNTIME_A2A_URL not set and no live runtime answers on "
+            "localhost:6090 or the public edge — this probes PRODUCTION; set "
+            "LEGBA_RUNTIME_A2A_URL (or LEGBA_PUBLIC_DOMAIN) to run it."
         )
     status, body = _http_probe(f"{base_url}/a2a/skills", timeout=3.0)
     # When probing the container DIRECTLY (no auth proxy in front), only

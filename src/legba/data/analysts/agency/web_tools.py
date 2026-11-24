@@ -118,8 +118,20 @@ DEFERRAL, NOT RETRY (the ``deferral`` block on a failed result):
        because the backlog is re-read and priority-ordered every tick anyway.
 
   ``escalate=true`` means the ladder is exhausted: an operator is needed, not
-  more waiting. A HARD failure (misconfiguration, auth, non-JSON body) carries
-  NO deferral on purpose — waiting cannot fix it.
+  more waiting. A HARD failure (misconfiguration, non-JSON body) carries NO
+  deferral on purpose — waiting cannot fix it. The one exception is the
+  credits/auth class (HTTP 401/402/403, or a body naming credits, quota,
+  balance, billing or a rejected key): it carries a deferral with
+  ``escalate=true`` from the first failure and a long operator hold, so a
+  laddered run stops re-asking a rung that cannot answer until an operator
+  acts.
+
+A HARD failure is NEVER charged: the provider answered nothing, so the rung's
+``cost_usd`` is 0 (the outcome still counts the query as ATTEMPTED, and the
+ladder entry carries ``answered_queries: 0``). The error string keeps the HTTP
+status and the first 200 characters of the provider's own response body
+(key-shaped tokens redacted), so "credits exhausted" is visible in the call
+record rather than a bare ``serper HTTP 400``.
 
 A handler is ``async (call, pack, ctx) -> ToolResult`` — it NEVER decides
 agency; resolution + the governor have already admitted the call. Read-only:
@@ -130,13 +142,17 @@ finding's provenance can record where the external evidence came from.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import re
+import time
 from dataclasses import dataclass, field, replace as _dc_replace
 from typing import Any
 
 import httpx
 
+from ...registry.search_health import build_health_block
 from ...schemas.action_pack import ActionPack
 from ...schemas.properties import Property
 from ...schemas.stack import SearchProviderConfig
@@ -145,6 +161,7 @@ from ...sources._egress import (
     fetch_client,
     guarded_async_client,
 )
+from ...sources._fetch_policy import fetch_policy_for, impersonate_kwarg
 from ...stack.search import (
     DEFAULT_LIVENESS_CACHE,
     HardSearchFailure,
@@ -272,21 +289,35 @@ async def web_fetch_tool(
 
     cfg = _tool_config(pack, "web_fetch")
     timeout = float(cfg.get("timeout_seconds") or _DEFAULT_TIMEOUT_SECONDS)
+    # W11-F138 — the per-host fetch policy is consulted BEFORE the client is
+    # built: a registered host's ``impersonate``/``http2`` resolve into the
+    # construction kwargs, ``max_retries``/``backoff_s`` extend the
+    # timeout-retry bound; an unlisted host's kwargs are today's exactly.
+    policy = fetch_policy_for(url)
     attempts = 0
     response: httpx.Response | None = None
     last_timeout: httpx.TimeoutException | None = None
-    while attempts <= _FETCH_TIMEOUT_RETRIES:
+    retries = max(_FETCH_TIMEOUT_RETRIES, int(policy.max_retries))
+    while attempts <= retries:
         attempts += 1
         try:
+            client_kwargs: dict[str, Any] = {
+                "follow_redirects": True,
+                "timeout": timeout,
+                "headers": {"User-Agent": _USER_AGENT},
+            }
+            if policy.http2 is not None:
+                client_kwargs["http2"] = policy.http2
+            impersonate = impersonate_kwarg(policy)
+            if impersonate is not None:
+                client_kwargs["impersonate"] = impersonate
             async with fetch_client(
                 # ``guarded=`` hands ``fetch_client`` THIS module's own
                 # ``guarded_async_client``, so the flag-off path is the exact
                 # call this site made before, through the exact name the
                 # existing e2e suites monkeypatch. See _egress.fetch_client.
                 guarded=guarded_async_client,
-                follow_redirects=True,
-                timeout=timeout,
-                headers={"User-Agent": _USER_AGENT},
+                **client_kwargs,
             ) as client:
                 response = await client.get(url)
             break
@@ -307,9 +338,11 @@ async def web_fetch_tool(
             last_timeout = exc
             logger.warning(
                 "web_fetch.timeout url=%s attempt=%d/%d cls=%s timeout=%.1fs",
-                url, attempts, _FETCH_TIMEOUT_RETRIES + 1,
+                url, attempts, retries + 1,
                 type(exc).__name__, timeout,
             )
+            if policy.backoff_s > 0:
+                await asyncio.sleep(policy.backoff_s)
             continue
         except httpx.HTTPError as exc:
             logger.warning("web_fetch.http_error url=%s err=%s", url, exc)
@@ -453,6 +486,52 @@ class _RungOutcome:
     #: 100%.
     queries: int = 0
     detail: str = ""
+    #: Queries the provider actually ANSWERED. A hard failure issued ``queries``
+    #: and answered none; it is attempted-not-answered, and it is not charged.
+    answered_queries: int | None = None
+
+
+#: Provider body text that says the account — not the request — is the problem.
+_OPERATOR_BODY_RE = re.compile(
+    r"credit|quota|balance|billing|payment|subscription|insufficient|"
+    r"exhaust|unauthori[sz]ed|forbidden|invalid\W+(?:api\W*)?key|"
+    r"api\W*key|not\W+enough",
+    re.IGNORECASE,
+)
+
+#: HTTP statuses that mean "the account / key", whatever the body says.
+_OPERATOR_STATUSES = frozenset({401, 402, 403})
+
+#: Key-shaped material to scrub from a provider body before it is stored:
+#: ``Bearer`` tokens, ``key: value`` / ``"api_key":"value"`` pairs, and any
+#: unbroken 24+ character token (hex, base64url, ``sk-…``).
+_REDACT_PAIR_RE = re.compile(
+    r"(?i)((?:api[_-]?key|x-api-key|authorization|token|secret|password)"
+    r"[\"']?\s*[:=]\s*[\"']?)(?:bearer\s+)?[^\s\"',;}]+"
+)
+_REDACT_BEARER_RE = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+")
+_REDACT_TOKEN_RE = re.compile(r"[A-Za-z0-9_\-]{24,}")
+
+_ERROR_BODY_CHARS = 200
+
+
+def _redact_provider_body(body: str) -> str:
+    """The first 200 chars of a provider response body, key-shaped text removed."""
+    text = " ".join(str(body or "").split())
+    text = _REDACT_PAIR_RE.sub(lambda m: f"{m.group(1)}[redacted]", text)
+    text = _REDACT_BEARER_RE.sub("Bearer [redacted]", text)
+    text = _REDACT_TOKEN_RE.sub("[redacted]", text)
+    return text[:_ERROR_BODY_CHARS]
+
+
+def _is_operator_class(exc: HardSearchFailure) -> bool:
+    """Credits exhausted / key rejected: only an operator can fix it."""
+    status = getattr(exc, "status", None)
+    if status in _OPERATOR_STATUSES:
+        return True
+    if status is None:
+        return False
+    return bool(_OPERATOR_BODY_RE.search(str(getattr(exc, "body", "") or "")))
 
 
 @dataclass
@@ -462,12 +541,15 @@ class _LadderLog:
     entries: list[dict[str, Any]] = field(default_factory=list)
 
     def record(self, rung: "_Rung", reason: str, *, detail: str = "",
-               queries: int = 0, cost_usd: float = 0.0) -> None:
+               queries: int = 0, cost_usd: float = 0.0,
+               answered_queries: int | None = None) -> None:
         self.entries.append({
             "provider": rung.label,
             "route": getattr(rung.route, "source", "") or "",
             "outcome": reason,
             "queries": queries,
+            **({"answered_queries": answered_queries}
+               if answered_queries is not None else {}),
             "cost_usd": round(cost_usd, 6),
             **({"detail": detail} if detail else {}),
         })
@@ -520,6 +602,46 @@ def _build_ladder(ctx: ToolContext, first: _Rung) -> list[_Rung]:
     return rungs
 
 
+def _elapsed_ms(started: float) -> int:
+    return int(round((time.monotonic() - started) * 1000))
+
+
+def _response_health(rung: _Rung, response: Any, elapsed_ms: int) -> dict[str, Any]:
+    """X1/B5 — the structured health block of one ANSWERED search.
+
+    Stamped on every ``web_search`` output (``output["health"]``): engines
+    asked / answered / errored, the result count, the elapsed time. It is the
+    input the external audit persists on its grade row
+    (``external_grades.search_health``) and the rule
+    :func:`legba.data.registry.search_health.read_search_health` reads to
+    decide whether a NOT_FOUND was a search that answered or one that ran
+    degraded. ``elapsed_ms`` is the provider call alone (paging included, the
+    liveness control probe not). Built AFTER the probe, so ``status`` and
+    ``liveness`` are the verdicts the output itself carries.
+    """
+    return build_health_block(
+        provider=rung.label,
+        status=response.status.value,
+        provider_degraded=response.degraded,
+        results=[
+            {"engine": r.engine, "raw": {"engines": (r.raw or {}).get("engines")}}
+            for r in response.results
+        ],
+        unresponsive=list(response.unresponsive_engines),
+        liveness=response.liveness.value,
+        elapsed_ms=elapsed_ms,
+    )
+
+
+def _failure_health(rung: _Rung, error_class: str, started: float) -> dict[str, Any]:
+    """The health block of a search the provider never answered: no count
+    (``result_count: None`` — nothing was measured), the class named."""
+    return build_health_block(
+        provider=rung.label, status="failed", provider_degraded=False,
+        elapsed_ms=_elapsed_ms(started), error_class=error_class,
+    )
+
+
 async def _run_rung(
     rung: _Rung,
     *,
@@ -537,9 +659,11 @@ async def _run_rung(
     """
     handler = rung.handler
     probes_before = int(getattr(cache, "probes", 0) or 0)
+    started = time.monotonic()
     try:
         queries = 1
         response = await handler.search(query, limit=limit, params=extra_params)
+        elapsed_ms = _elapsed_ms(started)
     except SearchProviderUnresolved as exc:
         # Refused BEFORE egress (no key bound, endpoint host fenced). Nothing
         # was spent and nothing was asked.
@@ -547,7 +671,11 @@ async def _run_rung(
             "web_search.provider_unresolved provider=%s err=%s", rung.label, exc,
         )
         return _RungOutcome(
-            result=ToolResult(status="failed", error=str(exc)),
+            result=ToolResult(
+                status="failed", error=str(exc),
+                output={"health": _failure_health(
+                    rung, "search_provider_unresolved", started)},
+            ),
             answered=False, reason="search_provider_unresolved",
             queries=0, detail=str(exc),
         )
@@ -563,7 +691,10 @@ async def _run_rung(
         return _RungOutcome(
             result=ToolResult(
                 status="failed", error=f"search_unavailable: {exc!s}",
-                output={"deferral": advice.to_dict()},
+                output={
+                    "deferral": advice.to_dict(),
+                    "health": _failure_health(rung, "search_unavailable", started),
+                },
             ),
             answered=False, reason="search_unavailable",
             cost_usd=rung.cost_usd_per_query * queries, queries=queries,
@@ -571,15 +702,34 @@ async def _run_rung(
         )
     except HardSearchFailure as exc:
         # Already carries its own classified prefix (egress_blocked / HTTP nnn /
-        # "search response not JSON" / misconfiguration). NO deferral: this
-        # class is never retried by contract, and waiting cannot fix a
-        # misconfiguration — it needs an operator.
-        logger.warning("web_search.hard_failure provider=%s err=%s", rung.label, exc)
+        # "search response not JSON" / misconfiguration). NO deferral for the
+        # misconfiguration class: it is never retried by contract, and waiting
+        # cannot fix it — it needs an operator.
+        #
+        # NEVER CHARGED. The provider answered nothing, so the rung books 0;
+        # the query is still counted as ATTEMPTED (``queries``) and as not
+        # answered (``answered_queries == 0``). The error keeps the status AND
+        # the first 200 chars of the provider's body, key-shaped text removed:
+        # a bare "serper HTTP 400" hid "not enough credits" for two days.
+        body = _redact_provider_body(getattr(exc, "body", "") or "")
+        message = f"{exc!s}: {body}" if body else str(exc)
+        logger.warning("web_search.hard_failure provider=%s err=%s", rung.label, message)
+        output: dict[str, Any] = {
+            "health": _failure_health(rung, "search_hard_failure", started),
+        }
+        if _is_operator_class(exc):
+            # Credits / key: waiting cannot fix it, an operator can. Escalate
+            # from the first failure and hold the rung out of the ladder.
+            advice = compute_deferral(
+                "search_credentials_or_credits", provider_key=rung.label,
+                cache=cache, detail=message, operator_required=True,
+            )
+            output["deferral"] = advice.to_dict()
         return _RungOutcome(
-            result=ToolResult(status="failed", error=str(exc)),
+            result=ToolResult(status="failed", error=message, output=output),
             answered=False, reason="search_hard_failure",
-            cost_usd=rung.cost_usd_per_query * queries, queries=queries,
-            detail=str(exc),
+            cost_usd=0.0, queries=queries, answered_queries=0,
+            detail=message,
         )
 
     # ---- empty is SUSPECT: measure the engine set before believing it ----
@@ -596,6 +746,8 @@ async def _run_rung(
 
     output = response.to_tool_output()
     output["provider"] = rung.label
+    # X1/B5 — the per-engine health block, on EVERY answered output.
+    output["health"] = _response_health(rung, response, elapsed_ms)
     if rung.route is not None:
         output["provider_route"] = rung.route.source
         output["provider_route_class"] = rung.route.route_class
@@ -893,6 +1045,7 @@ async def web_search_tool(
         log.record(
             rung, outcome.reason, detail=outcome.detail,
             queries=outcome.queries, cost_usd=outcome.cost_usd,
+            answered_queries=outcome.answered_queries,
         )
         last = outcome
         if outcome.answered and outcome.result is not None:

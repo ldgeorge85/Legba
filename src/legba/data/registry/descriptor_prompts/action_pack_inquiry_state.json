@@ -1,0 +1,8 @@
+{
+  "states": {
+    "action_pack:inquiry_state": {
+      "source": "action_pack_inquiry_state.yaml",
+      "state": "active"
+    }
+  }
+}

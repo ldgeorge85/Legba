@@ -277,7 +277,9 @@ class TestSubjectGuardS2:
         # body, NOT in the title). The title's Korea must win — geo=KR, not BR.
         backend = _StubBackend(
             {
-                "Korea, Republic of": _result("Korea, Republic of", "KR"),
+                # Lane N-O: the query is pycountry's common_name ("South
+                # Korea"); "Korea, Republic of" resolved to Singapore live.
+                "South Korea": _result("Korea, Republic of", "KR"),
                 "Brasília": _result("Brazil", "BR", precision="municipality"),
             }
         )
@@ -291,7 +293,7 @@ class TestSubjectGuardS2:
         out = await handler.transform(sig, _ctx())
         assert out.payload["geo"]["country_iso2"] == "KR"
         # Korea resolved first; the incidental Brasília was never even queried.
-        assert backend.calls == ["Korea, Republic of"]
+        assert backend.calls == ["South Korea"]
 
     async def test_subject_location_in_title_still_resolves(self):
         # When the city IS the subject (in the title), it keeps its high

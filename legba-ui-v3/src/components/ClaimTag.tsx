@@ -47,7 +47,7 @@ const TONE_CLASS: Record<ClaimFoldTone, string> = {
  * dead end.
  */
 export function ClaimFoldChipTag({ chip }: { chip: ClaimFoldChip }) {
-  const className = `ml-1 inline-flex items-center rounded border px-1 align-baseline text-[10px] font-medium leading-tight ${
+  const className = `ml-1 inline-flex items-center rounded border px-1 align-baseline text-label font-medium leading-tight ${
     TONE_CLASS[chip.tone]
   }`
   if (chip.drill) {
@@ -106,7 +106,7 @@ export default function ClaimTag({ citation, chips }: ClaimTagProps) {
     <span className="align-baseline" data-testid="claim-tag">
       {(masthead || date) && (
         <span
-          className="ml-1 inline-flex items-baseline gap-1 whitespace-nowrap align-baseline text-[10px] leading-tight text-ink-3"
+          className="ml-1 inline-flex items-baseline gap-1 whitespace-nowrap align-baseline text-label leading-tight text-ink-3"
           data-testid="claim-source-tag"
           data-masthead={masthead ?? undefined}
           data-date={date ?? undefined}

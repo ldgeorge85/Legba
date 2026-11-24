@@ -3,7 +3,7 @@
 
 # Manual ingest — batch format
 
-*The on-disk FORMAT for hand-supplying data to the knowledge layer: a directory
+*The on-disk FORMAT for hand-supplying data to the substrate (facts, entities, nexuses, signals, and a vector-corpus lane): a directory
 with a manifest and per-kind JSONL files. This describes the shape and the
 validation contract. The loader that consumes a validated batch lives in
 [`src/legba/data/seed/manual_batch.py`](../src/legba/data/seed/manual_batch.py)
@@ -19,6 +19,14 @@ is validated, then written through the same temporal write path
 (`write_fact` / `write_nexus`) with supersession semantics and a `seed_batches`
 ledger row. It is **not** a new subsystem — it is a defined file format plus a
 generic loader over it.
+
+**How it differs from the on-request intake.** A manual batch is records a person
+already has, written straight into the substrate through the seed write path (stamped `manual`, or `curated` when the manifest says so). The
+on-request intake ([operations/on-request-fetching.md](operations/on-request-fetching.md))
+is the opposite direction: a request to *fetch* an address or re-poll a source,
+run through a registered source's pipeline, with fetch receipts and the source's
+own provenance. Use a batch for curated data without a live upstream; use the
+intake when the material should arrive the way a poll would bring it.
 
 The format and its validation live in
 [`src/legba/data/seed/manual_schema.py`](../src/legba/data/seed/manual_schema.py)

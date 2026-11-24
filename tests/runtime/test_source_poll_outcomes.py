@@ -108,7 +108,7 @@ class _CapturingPool:
         cols = (
             "source_id", "source_version", "owner_tenant", "outcome",
             "health_state", "capped", "signals_written", "error",
-            "newest_entry_ts", "reserve_unchanged",
+            "newest_entry_ts", "reserve_unchanged", "keyword_filtered",
         )
         rows = []
         for query, args in self.executes:
@@ -348,7 +348,7 @@ async def test_dedup_collapsed_poll_is_success_not_empty() -> None:
     # the 5 AP feeds sat frozen for six days behind a wall of green successes.
     core, pool, _store, _sid = _build(_StubHandler([_entry("source.test")]))
 
-    async def _collapse(conn, ctx, raw, *, dedup_stats=None):
+    async def _collapse(conn, ctx, raw, *, dedup_stats=None, hold=None):
         if dedup_stats is not None:
             dedup_stats["reserve_unchanged"] = (
                 dedup_stats.get("reserve_unchanged", 0) + 1
@@ -383,7 +383,7 @@ async def test_capped_zero_written_does_not_consult_health(monkeypatch) -> None:
         _StubHandler([_entry("source.test") for _ in range(3)], health=health)
     )
 
-    async def _drop(conn, ctx, raw, *, dedup_stats=None):  # all dropped → 0 written
+    async def _drop(conn, ctx, raw, *, dedup_stats=None, hold=None):  # all dropped → 0 written
         return None
 
     core._process_one = _drop  # type: ignore[method-assign]

@@ -1,0 +1,54 @@
+# The registered names a round spec may use (plan P4 §5.2 V5, V8, V10, V12).
+#
+# PLANES map a stack-component ref to its model FAMILY. The families are the
+# ones declared for the grader fence (GRADER_FAMILY_BY_COMPONENT in
+# src/legba/runtime/external_grader_route.py); a test pins that every plane
+# here agrees with that map, so the two cannot drift.
+planes:
+  llm.primary.openai_compat: xiaomi_mimo
+  llm.verify.innoai_gemma.openai_compat: google_gemma
+  llm.verify.innoai_gemma_think.openai_compat: google_gemma
+  llm.judge.innoai_lightning_think.openai_compat: nvidia
+  llm.grader.innoai_lightning.openai_compat: nvidia
+
+# PACKS a seat may list under `tools`. run_cut: true means the pack is a
+# substrate READ whose binding inside a round applies the run's as-of cut and
+# excludes every row the current run wrote (design §3.3 rule 4; the binding is
+# lanes G-5/G-6's obligation). A pack that is not run-cut is refused (V12):
+# a live web fetch or a write pack cannot be cut to an as-of time.
+packs:
+  substrate_read: {run_cut: true}
+  substrate_read_raw: {run_cut: true}
+  substrate_read_verified: {run_cut: true}
+  web_access: {run_cut: false}
+  research: {run_cut: false}
+  journal_read: {run_cut: false}
+  consult_write: {run_cut: false}
+  propose_facts: {run_cut: false}
+
+# CODE functions a `kind: code` seat may name. `pure` functions are built in
+# legba.data.rounds.tables; `substrate` functions read the record and are
+# injected by the host (the harness: synthetic or scripted; the runtime host:
+# lane G-6). A host that has no implementation fails loudly (SEAMS #92).
+code_fns:
+  sentence_table: {output: sentence_table/1, pure: true}
+  merge_and_count_origins: {output: evidence_table/1, pure: true}
+  consistency_matrix: {output: matrix/1, pure: true}
+  scope_and_freeze: {output: frozen_scope/1, pure: false}
+  core_packet_and_slices: {output: seat_slices/1, pure: false}
+  series_panel: {output: series_panel/1, pure: false}
+  coverage_audit: {output: blind_spots/1, pure: false}
+  statement_gate_shadow: {output: statement_proposals/1, pure: false}
+
+# GATES a seat may list (applied to its output before anyone may read it).
+# The first five reuse the statement layer's honesty gates; the last three are
+# round-specific (design §4.3). Implemented in legba.data.rounds.gates.
+gates: [handed_rows, quote_in_source, numbers_in_evidence, dates_in_evidence, control_text,
+        must_include_set, every_sentence_maps_to_rows, probabilities_copied_not_averaged]
+
+# Code SCORE functions a `select` may rank by (`by: <fn>`).
+score_fns: [support_count]
+
+# Round types the operator has allowed to publish to readers (V10). Empty:
+# the built default is never, until the operator allows a type by name.
+reader_allowed: []

@@ -79,7 +79,7 @@ from . import region_rollup as _rollup
 from .composition_window import PERIPHERY_TIER, _EVIDENCE_TIER_KEY
 # 7d — the independence count behind a quoted claim (the ``single_source`` /
 # ``wire_folded`` stamps below). Leaf, stdlib-only, one way.
-from .source_independence import head_citations, independence_of
+from .source_independence import stamp_cited_head
 from .window_ledger import (
     CONTINUITY_CITATION_KEY,
     CONTINUITY_PRIOR,
@@ -313,12 +313,8 @@ def _build_composition_citation(
     # a claim on two independent sources is byte-for-byte the citation that
     # shipped before this, and a composition origin (which cites findings, not
     # signals) is UNKNOWN and therefore unmarked rather than falsely cleared.
-    independence = independence_of(head_citations(src_row))
-    if independence.single_source:
-        citation["single_source"] = True
-    if independence.folded:
-        citation["wire_folded"] = True
-    return citation
+    # C-2: a head that rested ONLY on claim rows also stamps ``claim`` (hop 2).
+    return stamp_cited_head(citation, src_row)
 
 
 async def resolve_composition_citations(

@@ -597,13 +597,17 @@ def test_a_long_source_reaches_the_judge_whole_instead_of_being_re_cut():
 
 
 def test_the_train_ships_behind_one_new_stamp():
-    """H3's OWN stamp, pinned by literal string: a later lane
-    (``2026-09-25/1``, H3-MEASURE — persisting HOW H3 aligned) has since
-    become the current head, so this no longer reads off ``JUDGE_PIPELINE_
-    VERSION`` (see that stamp's own test for the current-head assertions)."""
+    """H3's OWN stamp, pinned by literal string: two later lanes
+    (``2026-09-25/1``, H3-MEASURE — persisting HOW H3 aligned; then
+    ``2026-09-28/1``, carried_unsupported; then ``2026-10-03/1``,
+    carried_ungraded) have since become the current head, so this no longer
+    reads off ``JUDGE_PIPELINE_VERSION`` (see that stamp's own test for the
+    current-head assertions)."""
     assert "2026-09-24/1" in STAMP_LINEAGE
     assert STAMP_LINEAGE[STAMP_LINEAGE.index("2026-09-24/1") - 1] == "2026-09-20/1"
-    assert STAMP_LINEAGE[-1] == JUDGE_PIPELINE_VERSION == "2026-09-25/1"
+    assert STAMP_LINEAGE[STAMP_LINEAGE.index("2026-09-24/1") + 1] == "2026-09-25/1"
+    assert STAMP_LINEAGE[-1] == JUDGE_PIPELINE_VERSION
+    assert "2026-09-28/1" in STAMP_LINEAGE
 
 
 def test_the_stamp_declares_all_three_families_moving():

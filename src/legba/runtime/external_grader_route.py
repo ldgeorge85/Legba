@@ -114,8 +114,24 @@ GRADER_STACK_REF_ENV = "LEGBA_EXTERNAL_GRADER_STACK_REF"
 #: component well. An id absent from this map has family ``""`` and the fence
 #: falls back to id equality — see :func:`grader_fence_refusal`.
 GRADER_FAMILY_BY_COMPONENT: dict[str, str] = {
-    # the WRITER's plane (the self-hosted gpt-oss-120b core plane)
-    "llm.primary.openai_compat": "openai_oss",
+    # the WRITER's plane. Until the 2026-10-22 cutover this id served the
+    # self-hosted gpt-oss-120b (family openai_oss); from the cutover the SAME
+    # component id is a new head on the innoai gateway serving MiMo-V2.6-Flash
+    # (`fast`). The family label follows the model the head serves — the fence
+    # only needs the writer's family to be distinct from the judge's and the
+    # grader's, and both of those are declared below.
+    "llm.primary.openai_compat": "xiaomi_mimo",
+    # the JUDGE on the box (cutover 2026-10-22): Gemma 4 via the gateway, rung 1;
+    # Nemotron Lightning (think on) rung 2; Lightning (think off) the grader.
+    "llm.verify.innoai_gemma.openai_compat": "google_gemma",
+    # the bake-off GOLD DRAFTER (W11-G1): the same Gemma behind the `gemma-think`
+    # alias — declared so the fence refuses it as a grader (design §4.4).
+    "llm.verify.innoai_gemma_think.openai_compat": "google_gemma",
+    "llm.judge.innoai_lightning_think.openai_compat": "nvidia",
+    "llm.grader.innoai_lightning.openai_compat": "nvidia",
+    # the DECISION model on the box (W11-F108): clef-flash, POST /decide — the
+    # bearing gate's shadow today; declared so a repoint onto it is fenced.
+    "llm.decide.innoai_clef_flash": "cloudflare_clef",
     # the JUDGE's plane
     "llm.judge.openrouter_nemotron120b": "nvidia",
     "llm.judge.nemotron3_super.openai_compat": "nvidia",

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.eurostat.hicp_ea_monthly": {
+      "source": "source_eurostat_hicp_ea_monthly.yaml",
+      "state": "draft"
+    }
+  }
+}

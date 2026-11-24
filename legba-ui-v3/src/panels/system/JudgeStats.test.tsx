@@ -19,7 +19,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactElement } from 'react'
 import JudgeStatsPanel from './JudgeStats'
-import { MIN_COMPARABLE_N } from '@/lib/judgeStats'
+import { JUDGE_COLUMN, JUDGE_DEFAULT_WINDOW_DAYS, MIN_COMPARABLE_N } from '@/lib/judgeStats'
 import type { JudgeStatsProvider, JudgeStatsResponse } from '@/lib/api'
 import type { PanelRegistration } from '@/types'
 
@@ -290,5 +290,33 @@ describe('JudgeStats panel', () => {
 
     const row = await screen.findByTestId('judge-stats-day-2026-08-20')
     expect(row).toHaveTextContent('A 5')
+  })
+
+  it('names the LLM-judged share apart from the mean faithfulness, and opens on the footer’s window (C2)', async () => {
+    served = payload({
+      totals: { ...payload().totals, critiques: BIG, attributed: BIG, providers: 1 },
+      providers: [
+        provider({
+          served_by: 'A',
+          n: BIG,
+          by_status: { llm: BIG },
+          adjudicated_n: BIG,
+          adjudicated_share: 0.5,
+          faithfulness_n: BIG,
+          faithfulness_mean: 0.7,
+        }),
+      ],
+    })
+    render(wrap(<JudgeStatsPanel registration={reg()} scope={{}} mode="personal" />))
+    await screen.findByTestId('judge-stats-provider-A')
+    const share = screen.getAllByTestId('judge-stats-col-adjudicated')[0]
+    const mean = screen.getAllByTestId('judge-stats-col-faithfulness')[0]
+    // A share of verdicts is not a faithfulness figure: its heading never says so.
+    expect(share.textContent).toBe(JUDGE_COLUMN.adjudicated)
+    expect(share.textContent).not.toMatch(/faithful/i)
+    expect(share.getAttribute('title')).toMatch(/not a faithfulness score/i)
+    expect(mean.textContent).toBe('mean faithfulness')
+    // The panel and the footer read ONE call: the same default window.
+    expect(seenUrls.some((u) => u.includes(`days=${JUDGE_DEFAULT_WINDOW_DAYS}`))).toBe(true)
   })
 })

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.abc_au.justin": {
+      "source": "source_abc_australia.yaml",
+      "state": "draft"
+    }
+  }
+}

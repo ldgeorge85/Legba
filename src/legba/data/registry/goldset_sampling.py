@@ -36,22 +36,17 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Iterable, Sequence
 
-#: The bounded reasoning units the correctness plane measures individually.
-#: MIRROR of ``legba.data.analysts.deterministic_handlers.unit_correctness_scorer
-#: ._DEFAULT_UNITS`` — keep in sync (drift guard: tests/data_pkg/
-#: test_goldset_sampling.py::test_default_units_mirror_scorer).
-DEFAULT_UNITS: tuple[str, ...] = (
-    "leadership_transition",
-    "energy_security",
-    "escalation",
-    "narrative_coordination",
-    "internal_stability",
-    "military_posture",
-    "economic_coercion",
-)
+from .. import rosters as _rosters
 
-#: Weekly sample size — "a handful": one per unit (7) + one hash-priority fill.
-DEFAULT_SAMPLE_SIZE = 8
+#: The bounded reasoning units the correctness plane measures individually:
+#: the profile's ``rosters.scored_units`` (ROSTER-1), the same helper
+#: ``unit_correctness_scorer._DEFAULT_UNITS`` reads (drift guard:
+#: tests/data_pkg/test_goldset_sampling.py::test_default_units_mirror_scorer).
+DEFAULT_UNITS: tuple[str, ...] = _rosters.scored_unit_roster()
+
+#: Weekly sample size — "a handful": one per unit + one hash-priority fill
+#: (the geopolitics profile: 7 + 1 = 8).
+DEFAULT_SAMPLE_SIZE = len(DEFAULT_UNITS) + 1
 
 #: Faithfulness band split. The verify floor is 0.50 (below it a finding is not
 #: "verified" product); 0.75 splits the verified range into shaky [0.50, 0.75)

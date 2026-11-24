@@ -1,0 +1,151 @@
+# stance_linear/2 — stance_linear/1 re-sized from the first real runs (lane G-6).
+# Same seats and shape as /1; what changed:
+#  * deadlines from measurement (lane G-5, 131 calls): thinking OFF p50 6.3 s,
+#    p95 14.5 s; thinking ON p50 26.9 s, p95 121 s. A thinking seat gets 180 s, a
+#    plain seat 60 s, a seat with tool rounds 150-180 s (two rounds of reads,
+#    each read cut off at 25 s, its duration on the receipt);
+#  * the context builder no longer thinks: its job is selection, and with
+#    thinking it ran 191-210 s against 120 s (90-140 s of it model time);
+#  * the collectors get the gates' discipline in their card (collector_v2), the
+#    date rule as a gate, and ONE repair retry fed the gates' named reasons
+#    (`repair: reasons`) instead of a lower min_present;
+#  * every model seat retries once, and a retry after an unreadable reply is
+#    handed the parse error;
+#  * the verifier is a verdict/2 judge (a check per sentence) on its own card.
+round:
+  id: stance_linear
+  version: 2
+  about: one subject and one question at one as-of time, read through falsifiable questions
+  inputs:
+    subject: {type: subject_ref}
+    question: {type: text, optional: true}
+    as_of: {type: timestamp}
+  seats:
+    freeze:
+      kind: code
+      fn: scope_and_freeze
+      reads: [{from: input.subject}, {from: input.as_of}]
+      output: frozen_scope/1
+      deadline_s: 30
+    context:
+      kind: model
+      card: cards/context_builder_v2.md
+      plane: llm.primary.openai_compat
+      thinking: off
+      reads: [{from: freeze}]
+      tools: [substrate_read]
+      output: context_pack/1
+      gates: [handed_rows, must_include_set]
+      deadline_s: 180
+      retries: 1
+      repair: reasons
+      on_failure: stop_round
+    lead:
+      kind: model
+      card: cards/lead.md
+      plane: llm.primary.openai_compat
+      thinking: on
+      reads: [{from: input.question}, {from: context}]
+      output: question_set/1
+      deadline_s: 180
+      retries: 1
+      repair: reasons
+      on_failure: stop_round
+    collector_a:
+      kind: model
+      card: cards/collector_v2.md
+      plane: llm.primary.openai_compat
+      thinking: off
+      reads: [{from: lead, view: rows}, {from: context}]
+      withheld: [lead.working_reading]
+      tools: [substrate_read]
+      output: disposition_set/1
+      gates: [handed_rows, quote_in_source, numbers_in_evidence, dates_in_evidence]
+      deadline_s: 150
+      retries: 1
+      repair: reasons
+    collector_b: {seat_ref: collector_a}
+    collector_c: {seat_ref: collector_a}
+    numbers:
+      kind: code
+      fn: series_panel
+      reads: [{from: freeze}]
+      output: series_panel/1
+      deadline_s: 30
+    merge:
+      kind: code
+      fn: merge_and_count_origins
+      reads: [{from: collect.sealed, view: rows}, {from: numbers}, {from: context}]
+      output: evidence_table/1
+      deadline_s: 30
+    contrarian:
+      kind: model
+      card: cards/contrarian.md
+      plane: llm.primary.openai_compat
+      thinking: on
+      reads: [{from: lead, view: rows}, {from: merge}]
+      withheld: [lead.working_reading]
+      output: position/1
+      gates: [handed_rows]
+      deadline_s: 180
+      retries: 1
+      repair: reasons
+    adjudicator:
+      kind: model
+      card: cards/adjudicator.md
+      plane: llm.primary.openai_compat
+      thinking: on
+      reads: [{from: lead}, {from: merge}, {from: challenge.sealed, view: sentence_table}]
+      output: ruling/1
+      gates: [handed_rows]
+      deadline_s: 180
+      retries: 1
+      repair: reasons
+      on_failure: stop_round
+    verifier:
+      kind: judge
+      card: cards/judges/verifier.md
+      plane: llm.verify.innoai_gemma.openai_compat
+      family_rule: {differs_from: [adjudicator, collector_a]}
+      reads: [{from: adjudicator, view: sentence_table}]
+      output: verdict/2
+      deadline_s: 120
+      retries: 1
+      repair: reasons
+    gate_shadow:
+      kind: code
+      fn: statement_gate_shadow
+      reads: [{from: adjudicator}, {from: verify.tally}]
+      output: statement_proposals/1
+      deadline_s: 60
+    editor:
+      kind: model
+      card: cards/editor.md
+      plane: llm.primary.openai_compat
+      thinking: off
+      reads: [{from: adjudicator}, {from: verify.tally}]
+      output: read/1
+      gates: [every_sentence_maps_to_rows]
+      deadline_s: 60
+      retries: 1
+      repair: reasons
+  flow:
+    seq:
+      - {seat: freeze}
+      - {seat: context}
+      - {seat: lead}
+      - par:
+          - {blind: [{seat: collector_a}, {seat: collector_b}, {seat: collector_c}], id: collect, deadline_s: 330, min_present: 2}
+          - {seat: numbers}
+        id: gather
+        join: all
+        deadline_s: 360
+      - {seat: merge}
+      - {blind: [{seat: contrarian}], id: challenge, deadline_s: 360, min_present: 0}
+      - {seat: adjudicator}
+      - {panel: {judges: [verifier], on: adjudicator, tally: majority}, id: verify, deadline_s: 240}
+      - {seat: gate_shadow}
+      - {seat: editor}
+    id: main
+  budgets: {wall_s: 2400, model_calls: 18, max_parallel: 4}
+  publishes: shadow

@@ -1,0 +1,15 @@
+{
+  "prompts": {
+    "signal_salience": {
+      "chars": 578,
+      "sha256": "71c36e911d3f9a5385c4a029a06d0b656f9665c2502db6635865083c138921ff",
+      "source": "analyst_signal_salience.yaml"
+    }
+  },
+  "states": {
+    "analyst:signal_salience": {
+      "source": "analyst_signal_salience.yaml",
+      "state": "active"
+    }
+  }
+}

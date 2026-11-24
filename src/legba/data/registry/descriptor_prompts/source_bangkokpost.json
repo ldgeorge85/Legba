@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.bangkokpost.topstories": {
+      "source": "source_bangkokpost.yaml",
+      "state": "draft"
+    }
+  }
+}

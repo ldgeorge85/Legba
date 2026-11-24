@@ -1,10 +1,11 @@
 /**
- * World-map renderer selection (S7-T5).
+ * World-map renderer selection (S7-T5; U-4 retired Leaflet).
  *
- * Two renderers ship, both fully wired to the shared world store:
- *   - 'leaflet'  — DOM/SVG, always composites in a Dockview tile (the
- *                  known-good map). FALLBACK — served only when the browser
- *                  cannot create a WebGL context (see DEFAULT note below).
+ * Two renderers ship:
+ *   - 'drawn'    — the SVG map (`v4/globe/SvgWorld`), always composites in a
+ *                  Dockview tile. FALLBACK — served only when the browser
+ *                  cannot create a WebGL2 context (see DEFAULT note below).
+ *                  It replaced Leaflet (U-4).
  *   - 'maplibre' — WebGL, rendered through the TileWebGLOverlay harness that
  *                  routes the GPU canvas OUT of the tile transform (the S7-T5
  *                  unlock), adding the banded-verdict choropleth + signal-density
@@ -16,22 +17,26 @@
  * banded-verdict choropleth painting correctly, because the TileWebGLOverlay
  * portals the GPU canvas to <body>, OUT of every Dockview CSS transform (an
  * architectural fix, GPU-agnostic). A WebGL-availability guard below downgrades
- * to Leaflet on any browser that genuinely cannot create a WebGL context, so a
+ * to the drawn map on any browser that cannot create a WebGL2 context, so a
  * black default can never ship. Overrides still win, with NO rebuild —
  *
- *   ?map=leaflet                                  // URL override (wins, either way)
- *   localStorage.legba_map_engine = 'leaflet'     // or 'maplibre'
+ *   ?map=drawn                                    // URL override (wins, either way)
+ *   localStorage.legba_map_engine = 'drawn'       // or 'maplibre'
  *
- * Leaflet + its `leaflet` deps stay regardless — the ReadGeoLens mini-map and
- * the fallback both use them.
+ * (`leaflet`, the retired engine's name, still reads as `drawn`.) This choice
+ * applies with the globe flag OFF; with it on, `lib/globeFlag.ts` decides.
  */
-export type MapEngine = 'maplibre' | 'leaflet'
+export type MapEngine = 'maplibre' | 'drawn'
 
-/** True if the browser can create a WebGL context (maplibre needs one). */
-function hasWebGL(): boolean {
+/**
+ * True if the browser can create a WebGL2 context. maplibre-gl 5 dropped
+ * WebGL1 (U-4: the upgrade's one hard break), so a WebGL1-only browser is
+ * routed to the drawn fallback rather than handed an engine that throws.
+ */
+export function hasWebGL2(): boolean {
   try {
     const c = document.createElement('canvas')
-    return !!(c.getContext('webgl2') || c.getContext('webgl') || c.getContext('experimental-webgl'))
+    return !!c.getContext('webgl2')
   } catch {
     return false
   }
@@ -41,14 +46,16 @@ export function mapEngine(): MapEngine {
   try {
     // An explicit override is honored unconditionally (debugging / preference).
     const url = new URLSearchParams(window.location.search).get('map')
-    if (url === 'leaflet' || url === 'maplibre') return url
+    if (url === 'maplibre') return url
+    if (url === 'drawn' || url === 'leaflet') return 'drawn'
     const ls = localStorage.getItem('legba_map_engine')
-    if (ls === 'leaflet' || ls === 'maplibre') return ls
+    if (ls === 'maplibre') return ls
+    if (ls === 'drawn' || ls === 'leaflet') return 'drawn'
     // Default to the richer maplibre choropleth, but never hand back a renderer
-    // the browser can't composite — fall back to the always-safe Leaflet.
-    return hasWebGL() ? 'maplibre' : 'leaflet'
+    // the browser can't composite — fall back to the always-safe drawn map.
+    return hasWebGL2() ? 'maplibre' : 'drawn'
   } catch {
-    /* SSR / private mode → the safe DOM/SVG renderer */
-    return 'leaflet'
+    /* SSR / private mode → the safe SVG renderer */
+    return 'drawn'
   }
 }

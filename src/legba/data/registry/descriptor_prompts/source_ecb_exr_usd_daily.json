@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.ecb.exr_usd_daily": {
+      "source": "source_ecb_exr_usd_daily.yaml",
+      "state": "draft"
+    }
+  }
+}

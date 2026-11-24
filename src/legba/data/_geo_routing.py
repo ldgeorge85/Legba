@@ -102,6 +102,8 @@ from dataclasses import dataclass, fields
 from typing import TYPE_CHECKING, Any, Iterable, Mapping, Sequence
 
 from ._entity_canon import canonicalize_entity
+from .gazetteer import gazetteer
+from .signal_slice_scope import canonical_only_sql_for
 from ._polity_match import (
     _ISO2_HOME_ALIASES,
     _pycountry_names,
@@ -130,7 +132,9 @@ ENV_PREFIX: str = "LEGBA_SLICE_GEO_V2_"
 
 #: Every canonical polity the shared canon knows — the SAME set
 #: ``_frame_anchor.DEFAULT_CANDIDATES`` is built from, read from its source
-#: (``_polity_match._SURFACES``) rather than through ``_frame_anchor``.
+#: (``_polity_match._SURFACES``) rather than through ``_frame_anchor``. DERIVED,
+#: never listed: the canonical names the profile gazetteer's ``alias_map`` and
+#: ``demonym_map`` resolve to (W10 CANON-1).
 #: Importing the sibling here would close a cycle:
 #: ``_frame_anchor -> _frame_content -> _coverage_floor_scan -> _geo_routing``,
 #: and the coverage floor is one of this module's two callers.
@@ -163,6 +167,12 @@ def _official_names_by_iso2() -> dict[str, frozenset[str]]:
     if _OFFICIAL_NAMES_BY_ISO2 is not None:
         return _OFFICIAL_NAMES_BY_ISO2
     built: dict[str, frozenset[str]] = {}
+    # The pycountry universe is walked only where the profile's gazetteer
+    # DECLARES it (``polities.universe: pycountry``, W10 CANON-1).
+    polities = gazetteer().get("polities")
+    if polities is None or polities.universe != "pycountry":
+        _OFFICIAL_NAMES_BY_ISO2 = built
+        return built
     try:
         import pycountry
     except Exception:  # pragma: no cover — dependency-shape guard
@@ -483,21 +493,21 @@ def admitted_rows(
 #: and hitting it is reported rather than swallowed.
 MAX_ROUTED_ROWS = 20_000
 
-#: How many desks the routed-elsewhere breakdown names in the receipt. The
-#: fleet is 32 desks; the receipt wants the shape of the gap, not a census.
+#: How many desks the routed-elsewhere breakdown names in the receipt. A fleet
+#: runs tens of desks; the receipt wants the shape of the gap, not a census.
 MAX_ROUTED_TARGETS_IN_RECEIPT = 12
 
 #: High-magnitude signals in the window, with the geo the router chose and the
 #: title the newsroom wrote. No desk join: the desk × row attribution happens
 #: in Python, where the canon's matcher lives.
-ROUTED_ELSEWHERE_SQL = """
+ROUTED_ELSEWHERE_SQL = f"""
     SELECT s.geo AS geo, s.payload ->> 'title' AS title
       FROM signals s
      WHERE s.fetched_at > now() - make_interval(days => $1)
        AND (s.salience ->> 'magnitude')::float >= $2
        AND s.payload ->> 'title' IS NOT NULL
        AND s.payload ->> 'title' <> ''
-       AND (s.canonical_signal_id IS NULL OR s.canonical_signal_id = s.id)
+       AND {canonical_only_sql_for("s")}
      LIMIT $3
 """
 

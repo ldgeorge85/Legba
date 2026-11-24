@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.eucommission.press": {
+      "source": "source_eucommission_press.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -77,6 +77,7 @@ from typing import Any
 from uuid import UUID
 
 from ...schemas.action_pack import ActionPack
+from ...principals import seat_handle
 from .tools import ToolCall, ToolContext, ToolResult, WritebackContext
 
 logger = logging.getLogger(__name__)
@@ -215,9 +216,10 @@ async def _insert_proposal(
                 diff,
                 cited_substrate_refs,
                 status,
-                decision_reason
+                decision_reason,
+                written_by
             )
-            VALUES ($1, $2, $3, $4, $5::jsonb, $6::uuid[], $7, $8)
+            VALUES ($1, $2, $3, $4, $5::jsonb, $6::uuid[], $7, $8, legba_principal($9))
             RETURNING id
             """,
             proposal_kind,
@@ -228,6 +230,7 @@ async def _insert_proposal(
             list(cited_refs),
             status,
             archive_reason,
+            seat_handle(ctx.analyst_id, ctx.analyst_version),
         )
     proposal_id = row["id"]
     if archive_reason is not None:

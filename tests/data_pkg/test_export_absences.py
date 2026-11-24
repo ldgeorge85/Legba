@@ -242,9 +242,9 @@ def test_an_empty_desk_prints_every_kind_as_READ_not_as_blank():
     block = absences_block(_out())
     assert block["item_count"] == 0
     md = "\n".join(render_absences_markdown(block))
-    # 7g-2: eight kinds. The composer iterates ABSENCE_KINDS and is
+    # 7g-2: nine kinds (W11-F14 added carried_unsupported). The composer iterates ABSENCE_KINDS and is
     # kind-agnostic, so this pins the vocabulary against the printed brief.
-    assert md.count("read for this desk, nothing absent under this kind") == 8
+    assert md.count("read for this desk, nothing absent under this kind") == 9
     assert "typed absences recorded: 0" in md
 
 
@@ -613,3 +613,14 @@ def test_the_readers_kind_ORDER_matches_the_routes_own() -> None:
     )
     assert block, "ABSENCE_KIND_ORDER not found in absenceModel.ts"
     assert re.findall(r"'([a-z_]+)'", block.group(1)) == list(ABSENCE_KINDS)
+
+
+def test_a_g20_desk_appendix_is_accepted_by_the_route_model():
+    """W11-F78: a 23,000-char client appendix (20 situations × 20 events on a
+    G20 desk) was refused at 20,000 and the Brief tab could not render for
+    any country desk. The guard is now above the client's own 30,000 cap."""
+    from legba.data.registry.export_absences import APPENDIX_MAX_CHARS, ExportAppendixIn
+
+    assert APPENDIX_MAX_CHARS >= 40_000
+    body = ExportAppendixIn(markdown="x" * 30_000, absences=True, scope="country_g20_cn")
+    assert len(body.markdown or "") == 30_000

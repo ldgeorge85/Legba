@@ -11,7 +11,7 @@
  * route (`lib/coverageFooter.ts` holds the arithmetic and the wording):
  *
  *     sources 38/57 firing · 12m ago   gaps 5 typed · 1m ago
- *     judge 0.83 faithfulness · 4m ago   grader 44/187 desks graded · 7h ago
+ *     judge 0.83 mean faithfulness · 14d · 4m ago   grader 44/187 desks graded · 7h ago
  *
  * Each figure carries its unit; each carries its own as-of (relative here, and
  * absolute in its `title` beside every denominator and caveat); an absent
@@ -32,9 +32,11 @@
 
 import { FileDown } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
+import { SLOW_STALE_MS, SOURCE_FIRING_KEY } from '@/lib/queryKeys'
 import type { Mode, PanelKind } from '@/types'
 import { cn } from '@/lib/cn'
 import { PreferencesControls } from '@/components/density/PreferencesControls'
+import { IdentityChip } from '@/auth/IdentityChip'
 import { useDebugMode } from '@/lib/debugMode'
 import { useExportBasket } from '@/state/exportBasket'
 import { useScope } from '@/state/scope'
@@ -46,6 +48,7 @@ import {
   type SourceFiringRow,
 } from '@/lib/api'
 import type { GraderRoster } from '@/lib/graderRosterModel'
+import { JUDGE_DEFAULT_WINDOW_DAYS } from '@/lib/judgeStats'
 import type { AbsenceResponse } from '@/lib/absenceModel'
 import {
   COVERAGE_FIGURE_PANEL,
@@ -56,8 +59,9 @@ import {
   type CoverageFigure,
 } from '@/lib/coverageFooter'
 
-/** The judge window the footer states. Matches the route's own default unit. */
-const JUDGE_WINDOW_DAYS = 7
+/** The judge window the footer states — the SAME window (and so the same
+ *  `['judge-stats', days]` call) the Judge Stats panel opens on (C2). */
+const JUDGE_WINDOW_DAYS = JUDGE_DEFAULT_WINDOW_DAYS
 /** The footer's own poll. The owning panels poll faster; react-query takes the
  *  shorter interval whenever one of them is also observing the same key. */
 const FOOTER_POLL_MS = 300_000
@@ -139,9 +143,10 @@ function CoverageLine({ onOpenPanel }: { onOpenPanel?: (kind: PanelKind) => void
         : null
 
   const sources = useQuery<SourceFiringRow[]>({
-    queryKey: ['system-status', 'source-firing'],
+    queryKey: SOURCE_FIRING_KEY,
     queryFn: getSystemSourceFiring,
     refetchInterval: FOOTER_POLL_MS,
+    staleTime: SLOW_STALE_MS,
     retry: false,
   })
 
@@ -225,7 +230,8 @@ export function StatusBar({
         <ExportBasketChip onOpen={onOpenExport} />
         {errorText && <span className="max-w-md truncate text-accent-critical">{errorText}</span>}
         {lastRefresh && <span>refreshed {lastRefresh.toLocaleTimeString()}</span>}
-        <span>{authenticated ? 'auth: ok' : 'auth: dev'}</span>
+        {/* X3-B3: who the registry says is here (GET /auth/me). */}
+        <IdentityChip storedToken={authenticated} />
         <PreferencesControls />
       </div>
     </footer>

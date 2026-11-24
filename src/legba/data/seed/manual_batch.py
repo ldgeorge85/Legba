@@ -92,6 +92,7 @@ from uuid import UUID, uuid4, uuid5
 from pydantic import BaseModel, ConfigDict
 
 from ..nats import BACKFILL_EVENT_CLASS
+from ..principals import rule_handle
 from ..provenance import (
     FactPayload,
     NexusPayload,
@@ -101,6 +102,7 @@ from ..provenance import (
 )
 from ..provenance.origin import origin_class_clause
 from ..provenance.writes import _canonical_rel_type, _source_tier_rank
+from ..source_classification import source_classification
 from ..sources._contract import InMemoryStateStore, Signal, SourceContext
 from ..sources.baseline import run_baseline
 from ..vocabulary import normalize_predicate
@@ -118,6 +120,9 @@ from .manual_schema import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: Who writes a manual batch's source row (lane 9): this loader.
+_WRITTEN_BY = rule_handle("manual_batch")
 
 #: P7/7g-1 — the origin-class leg on the prior-fact read (SEAMS #57 sweep).
 #: A manual seed batch supersedes the LIVE open row for a triple; a loaded
@@ -146,6 +151,15 @@ PublishSignal = Callable[[Signal, str], Awaitable[Any]]
 # ``source_descriptors`` head row is registered so the source resolves for
 # provenance / lineage / the UI without ever being polled or poll-liveness-checked.
 _MANUAL_SOURCE_PREFIX = "source.manual."
+#: The ``source.manual.<batch>`` head's scope — written into the head body
+#: (`_register_manual_source`) and bound into the backfill's
+#: ``SourceContext.classification`` (W10 TAX-2), so the two cannot drift.
+_MANUAL_SOURCE_SCOPE: dict[str, Any] = {
+    "owner_tenant": "default",
+    "geo": [],
+    "languages": [],
+    "tags": ["manual", "backfill"],
+}
 # A fixed namespace so a backfilled signal's id is DETERMINISTIC on
 # ``(source_id, external_id|content_hash)`` — a batch re-run collides on the row
 # id (``ON CONFLICT (id) DO NOTHING``) and is an idempotent no-op, not a dup.
@@ -821,12 +835,7 @@ async def _register_manual_source(
             "state": "configured",
             "owner": manifest.operator,
         },
-        "scope": {
-            "owner_tenant": "default",
-            "geo": [],
-            "languages": [],
-            "tags": ["manual", "backfill"],
-        },
+        "scope": json.loads(json.dumps(_MANUAL_SOURCE_SCOPE)),
         "acquisition": "manual",
         "manual_batch": {
             "batch_id": manifest.batch_id,
@@ -839,15 +848,19 @@ async def _register_manual_source(
         """
         INSERT INTO source_descriptors
             (descriptor_id, version, schema_uri, is_head, abstraction_level,
-             kind, state, owner, name, body, inherits, created_at)
+             kind, state, owner, name, body, inherits, created_at, written_by)
         VALUES ($1, '1', 'legba/source/1.0.0', true, 'L1',
-                'manual', 'configured', $2, $3, $4::jsonb, '{}'::text[], now())
+                'manual', 'configured', $2, $3, $4::jsonb, '{}'::text[], now(),
+                legba_principal($5))
         ON CONFLICT (descriptor_id, version) DO NOTHING
         """,
         source_id,
         manifest.operator,
         f"Manual backfill — {manifest.batch_id}",
         json.dumps(body),
+        # Lane 9: the manual-batch loader wrote the row; the manifest's
+        # ``operator`` (a free-text name the manifest carries) stays in owner.
+        _WRITTEN_BY,
     )
 
 
@@ -879,6 +892,9 @@ async def _apply_signal(
         # A record's inline geo also seeds the baseline geo-from-scope backstop;
         # when the record carried none, a wired geocode stage fills the column.
         scope_geo=list(record.geo),
+        # W10 TAX-2: the manual head's declared classification (its legacy
+        # scope.tags bind as src:), stamped onto every backfilled signal.
+        classification=await source_classification(_MANUAL_SOURCE_SCOPE),
     )
     enriched = await run_baseline(
         sig, ctx, media="reference", enrichment_stage=enrichment_stage
@@ -892,7 +908,8 @@ async def _apply_signal(
     from ...runtime.source_actor import write_canonical_signal
 
     written_id = await write_canonical_signal(
-        conn, enriched, source_version="1", owner_tenant="default"
+        conn, enriched, source_version="1", owner_tenant="default",
+        classification=ctx.classification,
     )
     if written_id is None:  # ON CONFLICT (id) — an idempotent re-run no-op.
         return RecordAction.SKIP

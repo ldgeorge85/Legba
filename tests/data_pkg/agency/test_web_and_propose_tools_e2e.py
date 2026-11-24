@@ -269,26 +269,54 @@ async def test_propose_fact_writes_proposed_row_through_gate(pool):
 
 
 async def test_propose_fact_without_derived_from_refused(pool):
+    """Lineage is mandatory, and it is now refused TWICE over.
+
+    ``derived_from`` is declared ``required`` in the tool grammar, so an
+    absent one never reaches the handler at all: the 2026-09-28 tool seam
+    blocks it at the gate (``agency`` step 2.5) before the pack's rate or
+    budget is spent, and hands the planner the declared grammar back. The
+    handler's own lineage refusal below still covers what a schema cannot
+    see — a ``derived_from`` that is present but holds nothing usable."""
     pack = _pack("propose_facts", tools=["propose_fact"])
     scope = TargetScopeView(target_id="t_s6")
     agency = Agency()
     actx = _analyst_ctx()
     ctx = ToolContext(writeback=WritebackContext(pg_pool=pool, analyst_ctx=actx))
-    call = ToolCall(
-        pack_id="propose_facts", tool_name="propose_fact",
-        budget_account=f"acct-{uuid4().hex[:8]}", requested_by="analyst.x",
-        args={"subject": "A", "predicate": "controls", "value": "B"},  # no derived_from
-    )
-    async with pool.acquire() as conn:
-        outcome = await agency.run_pack_tool(
-            conn, pack=pack, call=call,
-            analyst_grants=[_ref("propose_facts")], target_allows=[_ref("propose_facts")],
-            scope=scope, ctx=ctx,
+
+    def _call(args):
+        return ToolCall(
+            pack_id="propose_facts", tool_name="propose_fact",
+            budget_account=f"acct-{uuid4().hex[:8]}", requested_by="analyst.x",
+            args=args,
         )
-    assert outcome.admitted is True
-    assert outcome.tool_result.status == "failed"
-    assert "derived_from" in (outcome.tool_result.error or "")
-    # Nothing was written.
+
+    async def _run(args):
+        async with pool.acquire() as conn:
+            return await agency.run_pack_tool(
+                conn, pack=pack, call=_call(args), scope=scope, ctx=ctx,
+                analyst_grants=[_ref("propose_facts")],
+                target_allows=[_ref("propose_facts")],
+            )
+
+    # (1) ABSENT — blocked at the gate, the tool never runs.
+    blocked = await _run(
+        {"subject": "A", "predicate": "controls", "value": "B"},
+    )
+    assert blocked.admitted is False
+    assert blocked.block_cause == "invalid_arg"
+    assert "derived_from" in blocked.detail
+    assert blocked.tool_result is None
+
+    # (2) PRESENT BUT EMPTY — the schema is satisfied, the handler is not.
+    ran = await _run({
+        "subject": "A", "predicate": "controls", "value": "B",
+        "derived_from": [""],
+    })
+    assert ran.admitted is True
+    assert ran.tool_result.status == "failed"
+    assert "derived_from" in (ran.tool_result.error or "")
+
+    # Nothing was written by either.
     async with pool.acquire() as conn:
         n = await conn.fetchval(
             "SELECT COUNT(*) FROM facts WHERE subject = 'A' AND value = 'B'")

@@ -135,14 +135,16 @@ from uuid import UUID
 
 from ..provenance.citation_markers import prior_read_ref
 from ..provenance.origin import origin_class_clause
+from ._tradecraft import CARRIED_ANCHOR_BLOCK_NOTE
 from .history_grounding import (
     GROUNDING_HISTORY,
     HISTORY_SERIES_CAP,
     HISTORY_SERIES_MAX_CAP,
+    HISTORY_WITNESS_KEY,
     history_block_lines,
     observation_citations,
     ordinal_span,
-    read_desk_history,
+    read_desk_history_witnessed,
 )
 from .window_ledger import (
     LEDGER_UNIT_TOTAL_CAP,
@@ -446,7 +448,7 @@ _OPEN_QUESTIONS_SQL = """
            EXTRACT(EPOCH FROM (NOW() - produced_at)) / 86400.0 AS age_days
       FROM hypotheses
      WHERE status = 'open_question'
-       AND target_id = $1
+       AND target_id = $1{dec19}
      ORDER BY produced_at DESC, id
      LIMIT $2
 """
@@ -466,7 +468,12 @@ async def read_desk_open_questions(
     """
     if not target_id:
         return []
-    rows = await conn.fetch(_OPEN_QUESTIONS_SQL, str(target_id), int(limit))
+    # DEC-19: a consult's minted watch never steers a scheduled desk's read
+    # unless LEGBA_DESK_GROUNDING_INCLUDES_CONSULT_WATCHES is on.
+    from .consult_watch_fold import consult_watch_exclusion_sql
+
+    sql = _OPEN_QUESTIONS_SQL.format(dec19=consult_watch_exclusion_sql())
+    rows = await conn.fetch(sql, str(target_id), int(limit))
     out: list[dict[str, Any]] = []
     for raw in rows:
         r = dict(raw)
@@ -759,23 +766,18 @@ async def gather_unit_grounding_rows(
     # not ask. The read reaches a table no other grounding block touches
     # (`observations`, a curated holding), and it is the only block whose rows
     # are not this platform's own memory — so it is offered per desk, never
-    # fleet-wide, exactly as the OPEN EVENTS grant is.
+    # fleet-wide, exactly as the OPEN EVENTS grant is. SW-2: once granted the
+    # row is ALWAYS emitted, carrying its read's WITNESS — an empty payload
+    # renders nothing and receipts 0, but says which absence it was.
     if offer_history:
-        try:
-            history = await read_desk_history(
-                conn,
-                target_id=str(target_filter),
-                limit=max(1, min(int(history_series_limit), HISTORY_SERIES_MAX_CAP)),
-            )
-        except Exception as exc:  # pragma: no cover — best-effort enrichment
-            logger.warning(
-                "unit_grounding.history.failed target_id=%s err=%s "
-                "— this run reads WITHOUT its historical series",
-                target_filter, exc,
-            )
-            history = []
-        if history:
-            out.append(_synthetic_row(GROUNDING_HISTORY, history))
+        history, witness = await read_desk_history_witnessed(
+            conn,
+            target_id=str(target_filter),
+            limit=max(1, min(int(history_series_limit), HISTORY_SERIES_MAX_CAP)),
+        )
+        row = _synthetic_row(GROUNDING_HISTORY, history)
+        row[HISTORY_WITNESS_KEY] = witness
+        out.append(row)
 
     return out
 
@@ -829,11 +831,13 @@ def grounding_receipts(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     Always reports EVERY key: a silently-absent memory is exactly what this
     receipt exists to make visible, and a key that only appears when the block
     resolved cannot distinguish "no prior read" from "the receipt changed shape".
+    A granted HISTORY row whose read came back empty (SW-2) renders nothing and
+    counts 0 — its ``grounding_history_detail`` says why.
     """
     present = {
         row.get(UNIT_GROUNDING_ROW_KEY)
         for row in rows
-        if isinstance(row, Mapping)
+        if isinstance(row, Mapping) and block_ordinal_span(row) > 0
     }
     return {
         receipt: (1 if kind in present else 0)
@@ -899,6 +903,15 @@ def _render_prior_read(row: Mapping[str, Any], ordinal: int) -> list[str]:
             "run's own signal numbering — they resolve to NOTHING in this "
             f"run and are NOT citable; cite this block as [{ordinal}]."
         )
+    # Q4 (2026-09-28) — THE CARRIED DATED ANCHOR, rendered where the memory IS.
+    # The clause says it once at the top of the system prompt; the temptation
+    # arrives here, thousands of tokens later, with the previous cycle's
+    # forward-dated claim sitting on the next line. The France head carried
+    # "virtually certain on 28 September 2026" for three months out of a body
+    # excerpt exactly like the one below, at faithfulness 1.00, because the
+    # block it came from is a citable ref. This line sits IMMEDIATELY ABOVE the
+    # body so the fence is read with the thing it fences.
+    lines.append(f"    {CARRIED_ANCHOR_BLOCK_NOTE}")
     lines.append(f"    body: {body}")
     return lines
 

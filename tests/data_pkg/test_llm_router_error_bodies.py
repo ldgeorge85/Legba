@@ -37,9 +37,11 @@ from legba.data.registry.credentials import MissingSecretError
 from legba.data.schemas import LLMProviderConfig, Property
 from legba.data.stack.llm import VLLMProviderHandler
 from legba.data.stack.llm.base import (
+    RETRY_AFTER_CAP_S,
     HardLLMFailure,
     RouterStatus,
     TransientLLMFailure,
+    _parse_retry_after,
 )
 
 # ``asyncio_mode = "auto"`` (pyproject.toml) runs the async tests; the one
@@ -502,3 +504,138 @@ def test_router_status_serialises_as_the_inner_code():
     assert json.dumps({"http_status": int(status)}) == '{"http_status": 502}'
     assert status == 502 and status >= 500
     assert str(status) == "200/502"
+
+
+# ---------------------------------------------------------------------------
+# 5. Status-line Retry-After (W11-F101): the gateway's 429 + ``Retry-After: 23``
+# ---------------------------------------------------------------------------
+
+_GATEWAY_429_BODIES = [
+    {"error": {"message": "too many concurrent requests", "type": "rate_limit_error"}},
+    {"error": {"message": "rate limit exceeded", "type": "rate_limit_error"}},
+]
+
+
+@pytest.mark.parametrize("body", _GATEWAY_429_BODIES)
+async def test_status_line_429_retry_after_is_honoured_and_carried(
+    _no_real_sleep, body
+):
+    """Both live gateway bodies: the 23 s instruction drives the in-layer waits
+    and rides out on the raised failure for the actor's retry loop."""
+    calls: list[int] = []
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(429, json=body, headers={"Retry-After": "23"})
+
+    handler = await _handler(responder)
+    with pytest.raises(TransientLLMFailure) as excinfo:
+        await handler.chat_complete(_MESSAGES)
+
+    assert len(calls) == 4
+    assert _no_real_sleep == [23.0, 23.0, 23.0]
+    assert excinfo.value.status == 429
+    assert excinfo.value.retry_after == 23.0
+    assert body["error"]["message"] in str(excinfo.value)
+
+
+async def test_status_line_retry_after_is_capped(_no_real_sleep):
+    """A provider asking for an hour gets RETRY_AFTER_CAP_S, in-layer and carried."""
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="busy", headers={"Retry-After": "3600"})
+
+    handler = await _handler(responder)
+    with pytest.raises(TransientLLMFailure) as excinfo:
+        await handler.chat_complete(_MESSAGES)
+
+    assert _no_real_sleep == [RETRY_AFTER_CAP_S] * 3
+    assert excinfo.value.retry_after == RETRY_AFTER_CAP_S == 120.0
+
+
+async def test_status_line_retry_after_http_date_is_honoured(_no_real_sleep):
+    """The HTTP-date form is parsed (far future -> the cap), not ignored."""
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429,
+            text="slow down",
+            headers={"Retry-After": "Fri, 31 Dec 2099 23:59:59 GMT"},
+        )
+
+    handler = await _handler(responder)
+    with pytest.raises(TransientLLMFailure) as excinfo:
+        await handler.chat_complete(_MESSAGES)
+
+    assert _no_real_sleep == [120.0] * 3
+    assert excinfo.value.retry_after == 120.0
+
+
+async def test_429_without_retry_after_is_byte_identical(_no_real_sleep):
+    """No header: the 2**attempt schedule and ``retry_after=None``, as before."""
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json=_GATEWAY_429_BODIES[0])
+
+    handler = await _handler(responder)
+    with pytest.raises(TransientLLMFailure) as excinfo:
+        await handler.chat_complete(_MESSAGES)
+
+    assert _no_real_sleep == [1, 2, 4]
+    assert all(type(s) is int for s in _no_real_sleep)
+    assert excinfo.value.retry_after is None
+
+
+async def test_unparsable_retry_after_falls_back_to_the_schedule(_no_real_sleep):
+    def responder(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, text="x", headers={"Retry-After": "soon-ish"})
+
+    handler = await _handler(responder)
+    with pytest.raises(TransientLLMFailure) as excinfo:
+        await handler.chat_complete(_MESSAGES)
+
+    assert _no_real_sleep == [1, 2, 4]
+    assert excinfo.value.retry_after is None
+
+
+async def test_envelope_retry_after_is_capped(_no_real_sleep):
+    """The router-echoed header obeys the same ceiling."""
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=_envelope_body(429, metadata={"headers": {"Retry-After": "900"}}),
+        )
+
+    handler = await _handler(responder)
+    with pytest.raises(TransientLLMFailure) as excinfo:
+        await handler.chat_complete(_MESSAGES)
+
+    assert _no_real_sleep == [120.0] * 3
+    assert excinfo.value.retry_after == 120.0
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, None),
+        ("", None),
+        ("   ", None),
+        ("23", 23.0),
+        (" 23 ", 23.0),
+        ("0", 0.0),
+        ("120", 120.0),
+        ("121", 120.0),
+        ("-5", None),
+        ("1.5", None),
+        ("garbage", None),
+        ("Thu, 22 Oct 2026 12:00:23 GMT", 23.0),
+        ("Thu, 22 Oct 2026 11:59:00 GMT", 0.0),  # already past -> retry now
+        ("Thu, 22 Oct 2026 13:00:00 GMT", 120.0),  # an hour out -> capped
+    ],
+)
+def test_parse_retry_after(raw, expected):
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 10, 22, 12, 0, 0, tzinfo=timezone.utc)
+    assert _parse_retry_after(raw, now=now) == expected

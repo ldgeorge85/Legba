@@ -11,7 +11,7 @@ Coverage map per Protocol method:
 
   * ``search_signals``         — happy path, category filter, empty
                                  query, no-match query, limit clamp,
-                                 scope_predicate echo.
+                                 scope_predicate echo, canonical-only.
   * ``query_facts``            — single-filter + combined filters, no-
                                  filter error path, empty-result path.
   * ``inspect_entity``         — entity found w/ versions + mentions;
@@ -520,7 +520,14 @@ async def test_search_signals_empty_query(port):
 
 
 @pytest.mark.asyncio
-async def test_search_signals_no_match(port, pg_pool):
+async def test_search_signals_no_match_says_why_it_is_empty(port, pg_pool):
+    """An empty read is not an answer about the world, and this one used to
+    look like one. ``plainto_tsquery('simple', …)`` ANDs every lexeme, and
+    'simple' has no stopwords and no stemming, so every word in a question is
+    a term the title+summary must ALL carry — live on 2026-09-28 a five-term
+    natural-language query came back with zero rows and was read as "no
+    coverage" when the corpus had plenty. The result now carries its count,
+    the lexemes Postgres itself required, and the tool to use instead."""
     await _insert_signal(
         pg_pool,
         title="Routine maintenance log",
@@ -532,6 +539,51 @@ async def test_search_signals_no_match(port, pg_pool):
     )
     assert result["rows"] == []
     assert result["refs"] == []
+    assert result["count"] == 0
+    # Postgres's own tokenizer, read back — 'simple' splits on the
+    # underscores, which is exactly the sort of detail a re-implementation in
+    # Python would have got nearly right and reported wrongly.
+    assert result["lexemes_required"] == [
+        "xyzzy", "unmatched", "token", "zzzqqq",
+    ]
+    why = result["why_empty"]
+    assert "AND, not OR" in why
+    assert "'xyzzy'" in why and "'zzzqqq'" in why
+    assert "search_corpus" in why
+
+
+@pytest.mark.asyncio
+async def test_search_signals_why_empty_names_every_required_lexeme(port, pg_pool):
+    """The conjunction is the whole story on a multi-term query, so the
+    lexemes are read back out of Postgres's own rendered tsquery rather than
+    guessed by re-implementing its tokenizer."""
+    await _insert_signal(
+        pg_pool, title="Reservoir levels steady", summary="Routine",
+        category="energy",
+    )
+    result = await port.search_signals(
+        query="reservoir levels and the zzzqqqmissing turbine", limit=5,
+    )
+    assert result["count"] == 0
+    # 'and'/'the' are NOT stopwords under the 'simple' configuration — that is
+    # precisely the trap, and the message has to show it.
+    assert result["lexemes_required"] == [
+        "reservoir", "levels", "and", "the", "zzzqqqmissing", "turbine",
+    ]
+    for lexeme in result["lexemes_required"]:
+        assert repr(lexeme) in result["why_empty"]
+
+
+@pytest.mark.asyncio
+async def test_search_signals_hit_carries_a_count_and_no_why_empty(port, pg_pool):
+    await _insert_signal(
+        pg_pool, title="Turbine inspection completed", summary="hydro plant",
+        category="energy",
+    )
+    result = await port.search_signals(query="turbine inspection", limit=5)
+    assert result["count"] == len(result["rows"]) >= 1
+    assert "why_empty" not in result
+    assert "lexemes_required" not in result
 
 
 @pytest.mark.asyncio
@@ -551,6 +603,44 @@ async def test_search_signals_limit_clamped(port, pg_pool):
 
 
 @pytest.mark.asyncio
+async def test_search_signals_canonical_only(port, pg_pool):
+    """W8-F2: two canonical twins (a kept row and its re-polled alias, dedup
+    stamped ``canonical_signal_id`` to the kept row) come back as ONE hit — a
+    consult never cites a re-polled duplicate. A self-stamped kept row
+    (``canonical_signal_id = id``) is canonical too."""
+    token = f"twinsqp{uuid4().hex[:10]}"
+    kept = await _insert_signal(
+        pg_pool, title=f"Dam spillway opened {token}", summary="flood",
+    )
+    alias = await _insert_signal(
+        pg_pool, title=f"Dam spillway opened {token}", summary="flood",
+    )
+    self_kept = await _insert_signal(
+        pg_pool, title=f"Spillway gauge {token}", summary="flood",
+    )
+    try:
+        async with pg_pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE signals SET canonical_signal_id = $1 WHERE id = $2",
+                kept, alias,
+            )
+            await conn.execute(
+                "UPDATE signals SET canonical_signal_id = id WHERE id = $1",
+                self_kept,
+            )
+        result = await port.search_signals(query=f"spillway {token}", limit=10)
+        assert sorted(result["refs"]) == sorted([str(kept), str(self_kept)])
+        assert str(alias) not in result["refs"]
+        assert result["count"] == 2
+    finally:
+        async with pg_pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM signals WHERE id = ANY($1::uuid[])",
+                [alias, kept, self_kept],
+            )
+
+
+@pytest.mark.asyncio
 async def test_search_signals_scope_predicate_echo(port, pg_pool):
     await _insert_signal(
         pg_pool, title="Diplomatic statement issued", summary="press release",
@@ -562,6 +652,124 @@ async def test_search_signals_scope_predicate_echo(port, pg_pool):
     )
     assert result["scope_predicate_applied"] is False
     assert "scope_predicate_note" in result
+
+
+def _oversize_summary(lead: str) -> str:
+    """A summary whose UNCAPPED tsvector exceeds Postgres' 1 MB limit.
+
+    W11-F135: an RSS entry whose description was inline base64 images became an
+    11 MB summary of millions of unique "words" and broke every
+    ``search_signals`` call for five weeks. 250k distinct 9-char tokens is
+    about 2.3 MB of text and ~2.5 MB of tsvector, with the lead words first so
+    the row still matches the query.
+    """
+    return lead + " " + " ".join(f"x{i:07d}" for i in range(250_000))
+
+
+@pytest.mark.asyncio
+async def test_search_signals_survives_an_oversize_summary(port, pg_pool):
+    # The planner builds the tsvector for EVERY row, so one oversize summary
+    # used to fail the whole call whatever the query ("string is too long for
+    # tsvector"). The summary leg is capped at FTS_SUMMARY_MAX_CHARS.
+    from legba.data.signal_slice_scope import FTS_SUMMARY_MAX_CHARS
+
+    big = _oversize_summary("Itaipu turbine retrofit")
+    assert len(big) > 10 * FTS_SUMMARY_MAX_CHARS
+    big_sid = await _insert_signal(
+        pg_pool, title="Oversize feed entry", summary=big, category="energy",
+    )
+    ok_sid = await _insert_signal(
+        pg_pool, title="Itaipu turbine upgrade complete",
+        summary="Third-gen refit finished.", category="energy",
+    )
+
+    result = await port.search_signals(query="Itaipu turbine", limit=10)
+
+    assert "error" not in result
+    assert str(ok_sid) in result["refs"]
+    # The oversize row's leading text is inside the cap, so it still matches.
+    assert str(big_sid) in result["refs"]
+
+
+@pytest.mark.asyncio
+async def test_search_signals_oversize_summary_beyond_cap_is_not_searched(
+    port, pg_pool,
+):
+    # Text past the cap is deliberately not indexed: the query must RUN and
+    # simply not match a token that exists only beyond FTS_SUMMARY_MAX_CHARS.
+    from legba.data.signal_slice_scope import FTS_SUMMARY_MAX_CHARS
+
+    big = _oversize_summary("lead words") + " zzbeyondcap"
+    assert big.index("zzbeyondcap") > FTS_SUMMARY_MAX_CHARS
+    await _insert_signal(pg_pool, title="Oversize", summary=big)
+    result = await port.search_signals(query="zzbeyondcap", limit=5)
+    assert "error" not in result
+    assert result["rows"] == []
+
+
+@pytest.mark.asyncio
+async def test_search_signals_limit_error_degrades_loudly_not_fatally():
+    # If Postgres still raises program_limit_exceeded (54000), the tool returns
+    # the standard rows+error shape instead of raising into the tool loop;
+    # any other error still propagates.
+    class _Limit(Exception):
+        sqlstate = "54000"
+
+    class _Other(Exception):
+        sqlstate = "42601"
+
+    class _Conn:
+        def __init__(self, exc):
+            self._exc = exc
+
+        async def fetch(self, *_a, **_k):
+            raise self._exc
+
+    class _Acq:
+        def __init__(self, exc):
+            self._exc = exc
+
+        async def __aenter__(self):
+            return _Conn(self._exc)
+
+        async def __aexit__(self, *_a):
+            return False
+
+    class _Pool:
+        def __init__(self, exc):
+            self._exc = exc
+
+        def acquire(self):
+            return _Acq(self._exc)
+
+    degraded = PostgresQdrantSubstrateQueryPort(
+        pg_pool=_Pool(_Limit("string is too long for tsvector")),
+        qdrant_client=None,
+        signals_collection="x",
+    )
+    out = await degraded.search_signals(query="iran", limit=5)
+    assert out["rows"] == [] and out["refs"] == [] and out["count"] == 0
+    assert "too long for tsvector" in out["error"]
+    assert "search_corpus" in out["error"]
+
+    broken = PostgresQdrantSubstrateQueryPort(
+        pg_pool=_Pool(_Other("syntax")),
+        qdrant_client=None,
+        signals_collection="x",
+    )
+    with pytest.raises(_Other):
+        await broken.search_signals(query="iran", limit=5)
+
+
+@pytest.mark.asyncio
+async def test_get_timeline_survives_an_oversize_summary(port, pg_pool):
+    subj = "Oversizia"
+    big = _oversize_summary("Oversizia signs pact")
+    big_sid = await _insert_signal(
+        pg_pool, title="Oversizia feed entry", summary=big,
+    )
+    result = await port.get_timeline(subject=subj, limit=20)
+    assert str(big_sid) in [i["id"] for i in result["items"]]
 
 
 # ---------------------------------------------------------------------------
@@ -1521,6 +1729,144 @@ async def test_list_sources_sql_executes(port):
     )
 
 
+# W11-F152 -- list_sources: freshest-first rows behind a whole-fleet summary,
+# last_success_at + staleness on every row, 'empty' read as "no new items".
+# The session DB is shared, so each test seeds its own uniquely-named sources
+# and asserts only on those (relative order, own rows), never on fleet totals.
+
+
+async def _seed_extra_poll(
+    pool, *, source_id: str, outcome: str, occurred_at: datetime,
+) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO source_poll_outcomes
+                (source_id, source_version, outcome, health_state,
+                 signals_written, occurred_at, newest_entry_ts)
+            VALUES ($1, 'v1', $2, 'healthy', 0, $3, NULL)
+            """,
+            source_id, outcome, occurred_at,
+        )
+
+
+@pytest.mark.asyncio
+async def test_list_sources_default_order_is_freshest_first_never_delivered_last(
+    pg_pool, port,
+) -> None:
+    now = datetime.now(tz=timezone.utc)
+    tag = uuid4().hex[:8]
+    fresh = f"source.ls.fresh.{tag}"
+    old = f"source.ls.old.{tag}"
+    never = f"source.ls.never.{tag}"
+    for sid, last in (
+        (never, None), (old, now - timedelta(hours=100)),
+        (fresh, now - timedelta(hours=1)),
+    ):
+        await _seed_source_health_probe(
+            pg_pool, source_id=sid, last_signal_at=last,
+            poll_outcome="empty", poll_newest_entry_ts=None,
+        )
+
+    out = await port.list_sources(active_only=True)
+    order = [r["source_id"] for r in out["rows"]
+             if r["source_id"] in {fresh, old, never}]
+    assert order == [fresh, old, never]
+
+    # silent_only inverts it: the caller asked for the silent ones, so the
+    # worst lead (never delivered first), and the fresh one is filtered out.
+    silent = await port.list_sources(
+        active_only=True, silent_only=True, silent_hours=48,
+    )
+    order = [r["source_id"] for r in silent["rows"]
+             if r["source_id"] in {fresh, old, never}]
+    assert order == [never, old]
+
+
+@pytest.mark.asyncio
+async def test_list_sources_rows_carry_last_success_staleness_and_empty_note(
+    pg_pool, port,
+) -> None:
+    from legba.runtime import source_staleness as _staleness
+
+    now = datetime.now(tz=timezone.utc)
+    tag = uuid4().hex[:8]
+    quiet = f"source.ls.quiet.{tag}"
+    errored = f"source.ls.errored.{tag}"
+    success_at = now - timedelta(days=3)
+    # A feed whose LATEST poll is 'empty' but which succeeded three days ago.
+    await _seed_source_health_probe(
+        pg_pool, source_id=quiet, last_signal_at=now - timedelta(days=3),
+        poll_outcome="empty", poll_newest_entry_ts=None,
+        occurred_at=now - timedelta(minutes=10),
+    )
+    await _seed_extra_poll(
+        pg_pool, source_id=quiet, outcome="success", occurred_at=success_at,
+    )
+    # A feed that has never had a success poll and whose latest poll errored.
+    await _seed_source_health_probe(
+        pg_pool, source_id=errored, last_signal_at=None,
+        poll_outcome="error", poll_newest_entry_ts=None,
+    )
+
+    out = await port.list_sources(active_only=True)
+    by_id = {r["source_id"]: r for r in out["rows"]}
+
+    q = by_id[quiet]
+    assert q["last_poll_outcome"] == "empty"
+    assert q["last_success_at"] is not None
+    assert datetime.fromisoformat(q["last_success_at"]) == success_at
+    assert q["last_poll_at"] is not None
+    assert q["staleness"] in _staleness.STATES
+    assert "no new items" in q["last_poll_note"]
+    assert "not dead" in q["last_poll_note"]
+
+    e = by_id[errored]
+    assert e["last_poll_outcome"] == "error"
+    assert e["last_success_at"] is None
+    assert "last_poll_note" not in e          # the note is only for 'empty'
+
+    # Every row carries a staleness verdict from the one shared vocabulary.
+    assert all(r["staleness"] in _staleness.STATES for r in out["rows"])
+
+
+@pytest.mark.asyncio
+async def test_list_sources_summary_leads_and_is_whole_fleet(
+    pg_pool, port,
+) -> None:
+    never = f"source.ls.sumnever.{uuid4().hex[:8]}"
+    await _seed_source_health_probe(
+        pg_pool, source_id=never, last_signal_at=None,
+        poll_outcome="empty", poll_newest_entry_ts=None,
+    )
+
+    out = await port.list_sources(active_only=True)
+    # Key order is load-bearing: a bounded tool JSON sheds trailing rows, so
+    # the whole-fleet summary has to come before them.
+    assert list(out)[0] == "summary"
+    summary = out["summary"]
+    assert summary["sources_scanned"] == len(out["rows"])
+    assert sum(summary["by_staleness"].values()) == summary["sources_scanned"]
+    assert sum(summary["by_last_poll_outcome"].values()) == summary["sources_scanned"]
+    assert summary["by_last_poll_outcome"].get("empty", 0) >= 1
+    guide = summary["reading_guide"]
+    assert "no NEW items" in guide and "NOT dead" in guide
+    # A source that never delivered has staleness 'unknown' and so counts on
+    # the attention roster, which a trimmed row list cannot hide (the roster
+    # is capped, the total is not).
+    assert summary["attention_total"] >= 1
+    assert len(summary["attention"]) <= summary["attention_total"]
+    assert all(
+        {"source_id", "staleness", "last_poll_outcome"} <= set(a)
+        for a in summary["attention"]
+    )
+    assert next(
+        r for r in out["rows"] if r["source_id"] == never
+    )["staleness"] == "unknown"
+    assert out["count"] == len(out["rows"])
+    assert out["refs"] == []
+
+
 # ---------------------------------------------------------------------------
 # REGISTER-1h — ``new_situations`` counts NEW frames, not the clustering cron
 # ---------------------------------------------------------------------------
@@ -1609,3 +1955,363 @@ async def test_journal_delta_new_situations_counts_created_not_updated(
         (await port.get_journal_delta(since=wide))["delta"]["new_situations"]
         >= after_new["new_situations"] + 1
     )
+
+
+# ---------------------------------------------------------------------------
+# B.9 (CONSULT_REVIEW_2026-09-28) — get_source_health tells honest-quiet
+# apart from actually-broken, keyed to source_poll_outcomes.newest_entry_ts.
+# ---------------------------------------------------------------------------
+#
+# 2026-09-27: get_source_health reported 25 reference feeds "silent 50-80h"
+# under the flat >=48h cutoff alone — every one of them had polled cleanly
+# (outcome='empty') with newest_entry_ts confirming nothing newer was
+# upstream. Measured as a DIFFERENCE against a live baseline (like the
+# REGISTER-1h tests above): the session DB is shared, so an absolute count
+# would pin this file to its neighbours' rows.
+
+
+async def _seed_source_health_probe(
+    pool,
+    *,
+    source_id: str,
+    last_signal_at: datetime | None,
+    poll_outcome: str,
+    poll_newest_entry_ts: datetime | None,
+    occurred_at: datetime | None = None,
+) -> None:
+    """One ACTIVE head source (+ optional ``signals`` row + one
+    ``source_poll_outcomes`` row) for the B.9 ``feed_has_no_new_items`` /
+    ``newest_entry_ts`` cases. Mirrors the INSERT shape
+    ``test_liveness_watchdog._seed_honest_quiet_source`` already proved
+    against the real schema.
+    """
+    now = datetime.now(tz=timezone.utc)
+    occurred_at = occurred_at or now
+    body = {"identity": {"id": source_id, "kind": "rss", "state": "active"}}
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO source_descriptors
+                (descriptor_id, version, schema_uri, is_head, kind, state, owner,
+                 name, body, created_at)
+            VALUES ($1, 'v1', 'legba/source/1.0.0', TRUE, 'rss', 'active', 'test',
+                    $1, $2::jsonb, $3)
+            """,
+            source_id,
+            json.dumps(body),
+            now - timedelta(days=30),
+        )
+        if last_signal_at is not None:
+            await conn.execute(
+                """
+                INSERT INTO signals
+                    (id, source_id, source_version, payload, content_hash,
+                     fetched_at, created_at, updated_at, schema_uri)
+                VALUES (gen_random_uuid(), $1, 'v1', '{}'::jsonb, $2, $3, $4, $4,
+                        'iglu:legba/signal/jsonschema/1-0-0')
+                """,
+                source_id,
+                uuid4().hex,
+                last_signal_at,
+                now,
+            )
+        await conn.execute(
+            """
+            INSERT INTO source_poll_outcomes
+                (source_id, source_version, outcome, health_state,
+                 signals_written, occurred_at, newest_entry_ts)
+            VALUES ($1, 'v1', $2, 'healthy', 0, $3, $4)
+            """,
+            source_id,
+            poll_outcome,
+            occurred_at,
+            poll_newest_entry_ts,
+        )
+
+
+@pytest.mark.asyncio
+async def test_get_source_health_feed_has_no_new_items_true_for_honest_empty_poll(
+    pg_pool, port,
+) -> None:
+    """outcome='empty' + newest_entry_ts <= last_signal_at -> honestly quiet.
+
+    The row is flagged ``feed_has_no_new_items`` and lands in the fleet-wide
+    ``silent_feed_empty`` bucket, not the "broken" one.
+    """
+    now = datetime.now(tz=timezone.utc)
+    source_id = f"source.health.honestquiet.{uuid4().hex[:8]}"
+    last_signal_at = now - timedelta(hours=60)  # well past the 48h default
+    newest_entry_ts = last_signal_at - timedelta(seconds=30)  # no newer upstream
+
+    before = await port.get_source_health(silent_hours=48)
+
+    await _seed_source_health_probe(
+        pg_pool,
+        source_id=source_id,
+        last_signal_at=last_signal_at,
+        poll_outcome="empty",
+        poll_newest_entry_ts=newest_entry_ts,
+    )
+
+    after = await port.get_source_health(silent_hours=48)
+    row = next(r for r in after["rows"] if r["source_id"] == source_id)
+
+    assert row["feed_has_no_new_items"] is True
+    assert row["newest_entry_ts"] is not None
+    assert row["last_poll_outcome"] == "empty"
+    assert after["summary"]["silent_feed_empty"] == (
+        before["summary"]["silent_feed_empty"] + 1
+    )
+    assert after["summary"]["silent_poll_error_or_none"] == (
+        before["summary"]["silent_poll_error_or_none"]
+    )
+    assert after["summary"]["active_stalled"] == before["summary"]["active_stalled"] + 1
+
+
+@pytest.mark.asyncio
+async def test_get_source_health_feed_has_no_new_items_false_for_poll_error(
+    pg_pool, port,
+) -> None:
+    """outcome='error' -> never "feed empty", regardless of newest_entry_ts.
+
+    Lands in the fleet-wide ``silent_poll_error_or_none`` bucket — the
+    genuinely broken remainder the 09-27 misread conflated with the honestly
+    quiet feeds above.
+    """
+    now = datetime.now(tz=timezone.utc)
+    source_id = f"source.health.pollerror.{uuid4().hex[:8]}"
+    last_signal_at = now - timedelta(hours=60)
+
+    before = await port.get_source_health(silent_hours=48)
+
+    await _seed_source_health_probe(
+        pg_pool,
+        source_id=source_id,
+        last_signal_at=last_signal_at,
+        poll_outcome="error",
+        poll_newest_entry_ts=None,  # an errored poll observed nothing
+    )
+
+    after = await port.get_source_health(silent_hours=48)
+    row = next(r for r in after["rows"] if r["source_id"] == source_id)
+
+    assert row["feed_has_no_new_items"] is False
+    assert row["newest_entry_ts"] is None
+    assert after["summary"]["silent_poll_error_or_none"] == (
+        before["summary"]["silent_poll_error_or_none"] + 1
+    )
+    assert after["summary"]["silent_feed_empty"] == before["summary"]["silent_feed_empty"]
+
+
+@pytest.mark.asyncio
+async def test_get_source_health_feed_has_no_new_items_false_for_cursor_fault(
+    pg_pool, port,
+) -> None:
+    """outcome='empty' but newest_entry_ts is NEWER than last_signal_at (past
+    the small clock-skew slack) -> the cursor/filter ate a real upstream
+    entry, NOT an honestly quiet feed. Also lands in
+    ``silent_poll_error_or_none``.
+    """
+    now = datetime.now(tz=timezone.utc)
+    source_id = f"source.health.cursorfault.{uuid4().hex[:8]}"
+    last_signal_at = now - timedelta(hours=60)
+    # Ten minutes past last_signal_at — outside the 5-minute slack.
+    newest_entry_ts = last_signal_at + timedelta(minutes=10)
+
+    before = await port.get_source_health(silent_hours=48)
+
+    await _seed_source_health_probe(
+        pg_pool,
+        source_id=source_id,
+        last_signal_at=last_signal_at,
+        poll_outcome="empty",
+        poll_newest_entry_ts=newest_entry_ts,
+    )
+
+    after = await port.get_source_health(silent_hours=48)
+    row = next(r for r in after["rows"] if r["source_id"] == source_id)
+
+    assert row["feed_has_no_new_items"] is False
+    assert row["newest_entry_ts"] is not None
+    assert after["summary"]["silent_poll_error_or_none"] == (
+        before["summary"]["silent_poll_error_or_none"] + 1
+    )
+    assert after["summary"]["silent_feed_empty"] == before["summary"]["silent_feed_empty"]
+
+
+@pytest.mark.asyncio
+async def test_get_source_health_feed_has_no_new_items_tolerates_clock_skew_slack(
+    pg_pool, port,
+) -> None:
+    """newest_entry_ts a couple minutes AFTER last_signal_at, but inside the
+    small slack, still classifies honestly-quiet — the two timestamps come
+    from different clocks (the upstream feed's own entry stamps vs our fetch
+    time) and a hair of skew must not flip this to a cursor-fault false
+    positive."""
+    now = datetime.now(tz=timezone.utc)
+    source_id = f"source.health.skewslack.{uuid4().hex[:8]}"
+    last_signal_at = now - timedelta(hours=60)
+    newest_entry_ts = last_signal_at + timedelta(minutes=2)  # inside the 5m slack
+
+    before = await port.get_source_health(silent_hours=48)
+
+    await _seed_source_health_probe(
+        pg_pool,
+        source_id=source_id,
+        last_signal_at=last_signal_at,
+        poll_outcome="empty",
+        poll_newest_entry_ts=newest_entry_ts,
+    )
+
+    after = await port.get_source_health(silent_hours=48)
+    row = next(r for r in after["rows"] if r["source_id"] == source_id)
+
+    assert row["feed_has_no_new_items"] is True
+    assert after["summary"]["silent_feed_empty"] == (
+        before["summary"]["silent_feed_empty"] + 1
+    )
+# list_situations — the ORDER and the empty read (2026-09-28 consult review).
+# ---------------------------------------------------------------------------
+
+
+async def _insert_frame(
+    pg_pool,
+    *,
+    name: str,
+    target_id: str,
+    status: str,
+    intensity: float,
+    last_event_at: datetime,
+    updated_at: datetime,
+) -> UUID:
+    """One ``situations`` row with its intensity, its last real movement and
+    its re-cluster stamp set INDEPENDENTLY — the three clocks the ordering
+    question turns on."""
+    sid = uuid4()
+    async with pg_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO situations (id, data, name, status, category, "
+            "  last_event_at, event_count, intensity_score, target_id, "
+            "  analyst_id, produced_at, derived_from, schema_uri, "
+            "  created_at, updated_at) "
+            "VALUES ($1,'{}'::jsonb,$2,$3,'test_ordering',$4,1,$5,$6,"
+            "  'situation_clustering',$7,'{}'::uuid[],'u',$7,$8)",
+            sid, name, status, last_event_at, intensity, target_id,
+            updated_at - timedelta(days=30), updated_at,
+        )
+    return sid
+
+
+@pytest.mark.asyncio
+async def test_list_situations_ranks_by_intensity_not_the_re_cluster_stamp(
+    pg_pool, port,
+):
+    """ORDER BY updated_at returned NONE of the 12 ACTIVE frames on
+    2026-09-28: the hourly re-cluster stamps ``updated_at`` on every row it
+    touches, so the column orders by "when the clusterer last ran", which is
+    the same instant for hundreds of rows, and a LIMIT took an arbitrary
+    slice of 296 mostly-dormant frames. The consult prompt meanwhile promises
+    an intensity ranking.
+
+    DISCRIMINATING BY CONSTRUCTION: the hot frame carries the OLDEST
+    ``updated_at`` of the three, so under the old key it sorts LAST and a
+    limit of 2 drops it entirely.
+    """
+    now = datetime.now(timezone.utc)
+    tid = f"ordering-{uuid4().hex[:8]}"
+    hot = await _insert_frame(
+        pg_pool, name="GRU sabotage of defence firms", target_id=tid,
+        status="active", intensity=9.5,
+        last_event_at=now - timedelta(hours=2),
+        updated_at=now - timedelta(minutes=30),
+    )
+    await _insert_frame(
+        pg_pool, name="dormant frame A", target_id=tid,
+        status="dormant", intensity=1.2,
+        last_event_at=now - timedelta(days=9),
+        updated_at=now - timedelta(minutes=1),
+    )
+    await _insert_frame(
+        pg_pool, name="dormant frame B", target_id=tid,
+        status="dormant", intensity=0.4,
+        last_event_at=now - timedelta(days=11),
+        updated_at=now - timedelta(seconds=30),
+    )
+
+    out = await port.list_situations(target_id=tid, limit=2)
+    assert out["count"] == 2
+    assert out["rows"][0]["id"] == str(hot), (
+        "the hottest frame must lead; ordering by the re-cluster stamp would "
+        "have put it last"
+    )
+    assert [r["intensity_score"] for r in out["rows"]] == sorted(
+        [r["intensity_score"] for r in out["rows"]], reverse=True,
+    )
+    assert "why_empty" not in out
+
+    # The tiebreak is real: two frames at the same intensity order by their
+    # last ACTUAL movement, not by whichever the clusterer touched last.
+    same_a = await _insert_frame(
+        pg_pool, name="tie, moved yesterday", target_id=tid,
+        status="active", intensity=5.0,
+        last_event_at=now - timedelta(days=1),
+        updated_at=now - timedelta(days=3),
+    )
+    same_b = await _insert_frame(
+        pg_pool, name="tie, moved last week", target_id=tid,
+        status="active", intensity=5.0,
+        last_event_at=now - timedelta(days=7),
+        updated_at=now - timedelta(seconds=1),
+    )
+    tied = await port.list_situations(target_id=tid, limit=10)
+    ids = [r["id"] for r in tied["rows"]]
+    assert ids.index(str(same_a)) < ids.index(str(same_b))
+
+
+@pytest.mark.asyncio
+async def test_list_situations_empty_read_echoes_the_filters_it_applied(port):
+    """An empty read used to be indistinguishable from "there are no such
+    frames" — the reader could not tell the substrate from the filter."""
+    tid = f"no-such-target-{uuid4().hex[:8]}"
+    out = await port.list_situations(target_id=tid, since_hours=72, limit=5)
+    assert out["count"] == 0
+    why = out["why_empty"]
+    assert tid in why
+    assert "since_hours=72" in why
+
+
+@pytest.mark.asyncio
+async def test_list_situations_names_a_status_outside_the_live_set(port):
+    """``status="ok"`` — the value the core plane invented on 2026-09-28 — can
+    never match a row, and the read must say so by name rather than hand back
+    a silent empty the model will read as "no active situations"."""
+    from legba.runtime.substrate_frame_reads import SITUATION_STATUSES
+
+    out = await port.list_situations(status="ok", limit=5)
+    assert out["count"] == 0
+    why = out["why_empty"]
+    assert "'ok'" in why
+    for status in SITUATION_STATUSES:
+        assert status in why
+    assert "the empty result is the filter, not the substrate" in why
+
+    # A status that IS in the vocabulary gets no such accusation.
+    live = await port.list_situations(status="dormant", limit=1)
+    assert "not one of the statuses" not in live.get("why_empty", "")
+
+
+@pytest.mark.asyncio
+async def test_compare_targets_carries_its_count(port, pg_pool):
+    """The consult trace probes ``count`` first and this read never carried
+    one, so every compare_targets call in the ledger reads as count 0."""
+    ta, tb = f"cnt-a-{uuid4().hex[:6]}", f"cnt-b-{uuid4().hex[:6]}"
+    await _insert_finding(pg_pool, title="A finding", target_id=ta)
+    await _insert_finding(pg_pool, title="B finding", target_id=tb)
+
+    result = await port.compare_targets(target_ids=[ta, tb])
+    assert result["count"] == len(result["targets"]) == 2
+
+    # A refused comparison is honest about being empty, not silently 2.
+    degenerate = await port.compare_targets(target_ids=["only-one", "only-one"])
+    assert degenerate["targets"] == []
+    assert degenerate.get("count", 0) == 0

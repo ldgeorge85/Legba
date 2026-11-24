@@ -203,12 +203,12 @@ method:
       # serving a DIFFERENT model fails the calibration coverage test and stops
       # the grader until a re-gate lands.
       factory_kind: stack_ref
-      raw: llm.audit.openrouter_llama33_70b.openai_compat
+      raw: llm.verify.innoai_gemma.openai_compat   # cutover 2026-10-23: F2 = Gemma 4 on the box (the OpenRouter Llama lane is retired)
       expected_family: llm_provider
     family_f3:
       # F3 — Mistral Large 3 (mistralai/mistral-large-2512). Same rule.
       factory_kind: stack_ref
-      raw: llm.judge.openrouter_mistral_large.openai_compat
+      raw: llm.grader.innoai_lightning.openai_compat   # cutover 2026-10-23: F3 = Nemotron Lightning on the box (the OpenRouter Mistral lane is retired)
       expected_family: llm_provider
   # Per-day token cap (24h bucket). Sized for the measured shape: the Israel
   # hand run was 54 claims x 3 families at ~7.4k input each (a live packet

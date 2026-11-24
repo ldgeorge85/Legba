@@ -28,7 +28,8 @@ WRITES are code; the model is a bounded instrument"*. It also routes around
 THE FIVE THINGS THAT ARE CODE, NOT PROMPT
 -----------------------------------------
 1. **The query.** ``f"{subject} {UNIT_QUERY_TERMS[unit]} {date}"`` — a fixed,
-   auditable, hand-written per-unit term table in this module, the same doctrine
+   auditable, hand-written per-unit term table (each unit's ``query_terms`` in
+   the instance profile, ROSTER-2), the same doctrine
    as ``collection_gap.SOURCE_CLASSES_BY_DIMENSION`` (*"a fixed, auditable table
    — NEVER model-generated"*). The subject resolves through
    ``_polity_match.home_country_name`` over the target's geo, because the
@@ -86,6 +87,7 @@ watermark. Total byte-identity with the fleet as it stands.
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import ast
 import asyncio
@@ -98,6 +100,9 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Mapping, Sequence
 from uuid import UUID, uuid4
 
+from ... import rosters as _rosters
+from ... import subject as _subject
+from ...principals import rule_handle
 from ...provenance.models import FindingPayload
 from ....runtime.analyst_method import AnalystMethodResult
 from . import _reference_gap_dispatch
@@ -105,6 +110,8 @@ from . import _reference_gap_dispatch
 logger = logging.getLogger(__name__)
 
 SUB_HANDLER_NAME = "desk_reference"
+#: Who writes the reference rows (lane 9): this deterministic rule.
+_WRITTEN_BY = rule_handle(SUB_HANDLER_NAME)
 
 #: THIS INSTRUMENT'S OWN population stamp. Deliberately NOT
 #: ``JUDGE_PIPELINE_VERSION`` and not ``EXTERNAL_AUDIT_PIPELINE_VERSION``: a
@@ -128,7 +135,7 @@ SUB_HANDLER_NAME = "desk_reference"
 #: R4 T0 baseline, which is named in the prereg and cannot move for a
 #: coincidence of dates. ``n`` is a within-day ordinal, not a revision count —
 #: this is still this instrument's FIRST stamp.
-REFERENCE_PIPELINE_VERSION = "2026-09-05/2"
+REFERENCE_PIPELINE_VERSION = "2026-11-13/2"  # was 2026-09-05/2: the labelling call moved from temperature 0.0 to 1.0 (house rule); /2 because the judge took 2026-11-13/1 the same day
 
 #: THE F-2 GATE, declared in ONE place and read by both label consumers.
 #:
@@ -197,23 +204,18 @@ _DEFAULT_MATERIALITY = "medium"
 # short, keyword-shaped, no boolean syntax — and they are HERE rather than in a
 # prompt because a model-chosen query is a query that can quietly stop asking
 # about the uncomfortable thing.
+#
+# ROSTER-2: the table is PROFILE data — each unit's ``query_terms`` on the
+# profile's ``rosters.units`` entry (profiles/<id>/profile.yaml), read through
+# ``legba.data.rosters``. Built at import from the process's roster, like the
+# other roster constants (``scorecard_banding.DIMENSIONS``).
 
-UNIT_QUERY_TERMS: dict[str, str] = {
-    "escalation": "escalation risk military tension conflict",
-    "energy_security": "energy security oil gas electricity supply",
-    "economic_coercion": "sanctions tariffs export controls trade restrictions",
-    "internal_stability": "political stability protests unrest government crisis",
-    "leadership_transition": "leadership succession election cabinet resignation",
-    "military_posture": "military deployment forces exercise posture",
-    "narrative_coordination": "state media propaganda disinformation narrative",
-    "proliferation_watch": "nuclear weapons enrichment missile programme",
-    "disruption_status": "shipping traffic disruption closure transit flow",
-}
+UNIT_QUERY_TERMS: dict[str, str] = _rosters.unit_query_terms()
 
-#: The bounded units, in the order the census reports them. A unit missing from
-#: :data:`UNIT_QUERY_TERMS` is skipped and REPORTED — never searched with an
-#: improvised query.
-BOUNDED_UNITS: tuple[str, ...] = tuple(UNIT_QUERY_TERMS)
+#: The bounded units — the profile's unit roster, in roster order. A unit with
+#: no entry in :data:`UNIT_QUERY_TERMS` is skipped and REPORTED by name —
+#: never searched with an improvised query.
+BOUNDED_UNITS: tuple[str, ...] = _rosters.unit_roster()
 
 #: TIER v1 (design D-f / F-3) — the READ SET only: 5 targets x their live units
 #: = 38 (target, unit) pairs/day. Fleet total is 238 pairs and daily-for-all is
@@ -696,10 +698,6 @@ SELECT ad.descriptor_id AS analyst_id,
    AND ad.descriptor_id = ANY($1::text[])
 """
 
-_ISO_NAMES_SQL = """
-SELECT iso2, name FROM iso_countries WHERE iso2 = ANY($1::text[])
-"""
-
 #: Already written today. The unique index makes a double-write impossible, but
 #: reading first means a re-run SKIPS rather than burning a paid out-of-plane
 #: call and a search on a row that will be rejected.
@@ -710,11 +708,12 @@ SELECT unit_analyst_id, target_id
    AND labeled_by LIKE $2
 """
 
-_INSERT_REFERENCE_SQL = """
+_INSERT_REFERENCE_SQL = f"""
 INSERT INTO unit_reference_labels (
     id, unit_analyst_id, target_id, reference_answer, canonical_source_ids,
-    labeled_by, window_start, window_end, items, status, provenance
-) VALUES ($1, $2, $3, $4, '{}'::uuid[], $5, $6, $7, $8::jsonb, $9, $10::jsonb)
+    labeled_by, window_start, window_end, items, status, provenance, written_by
+) VALUES ($1, $2, $3, $4, '{{}}'::uuid[], $5, $6, $7, $8::jsonb, $9, $10::jsonb,
+          legba_principal('{_WRITTEN_BY}'))
 ON CONFLICT (unit_analyst_id, target_id, window_start)
   WHERE window_start IS NOT NULL
   DO NOTHING
@@ -775,7 +774,8 @@ def target_subject(
     *, target_id: str, name: str | None, geo: Sequence[str],
     iso_names: Mapping[str, str],
 ) -> str:
-    """The SUBJECT string a query is built around.
+    """The SUBJECT string a query is built around — the subject ladder's
+    first caller (``legba.data.subject.subject_name``, W10 SUBJECT-1).
 
     A single-country target resolves through the shared polity matcher's
     newsroom spelling (``home_country_name``), because the gazetteer alone
@@ -786,14 +786,10 @@ def target_subject(
     """
     from ..._polity_match import home_country_name
 
-    codes = [str(g) for g in (geo or []) if isinstance(g, str)]
-    if len(codes) == 1:
-        resolved = home_country_name(codes[0], iso_names.get(codes[0], ""))
-        if resolved:
-            return resolved
-    if name:
-        return str(name)
-    return str(target_id).replace("_", " ").strip()
+    return _subject.subject_name(
+        {"target_id": target_id, "name": name, "geo": list(geo or [])},
+        gazetteer=iso_names, spell=home_country_name,
+    )
 
 
 async def _load_population(
@@ -816,8 +812,7 @@ async def _load_population(
         for g in (r["geo"] or [])
         if isinstance(g, str)
     })
-    iso_rows = await conn.fetch(_ISO_NAMES_SQL, iso_codes) if iso_codes else []
-    iso_names = {str(r["iso2"]): str(r["name"]) for r in iso_rows}
+    iso_names = await _subject.gazetteer_names(conn, iso_codes)
     targets_by_id = {
         str(r["target_id"]): {
             "geo": [str(g) for g in (r["geo"] or []) if isinstance(g, str)],
@@ -846,6 +841,11 @@ async def _load_population(
         warnings.append(
             f"unit(s) with no live method.bounded_question, skipped: "
             f"{unquestioned}"
+        )
+    termless = sorted(set(units) - set(UNIT_QUERY_TERMS))
+    if termless:
+        warnings.append(
+            f"unit(s) with no query_terms in the profile, skipped: {termless}"
         )
 
     census = await conn.fetch(
@@ -913,7 +913,7 @@ async def _write_reference(
             llm.chat_complete(
                 [{"role": "user", "content": prompt}],
                 max_tokens=REFERENCE_MAX_TOKENS,
-                temperature=0.0,
+                temperature=HOUSE_TEMPERATURE,
                 system=REFERENCE_SYSTEM_PROMPT,
             ),
             timeout=LLM_TIMEOUT_SECONDS,
@@ -1391,7 +1391,7 @@ def _home_blob_for(target: Mapping[str, Any]) -> str:
     """
     from ..._polity_match import home_prose
 
-    geo = [str(g) for g in (target.get("geo") or []) if isinstance(g, str)]
+    geo = list(_subject.subject_geo({"geo": target.get("geo") or []}))
     iso_names = dict(target.get("iso_names") or {})
     return home_prose(geo, [iso_names[g] for g in geo if g in iso_names])
 

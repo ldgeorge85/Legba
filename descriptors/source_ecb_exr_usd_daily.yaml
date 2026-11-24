@@ -1,0 +1,131 @@
+# X-1 source expansion (2026-11-14) — the ECB euro reference exchange rate
+# against the US dollar, daily, as a SERIES. Ships DRAFT; the reference host
+# walks it to CONFIGURED (descriptors/LIFECYCLE.md), never active — activation
+# is the owner's call. Kind: series_api (the generic series kind, S-1).
+#
+# WHY: the first FX series in the tree (the "rates/prices" loss).
+#
+# THE ENDPOINT. ECB Data Portal SDMX REST, dataflow EXR, key D.USD.EUR.SP00.A
+# (daily, US dollar per euro, the ECB reference rate), `format=csvdata`.
+# Checked 2026-11-14 by the source-expansion review (one GET, generic client
+# identity, `lastNObservations=3`): no key; text/csv; header KEY, FREQ,
+# CURRENCY, CURRENCY_DENOM, EXR_TYPE, EXR_SUFFIX, TIME_PERIOD, OBS_VALUE,
+# OBS_STATUS, ... Only the key and the two parameters the review used are
+# relied on here: every poll asks for the last 60 observations (about twelve
+# weeks of TARGET days, a few KB), and the handler keeps the rows inside its
+# window. No since parameter is declared — the review did not exercise one.
+# Widening the key to more currencies (`D..EUR.SP00.A`) is a follow-up that
+# needs its own check.
+#
+# SUBJECT. The currency quoted against the euro (CURRENCY, "USD"),
+# subject_kind `entity`. UNIT: `fx_quote_per_base` (I-5's currency-pair unit:
+# units of the QUOTE currency — the subject, USD — per one unit of the BASE
+# currency, the euro; X-1 wrote `ratio` before the unit existed; the
+# description says which way round). Rates are published on TARGET business
+# days around 16:00 CET; a poll re-reads lag_days + revision_days (1 + 14)
+# days, so a late or corrected day is a new vintage and an unchanged re-read
+# writes nothing.
+#
+# READER. series_change (descriptors/analyst_series_change.yaml) judges every
+# live series; one named by no rule gets the count band, whose Poisson floor
+# is meaningless on an exchange rate. series_change/2026-11.3 (I-5) names a
+# rule for this family — `series_rules: ["ecb.exr.*=fx_move", ...]` (a move of
+# 2% or more across the current window is an event). Registering that option
+# is a roll step, not this file's (the analyst is live and this series is not).
+#
+# robots.txt allows the path for `*`.
+
+identity:
+  id: source.ecb.exr_usd_daily
+  name: ECB — euro reference rate vs US dollar, daily (series)
+  kind: series_api
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: x1_source_expansion
+  created: "2026-11-14T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [fx, exchange_rates, central_banks, markets, series, eu]
+  source_class: official
+  license_class: open_gov_attribution   # free use, accurate reproduction, ECB cited
+  attribution: "Source: ECB Data Portal (data.ecb.europa.eu), EXR D.USD.EUR.SP00.A"
+  access_class: public
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "17 16 * * *"            # daily, after the ~16:00 CET publication
+  cooldown_seconds: 3600
+  jitter_seconds: 120
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://data-api.ecb.europa.eu/service/data/EXR/D.USD.EUR.SP00.A"
+  params:
+    factory_kind: list
+    raw:
+      - ["format", "csvdata"]
+      - ["lastNObservations", "60"]
+  format:
+    factory_kind: text
+    raw: csv
+  date_field:
+    factory_kind: text
+    raw: TIME_PERIOD
+  date_format:
+    factory_kind: text
+    raw: iso_date
+  provenance_fields:
+    factory_kind: list
+    raw: [OBS_STATUS, CURRENCY_DENOM]
+  outputs:
+    factory_kind: list
+    raw:
+      - series: ecb.exr.reference_rate
+        value_field: OBS_VALUE
+        subject_field: CURRENCY
+        where:
+          - {field: FREQ, values: [D]}
+          - {field: CURRENCY_DENOM, values: [EUR]}
+        unit: fx_quote_per_base
+        period: day
+        subject_kind: entity
+        methodology_version: ecb-exr-sp00a-daily/1
+  lag_days:
+    factory_kind: number
+    raw: 1
+  revision_days:
+    factory_kind: number
+    raw: 14
+  backfill_days:
+    factory_kind: number
+    raw: 80
+
+sink:
+  family: observation
+  config:
+    series:
+      - id: ecb.exr.reference_rate
+        field: OBS_VALUE
+        unit: fx_quote_per_base
+        period: day
+        subject_kind: entity
+        methodology_version: ecb-exr-sp00a-daily/1
+        description: "ECB euro foreign exchange reference rate: units of the subject currency (CURRENCY) per one euro, TARGET business days"
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  media: reference
+
+deps: {}
+
+subscription_policy: open

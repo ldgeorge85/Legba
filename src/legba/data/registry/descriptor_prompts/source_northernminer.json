@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.northernminer.news": {
+      "source": "source_northernminer.yaml",
+      "state": "draft"
+    }
+  }
+}

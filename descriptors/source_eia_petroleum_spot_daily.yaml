@@ -1,0 +1,178 @@
+# S-1 — EIA daily crude spot prices (Europe Brent, WTI Cushing) as SERIES.
+# Ships DRAFT. Kind: series_api (the generic series kind, no provider code).
+#
+# WHY: forecast F6 (sealed 2026-11-11) asks whether "EIA Brent spot (series
+# RBRTE) is at or above $100/bbl on 2026-12-31 (the last trading day before,
+# if 12-31 is a holiday)". WTI (RWTC) comes from the same
+# route in the same request at no extra cost.
+#
+# THE ENDPOINT. EIA's open data API v2, route petroleum/pri/spt, daily,
+# facets[series][] = RBRTE (Europe Brent Spot Price FOB, $/bbl) and RWTC
+# (Cushing, OK WTI Spot Price FOB, $/bbl). JSON: response.data[] rows with
+# `period` (YYYY-MM-DD), `series`, `value` (a STRING since API 2.1.6),
+# `units` ("$/BBL"); offset/length paging, at most 5,000 rows a request.
+# THE API NEEDS A KEY: a GET without one answers 403 API_KEY_MISSING
+# (checked 2026-11-13). Registration is free (eia.gov/opendata/register.php,
+# the key arrives by e-mail) and the key is accepted ONLY as the `api_key`
+# query parameter. It is read from the vault (source.eia.api_key) — never
+# written here — and the handler keeps it out of the record URLs, the fetch
+# receipt's URL and the httpx request log (fetch_capture.redact_secrets).
+# EIA's KEYLESS channels for the same series are the daily history page
+# (dnav/pet/hist/RBRTED.htm, an HTML table of weeks x weekdays) and an .xls
+# workbook (dnav/pet/hist_xls/RBRTEd.xls, legacy BIFF; no reader in the
+# runtime image) — neither is a JSON or CSV series endpoint, so the keyed API
+# is the declarative route.
+#
+# PUBLICATION LAG. The spot-price tables are released about weekly: on
+# 2026-11-13 the history page said "Release Date 11/12/2026, Next Release
+# Date 11/18/2026", newest value 2026-11-11. So a poll is daily, most polls
+# write nothing, and each re-reads lag_days + revision_days (2 + 30) days so a
+# revised value is a new vintage. The first poll reads 400 days back (covers
+# F6's sealing on 2026-11-11, its date 2026-12-31 and a 35-day detector
+# baseline many times over: ~560 rows, one page).
+#
+# The row's record_time is the poll that first saw the value (the release it
+# came in). The API requires registration (a free key); one request a day here.
+#
+# Register / activate: see the S-1 lane report (orchestrator steps). Needs the
+# key in the vault first; without it the poll refuses loud
+# (SeriesApiAuthNotConfigured / a vault miss), it never polls unauthenticated.
+
+identity:
+  id: source.eia.petroleum_spot_daily
+  name: EIA — daily crude spot prices, Brent and WTI (series)
+  kind: series_api
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: s_1_series_sources
+  created: "2026-11-13T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [energy, oil, prices, markets, series, global]
+  source_class: official
+  license_class: public_domain    # U.S. government work
+  attribution: "Source: U.S. Energy Information Administration (EIA), spot prices FOB; release date = the row's record time"
+  access_class: public            # public data; the API key is free
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "37 16 * * *"            # daily; EIA releases the spot tables about weekly
+  cooldown_seconds: 3600
+  jitter_seconds: 120
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://api.eia.gov/v2/petroleum/pri/spt/data/"
+  params:
+    factory_kind: list
+    raw:
+      - ["frequency", "daily"]
+      - ["data[0]", "value"]
+      - ["facets[series][]", "RBRTE"]
+      - ["facets[series][]", "RWTC"]
+      - ["sort[0][column]", "period"]
+      - ["sort[0][direction]", "asc"]
+  auth:
+    factory_kind: dict
+    value_kind: text
+    raw:
+      mode: query
+      name: api_key
+      secret_ref: source.eia.api_key
+  since_param:
+    factory_kind: dict
+    value_kind: text
+    raw:
+      name: start
+      format: iso_date
+  pagination:
+    factory_kind: dict
+    value_kind: text
+    raw:
+      mode: offset
+      offset_param: offset
+      limit_param: length
+      page_size: 5000
+      max_pages: 4
+  format:
+    factory_kind: text
+    raw: json
+  rows_path:
+    factory_kind: text
+    raw: response.data
+  date_field:
+    factory_kind: text
+    raw: period
+  date_format:
+    factory_kind: text
+    raw: iso_date
+  provenance_fields:
+    factory_kind: list
+    raw: [series, units]
+  outputs:
+    factory_kind: list
+    raw:
+      - series: eia.pet_spot.rbrte
+        value_field: value
+        subject: global
+        where: [{field: series, values: [RBRTE]}]
+        unit: usd_per_barrel
+        period: day
+        subject_kind: global
+        methodology_version: eia-pet-spot-daily/1
+      - series: eia.pet_spot.rwtc
+        value_field: value
+        subject: global
+        where: [{field: series, values: [RWTC]}]
+        unit: usd_per_barrel
+        period: day
+        subject_kind: global
+        methodology_version: eia-pet-spot-daily/1
+  lag_days:
+    factory_kind: number
+    raw: 2
+  revision_days:
+    factory_kind: number
+    raw: 30
+  backfill_days:
+    factory_kind: number
+    raw: 400
+
+sink:
+  family: observation
+  config:
+    series:
+      - id: eia.pet_spot.rbrte
+        field: value
+        unit: usd_per_barrel
+        period: day
+        subject_kind: global
+        methodology_version: eia-pet-spot-daily/1
+        description: "Europe Brent Spot Price FOB, dollars per barrel, daily (EIA series RBRTE)"
+      - id: eia.pet_spot.rwtc
+        field: value
+        unit: usd_per_barrel
+        period: day
+        subject_kind: global
+        methodology_version: eia-pet-spot-daily/1
+        description: "Cushing, OK WTI Spot Price FOB, dollars per barrel, daily (EIA series RWTC)"
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  media: reference
+
+deps:
+  vault_secrets:
+    - source.eia.api_key
+
+subscription_policy: open

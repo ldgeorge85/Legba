@@ -894,15 +894,20 @@ def test_parse_tolerant_prose_date_accepts_seconds_and_bare_month():
     )
 
 
-def test_parse_tolerant_prose_date_rejects_localized_months():
-    """The live French / Turkish entries: NOT decoded, and NOT guessed at.
-
-    These are the same structural shape with a non-English month word. The
-    parser must return None (no date) rather than invent one — understating
-    the feed's newest entry is safe for the gauge, a wrong date is not.
-    """
-    assert _parse_tolerant_datetime("Vendredi, juillet 24, 2026 - 13:43") is None
-    assert _parse_tolerant_datetime("Perşembe, Temmuz 23, 2026 - 15:54") is None
+def test_parse_tolerant_prose_date_decodes_localized_months():
+    """The live French / Turkish entries are decoded from closed per-language
+    month tables (W11-F151: an undecodable French date read as undated and,
+    via the cursor, cost ICG every dated English item behind it). A month word
+    in no table is still rejected, never guessed (see the garbage test)."""
+    assert _parse_tolerant_datetime("Vendredi, juillet 24, 2026 - 13:43") == datetime(
+        2026, 7, 24, 13, 43, tzinfo=timezone.utc
+    )
+    assert _parse_tolerant_datetime("Perşembe, Temmuz 23, 2026 - 15:54") == datetime(
+        2026, 7, 23, 15, 54, tzinfo=timezone.utc
+    )
+    assert _parse_tolerant_datetime("Jeudi, octobre 29, 2026 - 11:01") == datetime(
+        2026, 10, 29, 11, 1, tzinfo=timezone.utc
+    )
 
 
 def test_parse_tolerant_prose_date_rejects_garbage():
@@ -928,14 +933,14 @@ def test_extract_published_recovers_crisisgroup_prose_date():
     assert dt == datetime(2026, 7, 30, 15, 47, tzinfo=timezone.utc)
 
 
-def test_extract_published_prose_localized_month_stays_none():
+def test_extract_published_prose_localized_month_is_decoded():
     entry = _entry_from_pubdate("Vendredi, juillet 24, 2026 - 13:43")
     assert entry.get("published_parsed") is None
-    assert _extract_published(entry) is None
+    assert _extract_published(entry) == datetime(2026, 7, 24, 13, 43, tzinfo=timezone.utc)
 
 
 # The live document verbatim (dates only), including the two localized entries
-# that must be skipped. Newest readable entry = 2026-07-30 15:47Z.
+# (decoded since W11-F151). Newest entry = 2026-07-30 15:47Z.
 CRISISGROUP_PROSE_FEED = """<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
 <channel>
@@ -989,10 +994,9 @@ async def test_pull_records_newest_entry_ts_for_prose_dated_feed():
     signals = await _collect(rss.pull(ctx))
     await rss.aclose()
 
-    # The localized-month entries are still EMITTED (an unreadable date is not
-    # a reason to drop an item) — they just carry no published_at.
+    # The localized-month entries are emitted AND dated (W11-F151).
     assert len(signals) == 4
-    assert sum(1 for s in signals if s.payload["published_at"] is None) == 2
+    assert sum(1 for s in signals if s.payload["published_at"] is None) == 0
 
     health = state.snapshot()[_RSS_HEALTH_KEY]
     assert health["detail"]["newest_entry_ts"] == "2026-07-30T15:47:00+00:00"
@@ -1125,3 +1129,130 @@ async def test_live_rss_feed_if_configured():
         assert "external_id" in s.payload
         assert "raw_body" in s.payload
         assert s.payload["source_url"] == url
+
+
+# ---------------------------------------------------------------------------
+# W11-F135: ingestion caps (inline base64 images, oversize summary)
+# ---------------------------------------------------------------------------
+
+
+def _oversize_feed(description_xml: str) -> str:
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <title>Arms feed</title><link>https://example.invalid/</link>
+  <description>fixture</description>
+  <item>
+    <title>Looking Back and Looking Ahead</title>
+    <link>https://example.invalid/blog/looking-back</link>
+    <description>{description_xml}</description>
+    <pubDate>Tue, 29 Sep 2026 18:00:00 +0000</pubDate>
+    <guid isPermaLink="false">tag:example.invalid:big-1</guid>
+  </item>
+</channel></rss>
+"""
+
+
+async def _pull_one(feed_xml: str) -> Signal:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, text=feed_xml,
+            headers={"Content-Type": "application/rss+xml"}, request=req,
+        )
+
+    rss = _make_handler(handler)
+    signals = await _collect(rss.pull(_make_ctx()))
+    await rss.aclose()
+    assert len(signals) == 1
+    return signals[0]
+
+
+@pytest.mark.asyncio
+async def test_inline_base64_images_are_stripped_from_summary_and_raw_body(caplog):
+    from legba.data.sources.rss import RSS_SUMMARY_MAX_CHARS
+
+    image = "iVBORw0KGgo" + "A1b2+/c3d4=" * 200_000      # ~2.2 MB of base64
+    # The shape measured live: HTML-escaped HTML carrying inline PNGs.
+    desc = (
+        "&lt;p&gt;The year in review.&lt;/p&gt;"
+        f"&lt;img src=&quot;data:image/png;base64,{image}&quot; /&gt;"
+        "&lt;p&gt;Closing paragraph.&lt;/p&gt;"
+    )
+    with caplog.at_level("WARNING", logger="legba.data.sources.rss"):
+        sig = await _pull_one(_oversize_feed(desc))
+
+    summary = sig.payload["summary"]
+    assert "base64," not in summary
+    assert "[inline image removed]" in summary
+    assert "The year in review." in summary
+    assert "Closing paragraph." in summary
+    assert len(summary) <= RSS_SUMMARY_MAX_CHARS
+    assert "base64," not in sig.payload["raw_body"]
+    assert len(sig.payload["raw_body"]) < 5_000
+    assert sig.payload["summary_original_chars"] > 2_000_000
+    # exactly one warning for the entry, naming the source and the original size
+    capped = [r for r in caplog.records if "rss.entry.capped" in r.getMessage()]
+    assert len(capped) == 1
+    msg = capped[0].getMessage()
+    assert "src.epe_feed" in msg
+    assert str(sig.payload["summary_original_chars"]) in msg
+
+
+@pytest.mark.asyncio
+async def test_oversize_text_summary_is_capped_and_raw_body_keeps_the_text(caplog):
+    from legba.data.sources.rss import (
+        RSS_RAW_BODY_MAX_CHARS, RSS_SUMMARY_MAX_CHARS,
+    )
+
+    words = "word " * 20_000                               # 100k chars, no image
+    with caplog.at_level("WARNING", logger="legba.data.sources.rss"):
+        sig = await _pull_one(_oversize_feed(words))
+
+    assert len(sig.payload["summary"]) == RSS_SUMMARY_MAX_CHARS
+    assert sig.payload["summary_original_chars"] == len(words.strip())
+    # raw_body is the evidence copy: under its own (larger) ceiling it is whole.
+    assert len(sig.payload["raw_body"]) == len(words.strip())
+    assert len(sig.payload["raw_body"]) < RSS_RAW_BODY_MAX_CHARS
+    assert any("rss.entry.capped" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_normal_entry_is_untouched_and_logs_no_cap_warning(caplog):
+    with caplog.at_level("WARNING", logger="legba.data.sources.rss"):
+        sig = await _pull_one(_oversize_feed("A short, ordinary description."))
+    assert sig.payload["summary"] == "A short, ordinary description."
+    assert "summary_original_chars" not in sig.payload
+    assert not any("rss.entry.capped" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_content_hash_is_taken_over_the_body_as_fetched():
+    # Two entries that differ ONLY inside the stripped image carry identical
+    # stored text but different content hashes: the hash is over the body as
+    # fetched, so a byte-identical re-serve of a held entry is still
+    # recognised and a changed one is not collapsed into it.
+    def feed(img: str) -> str:
+        return _oversize_feed(
+            f"text &lt;img src=&quot;data:image/png;base64,{img}&quot;&gt;"
+        )
+
+    one = await _pull_one(feed("iVBORw0KGgo" + "AAAA" * 1000))
+    again = await _pull_one(feed("iVBORw0KGgo" + "AAAA" * 1000))
+    other = await _pull_one(feed("iVBORw0KGgo" + "BBBB" * 1000))
+    assert one.payload["raw_body"] == other.payload["raw_body"]
+    assert "base64," not in one.payload["raw_body"]
+    assert one.content_hash == again.content_hash
+    assert one.content_hash != other.content_hash
+
+
+def test_strip_inline_data_images_unit():
+    from legba.data.sources.rss import strip_inline_data_images
+
+    assert strip_inline_data_images("") == ""
+    assert strip_inline_data_images("plain text") == "plain text"
+    out = strip_inline_data_images(
+        '<img src="data:image/jpeg;base64,/9j/4AAQ+=" alt="x"> '
+        'and <img src="data:image/svg+xml;base64,PHN2Zz4=">'
+    )
+    assert out.count("[inline image removed]") == 2
+    assert "base64" not in out
+    assert 'alt="x"' in out

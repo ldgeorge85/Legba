@@ -9,7 +9,9 @@ import {
   PANEL_ID_TO_KIND,
   SINGLETON_PANELS,
 } from './registry'
-import { resolveKind, resolveRetiredPanelId } from './aliases'
+import { KIND_ALIASES, resolveKind, resolveRetiredPanelId } from './aliases'
+import { catalogKinds, isDrill, REGISTRY_TOTAL_CEILING, RETIREMENT_SCHEDULE } from './kindPlan'
+import { findSurface, surfaceKinds } from '@/lib/surfaces'
 import type { PanelKind } from '@/types'
 
 describe('PANEL_REGISTRY', () => {
@@ -47,8 +49,10 @@ describe('PANEL_REGISTRY', () => {
     const targets = Object.entries(PANEL_REGISTRY).filter(
       ([, e]) => e.definition.category === 'target',
     )
-    // Was 10 (T1-T10); Target Hypotheses retired with /predictions.
-    expect(targets.length).toBeGreaterThanOrEqual(9)
+    // Was 10 (T1-T10); Target Hypotheses retired with /predictions. UI-B3
+    // (W11): eight of the nine are tabs of ONE kind, `subject.page`; the map
+    // and the clock wait for their survivors. Three bound subject kinds.
+    expect(targets.map(([k]) => k).sort()).toEqual(['subject.page', 'target.map', 'target.timeline'])
     for (const [, entry] of targets) {
       expect(entry.definition.scopeKey).toBe('target_id')
       expect(entry.definition.requiresBinding).toBe(true)
@@ -102,20 +106,42 @@ describe('PANEL_REGISTRY', () => {
  * duplicates).
  */
 describe('U-3 layout-compat — old panel ids resolve through the alias table', () => {
-  // Every kind U-3/GLASS-2 folded away behind a merged/tabbed survivor.
+  // Every kind U-3/GLASS-2 and UI-B1/merges folded away behind a
+  // merged/tabbed survivor.
   const MERGED_AWAY_KINDS = [
     'v4.timeline', // → Timeline's "Events" mode (survivor: system.timeline)
     'v4.why', // → Provenance's "Why" tab (survivor: system.provenance)
     'system.lineage', // → Provenance's "Lineage" tab
-    'v4.flow', // → Provenance's "Flow" tab
-    'system.situations', // → Provenance's "Trajectory" tab
-    'system.narratives', // → Provenance's "Narratives" tab
+    'v4.flow', // → the Registry's "Canvas" tab (re-pointed by UI-B1/merges)
+    'system.situations', // → the Register's "Situations" tab (re-pointed)
+    'system.narratives', // → the Register's "Narratives" tab (re-pointed)
     'system.alert_center', // → Alerts & Watches' "Triggers" tab
     'system.watchlist', // → Alerts & Watches' "Watches" tab
     'system.escalations', // → Alerts & Watches' "Deliveries" tab
     'system.deep_consult', // → Consult's "Deep" depth
     'system.entity_graph', // → Entities' "Graph" tab
     'system.notable_structure', // → Entities' "Structure" tab
+    // UI-B1/merges (W8) — UI-D1 Table B's twenty
+    'registry.targets', // → Registry "Subjects"
+    'registry.analysts', // → Registry "Units"
+    'registry.sources', // → Registry "Sources"
+    'source.detail', // → Registry "Sources" (the detail beneath the list)
+    'registry.stack', // → Registry "Stack"
+    'registry.action_packs', // → Registry "Packs"
+    'source.subscription_builder', // → Registry "Builder"
+    'source.subscription_policy', // → Registry "Policy"
+    'source.fanout', // → Provenance "Fan-out"
+    'system.production_gauge', // → System Status "Production"
+    'system.dead_letter', // → System Status "Failures"
+    'system.actor_health', // → System Status "Actors"
+    'system.stream_lag', // → System Status "Queues"
+    'system.governor', // → Ledgers "Governor"
+    'system.audit', // → Ledgers "Audit"
+    'system.budget', // → Ledgers "Budget"
+    'system.optimizer.diff', // → Optimizer "Diff"
+    'v4.kpi', // → the Wall's header band
+    'system.wall_movers', // → the Wall's "Movers" tab
+    'system.navigator', // → the read (the index is the object rail's Reads)
   ]
 
   it('every merged-away kind is GONE from the registry — retired, not hidden', () => {
@@ -148,21 +174,28 @@ describe('U-3 layout-compat — old panel ids resolve through the alias table', 
     }
   })
 
-  it('the five merged/survivor kinds exist, are visible, and are non-binding singletons', () => {
+  it('the merged/survivor kinds exist, are visible, and are non-binding singletons', () => {
     const survivors: PanelKind[] = [
       'system.timeline', // Timeline (Events / Validity)
-      'system.provenance', // Provenance (Why / Lineage / Flow / Trajectory / Narratives)
+      'system.provenance', // Provenance (Why / Lineage / Fan-out)
       'system.alerts_watches', // Alerts & Watches (Watches / Triggers / Deliveries)
       'system.consult', // Consult (Chat / Deep)
       'system.entities', // Entities (List / Graph / Structure)
+      // UI-B1/merges
+      'system.registry', // Subjects / Units / Sources / Stack / Packs / Builder / Policy / Canvas
+      'system.status', // Status / Production / Failures / Actors / Queues
+      'system.ledgers', // Governor / Audit / Budget
+      'system.register', // Situations / Narratives
+      'system.optimizer', // Candidates / Diff
+      'system.wall', // the At-a-Glance band over Overview / Movers
     ]
     for (const kind of survivors) {
       const entry = PANEL_REGISTRY[kind]
       expect(entry, `${kind} must exist`).toBeDefined()
       expect(entry.definition.requiresBinding).toBe(false)
       // system.entities is 'operator' category (personal-only per L-108 §6) —
-      // still visible, just not hidden.
-      expect(entry.definition.hidden).not.toBe(true)
+      // still in the `＋` catalog: a survivor is never a drill.
+      expect(isDrill(kind)).toBe(false)
     }
   })
 
@@ -176,40 +209,31 @@ describe('U-3 layout-compat — old panel ids resolve through the alias table', 
 
 /**
  * U-4 (COHERENCE_WAVES_PLAN_2026-07-28 §U-4) — the boot-grid "what changed"
- * tile is registered + hidden for a DIFFERENT reason than the U-3 merge
- * aliases above: it's a brand-new capability (not a folded-away original),
- * hidden purely so it doesn't spend the U-3 ≤22-visible-row sidebar budget
- * on a tile that's already on-screen at cold boot with no user action.
+ * tile was registered for a DIFFERENT reason than the U-3 merge aliases above:
+ * a brand-new capability (not a folded-away original). UI-B1/merges landed its
+ * Table B row: it is the Wall's Movers tab now, still fully reachable by id.
  */
-describe('U-4 — system.wall_movers is registered, hidden, and still fully reachable', () => {
-  it('is a real, non-binding singleton with its own Component', () => {
-    const entry = PANEL_REGISTRY['system.wall_movers']
-    expect(entry).toBeDefined()
-    expect(entry.definition.requiresBinding).toBe(false)
-    expect(entry.definition.scopeKey).toBe(null)
-    expect(entry.Component).toBeDefined()
+describe('U-4 — system.wall_movers landed on the Wall\'s Movers tab, still fully reachable', () => {
+  it('is no longer a registry row; its id and panel_id resolve onto the Wall, on Movers', () => {
+    expect(PANEL_REGISTRY['system.wall_movers' as PanelKind]).toBeUndefined()
+    expect(resolveKind('system.wall_movers')).toEqual({ kind: 'system.wall', tab: 'movers' })
+    expect(resolveRetiredPanelId('system_wall_movers')).toEqual({ kind: 'system.wall', tab: 'movers' })
   })
 
-  it('is hidden from the sidebar (does not spend the ≤22-row budget)', () => {
-    expect(PANEL_REGISTRY['system.wall_movers'].definition.hidden).toBe(true)
-    expect(SINGLETON_PANELS).not.toContain('system.wall_movers')
+  it("its Table B row is flipped to retired, with the alias's survivor and tab", () => {
+    expect(RETIREMENT_SCHEDULE['system.wall_movers']).toEqual({
+      survivor: 'system.wall',
+      tab: 'movers',
+      lands: 'UI-B1/merges',
+      retired: true,
+    })
   })
 
-  it('has a unique panel_id that round-trips through PANEL_ID_TO_KIND (so ⌘K / a saved layout referencing it resolves)', () => {
-    const panelId = PANEL_REGISTRY['system.wall_movers'].definition.panelId
-    expect(PANEL_ID_TO_KIND[panelId]).toBe('system.wall_movers')
-  })
-
-  it('ships in both personal and cis modes, same as the full Wall it complements', () => {
-    expect(PANEL_REGISTRY['system.wall_movers'].definition.modes).toEqual(
-      PANEL_REGISTRY['system.wall'].definition.modes,
-    )
-  })
-
-  it('adding this kind did not flip system.wall (the full panel) to hidden or binding', () => {
+  it('landing it did not make system.wall (the full panel) a drill or binding', () => {
     const wall = PANEL_REGISTRY['system.wall'].definition
-    expect(wall.hidden).not.toBe(true)
+    expect(isDrill('system.wall')).toBe(false)
     expect(wall.requiresBinding).toBe(false)
+    expect([...wall.modes].sort()).toEqual(['cis', 'personal'])
   })
 })
 
@@ -217,21 +241,19 @@ describe('U-4 — system.wall_movers is registered, hidden, and still fully reac
  * GLASS-2 — the three API surfaces that shipped with no consumer now have one.
  *
  * Two of the three (`system.situations`, `system.narratives`) landed as TABS of
- * the merged Provenance panel. They used to be registered-but-hidden rows for
- * exactly the reason the design diagnosed — the ≤23-visible-row budget was
- * spent, and "fold into a tab or hide" was the documented escape hatch. They
- * are now alias rows: the surfaces still render (Provenance's Trajectory and
- * Narratives tabs, unmodified), and a deep-link to either id still lands on its
- * tab, without either costing a catalog row.
+ * the merged Provenance panel for the old ≤23-visible-row budget. UI-D1 Table A
+ * gives them their own kind, `system.register` (Situations · Narratives), and
+ * UI-B1/merges RE-POINTED both alias rows there: the surfaces still render
+ * unmodified, and a deep-link to either id still lands on its tab.
  */
 describe('GLASS-2 — the unconsumed-API consumers', () => {
-  it('the journal gate is a real, VISIBLE, non-binding singleton', () => {
+  it('the journal gate is a real, catalog-listed, non-binding singleton', () => {
     const entry = PANEL_REGISTRY['system.journal_gate']
     expect(entry).toBeDefined()
     expect(entry.Component).toBeDefined()
     expect(entry.definition.requiresBinding).toBe(false)
     expect(entry.definition.scopeKey).toBe(null)
-    expect(entry.definition.hidden).not.toBe(true)
+    expect(catalogKinds()).toContain('system.journal_gate')
     expect(SINGLETON_PANELS).toContain('system.journal_gate')
   })
 
@@ -239,21 +261,22 @@ describe('GLASS-2 — the unconsumed-API consumers', () => {
     expect(PANEL_REGISTRY['system.journal_gate'].definition.modes).toEqual(['personal'])
   })
 
-  it('the two tab-mounted surfaces resolve onto Provenance, on their own tabs', () => {
+  it('the two tab-mounted surfaces resolve onto the Register, on their own tabs', () => {
     expect(resolveKind('system.situations')).toEqual({
-      kind: 'system.provenance',
-      tab: 'trajectory',
+      kind: 'system.register',
+      tab: 'situations',
     })
     expect(resolveKind('system.narratives')).toEqual({
-      kind: 'system.provenance',
+      kind: 'system.register',
       tab: 'narratives',
     })
   })
 
-  it('folding the two tabs in did not hide their host (system.provenance)', () => {
-    const host = PANEL_REGISTRY['system.provenance'].definition
-    expect(host.hidden).not.toBe(true)
+  it('their host (system.register) is a catalog kind, never a drill', () => {
+    const host = PANEL_REGISTRY['system.register'].definition
+    expect(isDrill('system.register')).toBe(false)
     expect(host.requiresBinding).toBe(false)
+    expect(catalogKinds()).toContain('system.register')
   })
 })
 
@@ -419,37 +442,92 @@ describe('registry size ratchet', () => {
     //
     // Re-armed at 60, same rule for the next one. The §7 merge trains still owe
     // this number a reduction, and this row is not an argument against that.
-    expect(Object.keys(PANEL_REGISTRY).length).toBeLessThanOrEqual(61)
+    //
+    // 61 → 62: a SEVENTH documented exception, W2 S-batch's
+    // `analysis.contentions`, and it takes the ratchet's "hide" option the way
+    // the fifth did — registered `hidden`, ⌘K-reachable, so the 26-row sidebar
+    // budget does not move.
+    //
+    // It is the only LIST of a record the platform already writes and already
+    // serves. `GET /v3/contentions` has had a fleet-wide, newest-first mode
+    // since 7a — "what did the contrary-evidence pass find last night" — and
+    // no surface has ever called it without a finding id: the Inspector chip
+    // reads one read's records, Cross-framing reads one claim's. So a pass that
+    // stopped running, or one that started contradicting a desk wholesale, was
+    // visible only to someone who happened to open the right sentence. Folding
+    // it into Cross-framing was considered: that panel holds ONE claim still,
+    // which is the arrangement that makes its silence readable, and a list
+    // would break it.
+    //
+    // It adds no route and no statistic; every field is the route's own,
+    // rendered through `contentionsModel` (the fences print "not measured",
+    // never 0). Re-armed at 62, same rule for the next one.
+    //
+    // UI-B1/shell (W7) — this ceiling is now a SECOND line of the kind plan,
+    // not its whole statement: `kindPlan.test.ts` holds the registry to ≤ 33
+    // kinds OFF Table B's retirement schedule (UI-D1 §2.2), and this total can
+    // only fall as UI-B1/merges and UI-B3 delete the scheduled rows.
+    //
+    // 62 → 45: UI-B1/merges (W8) — the first merge lane to pay the debt every
+    // exception above recorded. Twenty Table B kinds retired into the tabs of
+    // the merged wrappers (aliases.ts), three Table A survivors registered
+    // (`system.registry`, `system.ledgers`, `system.register`). The ceiling
+    // lives in `kindPlan.ts::REGISTRY_TOTAL_CEILING`, lowered in the same
+    // commit; the exceptions above stand as the record of why each row came.
+    //
+    // 45 → 38: UI-B3's subject half (W11) — the eight per-subject reads
+    // retired into `subject.page`'s tabs, the one kind it registered.
+    //
+    // 38 → 39: N-J (2026-11-13), `system.flow` — a documented exception the
+    // operator asked for by name: a read-only canvas over the descriptors as
+    // the working surface for redesigning the agents. It is not observability
+    // over the plumbing; it renders the registry's own objects (every edge a
+    // declared field, every relation the registry cannot express listed as
+    // such), and it is the surface a later "save writes a descriptor version"
+    // grows from. Folding it into the Registry's Canvas tab was considered: that
+    // tab is the v4 wiring editor (it writes), and the brief for this one is
+    // that it never does. It takes one of the two headroom places under the
+    // survivor ceiling (33) and seats in the Engine stance beside the Registry.
+    expect(Object.keys(PANEL_REGISTRY).length).toBeLessThanOrEqual(REGISTRY_TOTAL_CEILING)
+    expect(REGISTRY_TOTAL_CEILING).toBe(39)
   })
 
-  it('the 60th row is cross-framing — a hidden drill that costs no sidebar row', () => {
+  it('the 62nd row is the contentions listing — a catalog kind the Evaluation section mounts', () => {
+    // It was hidden for the sidebar budget; the tree is gone (UI-B1/shell), so
+    // it is an ordinary `＋` catalog kind with a declared home: the Trust
+    // stance seeds it (UI-D1 Table A — the stance rule, `kindPlan.test.ts`).
+    if (Object.keys(PANEL_REGISTRY).length >= 62) {
+      const c = PANEL_REGISTRY['analysis.contentions']
+      expect(c).toBeTruthy()
+      expect(c.definition.requiresBinding).toBe(false)
+      expect(c.definition.scopeKey).toBeNull()
+      expect(isDrill('analysis.contentions')).toBe(false)
+      // U-2: its home is the operator side's Evaluation section.
+      expect(surfaceKinds(findSurface('evaluation')!)).toContain('analysis.contentions')
+    }
+  })
+
+  it('the 60th row is cross-framing — a DRILL, so never in the `＋` catalog', () => {
     // Same ratchet shape as the 57th–59th. If the count reaches 60, this row
     // must be why, and the reason has to still hold: it is a DRILL scoped to a
-    // claim, so it stays `hidden` and out of `SINGLETON_PANELS`. The moment it
-    // gains a sidebar row, the budget in `navGroups.test.ts` must move with it
-    // and be argued there — not inherited from this line.
+    // claim — opened from the claim it is about, never listed.
     if (Object.keys(PANEL_REGISTRY).length >= 60) {
       const cf = PANEL_REGISTRY['analysis.cross_framing']
       expect(cf).toBeTruthy()
       expect(cf.definition.requiresBinding).toBe(false)
-      expect(cf.definition.hidden).toBe(true)
-      expect(SINGLETON_PANELS).not.toContain('analysis.cross_framing')
+      expect(isDrill('analysis.cross_framing')).toBe(true)
+      expect(catalogKinds()).not.toContain('analysis.cross_framing')
     }
   })
 
-  it('the 61st row is the desk brief page — the composed brief, finally readable', () => {
-    // Same ratchet shape as the 57th, 58th and 59th. If the count reaches 60,
-    // this row must be why, and the reason has to still hold: the brief is
-    // composed server-side and reachable only as a download, so the surface
-    // that renders it is the only way it can be read at all. The moment a
-    // merged desk surface carries it as a tab, this exception expires.
-    if (Object.keys(PANEL_REGISTRY).length >= 61) {
-      const page = PANEL_REGISTRY['target.desk_brief_page']
-      expect(page).toBeTruthy()
-      expect(page.definition.requiresBinding).toBe(true)
-      expect(page.definition.scopeKey).toBe('target_id')
-      expect(page.definition.hidden).not.toBe(true)
-    }
+  it('the desk brief page EXPIRED as a row: it is the subject page\'s Brief tab (UI-B3)', () => {
+    // The 61st row's own terms: "the moment a merged desk surface carries it
+    // as a tab, this exception expires". `subject.page` carries it.
+    expect('target.desk_brief_page' in PANEL_REGISTRY).toBe(false)
+    expect(KIND_ALIASES['target.desk_brief_page']).toEqual({ kind: 'subject.page', tab: 'brief' })
+    const page = PANEL_REGISTRY['subject.page']
+    expect(page.definition.requiresBinding).toBe(true)
+    expect(page.definition.scopeKey).toBe('target_id')
   })
 
   it('the 57th row is the demotion reader, paired with the surface it retires', () => {
@@ -463,17 +541,15 @@ describe('registry size ratchet', () => {
     }
   })
 
-  it('the 58th row is the Navigator — the front door that is not a panel list', () => {
-    // Same ratchet shape as the 57th: if the count reaches 58, the Navigator
-    // must be why. It is registered in BOTH modes on purpose — a cis session
-    // that boots without its navigation rail lands on a report with no way to
-    // change which report.
-    if (Object.keys(PANEL_REGISTRY).length >= 58) {
-      const nav = PANEL_REGISTRY['system.navigator']
-      expect(nav).toBeTruthy()
-      expect(nav.definition.requiresBinding).toBe(false)
-      expect([...nav.definition.modes].sort()).toEqual(['cis', 'personal'])
-    }
+  it('the 58th row (the Navigator) repaid itself: retired onto the read it opened', () => {
+    // The Navigator's exception promised the number would come down. It did:
+    // the products index is the object rail's Reads section (UI-B1/shell), so
+    // UI-B1/merges retired the kind onto the read. Its cis-mode guarantee —
+    // a session never lands on a report with no way to change which report —
+    // is the rail's now, and the read it aliases onto ships in both modes.
+    expect(PANEL_REGISTRY['system.navigator' as PanelKind]).toBeUndefined()
+    expect(resolveKind('system.navigator')).toEqual({ kind: 'v4.morning_read' })
+    expect([...PANEL_REGISTRY['v4.morning_read'].definition.modes].sort()).toEqual(['cis', 'personal'])
   })
 
   it('the 59th row is the divergence map — the unit no other surface can read', () => {
@@ -486,49 +562,31 @@ describe('registry size ratchet', () => {
       const map = PANEL_REGISTRY['system.layer_divergence']
       expect(map).toBeTruthy()
       expect(map.definition.requiresBinding).toBe(false)
-      expect(map.definition.hidden).not.toBe(true)
+      expect(isDrill('system.layer_divergence')).toBe(false)
     }
   })
 
-  it('hidden-but-registered rows are the exception, not the mechanism', () => {
-    // Eighteen kinds were hidden before this train — 27% of the catalog. What
-    // remains is the set with no survivor to alias onto yet (each named, with
-    // its reason, in registry.ts). If this number grows, a retirement was
-    // hidden instead of aliased.
-    //
-    // RAISED 6 → 7 on 2026-09-26 by wave P lane B, for exactly one row:
-    // `analysis.cross_framing`. What this check actually guards is a
-    // RETIREMENT being hidden instead of aliased — a surface quietly parked
-    // rather than pointed at its survivor. This row is not a retirement and has
-    // no survivor to point at: it is a drill scoped to a claim, hidden for the
-    // same reason `system.optimizer.diff` and `system.wall_movers` are, and
-    // hiding it is what keeps the sidebar budget at 26 rather than 27.
-    //
-    // The ratchet closes again at 7. A row joining this set still has to answer
-    // the question it was armed for: is something being retired without an
-    // alias?
-    const hidden = Object.values(PANEL_REGISTRY).filter((e) => e.definition.hidden === true)
-    expect(hidden.length).toBeLessThanOrEqual(7)
-  })
-
-  it('the hidden set holds no retirement without an alias', () => {
-    // The ratchet's real subject, asserted directly now that its number has
-    // moved: every hidden row is either a drill reached from its parent
-    // surface, or a kind no shipped surface renders yet. None of them is a
-    // retired id — those live in `panel-registry/aliases.ts` as data.
-    const hidden = Object.entries(PANEL_REGISTRY)
-      .filter(([, e]) => e.definition.hidden === true)
-      .map(([kind]) => kind)
-    expect(hidden.sort()).toEqual(
-      [
-        'analysis.cross_framing',
-        'source.fanout',
-        'source.subscription_builder',
-        'source.subscription_policy',
-        'system.optimizer.diff',
-        'system.stream_lag',
-        'system.wall_movers',
-      ].sort(),
+  it('nothing is HIDDEN any more — a drill is derived, never flagged (UI-D1 §2.2)', () => {
+    // `HIDDEN_KINDS` held eight kinds for the 26-row sidebar budget. The tree
+    // is gone, and "hidden" became a derived property: a kind whose params
+    // need a ref is a drill. The one singleton drill left is cross-framing;
+    // the optimizer diff became the Optimizer's Diff tab (UI-B1/merges), and
+    // the other six former hidden kinds are a catalog kind with a stance
+    // (contentions) or retired into a survivor's tab.
+    const drills = Object.keys(PANEL_REGISTRY).filter(
+      (k) => isDrill(k as PanelKind) && !PANEL_REGISTRY[k as PanelKind].definition.requiresBinding,
     )
+    expect(drills.sort()).toEqual(['analysis.cross_framing'])
+    for (const kind of [
+      'system.optimizer.diff',
+      'source.fanout',
+      'source.subscription_builder',
+      'source.subscription_policy',
+      'system.stream_lag',
+      'system.wall_movers',
+    ]) {
+      expect(RETIREMENT_SCHEDULE[kind]?.retired, `${kind} landed on its survivor`).toBe(true)
+      expect(resolveKind(kind)?.kind, kind).toBe(RETIREMENT_SCHEDULE[kind].survivor)
+    }
   })
 })

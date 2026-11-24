@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.usgs.earthquakes": {
+      "source": "source_usgs_earthquakes.yaml",
+      "state": "active"
+    }
+  }
+}

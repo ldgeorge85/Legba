@@ -219,8 +219,10 @@ from ...provenance.models import (
 from ....runtime.analyst_method import AnalystMethodResult
 from ... import _geo_routing
 from ... import critic_fold
+from ... import rosters as _rosters
 from . import (
     _band_crossing_scan,
+    _band_push_batch,
     _contention_flip_scan,
     _coverage_floor_scan,
     _daily_page_budget,
@@ -716,6 +718,9 @@ _VERIFIED_FINDINGS_SQL = f"""
                  f.severity IN ('high', 'critical')
                  OR f.data -> 'tags' ?| ARRAY['severity:high', 'severity:critical']
                )
+           -- N-U: an assembly that earned NO lead ("5 verified desk reads,
+           -- 0 not carried") is a roll-up of reads already paged, not news.
+           AND NOT COALESCE(f.data -> 'tags' ? 'lead:none', false)
            AND NOT EXISTS (
                  SELECT 1 FROM alert_trigger_watermarks w
                   WHERE w.trigger_class = $4
@@ -906,13 +911,15 @@ async def _scan_verified_findings(
 # Trigger 4 — deviation vs the trailing same-desk baseline
 # ---------------------------------------------------------------------------
 
+# The desks: the profile's SCORED roster tags (``rosters.scored_roster_tags()``,
+# bound as ``$2``; ``$1`` stays the LIMIT).
 _DESKS_SQL = """
     SELECT descriptor_id,
            body -> 'scope' -> 'geo' AS geo
       FROM target_descriptors
      WHERE is_head = TRUE
        AND COALESCE(state, 'active') <> 'retired'
-       AND (body -> 'scope' -> 'tags') ?| array['g20', 'watch']
+       AND (body -> 'scope' -> 'tags') ?| $2::text[]
      ORDER BY descriptor_id
      LIMIT $1
 """
@@ -1045,7 +1052,7 @@ async def _scan_baseline_deviation(
     n_sigma: float,
 ) -> tuple[list[AlertCandidate], list[tuple[str, str, dict[str, Any]]], bool]:
     seeded, watermarks = await _load_class_watermarks(conn, TRIGGER_BASELINE)
-    desks = await conn.fetch(_DESKS_SQL, _MAX_DESKS)
+    desks = await conn.fetch(_DESKS_SQL, _MAX_DESKS, list(_rosters.scored_roster_tags()))
     sidecar = await _load_fresh_sidecar_baselines(conn)
 
     candidates: list[AlertCandidate] = []
@@ -1265,8 +1272,12 @@ def _sink_payload(alert_row_id: UUID, cand: AlertCandidate) -> Any:
         unverified_state,
         verify_state_from_score,
     )
+    from ...alerts import topics as _topics
 
     path, url = receipt_link(str(alert_row_id), row_kind="alert")
+    from ...alerts.console_link import console_link
+
+    console_url = console_link(str(alert_row_id), row_kind="alert")
     if cand.trigger_class == TRIGGER_FINDING or (
         cand.trigger_class == TRIGGER_WATCHLIST
         and cand.faithfulness_score is not None
@@ -1290,6 +1301,17 @@ def _sink_payload(alert_row_id: UUID, cand: AlertCandidate) -> Any:
         alert_row_id=str(alert_row_id),
         receipt_path=path,
         receipt_url=url,
+        console_url=console_url,
+        # X4 ALERTS — the kind is the class; the topic is the class's (a rollup
+        # goes to `world` when any member does — see alerts.topics).
+        kind=cand.trigger_class,
+        topic=(
+            _topics.topic_for_rollup(
+                s.get("trigger_class", "") for s in cand.data.get("suppressed") or []
+            )
+            if cand.trigger_class == "rollup"
+            else _topics.topic_for(cand.trigger_class)
+        ),
     )
 
 
@@ -1575,6 +1597,7 @@ async def handle(
     seeded_classes: list[str] = []
     counts_by_class: dict[str, dict[str, int]] = {}
     guard_suppressed_written = 0
+    guard_held: list[tuple[UUID, AlertCandidate]] = []  # L-1: raised as held
     guard_suppressed_write_failures = 0
 
     async with pool.acquire() as conn:
@@ -1625,6 +1648,7 @@ async def handle(
                 analyst_id=analyst_id,
                 analyst_version=analyst_version,
                 run_uuid=run_uuid,
+                written_rows=guard_held,
             )
         )
 
@@ -1759,6 +1783,8 @@ async def handle(
     kept, rollup_cands = apply_desk_cap(candidates, per_desk_cap)
     suppressed = sum(int(r.data.get("suppressed_count", 0)) for r in rollup_cands)
     pageable = kept + rollup_cands
+    # X4 ALERTS — this tick's band moves are ONE push (and one budget unit).
+    _band_push_batch.mark_band_batch(pageable, run_uuid=run_uuid)
 
     dispatcher = _resolve_dispatcher(deps)
     fired = 0
@@ -1844,28 +1870,19 @@ async def handle(
             # transition — they are simply never handed to the dispatcher.
             if not cand.data.get("budget_deferred"):
                 to_fan_out.append((row_id, cand))
+            else:
+                guard_held.append((row_id, cand))
 
-    # Outward fan-out — best-effort by P1-1 contract; the rows are already
-    # durable and every sink outcome lands its own ledger row.
-    if dispatcher is None and to_fan_out:
-        logger.warning(
-            "alert_trigger_scan.fanout_unavailable alerts=%d — no "
-            "alert_sink_dispatcher wired (rows persisted; outward delivery "
-            "skipped this run)",
-            len(to_fan_out),
-        )
-    elif dispatcher is not None:
-        for row_id, cand in to_fan_out:
-            try:
-                await dispatcher.fan_out(_sink_payload(row_id, cand))
-                fanout_ok += 1
-            except Exception as exc:  # noqa: BLE001 — belt over the never-raise contract
-                fanout_failed += 1
-                logger.warning(
-                    "alert_trigger_scan.fanout_failed alert_row=%s err=%s",
-                    row_id,
-                    exc,
-                )
+    # L-1 — every alert row is raised through the ONE alert path
+    # (_trigger_scan_raise): the pushes this tick shaped page per the rule; the
+    # guard-suppressed and budget-deferred rows are raised HELD (logged with the
+    # reason, never paged). No dispatcher wired ⇒ every raise is held, as before.
+    from ._trigger_scan_raise import raise_trigger_alerts
+
+    fanout_ok, fanout_failed, band_batched = await raise_trigger_alerts(
+        pool, dispatcher, to_fan_out=to_fan_out, held=guard_held,
+        sink_payload=_sink_payload,
+    )
 
     if fired or rollups_written or seeded_classes or guard_suppressed_written:
         logger.info(
@@ -1910,6 +1927,10 @@ async def handle(
         research_dispatched=dispatched,
         research_dispatch_failures=dispatch_failures,
     )
+    if band_batched:
+        # X4: present only when band moves fanned out, so a scan without any
+        # keeps its receipt byte-identical.
+        finding.data["band_push_batch"] = {"members": band_batched, "pushes": 1}
     return AnalystMethodResult(
         finding=finding,
         usage={"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0},

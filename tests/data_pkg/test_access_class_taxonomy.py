@@ -114,6 +114,7 @@ EXPECTED_YAML_ACCESS: dict[str, str] = {
     "source_oilprice.yaml": "public",
     "source_opensanctions_api.yaml": "licensed_noncommercial",
     "source_opensanctions_bulk.yaml": "licensed_noncommercial",
+    "source_page_pipeline_default.yaml": "restricted",   # I-2: generic page adapter, fail-closed
     "source_pancanal.yaml": "public",
     "source_presstv_english.yaml": "public",
     "source_query_source_discovery_template.yaml": "restricted",
@@ -153,8 +154,68 @@ EXPECTED_YAML_ACCESS: dict[str, str] = {
     "source_un_press.yaml": "public",
     "source_usgs_earthquakes.yaml": "public",
     "source_who_disease_outbreak_news.yaml": "public",
+    "source_imf_portwatch_chokepoints.yaml": "public",  # N-L series source, keyless API
+    "source_eia_petroleum_spot_daily.yaml": "public",  # S-1 series source, free keyed API
+    "source_bis_policy_rates_daily.yaml": "public",  # S-1 series source, keyless API
     "source_worldnuclearnews.yaml": "public",
     "source_wto_news.yaml": "public",
+    # 2026-11-13 official-document gap closers (loss funnel S0): free no-auth feeds.
+    "source_federalregister_bis_feed.yaml": "public",
+    "source_federalregister_ofac_feed.yaml": "public",
+    "source_federalregister_presidential.yaml": "public",
+    "source_bmvg_news.yaml": "public",
+    "source_bundeswehr_procurement.yaml": "public",
+    # roll 73: UKMTO incident list (Royal Navy SCCD), keyless JSON.
+    "source_ukmto_incidents.yaml": "public",
+    # K-1 cyber desk (2026-11-14): free no-auth feeds and the KEV JSON.
+    "source_cisa_kev.yaml": "public",
+    "source_cisa_advisories.yaml": "public",
+    "source_ncsc_uk.yaml": "public",
+    "source_certfr_alerts.yaml": "public",
+    "source_certfr_cti.yaml": "public",
+    "source_certeu_advisories.yaml": "public",
+    "source_bsi_press.yaml": "public",
+    "source_therecord.yaml": "public",
+    "source_ransomware_live.yaml": "public",   # C-1: free no-auth feed (claim class)
+    "source_cyberscoop.yaml": "public",
+    "source_ransomlook.yaml": "public",   # C-3: free no-auth feed (claim class)
+    "source_checkpoint_research.yaml": "public",
+    "source_cloudflare_ddos.yaml": "public",
+    "source_securityweek.yaml": "public",
+    "source_aws_status.yaml": "public",
+    "source_azure_status.yaml": "public",
+    "source_gcp_status.yaml": "public",
+    "source_gworkspace_status.yaml": "public",
+    # X-1 source expansion (2026-11-14): free no-auth feeds, keyless series
+    # endpoints, two public sanctions registers, and the staged Telegram batch
+    # (public channels, the live monitor's class). The three non-commercial
+    # licences (Novaya Gazeta Europe, OC Media, Canada SEMA) are a
+    # license_class condition recorded in each header, as PortWatch's is — not
+    # a read restriction inside a deploy.
+    "source_novayagazeta_europe.yaml": "public",
+    "source_radiotamazuj.yaml": "public",
+    "source_ocmedia.yaml": "public",
+    "source_ukmod_govuk.yaml": "public",
+    "source_ukofsi_govuk.yaml": "public",
+    "source_eucommission_press.yaml": "public",
+    "source_ecb_press.yaml": "public",
+    "source_federalreserve_speeches.yaml": "public",
+    "source_ecdc_threats.yaml": "public",
+    "source_ecdc_news.yaml": "public",
+    "source_ecb_exr_usd_daily.yaml": "public",
+    "source_ecb_deposit_rate_daily.yaml": "public",
+    "source_eu_fsf_sanctions_list.yaml": "public",
+    "source_canada_sema_sanctions_list.yaml": "public",
+    "source_telegram_x1_staged.yaml": "public",
+    # I-5 (2026-11-14): five keyless series endpoints and one keyless JSON
+    # bulletin list, all openly licensed with attribution.
+    "source_worldbank_wdi_cpi_inflation_world.yaml": "public",
+    "source_nbu_exchange_daily.yaml": "public",
+    "source_nbu_key_rates.yaml": "public",  # roll 84
+    "source_bcb_selic_target.yaml": "public",
+    "source_boe_bank_rate_daily.yaml": "public",
+    "source_eurostat_hicp_ea_monthly.yaml": "public",
+    "source_jma_quake_list.yaml": "public",
 }
 
 #: The five files reviewed and found genuinely unclassifiable today — never-
@@ -168,6 +229,8 @@ FAIL_CLOSED_FILES: frozenset[str] = frozenset(
         "source_firecrawl.yaml",
         "source_generic_webhook.yaml",
         "source_query_source_discovery_template.yaml",
+        # I-2: the page pipeline — fetches whatever address a request names.
+        "source_page_pipeline_default.yaml",
     }
 )
 
@@ -300,7 +363,7 @@ def test_licensed_noncommercial_files_are_the_four_curated_datasets():
 
 
 def test_public_is_the_overwhelming_default():
-    """95 of 103 committed sources are free no-auth feeds (or, for UCDP,
+    """96 of 104 committed sources are free no-auth feeds (or, for UCDP,
     an attribution-only CC BY 4.0 dataset) with no separate agreement
     gating internal read access — the large majority, pinned as a sanity
     count so a future bulk mis-classification (e.g. everything flipping to
@@ -308,5 +371,5 @@ def test_public_is_the_overwhelming_default():
     public_count = sum(
         1 for c in EXPECTED_YAML_ACCESS.values() if c == "public"
     )
-    assert public_count == 95
-    assert len(EXPECTED_YAML_ACCESS) == 103
+    assert public_count == 144  # S-1: + BIS and EIA series; K-1: + 14 cyber sources; X-1: + 15 (all public); C-1: + 1; I-5: + 6 (all public); roll 84: + NBU key rates; C-3: + 3
+    assert len(EXPECTED_YAML_ACCESS) == 153   # I-2: + the page pipeline (restricted); S-1: + 2; K-1: + 14; X-1: + 15; C-1: + 1; I-5: + 6; roll 84: + 1; C-3: + 3

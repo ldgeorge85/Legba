@@ -1,0 +1,8 @@
+{
+  "states": {
+    "action_pack:escalate_finding": {
+      "source": "action_pack_escalate.yaml",
+      "state": "active"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:lane_malacca_south_china_sea": {
+      "source": "target_lane_malacca_south_china_sea.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -12,6 +12,7 @@
  * have no row_kind entry, so we layer a small fallback palette for those.
  */
 import { cn } from '@/lib/cn'
+import { humanizeAnalystId } from '@/lib/analystNames'
 import { kindColor, KIND_DEFAULT_COLOR } from '@/lib/graphModel'
 import type { ProvenanceRef } from '@/v4/why/types'
 
@@ -68,7 +69,7 @@ export default function ProvenanceChip({ refItem, onClick, active }: ProvenanceC
       data-kind={refItem.kind}
       className={cn(
         'group inline-flex max-w-full items-center gap-1.5 rounded-full border px-2 py-0.5',
-        'text-[11px] leading-none transition-colors',
+        'text-label leading-none transition-colors',
         'border-slate-700 bg-surface-100 text-slate-200',
         onClick && 'cursor-pointer hover:border-slate-600 hover:bg-surface-50',
         !onClick && 'cursor-default',
@@ -82,8 +83,8 @@ export default function ProvenanceChip({ refItem, onClick, active }: ProvenanceC
       />
       <span className="truncate">{display}</span>
       {refItem.via && (
-        <span className="shrink-0 truncate text-[10px] text-slate-500">
-          via {clampLabel(refItem.via)}
+        <span className="shrink-0 truncate text-label text-ink-3">
+          via {clampLabel(humanizeAnalystId(refItem.via, refItem.via))}
         </span>
       )}
     </button>

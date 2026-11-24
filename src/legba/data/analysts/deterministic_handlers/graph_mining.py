@@ -65,26 +65,11 @@ from ..._entity_canon import (
 )
 from ._graph_metrics_sink import write_graph_metric
 
-# P1-T9: the shortest-path + broker engine lives in the LEAF module
-# ``legba.data.graph_paths`` (stdlib + networkx + a caller-supplied AGE pool —
-# NO deterministic-handler-package deps) so the slim REGISTRY image can import
-# and serve ``/graph/path`` without pulling pycountry. Re-exported here so
-# graph_mining's public API + internal callers (``_augment_from_age`` /
-# the node-cap truncation) are unchanged — the definitions live in the leaf.
-from ...graph_paths import (  # noqa: F401  (re-exports)
-    _MAX_NODES,
-    _MAX_PATH_LEN,
-    _strip_agtype,
-    build_path_neighbourhood_cypher,
-    build_shortest_path_cypher,
-    shortest_path_with_broker,
-)
-
 logger = logging.getLogger(__name__)
 
-# Cap to keep deterministic mining bounded (``_MAX_NODES`` is imported from the
-# graph_paths leaf above so the cap is single-sourced). Larger subgraphs should
-# be scoped at the descriptor level (predicate filter) rather than here.
+# Cap to keep deterministic mining bounded. Larger subgraphs should be scoped at
+# the descriptor level (predicate filter) rather than here.
+_MAX_NODES = 5_000
 #
 # P1 EVENT-LOOP FREEZE FIX (2026-07-24): ``_proxy_chains`` calls networkx
 # ``all_simple_paths`` — worst-case EXPONENTIAL path enumeration — over the live
@@ -523,84 +508,9 @@ async def _run_mining_offloop(
         ]
 
 
-# ---------------------------------------------------------------------------
-# Live-substrate AGE pull (opt-in)
-# ---------------------------------------------------------------------------
-
-
-async def _augment_from_age(
-    inputs: list[dict[str, Any]],
-    deps: Any,
-    g: nx.MultiDiGraph,
-) -> dict[str, int]:
-    """Pull additional edges incident to input-row entities from AGE.
-
-    Best-effort: any failure (missing pool, AGE not loaded, label
-    permission issue) logs and returns zero-augmentation. The handler's
-    finding still ships with the input-only graph.
-
-    Returns counters: ``{"edges_pulled": N, "nodes_added": N}``.
-    """
-    counters = {"edges_pulled": 0, "nodes_added": 0}
-    pool = getattr(deps, "pg_pool", None) if deps is not None else None
-    if pool is None:
-        return counters
-    seed_entities = {n for n in g.nodes()}
-    if not seed_entities:
-        return counters
-    quoted = ", ".join(f'"{e}"' for e in list(seed_entities)[:200])
-    if not quoted:
-        return counters
-    cypher = (
-        "MATCH (a)-[r]->(b) "
-        f"WHERE a.id IN [{quoted}] OR b.id IN [{quoted}] "
-        "RETURN a.id AS src, b.id AS dst, label(r) AS rel "
-        f"LIMIT {_MAX_NODES}"
-    )
-    try:
-        async with pool.acquire() as conn:
-            await conn.execute("LOAD 'age'")
-            await conn.execute('SET search_path = ag_catalog, "$user", public')
-            rows = await conn.fetch(
-                "SELECT * FROM cypher('legba_graph', $$"
-                + cypher
-                + "$$) AS (src agtype, dst agtype, rel agtype)"
-            )
-    except Exception as exc:
-        logger.warning("graph_mining.age.pull_failed err=%s", exc)
-        return counters
-
-    for row in rows:
-        src = _strip_agtype(row["src"])
-        dst = _strip_agtype(row["dst"])
-        rel = _strip_agtype(row["rel"])
-        if not src or not dst:
-            continue
-        if src not in g.nodes():
-            counters["nodes_added"] += 1
-        if dst not in g.nodes():
-            counters["nodes_added"] += 1
-        polarity = _label_polarity(rel)
-        g.add_edge(
-            src, dst, label=rel, polarity=polarity, confidence=1.0,
-        )
-        counters["edges_pulled"] += 1
-    return counters
-
-
-# Heuristic mapping AGE edge labels → polarity. Anything not listed is
-# treated as neutral (0). The structural_balance handler has the
-# authoritative version of this table.
+# The negative relation labels. The structural_balance handler has the
+# authoritative polarity table.
 _NEGATIVE_LABELS = {"HostileTo", "Targets", "SuppliesWeaponsTo"}
-_POSITIVE_LABELS = {"AlliedWith", "MemberOf", "LeaderOf", "AffiliatedWith"}
-
-
-def _label_polarity(label: str) -> int:
-    if label in _NEGATIVE_LABELS:
-        return -1
-    if label in _POSITIVE_LABELS:
-        return 1
-    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -741,6 +651,16 @@ def _is_person_only(ep_classes: set[str] | None) -> bool:
 #: edge is not evidence of alignment. Same table, different question.
 MINING_FAMILIES = ("relation", "reference", "structural")
 
+#: The most edges the augment reads (roll 85). It used to read ``LIMIT 20000``
+#: with no ORDER BY: 36,443 world edges matched on live (2026-11-15), so an
+#: arbitrary ~45% were dropped and WHICH ones changed with the plan — the
+#: brokerage graph was a different random subset each run. The whole set is
+#: read now (EXPLAIN ANALYZE on live: 0.76 s for all 36,443 rows sorted, against
+#: 0.54-0.67 s for the old 20,000); this cap is a safety bound only, far above
+#: the live count, and when it is reached the MOST RECENT edges are the ones
+#: kept (``valid_from`` newest first, then the edge id) and the run logs it.
+MAX_MINING_EDGES = 100_000
+
 #: Pre-P4b substrate reads, kept verbatim for the flag-off state (see the
 #: ``projection_disabled`` branch in each reader). They are the queries the
 #: 2026-09-23 P4b review restored: with LEGBA_GRAPH_PROJECTION off the two live
@@ -759,7 +679,9 @@ _LEGACY_AUGMENT_SQL = """
                    -- #99: NEVER re-discover from our own inferred reifications,
                    -- else proxy-chain mining amplifies inferred-on-inferred.
                    AND COALESCE(e.source_type, '') <> 'inferred'
-                 LIMIT 20000
+                 -- roll 85: deterministic, newest first (MAX_MINING_EDGES).
+                 ORDER BY e.valid_from DESC NULLS LAST, e.id
+                 LIMIT $2
 """
 _LEGACY_RECENT_HOSTILE_SQL = """
                 SELECT sp.canonical_name AS subject,
@@ -855,10 +777,15 @@ async def _augment_from_nexuses(
                    -- #99: NEVER re-discover from our own inferred reifications,
                    -- else proxy-chain mining amplifies inferred-on-inferred.
                    AND COALESCE(e.source_type, '') <> 'inferred'
-                 LIMIT 20000
+                 -- roll 85: deterministic, newest first (MAX_MINING_EDGES).
+                 ORDER BY a.valid_from DESC NULLS LAST, a.src_id, a.arc_type
+                 LIMIT $2
                 """,
                 fams,
+                MAX_MINING_EDGES,
             )
+            if len(rows) >= MAX_MINING_EDGES:
+                logger.warning("graph_mining.edge.cap_reached cap=%d kept=newest", MAX_MINING_EDGES)
     except Exception as exc:
         logger.warning("graph_mining.edge.pull_failed err=%s", exc)
         return 0
@@ -1268,11 +1195,6 @@ def _build_finding(
         else f"communities={len(communities)} modularity=n/a",
         f"top_centrality_nodes={len(centrality)} proxy_chains={len(proxy_chains)}",
     ]
-    if augment_counters.get("edges_pulled"):
-        body_lines.append(
-            f"age_augmented edges={augment_counters['edges_pulled']} "
-            f"nodes_added={augment_counters['nodes_added']}"
-        )
     if mining_abandoned:
         # Honesty: the empty result is an ABANDONED run over a real graph, NOT an
         # empty graph — say so as prominently as truncation.
@@ -1332,7 +1254,7 @@ async def handle(
     """Sub-handler entry point — see module docstring for shape."""
     warnings: list[str] = []
     g = _graph_from_inputs(inputs)
-    augment_counters = {"edges_pulled": 0, "nodes_added": 0}
+    augment_counters: dict[str, int] = {}
     # W3-A: the mining SCOPE is declared, not implied — see MINING_FAMILIES.
     raw_fams = options.get("edge_families")
     fams = ([str(f).strip().lower() for f in raw_fams if str(f).strip()]
@@ -1343,10 +1265,6 @@ async def handle(
         # intermediary) are the primary signed-edge source for proxy mining.
         augment_counters["nexus_edges"] = await _augment_from_nexuses(
             deps, g, fams)
-    if deps is not None and bool(options.get("augment_from_age", True)):
-        age_counters = await _augment_from_age(inputs, deps, g)
-        augment_counters.update(age_counters)
-
     if g.number_of_nodes() > _MAX_NODES:
         warnings.append(
             f"graph_mining.truncated nodes={g.number_of_nodes()} max={_MAX_NODES}"
@@ -1455,9 +1373,4 @@ async def handle(
     )
 
 
-__all__ = [
-    "handle",
-    "build_shortest_path_cypher",
-    "build_path_neighbourhood_cypher",
-    "shortest_path_with_broker",
-]
+__all__ = ["handle"]

@@ -691,8 +691,8 @@ async def test_runner_wrapper_two_arg_call_matches_run_method(
     result = await runner(three_analyst_slice, {"analyst_id": "cor"})
     assert isinstance(result, AnalystMethodResult)
     assert result.finding.data["correlation_type"] == "contradiction"
-    # Default temperature is the low-discrimination 0.1 (vs inline_target's 0.2).
-    assert llm.last_temperature == pytest.approx(0.1)
+    # Default temperature is the house 1.0 (the rule since 2026-11-13).
+    assert llm.last_temperature == pytest.approx(1.0)
 
 
 async def test_run_method_strips_hallucinated_uuids_end_to_end(

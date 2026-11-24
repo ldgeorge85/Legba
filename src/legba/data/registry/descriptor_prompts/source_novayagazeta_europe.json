@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.novayagazeta_europe.news": {
+      "source": "source_novayagazeta_europe.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -309,11 +309,18 @@ DROP_WHY_UNKNOWN = "drop_why_unknown"
 #: happen unless the constructor is broken — which is the point of checking it.
 DROP_ORDER_VIOLATION = "drop_order_violation"
 
-#: ALL SIXTEEN ARE HARD, and the reason is one sentence: a deterministic arm
-#: over a generated payload cannot produce a "the model outran its evidence"
-#: verdict. It can only produce "the record does not say what it says it says",
-#: which is the house definition of hard verbatim — a claim its own cited source
-#: contradicts. D-1 §3.6's verify row rules it in terms.
+#: ARM 4(c) — the subject-group FLOOR's ledger contradicts itself (W4 F-3): its
+#: group arithmetic, its "honoured" claim, the prefix-modulo-the-floor order, or
+#: its promoted/displaced stamps. Emitted by ``assembly_floor_arm`` (F1-F4);
+#: spelled here so the one guarded table carries it.
+DROP_FLOOR_VIOLATION = "drop_floor_violation"
+
+#: ALL SEVENTEEN ARE HARD (D-3's sixteen plus W4 F-3's floor reason), and the
+#: reason is one sentence: a deterministic arm over a generated payload cannot
+#: produce a "the model outran its evidence" verdict. It can only produce "the
+#: record does not say what it says it says", which is the house definition of
+#: hard verbatim — a claim its own cited source contradicts. D-1 §3.6's verify
+#: row rules it in terms.
 #:
 #: HARD AND SOFT ARE STILL ARITHMETICALLY INDISTINGUISHABLE in this plane
 #: (``verify.py:1019-1036``: "LABELS ONLY"), and this train does not change
@@ -336,6 +343,7 @@ FAIL_CLASSES: dict[str, str] = {
     DROP_COUNT_MISMATCH: "hard_fail",
     DROP_WHY_UNKNOWN: "hard_fail",
     DROP_ORDER_VIOLATION: "hard_fail",
+    DROP_FLOOR_VIOLATION: "hard_fail",
 }
 
 #: Every counter these arms can bump, so the receipts are enumerable from code
@@ -353,6 +361,10 @@ COUNTERS: tuple[str, ...] = (
     "assembly_quote_origin_truncated",
     "assembly_quote_origin_unresolved",
     "assembly_quote_sha_unverifiable",
+    # Lane N-D: a span whose origin sha256 WAS compared over a complete capture
+    # and matched. ``ok`` alone counts spans that passed containment; only these
+    # passed the full check, and the page states fidelity as "k of n checked".
+    "assembly_quote_sha_verified",
     "assembly_scope_spans_checked",
     "assembly_scope_bounded_sentences",
     "assembly_scope_truncated",
@@ -390,6 +402,10 @@ COUNTERS: tuple[str, ...] = (
     # for the world tier's carry: it is 0 on every country read and every
     # pre-train row, and |carried blocks| on a healthy world read.
     "assembly_carried_origins_bridged",
+    # W4 F-3 — ARM 4(c), ``assembly_floor_arm``: one per read that carries a
+    # floor (the extra check unit ``branch_score`` adds), one per broken floor.
+    "assembly_floor_checked",
+    "assembly_floor_violation",
 )
 
 #: The closed coverage-status set. DUPLICATED as literals from
@@ -402,6 +418,9 @@ COVERAGE_STATUSES: tuple[str, ...] = (
     "below_floor",
     "unverified",
     "no_head_in_horizon",
+    # W11-F14 — a head whose status is carried, not re-evidenced
+    # (``legba.data.carried_state``); a typed absence, never a band.
+    "carried_unsupported",
 )
 
 #: The closed drop why-class enum (D-1 §1.7). Same duplication rule, same guard.
@@ -775,11 +794,15 @@ def _grade_span(
                     "not the body on the row"
                 )[:_DETAIL_CHARS],
             )
+        sha_verified = True
     else:
         res.bump("assembly_quote_sha_unverifiable")
+        sha_verified = False
 
     cut = captured[start:end].decode("utf-8", "replace")
     if fold_equal(cut, text):
+        if sha_verified:
+            res.bump("assembly_quote_sha_verified")
         return None
     if not fold_contains(body, text):
         res.bump("assembly_quote_not_contained")
@@ -1082,15 +1105,19 @@ def _grade_block_attribution(
 
 
 def selection_honesty(assembly: Mapping[str, Any]) -> ArmResult:
-    """ARM 4 — (a) the coverage ledger, (b) the drop ledger.
+    """ARM 4 — (a) the coverage ledger, (b) the drop ledger, (c) the floor.
 
     ONE finding per failing IDENTITY, not one per offending row: a broken ledger
     is a single construction defect and must cost the read one claim, not
     twenty. The detail carries the whole list, so nothing is hidden by the cap.
     """
+    from .assembly_floor_arm import floor_disclosure
+
     res = ArmResult()
     res.extend(_coverage_completeness(assembly))
     res.extend(_drop_disclosure(assembly))
+    # ARM 4(c) — the floor's own identities (W4 F-3). Inert without ``floor``.
+    res.extend(floor_disclosure(assembly))
     return res
 
 
@@ -1378,6 +1405,9 @@ def branch_score(result: ArmResult) -> dict[str, Any] | None:
         result.counters.get("assembly_quote_spans_checked", 0)
         + result.counters.get("assembly_attribution_blocks_checked", 0)
         + LEDGER_CHECK_UNITS
+        # W4 F-3 — one check unit per read carrying a floor; 0 everywhere else,
+        # so every country / thematic / pre-floor score is byte-identical.
+        + result.counters.get("assembly_floor_checked", 0)
     )
     if not result.counters.get("assembly_arms_reads_audited"):
         return None
@@ -1402,6 +1432,22 @@ def quote_fidelity_score(result: ArmResult) -> float | None:
     if not n:
         return None
     return result.counters.get("assembly_quote_spans_ok", 0) / n
+
+
+def quote_fidelity_coverage(result: ArmResult) -> tuple[int, int]:
+    """``(fully_checked, spans)`` — how many spans passed the WHOLE check
+    (offsets, containment AND the origin sha over a complete capture).
+
+    Lane N-D, measured 2026-11-11: world record fd6584eb read quote fidelity
+    1.00 = 16/16 while 12 of those 16 spans came from heads over the 4,000-char
+    capture, so their sha was never compared. ``quote_fidelity_score`` stays
+    the containment ratio it always was; THIS is the number a page may print as
+    "k of n checked", and it never rounds an unchecked span up to a pass.
+    """
+    return (
+        result.counters.get("assembly_quote_sha_verified", 0),
+        result.counters.get("assembly_quote_spans_checked", 0),
+    )
 
 
 def is_grader_of_record(assembly: Any) -> bool:
@@ -1590,10 +1636,11 @@ def fold(report: Any, *, assembly: Any, citations: Any) -> Any:
     logger.log(
         logging.ERROR if result.findings else logging.INFO,
         "verify.assembly_arms.audited blocks=%d spans=%d quote_fidelity=%s "
-        "violations=%d",
+        "sha_checked=%d/%d violations=%d",
         len(_blocks(assembly)),
         result.counters.get("assembly_quote_spans_checked", 0),
         "n/a" if score is None else f"{score:.4f}",
+        *quote_fidelity_coverage(result),
         len(result.findings),
     )
     # 2026-09-05/1 — and it is the LAST thing that touches the tally, which is
@@ -1644,6 +1691,7 @@ __all__ = [
     "is_grader_of_record",
     "origin_records",
     "quote_fidelity",
+    "quote_fidelity_coverage",
     "quote_fidelity_score",
     "regrade_to_arms",
     "scope_preservation",

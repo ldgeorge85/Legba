@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.kremlin.english": {
+      "source": "source_kremlin.yaml",
+      "state": "draft"
+    }
+  }
+}

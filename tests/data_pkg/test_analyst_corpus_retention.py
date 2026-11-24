@@ -36,7 +36,7 @@ from legba.data.analysts.deterministic import (
     run_method,
 )
 from legba.data.analysts.deterministic_handlers import corpus_retention
-from legba.data.analysts.handler_options import HANDLER_OPTIONS
+from legba.data.option_catalog.handler_options import HANDLER_OPTIONS
 from legba.data.provenance.models import FindingPayload
 from legba.runtime.analyst_method import AnalystMethodResult
 

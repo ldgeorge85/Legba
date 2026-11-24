@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:competing_hypotheses": {
+      "source": "analyst_competing_hypotheses.yaml",
+      "state": "active"
+    }
+  }
+}

@@ -115,7 +115,7 @@ export default function TargetMapPanel({ registration, scope }: PanelProps) {
     queryKey: ['target-map-signals', target_id],
     queryFn: () =>
       apiGet<SignalsResponse>(
-        `/signals?target_id=${encodeURIComponent(target_id)}&limit=500`,
+        `/signals?target_id=${encodeURIComponent(target_id)}&limit=500&fields=full`,
       ),
     refetchInterval: 60_000,
   })
@@ -125,7 +125,7 @@ export default function TargetMapPanel({ registration, scope }: PanelProps) {
     queryKey: ['target-map-findings', target_id],
     queryFn: () =>
       apiGet<FindingsResponse>(
-        `/findings?target_id=${encodeURIComponent(target_id)}&limit=200`,
+        `/findings?target_id=${encodeURIComponent(target_id)}&limit=200&fields=full`,
       ),
     refetchInterval: 60_000,
   })

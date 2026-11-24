@@ -1,11 +1,9 @@
 /**
- * Claims data layer (UI-3 / Tier B — Claims panel, ex-Facts).
- *
- * Post-L-090 the standalone facts table collapsed into the universal
- * analyst-output substrate. There is no `/claims` or `/facts` REST
- * endpoint (frozen surface) — the honest source for claim-like rows that
- * carry a confidence AND corroboration is the findings read
- * (`GET /api/v1/findings` → `FindingRow`): the deterministic
+ * Data layer of the subject page's Findings tab (`target.claims`, UI-3 /
+ * Tier B). Its rows are FINDINGS (`analyst_outputs` kind `finding`, from
+ * `GET /api/v1/findings` → `FindingRow`), not rows of the separate, live
+ * `facts` table; the `Claim` names are historical and kept for the saved
+ * layouts that name them. The deterministic
  * `corroboration_scoring` handler writes `corroboration_score` (a [0,1]
  * score) and `corroboration_sources` (independent-source count) into the
  * row's `data` jsonb.
@@ -237,7 +235,7 @@ export function toClaim(row: FindingRow): Claim {
     statement: row.title,
     body: row.body,
     confidence: row.confidence,
-    severity: row.severity ?? 'unknown',
+    severity: canonicalSeverity(row.severity),
     corroborationScore: corroborationScore(data),
     corroborationSources: corroborationSources(data),
     analyst_id: row.analyst_id,
@@ -252,7 +250,33 @@ export function toClaims(rows: FindingRow[]): Claim[] {
   return rows.map(toClaim)
 }
 
-/** Distinct severities present, for the facet dropdown. */
+/**
+ * U-1 — the platform's one severity scale, highest first. It is the scale the
+ * backend's carried state validates (`carried_state._LEVELS`: low · moderate ·
+ * elevated · high · critical). Older rows and the UI's own legacy taxonomy say
+ * `medium`; that is the same rung as `moderate` and reads as it, so a reader's
+ * filter never offers both.
+ */
+export const CLAIM_SEVERITY_SCALE = ['critical', 'high', 'elevated', 'moderate', 'low'] as const
+
+const SEVERITY_ALIASES: Record<string, string> = { medium: 'moderate' }
+
+/** One severity value on the platform scale (lower-cased; `medium` → `moderate`;
+ *  empty → `unknown`). A value off the scale passes through, never invented. */
+export function canonicalSeverity(severity: string | null | undefined): string {
+  const s = (severity ?? '').trim().toLowerCase()
+  if (!s) return 'unknown'
+  return SEVERITY_ALIASES[s] ?? s
+}
+
+/** Distinct severities present, for the facet dropdown — scale order, highest
+ *  first, off-scale values after. */
 export function claimSeverities(claims: Claim[]): string[] {
-  return [...new Set(claims.map((c) => c.severity))].sort()
+  const rank = (s: string) => {
+    const i = (CLAIM_SEVERITY_SCALE as readonly string[]).indexOf(s)
+    return i < 0 ? CLAIM_SEVERITY_SCALE.length : i
+  }
+  return [...new Set(claims.map((c) => canonicalSeverity(c.severity)))].sort(
+    (a, b) => rank(a) - rank(b) || a.localeCompare(b),
+  )
 }

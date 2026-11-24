@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:reference_deterministic": {
+      "source": "analyst_reference_deterministic.yaml",
+      "state": "draft"
+    }
+  }
+}

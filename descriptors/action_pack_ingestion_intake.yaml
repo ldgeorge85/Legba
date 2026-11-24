@@ -1,0 +1,67 @@
+# ingestion_intake action pack (lane I-1 — the ingestion intake).
+#
+# An agent asks for something to be ingested: an address fetched under a
+# page pipeline, or a source re-polled from a window start. The request goes
+# into the ONE queue every producer uses (ingestion_requests, migration 0249)
+# and through the same admission control: egress posture, the pipeline,
+# depth, duplicates, freshness (a page fetched in the last hours is served
+# from the stored copy, nothing fetched), per-host / per-requester / budget
+# class daily caps. A refusal is an answer with its reason, never an error.
+#
+# requested_by is the CALLING analyst (analyst::<id>, from the run's own
+# provenance identity), never an argument; ingestion_request_status reads
+# only the caller's own requests.
+#
+# THE SWITCH: LEGBA_INTAKE_AGENT_REQUESTS (off by default) — off, both tools
+# answer `failed` naming it. No analyst grants this pack until an operator
+# adds the grant.
+#
+# FOUR-SURFACE convergence (tools must be pack tools): this `tools` list ==
+# INTAKE_TOOLS == register_intake_tools (src/legba/data/analysts/agency/
+# intake_tools.py) == every tool a bound analyst can dispatch through it.
+#
+# `default_pipeline`: the page pipeline (a source descriptor whose kind takes
+# an address) used when the agent names none; empty = LEGBA_INTAKE_DEFAULT_
+# PIPELINE, else (I-2) the instance's default page pipeline
+# `source.page.default` (kind `page`, descriptors/source_page_pipeline_
+# default.yaml) for an address request.
+#
+# Registered via scripts/bringup_register_action_packs.py.
+
+identity:
+  id: ingestion_intake
+  name: Ingestion Intake (ask for something to be ingested)
+  schema_uri: legba/action_pack/1.0.0
+  version: "<content-hash stamped at register time>"
+  abstraction_level: L1
+  state: active
+  owner: i1_ingestion_intake
+  created: "2026-11-13T00:00:00Z"
+
+tools:
+  - name: request_ingestion
+    config:
+      default_pipeline: ""
+  - name: ingestion_request_status
+    config: {}
+
+prompt_fragments:
+  - >-
+    When the evidence you need is a specific page the platform has not
+    ingested, call request_ingestion(address=...) to ask for it; to re-read a
+    source from an earlier point, request_ingestion(source_id=...,
+    window_start=...). The answer is an id and a status: queued (it will be
+    fetched by the intake, not during this call), done (it was fetched
+    recently and the stored copy stands — nothing new will arrive), or
+    refused with a reason (a budget, a duplicate, an address the platform
+    will not fetch). Check later with ingestion_request_status(id).
+
+rules:
+  - "A request is not a fetch: nothing you ask for is readable in this run. Do not cite it until it has landed."
+  - "A refusal is final for this run — do not resubmit the same address; say what was refused and why."
+  - "Ask only for addresses you were given or found in the substrate — never guess internal hosts."
+
+governor:
+  budget_account: ingestion_intake
+  max_invocations_per_hour: 120
+  api_rate_per_minute: 30

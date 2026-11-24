@@ -90,11 +90,25 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 from ..stack.llm import tool_rounds as _tr
+
+# The three clock defaults and their env readers live in the stdlib-only leaf
+# ``legba.data.consult_clocks`` so the registry can derive its invoke timeout
+# from the SAME readers without importing this package (run 9b902fec). Every
+# name is re-exported here unchanged.
+from ..consult_clocks import (
+    DEFAULT_FINAL_FLOOR_SECONDS,
+    DEFAULT_ROUND_DEADLINE_SECONDS,
+    DEFAULT_TOTAL_BUDGET_SECONDS,
+    default_final_floor_seconds,
+    default_round_deadline_seconds,
+    default_total_budget_seconds,
+)
+from ..consult_clocks import env_seconds as _env_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -102,42 +116,10 @@ logger = logging.getLogger(__name__)
 # Budget
 # ---------------------------------------------------------------------------
 
-#: Hard ceiling on the WHOLE ReAct loop — with ONE deliberate exception, the
-#: final-synthesis floor below, which may carry a run past this rather than
-#: throw away an answer in progress.
-#:
-#: Sized under the detached run's invoke timeout (900s since the c8a0105c
-#: train) with room for the actor's own envelope assembly, so this is what ends
-#: a long run. See ``consult_runs.invoke_timeout_seconds`` for the full sum —
-#: raising this number means re-checking it.
-DEFAULT_TOTAL_BUDGET_SECONDS = 480.0
-
-#: Per-LLM-call deadline. Above the slowest observed healthy Opus consult turn
-#: (~101s on run 3ae77c64) with headroom, so it catches a stuck call without
-#: cutting a legitimately slow one.
-DEFAULT_ROUND_DEADLINE_SECONDS = 150.0
-
 #: Reserve carved out of the total for the forced final. Once less than this
 #: remains the loop stops drilling even if the drilling budget is untouched —
 #: an answer synthesised from four rounds beats a timeout after six.
 FINAL_RESERVE_SECONDS = 150.0
-
-#: FLOOR under the final synthesis's slice — never a ceiling.
-#:
-#: This is the 2026-09-16 c8a0105c fix. The synthesis used to get
-#: ``min(round_deadline, remaining)``, i.e. the same 150s slice as any drilling
-#: round. But the synthesis is not a drilling round: it is the only turn that
-#: produces the product, it is the longest generation of the run by
-#: construction (it writes the whole answer), and it happens when the
-#: transcript is at its largest. Capping it at a drilling round's deadline is
-#: exactly backwards — it cut a 13,000-character answer off at 150s and
-#: DISCARDED it.
-#:
-#: The synthesis now gets the REMAINING total budget, floored here so a loop
-#: that overran still gets a real slice rather than the scraps. That the floor
-#: can push the run past ``total_budget_seconds`` is deliberate and is the
-#: whole point: finishing the answer 60s late beats throwing it away on time.
-DEFAULT_FINAL_FLOOR_SECONDS = 240.0
 
 #: Native multi-call batch cap per round. Below ``MAX_TOOLS_PER_BATCH`` (5)
 #: because on the native route every result is replayed into every subsequent
@@ -145,13 +127,6 @@ DEFAULT_FINAL_FLOOR_SECONDS = 240.0
 #: run. Four wide reads still survey; the fifth mostly buys tokens. A
 #: descriptor may raise it.
 DEFAULT_NATIVE_BATCH_CAP = 4
-
-
-def default_final_floor_seconds() -> float:
-    """Floor under the final synthesis. Env ``LEGBA_CONSULT_FINAL_FLOOR_SECONDS``."""
-    return _env_seconds(
-        "LEGBA_CONSULT_FINAL_FLOOR_SECONDS", DEFAULT_FINAL_FLOOR_SECONDS
-    )
 
 
 def final_synthesis_budget(remaining_seconds: float, *, floor: float | None = None) -> float:
@@ -223,34 +198,193 @@ def partial_final_payload(
     }
 
 
-def _env_seconds(name: str, default: float) -> float:
-    """A positive float from ``name``, else ``default``.
+#: ``finish_reason`` values that say nothing about WHY a call stopped, so the
+#: completion-token count decides instead.
+_UNKNOWN_FINISH = (None, "", "unknown")
 
-    Unset / empty / non-numeric / non-positive all fall back: a malformed pin
-    must never zero a budget, which would make every consult degrade instantly.
+
+def output_limit(llm: Any, fallback: int | None) -> int | None:
+    """The output limit a call on ``llm`` actually runs under (roll-86
+    follow-up: no output caps — a caller's ``max_tokens`` never reaches a
+    wire): the model's declared maximum (``model_max_output_tokens``, the one
+    declared place), else ``fallback`` for a handler that declares none (a test
+    double). The "partial" label's count rule and the turn's spend projection
+    read this, not the descriptor's ``method.llm.max_tokens``."""
+    probe = getattr(llm, "model_max_output_tokens", None)
+    try:
+        limit = probe() if callable(probe) else None
+    except Exception:  # noqa: BLE001 — a label must never fail a turn
+        limit = None
+    return int(limit) if isinstance(limit, int) and limit > 0 else fallback
+
+
+def output_cap_hit(response: Any, usage: Mapping[str, Any], max_tokens: int | None) -> bool:
+    """Did this terminal call stop at its OUTPUT cap rather than finish?
+
+    ``finish_reason == "length"`` says so directly (both handlers normalize to
+    it). When the provider reported no reason, a completion count at or over
+    the call's ``max_tokens`` is the same fact. Read ONLY on a terminal answer
+    call: on a tool round the module docstring's rule stands — never key on
+    ``finish_reason`` there.
     """
-    raw = os.getenv(name, "").strip()
-    if raw:
-        try:
-            value = float(raw)
-            if value > 0:
-                return value
-        except ValueError:
-            pass
-    logger.debug("consult.budget.env_ignored name=%s raw=%r", name, raw)
-    return default
+    finish = getattr(response, "finish_reason", None)
+    if finish == "length":
+        return True
+    if finish not in _UNKNOWN_FINISH or not max_tokens:
+        return False
+    return int(usage.get("completion_tokens") or 0) >= int(max_tokens)
 
 
-def default_total_budget_seconds() -> float:
-    """Total wall-clock budget for the loop. Env ``LEGBA_CONSULT_BUDGET_SECONDS``."""
-    return _env_seconds("LEGBA_CONSULT_BUDGET_SECONDS", DEFAULT_TOTAL_BUDGET_SECONDS)
+def settle_final_reply(
+    parsed: Mapping[str, Any],
+    response: Any,
+    usage: Mapping[str, Any],
+    *,
+    max_tokens: int | None,
+    rounds_used: int,
+    rounds_available: int,
+    elapsed_s: float,
+    last_tool_incorporated: bool,
+) -> tuple[dict[str, Any] | None, str, dict[str, Any] | None]:
+    """``(payload, synthesis_status, step)`` for one terminal answer reply (W11-F160).
 
+    * No answer body — a sentinel and header lines only, or nothing — is NOT an
+      answer: ``(None, "none", step)``, so the turn stores an empty answer and
+      the panel offers "Synthesize from evidence". Header text is never stored
+      as the answer (turn ``91b6260c``).
+    * A body cut at the output cap is ``"partial"``: the prose is kept under the
+      :func:`partial_final_payload` banner, with the model's own ``cited_refs``.
+    * Otherwise the parsed payload is returned untouched as ``"complete"``.
 
-def default_round_deadline_seconds() -> float:
-    """Per-LLM-call deadline. Env ``LEGBA_CONSULT_ROUND_DEADLINE_SECONDS``."""
-    return _env_seconds(
-        "LEGBA_CONSULT_ROUND_DEADLINE_SECONDS", DEFAULT_ROUND_DEADLINE_SECONDS
+    ``step`` is the trace frame to record, ``None`` for a complete answer.
+    """
+    finish = getattr(response, "finish_reason", None)
+    capped = output_cap_hit(response, usage, max_tokens)
+    answer = str(parsed.get("answer") or "").strip()
+    if not answer:
+        return None, "none", {
+            "phase": "reflect", "kind": "degraded_final",
+            "reason": "empty_answer_body", "finish_reason": finish,
+            "output_cap_hit": capped,
+        }
+    if not capped:
+        return dict(parsed), "complete", None
+    reason = f"the model hit its {int(max_tokens or 0):,}-token output cap"
+    payload = partial_final_payload(
+        partial_text=answer, rounds_used=rounds_used,
+        rounds_available=rounds_available, elapsed_s=elapsed_s,
+        reason=reason, last_tool_incorporated=last_tool_incorporated,
     )
+    if parsed.get("cited_refs"):
+        payload["cited_refs"] = parsed["cited_refs"]
+    return payload, "partial", {
+        "phase": "reflect", "kind": "partial_final", "reason": "output_token_cap",
+        "finish_reason": finish, "max_tokens": max_tokens,
+        "completion_tokens": int(usage.get("completion_tokens") or 0),
+        "chars": len(answer),
+    }
+
+
+#: The stamp a held answer carries on the wire, so the panel keys on a token
+#: rather than on the banner's prose.
+PROVENANCE_HOLD_REASON = "provenance_hold"
+
+
+def provenance_hold(census: Mapping[str, Any] | None) -> tuple[str, str] | None:
+    """``(banner, hold_reason)`` for an answer that resolved NOTHING, else None.
+
+    The sibling of :func:`partial_final_payload`, and the same posture: an
+    answer the reader must not take at face value leads with a line saying so,
+    because a reader scanning a long answer must learn what it is before they
+    act on it, not after.
+
+    THE CASE IT CATCHES, from the 2026-09-28 review: the core-plane run
+    fabricated a tool RESULT into its own ARGS, quit at round 3 of 10, and
+    wrote a confident answer citing six ids that do not exist. Nothing in the
+    platform said a word. The answer rested on the model's own knowledge and
+    read exactly like one resting on the corpus.
+
+    THE TEST, and it is deliberately narrow. Both halves must be MEASURED —
+    the census reports ``None``, never a fabricated zero, when it could not
+    read a class, and an unmeasured census holds nothing:
+
+      * no cited ref resolved to ANY row — not a LIVE or HISTORY signal, not a
+        web-retrieval or seed row, and not a platform row without an origin
+        class (a situation, finding, hypothesis, event or nexus; those are the
+        corpus's own finished work and the prompt says to read them first);
+      * and the answer still asserts — at least one sentence naming no
+        evidence at all.
+
+    Zero resolved refs with zero asserting sentences is not a held answer; it
+    is a refusal, an empty answer, or a pure framing note, and banner-ing that
+    would be noise. ``uncertainty`` is NOT touched here: the evidence floor is
+    its own change and lives on its own path.
+    """
+    if not isinstance(census, Mapping):
+        return None
+    live = census.get("live")
+    history = census.get("history")
+    model_knowledge = census.get("model_knowledge")
+    if not isinstance(live, int) or not isinstance(history, int):
+        return None
+    if not isinstance(model_knowledge, int) or model_knowledge < 1:
+        return None
+    if live + history > 0:
+        return None
+    # W4b F-9 — refs past the classify cap were never looked up, so "nothing
+    # resolved" has not been measured for them. An unmeasured remainder holds
+    # nothing, same as an unmeasured class.
+    over_cap = census.get("unclassified_over_cap")
+    if isinstance(over_cap, int) and over_cap > 0:
+        return None
+    if isinstance(census.get("web_retrieval"), int) and census["web_retrieval"] > 0:
+        return None
+    if isinstance(census.get("seed"), int) and census["seed"] > 0:
+        return None
+    # A citation that landed on a REAL platform row that carries no origin
+    # class — a situation, a finding, a hypothesis, an event, a nexus — is
+    # evidence the corpus produced, and the prompt tells the model to consult
+    # exactly those rows FIRST. The hold is for an answer whose citations
+    # checked out NOWHERE (fabricated, malformed, or none at all) — the
+    # roll-28 proof held an answer cited to twelve real situations, which is
+    # the opposite of the case this exists for.
+    if isinstance(census.get("unresolved"), int) and census["unresolved"] > 0:
+        return None
+    by_kind = census.get("by_kind")
+    if isinstance(by_kind, Mapping) and any(
+        isinstance(v, int) and v > 0 for v in by_kind.values()
+    ):
+        return None
+    examined = census.get("sentences_examined")
+    sentences = (
+        f"{model_knowledge} of {examined} sentences"
+        if isinstance(examined, int) and examined
+        else f"{model_knowledge} sentence" + ("" if model_knowledge == 1 else "s")
+    )
+    tail = []
+    for key, phrase in (
+        ("unresolved", "{n} cited id{s} resolved to a record carrying no origin class"),
+        ("fabricated", "{n} cited id{s} matched no record at all"),
+    ):
+        value = census.get(key)
+        if isinstance(value, int) and value > 0:
+            tail.append(phrase.format(n=value, s="" if value == 1 else "s"))
+    malformed = census.get("malformed")
+    if isinstance(malformed, list) and malformed:
+        shown = ", ".join(str(m) for m in malformed[:3])
+        tail.append(
+            f"{len(malformed)} citation token"
+            f"{'' if len(malformed) == 1 else 's'} were not ids at all ({shown})"
+        )
+    detail = f" {'; '.join(tail)}." if tail else ""
+    banner = (
+        "> **Held: nothing in this answer resolved to live or held reporting.** "
+        f"Not one cited reference came back from the corpus, and {sentences} "
+        f"name no evidence.{detail} Read what follows as the model's own "
+        "knowledge until it is grounded — the citations below did not check "
+        "out.\n\n---\n\n"
+    )
+    return banner, PROVENANCE_HOLD_REASON
 
 
 def degraded_final_payload(
@@ -342,9 +476,16 @@ def native_wire(llm: Any) -> str:
 def native_tool_specs(known_tools: Any) -> list[_tr.ToolSpec]:
     """Specs for the consult whitelist, from the shared tool catalogue.
 
-    Every tool is offered under its OWN name with its own argument schema, so
-    the provider validates the arguments before they cost a round-trip. Five of
-    the nineteen have no catalogue entry yet and get the shared module's
+    Every tool is offered under its OWN name with its own argument schema.
+    The PLATFORM validates the arguments against that schema, not the
+    provider: this comment used to claim the provider did, and on 2026-09-28
+    a core-plane call carrying a fabricated ``result`` array and a
+    ``status: "ok"`` that no situation has went through the endpoint, through
+    this loop and into a SQL predicate without one word of complaint. The
+    check is ``tool_rounds.validate_args``, run at the agency hard gate
+    (``agency.Agency._run_pack_tool`` step 2.5), and a failure comes back to
+    the model as ``tool_blocked: <cause>: <detail>``. Five of the nineteen
+    have no catalogue entry yet and get the shared module's
     permissive free-form spec — the loop can route them, so it must be able to
     offer them, and their signatures are still stated in the system prompt's
     tool roster.
@@ -526,10 +667,12 @@ def native_round_summary(round_: NativeRound) -> dict[str, Any]:
 
 
 __all__ = [
+    "DEFAULT_FINAL_FLOOR_SECONDS",
     "DEFAULT_ROUND_DEADLINE_SECONDS",
     "DEFAULT_TOTAL_BUDGET_SECONDS",
     "FINAL_RESERVE_SECONDS",
     "NativeRound",
+    "default_final_floor_seconds",
     "default_round_deadline_seconds",
     "default_total_budget_seconds",
     "degraded_final_payload",
@@ -541,7 +684,10 @@ __all__ = [
     "render_tools_for",
     "native_tools_enabled",
     "native_wire",
+    "output_cap_hit",
+    "output_limit",
     "parse_native_reply",
+    "settle_final_reply",
     "supports_native_tools",
     "synthetic_round",
     "text_tool_round_fallback",

@@ -1,0 +1,15 @@
+{
+  "prompts": {
+    "statement_verifier_seat": {
+      "chars": 1680,
+      "sha256": "ea7394fd6501e1a48b3d46555b943f06a5563ef49aac47fabd79e0ecc46c0df0",
+      "source": "analyst_statement_verifier_seat.yaml"
+    }
+  },
+  "states": {
+    "analyst:statement_verifier_seat": {
+      "source": "analyst_statement_verifier_seat.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -91,6 +91,7 @@ fallback) so the operator sees the gap.
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import json
 import logging
@@ -230,7 +231,7 @@ class CriticDeps:
 
     llm: LLMHandlerLike
     max_tokens: int = 1536
-    temperature: float = 0.1  # low — we want consistent grading
+    temperature: float = HOUSE_TEMPERATURE  # low — we want consistent grading
     system_prompt: str = _SYSTEM_PROMPT_DEFAULT
     tools: dict[str, ToolCallable] = field(default_factory=dict)
     tools_whitelist: list[str] = field(default_factory=list)
@@ -1374,7 +1375,7 @@ class CriticRunner:
         llm: LLMHandlerLike,
         *,
         max_tokens: int = 1536,
-        temperature: float = 0.1,
+        temperature: float = HOUSE_TEMPERATURE,
         system_prompt: str | None = None,
         tools: dict[str, ToolCallable] | None = None,
         tools_whitelist: list[str] | None = None,

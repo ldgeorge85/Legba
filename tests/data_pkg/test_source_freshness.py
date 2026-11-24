@@ -150,3 +150,19 @@ def test_next_fire_after_refuses_rather_than_guesses(expr):
     """No honest answer ⇒ None. A caller that stamps an expiry from this must
     leave it unset rather than invent a schedule the descriptor never declared."""
     assert next_fire_after(expr, datetime(2026, 9, 24, tzinfo=timezone.utc)) is None
+
+
+def test_cadence_interval_is_walked_once_per_expression() -> None:
+    """N-W: the walk is a pure function of the expression (fixed epoch), so it
+    is memoized — the gauge's per-source calls held the loop 2-3 s a pass."""
+    from legba.data.registry import source_freshness as sf
+
+    sf._cadence_interval_minutes.cache_clear()
+    first = sf.cadence_interval_minutes("*/5 * * * *")
+    again = sf.cadence_interval_minutes(" */5 * * * * ")
+    assert first == again == 5.0
+    info = sf._cadence_interval_minutes.cache_info()
+    assert (info.misses, info.hits) == (1, 1)
+    assert sf.cadence_interval_minutes("47 5-23/6 * * *") == 360.0
+    assert sf.cadence_interval_minutes("not a cron") is None
+    assert sf.cadence_interval_minutes("") is None

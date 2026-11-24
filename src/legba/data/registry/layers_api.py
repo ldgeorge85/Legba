@@ -7,7 +7,7 @@ desk by desk, plus the newest FIRED finding each desk carries.
 
 WHY A ROUTE OVER THE RECEIPT AND NOT OVER A TABLE
 -------------------------------------------------
-The unit writes no table (docs/LAYERS.md, "The divergence measure (L2)"): the
+The unit writes no table (docs/DATA_SOURCES.md, "The divergence measure (L2)"): the
 series and the receipt ride ``analyst_outputs.data``, and a run that fired
 nothing is suppressed to trace-only so an idempotent re-run never repeats "no
 gap change" in the feed. Which means the QUIET days — the overwhelming majority,
@@ -95,7 +95,7 @@ PAIRS_OF_INTEREST: tuple[tuple[str, str, str, str], ...] = (
 )
 
 #: The one sentence the panel header renders, served by the server rather than
-#: copied into the bundle so the reader surface cannot drift from docs/LAYERS.md.
+#: copied into the bundle so the reader surface cannot drift from docs/DATA_SOURCES.md.
 UNIT_SENTENCE: str = (
     "Per country, the same stack of source layers is counted per day and the "
     "finding is the CHANGE in that country's own layer-to-layer divergence "
@@ -284,6 +284,11 @@ class LayerDivergenceOut(BaseModel):
     #: Desks the run was asked for and could not resolve, verbatim.
     desks_unresolved: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    #: The ``?target_id`` this response was narrowed to, echoed; ``null`` means
+    #: every desk the receipt carries. Narrowed with an empty ``desks`` and a
+    #: non-null ``receipt_run_id`` means "the newest run did not measure this
+    #: desk" — distinct from "no run yet" (null ``receipt_run_id``).
+    target_id: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -487,6 +492,27 @@ def project_receipt(
     )
 
 
+def narrow_to_target(
+    out: LayerDivergenceOut, target_id: str | None,
+) -> LayerDivergenceOut:
+    """Narrow a projected map to ONE desk (``?target_id``).
+
+    Keeps the receipt frame (stamps, method, audit, warnings) whole and filters
+    only the per-desk lists — ``desks`` and the run's own ``desks_unresolved``
+    — to rows naming that desk. Computes nothing; ``None`` is a no-op.
+    """
+    if target_id is None:
+        return out
+    return out.model_copy(update={
+        "target_id": target_id,
+        "desks": [d for d in out.desks if d.target_id == target_id],
+        "desks_unresolved": [
+            u for u in out.desks_unresolved
+            if str(u.get("target_id") or "") == target_id
+        ],
+    })
+
+
 def fired_by_desk(rows: list[Mapping[str, Any]]) -> dict[str, FiredOut]:
     """Index the DISTINCT-ON rows by ``target_id``.
 
@@ -533,6 +559,14 @@ def build_layers_router(deps: RegistryAPIDeps) -> APIRouter:
                 "newest one."
             ),
         ),
+        target_id: Optional[str] = Query(
+            default=None, min_length=1, max_length=200,
+            description=(
+                "Narrow the map to ONE desk. The receipt is still the newest "
+                "one; a desk it did not measure comes back with empty `desks` "
+                "and the filter echoed in `target_id`."
+            ),
+        ),
         _principal: str = Depends(require_bearer),
         deps_: RegistryAPIDeps = Depends(_get_deps),
     ) -> LayerDivergenceOut:
@@ -552,6 +586,7 @@ def build_layers_router(deps: RegistryAPIDeps) -> APIRouter:
                 generated_at=stamp,
                 layer_vocab=list(LAYER_VOCAB),
                 pairs_declared=_declared_pairs(),
+                target_id=target_id,
             )
 
         if receipt is None:
@@ -562,14 +597,18 @@ def build_layers_router(deps: RegistryAPIDeps) -> APIRouter:
                 generated_at=stamp,
                 layer_vocab=list(LAYER_VOCAB),
                 pairs_declared=_declared_pairs(),
+                target_id=target_id,
             )
 
-        return project_receipt(
-            receipt["output_payload"],
-            run_id=receipt["run_id"],
-            run_started_at=receipt["run_started_at"],
-            fired=fired_by_desk([dict(r) for r in fired_rows]),
-            now=stamp,
+        return narrow_to_target(
+            project_receipt(
+                receipt["output_payload"],
+                run_id=receipt["run_id"],
+                run_started_at=receipt["run_started_at"],
+                fired=fired_by_desk([dict(r) for r in fired_rows]),
+                now=stamp,
+            ),
+            target_id,
         )
 
     return router
@@ -590,5 +629,6 @@ __all__ = [
     "daily_series",
     "desk_from_receipt",
     "fired_by_desk",
+    "narrow_to_target",
     "project_receipt",
 ]

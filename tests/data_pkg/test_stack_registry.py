@@ -535,6 +535,60 @@ async def test_update_rejects_no_change(registry: StackRegistry, seeded_secrets)
         await registry.update(original.component_id, _postgres_cluster(), actor="lewis")
 
 
+def _resized(pool_size: int) -> PostgresCluster:
+    comp = _postgres_cluster()
+    return comp.model_copy(update={"config": comp.config.model_copy(
+        update={"pool_size": Property.Number.of(pool_size, minimum=1, maximum=200)}
+    )})
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_update_to_an_earlier_versions_content_reheads(
+    store: PostgresStore, registry: StackRegistry, seeded_secrets, audit: AuditLogger,
+):
+    """W11-F105: the PUT that 500'd on stack_components_pkey re-heads the row."""
+    a = await registry.register(_postgres_cluster(), actor="lewis")
+    await registry.update(a.component_id, _resized(25), actor="lewis")
+    c = await registry.update(a.component_id, _resized(30), actor="lewis")
+    row = await registry.update(a.component_id, _postgres_cluster(), actor="lewis")
+    assert row.version == a.version and row.is_head
+    assert row.created_at == a.created_at
+    async with store.acquire() as conn:
+        n = await conn.fetchval(
+            "SELECT count(*) FROM stack_components WHERE component_id = $1",
+            a.component_id,
+        )
+        heads = await conn.fetch(
+            "SELECT version FROM stack_components WHERE component_id = $1 AND is_head",
+            a.component_id,
+        )
+        entries = await audit.fetch_entries(
+            conn, descriptor_id=a.component_id, namespace="stack",
+        )
+    assert n == 3 and [h["version"] for h in heads] == [a.version]
+    rehead = [e for e in entries if e.action == "re_head"]
+    assert len(rehead) == 1
+    assert (rehead[0].from_version, rehead[0].to_version) == (c.version, a.version)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_rollback_previous_and_named(registry: StackRegistry, seeded_secrets):
+    from legba.data.registry import VersionConflict
+    a = await registry.register(_postgres_cluster(), actor="lewis")
+    b = await registry.update(a.component_id, _resized(25), actor="lewis")
+    c = await registry.update(a.component_id, _resized(30), actor="lewis")
+    assert (await registry.rollback(a.component_id, "lewis")).version == b.version
+    assert (await registry.rollback(a.component_id, "lewis")).version == a.version
+    with pytest.raises(VersionConflict):
+        await registry.rollback(a.component_id, "lewis")
+    row = await registry.rollback(a.component_id, "lewis", target_version=c.version)
+    assert row.version == c.version and row.is_head
+    with pytest.raises(VersionConflict):
+        await registry.rollback(a.component_id, "lewis", target_version=c.version)
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_retire_transitions_state(registry: StackRegistry, seeded_secrets):

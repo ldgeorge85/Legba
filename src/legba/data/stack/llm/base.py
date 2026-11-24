@@ -42,11 +42,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import socket
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import (
     Any,
     AsyncIterator,
@@ -71,6 +73,15 @@ from ...run_accounting import (
     record_prompt_rendered,
 )
 from ...schemas.stack import LLMProviderConfig
+from .call_gate import gate_for_component
+from .pricing import call_token_total
+from .thinking import (
+    ThinkingUnavailable,
+    call_with_thinking_fallback,
+    configured_thinking_alias,
+    reasoning_budget_fields,
+    resolve_call_model,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +224,11 @@ class TransientLLMFailure(Exception):
     that retries ABOVE this layer — the verify judge's transport shim — can obey
     the provider's instruction instead of guessing a backoff; ``None`` whenever
     no header was sent, which is every pre-existing raise site.
+
+    W11-F101: the analyst actor's transient retry loop also reads it (see
+    ``legba.runtime.actor_retry._transient_retry_delay``). The HTTP layer parses
+    both header forms (seconds and HTTP-date) and caps the value at
+    ``RETRY_AFTER_CAP_S``.
     """
 
     def __init__(
@@ -225,6 +241,42 @@ class TransientLLMFailure(Exception):
         super().__init__(message)
         self.status = status
         self.retry_after = retry_after
+
+
+class StreamInterruptedFailure(TransientLLMFailure):
+    """A streamed generation died AFTER it had delivered output (W11-F133).
+
+    Raised by the OpenAI-compatible stream accumulator (``vllm.py``) when the
+    connection drops, the server sends an error event, or the stream closes
+    without its terminator once text or a tool call has already arrived.
+
+    It is a :class:`TransientLLMFailure` so every existing classifier buckets
+    it exactly as it bucketed the non-streaming ``network error`` it replaces
+    (the actor's retry classification, the receipt status). What it ADDS is the
+    prefix the provider already generated: ``partial_text`` (the assistant text
+    streamed so far), ``tool_use_started`` (whether a tool call had begun — a
+    preamble, not an answer) and ``partial_body`` (the accumulated
+    non-streaming-shaped body, ``finish_reason: "error"`` on its choice). A
+    caller that can deliver a partial answer — the consult loop — reads them;
+    every other caller sees the transient failure it always saw, and never
+    mistakes a truncated generation for a finished one.
+
+    Never retried at the HTTP layer: the streamed prefix is already generated
+    (and, on a paid lane, billed); a retry would buy a second, divergent copy.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        partial_text: str = "",
+        tool_use_started: bool = False,
+        partial_body: Mapping[str, Any] | None = None,
+    ):
+        super().__init__(message)
+        self.partial_text = partial_text
+        self.tool_use_started = tool_use_started
+        self.partial_body = dict(partial_body or {})
 
 
 class BudgetExhausted(Exception):
@@ -285,6 +337,46 @@ def _envelope_code(err: Mapping[str, Any]) -> int | None:
     return None
 
 
+#: Ceiling on an honoured ``Retry-After``, in seconds (W11-F101). A provider
+#: may ask for anything; one that answers ``Retry-After: 3600`` must not park an
+#: analyst actor for an hour. 120 s clears the gateway's observed 23 s
+#: concurrency window several times over while keeping a run bounded. A hard
+#: module constant on purpose -- not a descriptor knob.
+RETRY_AFTER_CAP_S: float = 120.0
+
+
+def _parse_retry_after(
+    raw: str | None, *, now: datetime | None = None
+) -> float | None:
+    """A ``Retry-After`` header value as seconds to wait, capped; ``None`` if absent.
+
+    Both RFC 9110 forms: delay-seconds (``"23"``) and an HTTP-date
+    (``"Wed, 21 Oct 2026 07:28:00 GMT"``, converted to seconds from ``now``,
+    floored at 0 when already past). Anything else -- empty, negative,
+    fractional, garbage -- is ``None``, so the caller falls back to its own
+    schedule exactly as it did when the header was absent. The honoured value
+    is capped at :data:`RETRY_AFTER_CAP_S`.
+    """
+    if raw is None:
+        return None
+    value = raw.strip()
+    if not value:
+        return None
+    if value.isdigit():
+        return min(float(value), RETRY_AFTER_CAP_S)
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if when is None:  # pragma: no cover -- py<3.10 returned None on garbage
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    current = now if now is not None else datetime.now(timezone.utc)
+    seconds = (when - current).total_seconds()
+    return min(max(seconds, 0.0), RETRY_AFTER_CAP_S)
+
+
 def _envelope_retry_after(err: Mapping[str, Any]) -> float | None:
     """``Retry-After`` as the router echoed it under ``error.metadata.headers``."""
     meta = err.get("metadata")
@@ -298,7 +390,7 @@ def _envelope_retry_after(err: Mapping[str, Any]) -> float | None:
             continue
         # A zero or negative instruction is not an instruction — falling through
         # to the schedule beats turning the backoff into a busy loop.
-        return seconds if seconds > 0 else None
+        return min(seconds, RETRY_AFTER_CAP_S) if seconds > 0 else None
     return None
 
 
@@ -382,6 +474,7 @@ def _inner_code_is_retryable(code: int | None) -> bool:
 #: request content and 4xx bodies can name credential ids.
 _CALL_STATUS_BY_EXC: Mapping[str, str] = {
     "TransientLLMFailure": "transient_fail",
+    "StreamInterruptedFailure": "transient_fail",
     "HardLLMFailure": "hard_fail",
     "BudgetExhausted": "budget_exhausted",
     "CancelledError": "cancelled",
@@ -408,17 +501,30 @@ _CALL_STATUS_BY_EXC: Mapping[str, str] = {
 from .pricing import ModelPrice  # noqa: F401  (re-export for back-compat)
 
 
+def longest_prefix_price(
+    model: str, price_table: Mapping[str, ModelPrice],
+) -> ModelPrice | None:
+    """The family entry for a revisioned model id: the LONGEST table key that
+    prefixes ``model`` (providers ship minor revisions on a base name, e.g.
+    ``claude-opus-4-7-20260301`` vs ``claude-opus-4-7``).
+
+    Longest, not first: ``claude-opus-5-5`` must resolve to its own row and
+    never to ``claude-opus-5`` — a first-match scan made the answer depend on
+    dict order (W11-F136(b)).
+    """
+    best: str | None = None
+    for key in price_table:
+        if model.startswith(key) and (best is None or len(key) > len(best)):
+            best = key
+    return price_table[best] if best is not None else None
+
+
 def estimate_cost(model: str, usage: LLMUsage, price_table: Mapping[str, ModelPrice]) -> float:
     """Compute cost in USD from token counts + a price table. Returns 0.0 if
     the model isn't in the table (e.g. self-hosted vLLM)."""
     price = price_table.get(model)
     if price is None:
-        # Try a prefix match — providers ship many minor revisions on a base
-        # model name (e.g. claude-opus-4-7-20260301 vs claude-opus-4-7).
-        for key, entry in price_table.items():
-            if model.startswith(key):
-                price = entry
-                break
+        price = longest_prefix_price(model, price_table)
     if price is None:
         return 0.0
     cost = (
@@ -493,6 +599,12 @@ class LLMProviderHandler:
     default_port: ClassVar[int] = 443
     #: Per-subprovider pricing table; subclasses override.
     PRICE_TABLE: ClassVar[Mapping[str, ModelPrice]] = {}
+    #: W11-F133. True on a handler whose ``_call_chat`` may receive a
+    #: ``stream: true`` payload and folds the SSE body back into the
+    #: non-streaming JSON shape via :meth:`_accumulate_sse`. False (every
+    #: handler that never streams through the base loop) keeps ``_call_chat``
+    #: on the plain ``client.post`` path, byte-identical to before.
+    ACCUMULATES_SSE: ClassVar[bool] = False
 
     # ---- Instance state --------------------------------------------------
     def __init__(self) -> None:
@@ -667,6 +779,18 @@ class LLMProviderHandler:
 
     # ---- LLM-specific surface --------------------------------------------
 
+    def model_max_output_tokens(self, model: str | None = None) -> int | None:
+        """THE declared maximum output of the model a call runs on — the value
+        sent where a wire requires the field (no output caps: a caller's
+        ``max_tokens`` never reaches a wire). Here: the component's ``max_tokens``;
+        Anthropic overrides with its documented per-model table."""
+        raw = getattr(getattr(self._cfg, "max_tokens", None), "raw", None)
+        return int(raw) if isinstance(raw, (int, float)) and raw > 0 else None
+
+    def thinking_available(self) -> bool:
+        """Does this component declare a thinking alias (``thinking.py``)?"""
+        return self._cfg is not None and configured_thinking_alias(self._cfg) is not None
+
     async def chat_complete(
         self,
         messages: list[Mapping[str, Any]],
@@ -678,6 +802,7 @@ class LLMProviderHandler:
         system: str | None = None,
         temperature: float | None = None,
         ctx: RuntimeContextLike | None = None,
+        thinking: bool | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
         """Single-turn chat completion.
@@ -688,16 +813,61 @@ class LLMProviderHandler:
                 `_translate_messages`.
             tools: optional OpenAI-tool-spec list; translated per provider.
             model: optional model override; defaults to the configured one.
-            max_tokens: optional max output tokens; defaults to configured.
+            max_tokens: accepted, never sent (no output caps): a wire that
+                requires the field gets ``model_max_output_tokens``.
             reasoning_effort: o-series / GPT-5 / Claude extended thinking.
             system: top-level system prompt for providers that take it
                 separately (Anthropic). For OpenAI-style providers the base
                 prepends it as the first system message.
             ctx: optional runtime context for budget reporting hooks.
+            thinking: ``True`` sends the call to the component's thinking
+                alias (``thinking_model_name``), resolved in
+                ``stack/llm/thinking.py`` — the one place an alias is chosen.
+                ``None``/``False`` is the call as it always was. Thinking
+                never adds a ``max_tokens`` and never changes temperature.
+                T-2: a thinking call that fails for a reason the thinking
+                alias causes is retried ONCE on the plain alias, the retry's
+                receipt carrying ``thinking_fallback`` (``thinking.py``).
         """
+        async def _once(think: bool | None, fallback: str | None) -> LLMResponse:
+            return await self._chat_complete_once(
+                messages, tools=tools, model=model, max_tokens=max_tokens,
+                reasoning_effort=reasoning_effort, system=system,
+                temperature=temperature, ctx=ctx, thinking=think,
+                thinking_fallback=fallback, **kwargs,
+            )
+
+        return await call_with_thinking_fallback(
+            _once, thinking=thinking, had_tools=bool(tools),
+            component_id=self._instance_id,
+        )
+
+    async def _chat_complete_once(
+        self,
+        messages: list[Mapping[str, Any]],
+        *,
+        tools: list[LLMTool] | None,
+        model: str | None,
+        max_tokens: int | None,
+        reasoning_effort: str | None,
+        system: str | None,
+        temperature: float | None,
+        ctx: RuntimeContextLike | None,
+        thinking: bool | None,
+        thinking_fallback: str | None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        """One wire call (the body ``chat_complete`` always had)."""
         self._require_configured()
         cfg = self._cfg  # type: ignore[assignment]
-        chosen_model = model or cfg.model_name.raw  # type: ignore[union-attr]
+        try:
+            chosen_model = resolve_call_model(
+                cfg, model=model, thinking=thinking, component_id=self._instance_id,
+            )
+        except ThinkingUnavailable as exc:
+            raise HardLLMFailure(str(exc)) from exc
+        for key, value in reasoning_budget_fields(cfg, thinking=thinking).items():
+            kwargs.setdefault(key, value)
         chosen_max_tokens = max_tokens or int(cfg.max_tokens.raw)  # type: ignore[union-attr]
 
         # RUST-5 — ``analyst_traces.prompt_rendered``. Captured from the
@@ -741,8 +911,17 @@ class LLMProviderHandler:
         _acct_started = time.monotonic()
         _acct_response: LLMResponse | None = None
         _acct_exc: BaseException | None = None
+        # T-1: the core-plane component's ONE process-wide concurrency bound
+        # (``call_gate``) is held around the network hop only; every other
+        # component gets ``None`` and its call is unchanged.
+        gate = gate_for_component(self._instance_id)
+        ticket = None
         try:
-            data = await self._call_chat(payload)
+            if gate is None:
+                data = await self._call_chat(payload)
+            else:
+                async with gate.slot() as ticket:
+                    data = await self._call_chat(payload)
             response = self._parse_response(data, model=chosen_model)
             _acct_response = response
         except BaseException as exc:
@@ -756,14 +935,20 @@ class LLMProviderHandler:
                 started_monotonic=_acct_started,
                 response=_acct_response,
                 exc=_acct_exc,
+                thinking=bool(thinking),
+                gate_wait_ms=ticket.wait_ms if ticket is not None else 0,
+                thinking_fallback=thinking_fallback, payload=payload,
             )
 
-        # Report tokens for budget tracking.
+        # Report tokens for budget tracking. Reasoning is added on top only
+        # where the provider counts it OUTSIDE completion_tokens (``pricing.
+        # call_token_total``): on the OpenAI-compatible wire it is a subset.
         if ctx is not None and ctx.budget is not None:
-            total = (
-                response.usage.prompt_tokens
-                + response.usage.completion_tokens
-                + response.usage.reasoning_tokens
+            total = call_token_total(
+                self.subprovider,
+                prompt_tokens=response.usage.prompt_tokens,
+                completion_tokens=response.usage.completion_tokens,
+                reasoning_tokens=response.usage.reasoning_tokens,
             )
             if total > 0:
                 await ctx.budget.record(
@@ -785,6 +970,7 @@ class LLMProviderHandler:
         system: str | None = None,
         temperature: float | None = None,
         ctx: RuntimeContextLike | None = None,
+        thinking: bool | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[LLMChunk]:
         """Streaming chat completion. Default base implementation falls back
@@ -794,7 +980,7 @@ class LLMProviderHandler:
             messages,
             tools=tools, model=model, max_tokens=max_tokens,
             reasoning_effort=reasoning_effort, system=system,
-            temperature=temperature, ctx=ctx, **kwargs,
+            temperature=temperature, ctx=ctx, thinking=thinking, **kwargs,
         )
         yield LLMChunk(
             delta_content=response.content,
@@ -815,8 +1001,15 @@ class LLMProviderHandler:
         started_monotonic: float,
         response: "LLMResponse | None",
         exc: BaseException | None,
+        thinking: bool = False,
+        gate_wait_ms: int = 0,
+        thinking_fallback: str | None = None, payload: Mapping[str, Any] | None = None,
     ) -> None:
         """Record one completed/failed call into the bound run account.
+
+        ``thinking`` and ``gate_wait_ms`` (T-1) are SPARSE: recorded only when
+        the call thought / waited on the core-plane gate, so every other
+        receipt stays byte-identical.
 
         Pure instrumentation: swallows everything. A raise here would either
         fail a run that succeeded or mask the provider exception propagating
@@ -835,6 +1028,13 @@ class LLMProviderHandler:
                 "prompt_sha256": prompt_sha,
                 "prompt_chars": prompt_chars,
             }
+            if thinking:
+                fields["thinking"] = True
+            if gate_wait_ms > 0:
+                fields["gate_wait_ms"] = int(gate_wait_ms)
+            if thinking_fallback:  # T-2: this call is the plain-alias retry
+                fields["thinking_fallback"] = thinking_fallback
+            fields.update((self._wire_receipt_fields(payload) if payload is not None else None) or {})
             if exc is not None:
                 fields["status"] = _CALL_STATUS_BY_EXC.get(
                     type(exc).__name__, "error",
@@ -920,6 +1120,9 @@ class LLMProviderHandler:
 
     # ---- Provider hooks (subclass overrides) -----------------------------
 
+    def _wire_receipt_fields(self, payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        return None  # sparse wire facts for the call's receipt (Anthropic: window-limited max_tokens)
+
     def _translate_messages(
         self,
         messages: list[Mapping[str, Any]],
@@ -968,9 +1171,36 @@ class LLMProviderHandler:
         retryable = {429, 500, 502, 503, 529}
         max_retries = 3
         last_exc: Exception | None = None
+        # W11-F133: a streaming handler sends the SAME request with
+        # ``stream: true`` and reads the body incrementally. Everything that
+        # happens BEFORE the stream opens (connect errors, status codes,
+        # Retry-After, a router's 2xx error envelope, a server that ignored
+        # ``stream`` and answered JSON) runs through the exact branches below;
+        # only a ``text/event-stream`` body is handed to ``_accumulate_sse``.
+        streaming = self.ACCUMULATES_SSE and bool(payload.get("stream"))
         for attempt in range(max_retries + 1):
+            outcome: dict[str, Any] | None = None
             try:
-                response = await client.post(path, json=dict(payload))
+                if streaming:
+                    response = await client.send(
+                        client.build_request("POST", path, json=dict(payload)),
+                        stream=True,
+                    )
+                    # Settled INSIDE the network guard: on a streamed request
+                    # the body is read here, so a read that fails on an error
+                    # status or a plain-JSON answer is the same retryable
+                    # network error a non-streamed ``post`` raised. An SSE
+                    # body never escapes as one — ``_accumulate_sse`` owns
+                    # every failure once the stream is open (never retried).
+                    try:
+                        outcome = await self._settle_response(
+                            response, attempt=attempt, max_retries=max_retries,
+                            retryable=retryable, streaming=True,
+                        )
+                    finally:
+                        await response.aclose()
+                else:
+                    response = await client.post(path, json=dict(payload))
             except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as exc:
                 last_exc = exc
                 if attempt < max_retries:
@@ -978,34 +1208,85 @@ class LLMProviderHandler:
                     continue
                 raise TransientLLMFailure(f"network error: {exc}") from exc
 
-            retry_after = response.headers.get("retry-after")
-            if response.status_code in retryable and attempt < max_retries:
-                # Honor `retry-after` if set.
-                wait_s = int(retry_after) if retry_after and retry_after.isdigit() else 2 ** attempt
-                await asyncio.sleep(wait_s)
-                continue
-
-            if response.status_code >= 400:
-                body = self._safe_body(response)
-                # 4xx → HardLLMFailure (auth, bad request); 5xx → TransientLLMFailure
-                if response.status_code in retryable:
-                    raise TransientLLMFailure(
-                        f"{self.subprovider} {response.status_code}: {body[:300]}",
-                        status=response.status_code,
-                        # Carried, not consumed: this layer has exhausted its own
-                        # retries by the time it raises, so the header is only
-                        # useful to a caller retrying above it.
-                        retry_after=(
-                            float(retry_after)
-                            if retry_after and retry_after.isdigit()
-                            else None
-                        ),
-                    )
-                raise HardLLMFailure(
-                    f"{self.subprovider} {response.status_code}: {body[:300]}",
-                    status=response.status_code, body=body[:1000],
+            if not streaming:
+                outcome = await self._settle_response(
+                    response, attempt=attempt, max_retries=max_retries,
+                    retryable=retryable,
                 )
+            if outcome is None:
+                continue  # the settle step slept; next attempt
+            return outcome
 
+        raise last_exc or TransientLLMFailure("call failed after retries")
+
+    async def _accumulate_sse(self, response: httpx.Response) -> dict[str, Any]:
+        """Fold a ``text/event-stream`` body into the non-streaming JSON shape.
+
+        Only called when :attr:`ACCUMULATES_SSE` is set; see ``vllm.py``.
+        """
+        raise NotImplementedError
+
+    async def _settle_response(
+        self,
+        response: httpx.Response,
+        *,
+        attempt: int,
+        max_retries: int,
+        retryable: set[int],
+        streaming: bool = False,
+    ) -> dict[str, Any] | None:
+        """One attempt's response → the body, ``None`` (slept; retry), or a raise.
+
+        The body of the historical ``_call_chat`` loop, moved verbatim so the
+        streaming path shares every branch; ``streaming`` only decides how the
+        body is READ (an SSE body is accumulated, anything else is read whole).
+        """
+        # Seconds or an HTTP-date, capped at RETRY_AFTER_CAP_S (W11-F101);
+        # ``None`` when absent or unparsable -> the 2**attempt schedule.
+        retry_after = _parse_retry_after(response.headers.get("retry-after"))
+        if response.status_code in retryable and attempt < max_retries:
+            # Honor `retry-after` if set.
+            wait_s = retry_after if retry_after is not None else 2 ** attempt
+            if streaming:
+                await response.aclose()  # never hold a connection across the wait
+            await asyncio.sleep(wait_s)
+            return None
+
+        if response.status_code >= 400:
+            if streaming:
+                await response.aread()
+            body = self._safe_body(response)
+            # 4xx → HardLLMFailure (auth, bad request); 5xx → TransientLLMFailure
+            if response.status_code in retryable:
+                raise TransientLLMFailure(
+                    f"{self.subprovider} {response.status_code}: {body[:300]}",
+                    status=response.status_code,
+                    # Carried, not consumed: this layer has exhausted its own
+                    # retries by the time it raises, so the header is only
+                    # useful to a caller retrying above it.
+                    retry_after=retry_after,
+                )
+            raise HardLLMFailure(
+                f"{self.subprovider} {response.status_code}: {body[:300]}",
+                status=response.status_code, body=body[:1000],
+            )
+
+        sse = streaming and "text/event-stream" in response.headers.get(
+            "content-type", ""
+        )
+        if sse:
+            # The stream is OPEN. A pre-content error event comes back as
+            # an error envelope with no ``choices`` and takes the router
+            # branch below (retried exactly like the JSON shape); a
+            # transport failure raises from inside the accumulator and is
+            # never retried here.
+            data = await self._accumulate_sse(response)
+        else:
+            if streaming:
+                # A server (or proxy) that ignored ``stream: true`` and
+                # answered the complete JSON body. Accepted as-is:
+                # streaming is a transport choice, never a correctness one.
+                await response.aread()
             try:
                 data = response.json()
             except ValueError as exc:
@@ -1013,59 +1294,56 @@ class LLMProviderHandler:
                     f"{self.subprovider} returned non-JSON body: {response.text[:200]}",
                 ) from exc
 
-            # ROUTER-WRAPPED PROVIDER ERROR (2026-09-08). Everything above this
-            # line switches on ``response.status_code``, and for two days that
-            # was the wrong question. A router answers 200 the moment it commits
-            # headers, so an upstream overload arrives as a SUCCESS carrying a
-            # 502 in its body and no ``choices`` -- the loop never fired, and
-            # ``_account_call`` wrote ``status="success"`` 626 times over a
-            # grader outage that a fidelity replay, not a gauge, eventually
-            # found. The predicate is the SAME one; only the place it reads the
-            # status from is new.
-            err = _router_error(data)
-            if err is None:
-                return data
-            code = _envelope_code(err)
-            envelope_retry_after = _envelope_retry_after(err)
-            detail = str(err.get("message") or err)[:300]
-            if _inner_code_is_retryable(code):
-                if attempt < max_retries:
-                    wait_s = envelope_retry_after
-                    if wait_s is None and retry_after and retry_after.isdigit():
-                        wait_s = float(retry_after)
-                    await asyncio.sleep(
-                        wait_s if wait_s is not None else 2 ** attempt
-                    )
-                    continue
-                raise TransientLLMFailure(
-                    f"{self.subprovider} {response.status_code}/{code or 'error'}"
-                    f" (router-wrapped): {detail}",
-                    # ``RouterStatus`` so the receipt records the inner 502 while
-                    # ``str(exc.status)`` still reads "200/502" for the judge
-                    # transport shim. Only when the router NAMED a code -- a
-                    # fabricated number would be worse than an absent one.
-                    status=(
-                        RouterStatus(code, router=response.status_code)
-                        if code is not None else None
-                    ),
-                    retry_after=(
-                        envelope_retry_after
-                        if envelope_retry_after is not None
-                        else (
-                            float(retry_after)
-                            if retry_after and retry_after.isdigit()
-                            else None
-                        )
-                    ),
+        # ROUTER-WRAPPED PROVIDER ERROR (2026-09-08). Everything above this
+        # line switches on ``response.status_code``, and for two days that
+        # was the wrong question. A router answers 200 the moment it commits
+        # headers, so an upstream overload arrives as a SUCCESS carrying a
+        # 502 in its body and no ``choices`` -- the loop never fired, and
+        # ``_account_call`` wrote ``status="success"`` 626 times over a
+        # grader outage that a fidelity replay, not a gauge, eventually
+        # found. The predicate is the SAME one; only the place it reads the
+        # status from is new.
+        err = _router_error(data)
+        if err is None:
+            return data
+        code = _envelope_code(err)
+        envelope_retry_after = _envelope_retry_after(err)
+        detail = str(err.get("message") or err)[:300]
+        if _inner_code_is_retryable(code):
+            if attempt < max_retries:
+                wait_s = envelope_retry_after
+                if wait_s is None:
+                    wait_s = retry_after
+                await asyncio.sleep(
+                    wait_s if wait_s is not None else 2 ** attempt
                 )
-            raise HardLLMFailure(
-                f"{self.subprovider} {response.status_code}/{code}"
+                return None
+            raise TransientLLMFailure(
+                f"{self.subprovider} {response.status_code}/{code or 'error'}"
                 f" (router-wrapped): {detail}",
-                status=RouterStatus(code, router=response.status_code),
-                body=self._safe_body(response)[:1000],
+                # ``RouterStatus`` so the receipt records the inner 502 while
+                # ``str(exc.status)`` still reads "200/502" for the judge
+                # transport shim. Only when the router NAMED a code -- a
+                # fabricated number would be worse than an absent one.
+                status=(
+                    RouterStatus(code, router=response.status_code)
+                    if code is not None else None
+                ),
+                retry_after=(
+                    envelope_retry_after
+                    if envelope_retry_after is not None
+                    else retry_after
+                ),
             )
-
-        raise last_exc or TransientLLMFailure("call failed after retries")
+        raise HardLLMFailure(
+            f"{self.subprovider} {response.status_code}/{code}"
+            f" (router-wrapped): {detail}",
+            status=RouterStatus(code, router=response.status_code),
+            body=(
+                json.dumps(data, default=str)[:1000] if sse
+                else self._safe_body(response)[:1000]
+            ),
+        )
 
     def _chat_endpoint_path(self) -> str:
         """Provider-specific path under the configured api_endpoint."""
@@ -1184,6 +1462,17 @@ class LLMProviderHandler:
         """The provider's catalog as fetched by `on_configure` (best-effort).
         Empty for providers without a discovery endpoint."""
         return list(self._model_list)
+
+    def context_window_tokens(self) -> int | None:
+        """The configured model's context window in tokens, if this handler knows it.
+
+        W11-F133: the consult loop derives its input ceiling from this when the
+        descriptor sets none (``consult_context_ceiling.derive_ceiling``). The
+        base knows nothing; a subclass that can learn the window (the
+        OpenAI-compatible ``/v1/models`` listing, a documented constant)
+        overrides it. ``None`` = unknown, never a guess.
+        """
+        return None
 
 
 # ---------------------------------------------------------------------------

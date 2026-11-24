@@ -1,39 +1,74 @@
 /**
- * Command Palette — the Cmd/Ctrl-K RECORD-JUMP gateway (redesign Move 3a).
+ * Command Palette — the Cmd/Ctrl-K COMMAND LINE (redesign Move 3a; UI-B1/shell).
  *
- * Previously this listed only non-binding singleton panels and *skipped every
- * binding-scoped one* (`if (def.requiresBinding) continue`), so the canonical
- * "follow the data" power-move — jump straight to `target.findings:brazil` —
- * was impossible. It is now the primary way into the app: a single fuzzy query
- * resolves across FOUR indexed families, ranked by smart defaults (recents,
- * then favorites, then the rest):
+ * One fuzzy query resolves across every family, ranked by smart defaults
+ * (recents, then favorites, then the rest). EVERY family compiles to drive
+ * actions (`lib/commands.ts::paletteActions`) and runs through the ONE
+ * executor (`drive` → `applyAction`) — the palette holds no opener of its own:
  *
- *   1. RECORDS  — targets / analysts / sources from the registry. Enter opens
- *      the record's bound primary panel (target→Findings, analyst→Outputs,
- *      source→Detail); ⌘/Ctrl-Enter selects it into the Inspector instead.
- *   2. PANELS   — every singleton panel kind (including the §6 hidden-7, which
- *      stay deep-link-only on the sidebar but are discoverable here, Move 3b).
- *   3. WORKSPACES — the six stances (Morning Read / Desk / Investigate / Trust /
- *      The Gate / Engine). `#` narrows to just these: the guaranteed switcher
- *      when a keybinding is contested (design §3.2/§3.3).
- *   4. PRESETS  — the curated layout arrangements (Monitoring / Investigation /
- *      Operations …). Distinct from a workspace: a preset clears and re-seeds,
- *      a workspace saves the outgoing stance and restores the incoming one.
- *   5. ACTIONS  — "Investigate" entries that open the bound analysis grid for a
- *      target/analyst (same machinery as the sidebar pickers).
+ *   1. RECORDS    — subjects / units / sources. A subject's Enter opens its
+ *                   read (scope + focus + its page), ⌘/Ctrl-Enter focuses it;
+ *                   a unit's or source's Enter → `focus`, ⌘/Ctrl-Enter →
+ *                   `open_panel` on the record's bound primary.
+ *   2. PANELS     — the `＋` catalog: every kind that renders on its own (a
+ *                   DRILL needs a ref and opens from its parent object). On
+ *                   the reader side only the reader's views are listed here;
+ *                   anything else is a search away and crosses to the
+ *                   operator side when chosen.
+ *   3. SURFACES   — Board · Subject · Ledger · Watch and the operator
+ *                   sections → `arrange` (U-2 shell; the workspaces, missions
+ *                   and presets families are gone with the arrangement cut).
+ *   4. CASES      — every consult turn in the store that presented a case →
+ *                   a replay through the case player (UI-D1 §3).
+ *   5. ACTIONS    — "Investigate · X" → `focus` + the record's reads.
+ *   6. COMMANDS   — the SHELL family this shell carries (reset the surface,
+ *                   copy a link, density, close the opened view) — never
+ *                   recorded.
  *
- * A leading dot+chevron favorite toggle persists to localStorage. The modal is
- * intentionally self-contained (no portal) — the app has a single root and the
- * fixed overlay sits above the Dockview workspace.
+ * A leading dot+chevron favorite toggle persists to localStorage.
+ *
+ * THE ROW MODEL (X3/D3; review D §C4, "⌘K opens on 465 alphabetical rows
+ * starting with '38 North' and paused sources"). Every row carries a FAMILY,
+ * and the empty palette is ordered by it — after the operator's own recents
+ * and favorites — never alphabetically across families:
+ *
+ *   subjects (by recent activity: the newest read on record, newest first;
+ *   a subject with no read on record after them) → panels → surfaces →
+ *   cases → commands → units → Investigate → sources →
+ *   records not active (a draft subject, a paused unit) → PAUSED sources last.
+ *
+ * A subject is called by the profile's noun (`lib/subjectRead.ts`), never
+ * "target"; its Enter opens its READ (the same three actions as a rail
+ * click), ⌘Enter only focuses it (the Inspector). A source that is not active
+ * says so in its hint ("source · paused") and sorts last under a query too.
+ *
+ * THE MODAL (UI-B1/tokens): the overlay is the `Dialog` primitive
+ * (`src/ui/dialog.tsx`, Radix underneath), replacing a hand-rolled
+ * `role="dialog"` div. The dialog owns the modal half of the key handling —
+ * Escape closes, focus moves into the search box on open and is TRAPPED (Tab
+ * cycles inside the palette, which the hand-rolled one never did), focus
+ * returns to the opener on close, a press on the backdrop closes — and it
+ * portals into the shell's overlay host. The palette keeps only the LIST keys
+ * (↑ / ↓ move, Enter opens, ⌘/Ctrl-Enter the alternate action). The families,
+ * the ranking and every test id are unchanged.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Star } from 'lucide-react'
 import type { Mode, PanelKind } from '@/types'
-import type { SelectionKind } from '@/state/selection'
-import { PANEL_REGISTRY, type RegistryEntry } from '@/panel-registry/registry'
-import { LAYOUT_PRESETS } from '@/lib/layoutPresets'
-import { WORKSPACES, type WorkspaceId } from '@/lib/workspaces'
+import { PANEL_REGISTRY } from '@/panel-registry/registry'
+import { catalogKinds } from '@/panel-registry/kindPlan'
+import { SURFACES, readerKinds, type Side } from '@/lib/surfaces'
+import { useBelowContributor } from '@/auth/roles'
+import { drive, type WorkstationAction } from '@/lib/applyAction'
+import {
+  INVESTIGATE_KINDS,
+  availableShellCommands,
+  paletteActions,
+  runCommand,
+} from '@/lib/commands'
+import { recordedCases, replayRecordedCase } from '@/lib/caseReplay'
+import { useConsultSessions } from '@/state/consultSession'
 import {
   loadFavorites,
   loadRecents,
@@ -41,46 +76,46 @@ import {
   toggleFavorite,
 } from '@/lib/paletteRecents'
 import { usePaletteRecords, type PaletteRecord } from '@/components/usePaletteRecords'
+import { useCountryVerdicts } from '@/v4/world/countryVerdicts'
+import { useSupplyChainDesks } from '@/v4/world/supplyChainDesks'
+import { subjectName, useSubjectIndex, type SubjectIndex } from '@/lib/deskNames'
+import { relativeTime } from '@/lib/findingsViews'
+import { PROFILE_UI } from '@/lib/profileUi'
+import { subjectReadActions } from '@/lib/subjectRead'
+import { selectionKindLabel, SUBJECT_NOUN } from '@/lib/subjectNoun'
 import { cn } from '@/lib/cn'
+import { Dialog, DialogContent, DialogTitle } from '@/ui/dialog'
 
 export interface CommandPaletteProps {
   open: boolean
   mode: Mode
   onClose: () => void
-  /** Same opener the Sidebar uses; null registration = singleton open. */
-  onOpen: (kind: PanelKind, registration: null) => void
-  /** Open a binding-scoped panel bound to a record id (target/analyst). */
-  onOpenBound: (kind: PanelKind, recordKind: PaletteRecord['recordKind'], id: string) => void
-  /** Select a record into the unified selection store → the Inspector. */
-  onSelectRecord: (recordKind: SelectionKind, id: string, label: string) => void
-  /** Apply a named layout preset (a curated arrangement — clears and re-seeds). */
-  onApplyPreset: (presetId: string) => void
-  /** Switch stances (saves the outgoing workspace, restores/seeds the incoming). */
-  onSwitchWorkspace: (ws: WorkspaceId) => void
-  /** Open the target-scoped analysis grid. */
-  onInvestigateTarget: (targetId: string) => void
-  /** Open the analyst-scoped analysis grid. */
-  onInvestigateAnalyst: (analystId: string) => void
+  /** The side the reader stands on: the reader side's panel family lists only reader views. */
+  side?: Side
+  /**
+   * Where the compiled actions go. Defaults to `drive` (the ONE executor via
+   * the registered shell); a test passes a recorder.
+   */
+  onDrive?: (actions: WorkstationAction[]) => void
 }
 
-type EntryKind = 'panel' | 'record' | 'preset' | 'action' | 'workspace'
+type EntryKind = 'panel' | 'record' | 'action' | 'surface' | 'case' | 'command'
 
 /**
  * Prefix namespacing (design §3.3) — VS Code's mechanism for getting depth out
  * of a flat list without a nested menu: a leading sigil narrows the index to
  * one family before the fuzzy match runs.
  *
- *   `#` → the six workspaces (the guaranteed stance switcher, even if a
- *         keybinding is contested — design §3.2)
- *   `>` → panels + layout presets ("what can I open / arrange")
+ *   `#` → the surfaces (where am I working)
+ *   `>` → panels and shell commands ("what can I open / do")
  *
  * The design's other two rows (`/` the substrate, `@` entities) wait on the
  * search fan-out moving under the palette; unprefixed search is unchanged and
  * still spans every family.
  */
 const PREFIX_FAMILIES: Record<string, ReadonlySet<EntryKind>> = {
-  '#': new Set<EntryKind>(['workspace']),
-  '>': new Set<EntryKind>(['panel', 'preset']),
+  '#': new Set<EntryKind>(['surface']),
+  '>': new Set<EntryKind>(['panel', 'command']),
 }
 
 /** Split a leading namespace sigil off the query. */
@@ -90,9 +125,44 @@ export function parsePalettePrefix(query: string): { prefix: string | null; rest
   return { prefix: null, rest: query }
 }
 
-interface PaletteEntry {
+/**
+ * The row FAMILY — what the empty palette orders by (see the header). Lower
+ * ranks first; `source_paused` is always last, under a query too.
+ */
+export type PaletteFamily =
+  | 'subject'
+  | 'panel'
+  | 'surface'
+  | 'case'
+  | 'command'
+  | 'unit'
+  | 'action'
+  | 'source'
+  | 'inactive'
+  | 'source_paused'
+
+export const PALETTE_FAMILY_ORDER: readonly PaletteFamily[] = [
+  'subject',
+  'panel',
+  'surface',
+  'case',
+  'command',
+  'unit',
+  'action',
+  'source',
+  'inactive',
+  'source_paused',
+]
+
+const FAMILY_RANK = new Map(PALETTE_FAMILY_ORDER.map((f, i) => [f, i]))
+
+export interface PaletteEntry {
   /** Stable composite key — used for recents/favorites addressing + React keys. */
   key: string
+  /** The row family (ordering). */
+  family: PaletteFamily
+  /** A subject's newest read on record (epoch ms), or null — never invented. */
+  activity?: number | null
   label: string
   /** Secondary right-aligned hint (category / record kind / state). */
   hint: string
@@ -109,9 +179,12 @@ interface PaletteEntry {
 
 /** The record family → its bound primary panel (the Enter default for a record). */
 export const RECORD_PRIMARY_PANEL: Record<PaletteRecord['recordKind'], PanelKind> = {
-  target: 'target.findings',
+  // UI-B3 — a subject's bound primary surface is its page (Brief tab).
+  target: 'subject.page',
   analyst: 'analyst.outputs',
-  source: 'source.detail',
+  // `source.detail` retired onto the Registry's Sources tab (UI-B1/merges); a
+  // source record's Enter is a `focus`, which that tab's detail follows.
+  source: 'system.registry',
 }
 
 /** Subsequence fuzzy match — every query char appears in order in target. */
@@ -152,127 +225,233 @@ export function scoreMatch(query: string, target: string): number {
   return fuzzyMatch(q, t) ? 100 : 0
 }
 
-/** Singleton panel entries (binding-scoped panels reach the index via records). */
-function panelEntries(mode: Mode, onOpen: CommandPaletteProps['onOpen']): PaletteEntry[] {
+type Drive = (actions: WorkstationAction[]) => void
+
+/**
+ * The `＋` catalog as palette entries — a drill opens from its parent instead.
+ * On the reader side a non-reader view is still listed (search must reach
+ * everything) but says it crosses to the operator side.
+ */
+function panelEntries(mode: Mode, run: Drive, side: Side = 'operator', readerOnly = false): PaletteEntry[] {
   const out: PaletteEntry[] = []
-  for (const [kind, entry] of Object.entries(PANEL_REGISTRY) as Array<[PanelKind, RegistryEntry]>) {
-    const def = entry.definition
-    // Binding-scoped panels are reachable through their RECORD (target.findings
-    // opens when you pick the brazil target), so we don't list them unbound here
-    // — an unbound open would only render a placeholder.
-    if (def.requiresBinding) continue
+  const reader = new Set<string>(readerKinds())
+  for (const kind of catalogKinds()) {
+    const def = PANEL_REGISTRY[kind].definition
     if (def.modes.length > 0 && !def.modes.includes(mode)) continue
-    // NOTE (Move 3b): hidden panels (the §6 DROP set) are NO LONGER skipped —
-    // they stay off the sidebar but are discoverable + openable here.
+    if (readerOnly && !reader.has(kind)) continue
     out.push({
       key: `panel:${kind}`,
+      family: 'panel',
       label: def.defaultTitle,
-      hint: def.hidden ? `${def.category} · hidden` : def.category,
+      hint: side === 'reader' && !reader.has(kind) ? 'operator side' : selectionKindLabel(def.category),
       entryKind: 'panel',
       search: `${def.defaultTitle} ${kind}`,
-      open: () => onOpen(kind, null),
+      open: () => run(paletteActions.panel(kind)),
     })
   }
   return out
 }
 
+/** Surface entries — the `#` family, and the guaranteed switcher. */
+function surfaceEntries(run: Drive, readerOnly = false): PaletteEntry[] {
+  return SURFACES.filter((sf) => !readerOnly || sf.side === 'reader').map((sf) => ({
+    key: `surface:${sf.id}`,
+    family: 'surface' as const,
+    label: `${sf.side === 'reader' ? 'Surface' : 'Operator'} · ${sf.label}`,
+    hint: `alt+${sf.key}`,
+    entryKind: 'surface' as const,
+    search: `${sf.label} ${sf.question} surface ${sf.side} ${sf.id}`,
+    open: () => run(paletteActions.surface(sf.id)),
+  }))
+}
+
+/** Case entries — each recorded case in the Consult store replays. */
+function caseEntries(cases: ReturnType<typeof recordedCases>): PaletteEntry[] {
+  return cases.map((c) => ({
+    key: `case:${c.panelId}:${c.turnIndex}`,
+    family: 'case' as const,
+    label: `Case · ${c.label}`,
+    hint: `replay · ${c.record.actions.length} step${c.record.actions.length === 1 ? '' : 's'}`,
+    entryKind: 'case' as const,
+    search: `${c.label} case replay ${c.record.summary ?? ''}`,
+    open: () => replayRecordedCase(c),
+  }))
+}
+
+/** The SHELL commands this shell carries — run locally, never recorded. */
+function commandEntries(): PaletteEntry[] {
+  return availableShellCommands()
+    .filter((c) => c.id !== 'palette.search')
+    .map((c) => ({
+      key: `command:${c.id}`,
+      family: 'command' as const,
+      label: `Command · ${c.label}`,
+      hint: 'shell',
+      entryKind: 'command' as const,
+      search: `${c.label} ${c.id} command`,
+      open: () => {
+        runCommand(c.id)
+      },
+    }))
+}
+
+/** The family a registry record sorts in: an inactive record sinks, a paused source sinks last. */
+export function recordFamily(rec: PaletteRecord): PaletteFamily {
+  const active = !rec.state || rec.state === 'active'
+  if (rec.recordKind === 'source') return active ? 'source' : 'source_paused'
+  if (!active) return 'inactive'
+  return rec.recordKind === 'target' ? 'subject' : 'unit'
+}
+
+/** A record's kind as the screen names it — the profile's nouns, never `target` / `analyst`. */
+function recordNoun(kind: PaletteRecord['recordKind']): string {
+  if (kind === 'target') return SUBJECT_NOUN.toLowerCase()
+  if (kind === 'analyst') return PROFILE_UI.unit_noun.singular.toLowerCase()
+  return 'source'
+}
+
+/** `G20 — Brazil` → `Brazil`: a declared name's qualifier dropped; a name with none is itself. */
+function nameTail(name: string): string {
+  const i = name.indexOf(' — ')
+  const tail = i >= 0 ? name.slice(i + 3).trim() : ''
+  return tail || name
+}
+
 /**
- * Workspace (stance) entries — the `#` family, and the guaranteed switcher.
- *
- * Distinct from a layout preset below: switching a workspace SAVES the outgoing
- * arrangement into its own slot and restores the incoming one, where applying a
- * preset clears the dock and re-seeds it.
+ * Record entries (subjects / units / sources). `activity` maps a subject id to
+ * its newest read on record (epoch ms); a subject absent from it has no read
+ * on record and says so.
  */
-function workspaceEntries(onSwitch: CommandPaletteProps['onSwitchWorkspace']): PaletteEntry[] {
-  return WORKSPACES.map((w) => ({
-    key: `workspace:${w.id}`,
-    label: `Workspace · ${w.label}`,
-    hint: `stance · alt+${w.index}`,
-    entryKind: 'workspace' as const,
-    search: `${w.label} ${w.question} workspace stance ${w.id}`,
-    open: () => onSwitch(w.id),
-  }))
-}
-
-/** Layout-preset (curated arrangement) entries. */
-function presetEntries(onApplyPreset: CommandPaletteProps['onApplyPreset']): PaletteEntry[] {
-  return LAYOUT_PRESETS.map((p) => ({
-    key: `preset:${p.id}`,
-    label: `Layout · ${p.label}`,
-    hint: 'layout',
-    entryKind: 'preset' as const,
-    search: `${p.label} ${p.description} preset layout arrangement`,
-    open: () => onApplyPreset(p.id),
-  }))
-}
-
-/** Record entries (targets / analysts / sources). */
-function recordEntries(
+export function recordEntries(
   records: PaletteRecord[],
-  onOpenBound: CommandPaletteProps['onOpenBound'],
-  onSelectRecord: CommandPaletteProps['onSelectRecord'],
-  onInvestigateTarget: CommandPaletteProps['onInvestigateTarget'],
-  onInvestigateAnalyst: CommandPaletteProps['onInvestigateAnalyst'],
+  run: Drive,
+  activity: ReadonlyMap<string, number> = new Map(),
+  subjects?: SubjectIndex,
 ): PaletteEntry[] {
   const out: PaletteEntry[] = []
   for (const rec of records) {
     const primaryPanel = RECORD_PRIMARY_PANEL[rec.recordKind]
-    // Defensive guard: the record→primary-panel mapping is test-asserted, but a
-    // missing binding-scoped panel (target.findings / analyst.outputs /
-    // source.detail) must degrade — skip the record, never throw at runtime.
+    // Defensive guard: a missing bound primary must degrade — skip the record,
+    // never throw at runtime.
     const primaryDef = PANEL_REGISTRY[primaryPanel]?.definition
     if (!primaryDef) continue
+    const family = recordFamily(rec)
+    const noun = recordNoun(rec.recordKind)
     const stateHint = rec.state && rec.state !== 'active' ? ` · ${rec.state}` : ''
-    out.push({
-      key: `record:${rec.recordKind}:${rec.id}`,
-      label: rec.label === rec.id ? rec.id : `${rec.label} · ${rec.id}`,
-      hint: `${rec.recordKind}${stateHint}`,
-      entryKind: 'record',
-      search: `${rec.label} ${rec.id} ${rec.recordKind} ${primaryDef.defaultTitle}`,
-      // Enter → SET THE DESK SELECTION (the keystone): the feed, map, and
-      // Inspector all follow the shared selection, so "pick a country → see its
-      // findings" works from the palette without opening a placeholder panel.
-      open: () => onSelectRecord(rec.recordKind, rec.id, rec.label),
-      // ⌘/Ctrl-Enter → open the record's bound primary panel (grid) instead.
-      alt: () => onOpenBound(primaryPanel, rec.recordKind, rec.id),
-      altHint: 'open panel',
-    })
-    // Targets + analysts additionally get an "Investigate" grid action.
     if (rec.recordKind === 'target') {
+      // A SUBJECT: its declared name, its noun, its last read — and Enter
+      // opens its READ (scope + focus + its page), exactly as a rail click.
+      // Its DECLARED name, as the rail reads it (never a humanized id).
+      const name = (subjects ? subjectName(rec.id, subjects) : null) ?? nameTail(rec.label)
+      const at = activity.get(rec.id) ?? null
+      const when = at != null ? relativeTime(new Date(at).toISOString()) : 'no read on record'
+      out.push({
+        key: `record:${rec.recordKind}:${rec.id}`,
+        family,
+        activity: at,
+        label: name,
+        hint: `${noun}${stateHint} · ${when}`,
+        entryKind: 'record',
+        search: `${name} ${rec.label} ${rec.id} ${noun} subject`,
+        open: () => run(subjectReadActions(rec.id, name)),
+        // ⌘/Ctrl-Enter → focus only: the Inspector's read state, then its configuration.
+        alt: () => run(paletteActions.selectRecord(rec.recordKind, rec.id, name)),
+        altHint: 'inspect',
+      })
       out.push({
         key: `action:investigate-target:${rec.id}`,
-        label: `Investigate · ${rec.id}`,
-        hint: 'grid',
+        family: 'action',
+        label: `Investigate · ${name}`,
+        hint: 'reads',
         entryKind: 'action',
-        search: `investigate target grid ${rec.label} ${rec.id}`,
-        open: () => onInvestigateTarget(rec.id),
+        search: `investigate ${noun} grid ${name} ${rec.id}`,
+        open: () => run(paletteActions.investigate('target', rec.id, INVESTIGATE_KINDS.target)),
       })
-    } else if (rec.recordKind === 'analyst') {
+      continue
+    }
+    out.push({
+      key: `record:${rec.recordKind}:${rec.id}`,
+      family,
+      label: rec.label === rec.id ? rec.id : `${rec.label} · ${rec.id}`,
+      hint: `${noun}${stateHint}`,
+      entryKind: 'record',
+      search: `${rec.label} ${rec.id} ${noun} ${rec.recordKind} ${primaryDef.defaultTitle}`,
+      // Enter → `focus`: the feed, map, and Inspector all follow the shared
+      // selection.
+      open: () => run(paletteActions.selectRecord(rec.recordKind, rec.id, rec.label)),
+      // ⌘/Ctrl-Enter → `open_panel` on the record's bound primary.
+      alt: () => run(paletteActions.openRecord(primaryPanel, rec.recordKind, rec.id)),
+      altHint: 'open panel',
+    })
+    if (rec.recordKind === 'analyst') {
       out.push({
         key: `action:investigate-analyst:${rec.id}`,
-        label: `Investigate · ${rec.id}`,
-        hint: 'grid',
+        family: 'action',
+        label: `Investigate · ${rec.label === rec.id ? rec.id : rec.label}`,
+        hint: 'reads',
         entryKind: 'action',
-        search: `investigate analyst grid ${rec.label} ${rec.id}`,
-        open: () => onInvestigateAnalyst(rec.id),
+        search: `investigate ${noun} grid ${rec.label} ${rec.id}`,
+        open: () => run(paletteActions.investigate('analyst', rec.id, INVESTIGATE_KINDS.analyst)),
       })
     }
   }
   return out
 }
 
-export function CommandPalette({
-  open,
-  mode,
-  onClose,
-  onOpen,
-  onOpenBound,
-  onSelectRecord,
-  onApplyPreset,
-  onSwitchWorkspace,
-  onInvestigateTarget,
-  onInvestigateAnalyst,
-}: CommandPaletteProps) {
+/** Within a family: newest activity first, an entry with none after every one that has some, then label. */
+function byActivityThenLabel(a: PaletteEntry, b: PaletteEntry): number {
+  const aa = a.activity ?? null
+  const bb = b.activity ?? null
+  if (aa != null && bb != null && aa !== bb) return bb - aa
+  if (aa != null && bb == null) return -1
+  if (aa == null && bb != null) return 1
+  return a.label.localeCompare(b.label)
+}
+
+/**
+ * THE ORDER (X3/D3). Empty query: the operator's recents, then favorites,
+ * then by family (subjects first, by activity, newest first), then label.
+ * With a query: a paused source still sinks below every other match, then by
+ * how well it matched, favorites, family, activity, label.
+ */
+export function orderPaletteEntries(
+  entries: readonly PaletteEntry[],
+  rest: string,
+  opts: { recents?: readonly string[]; favorites?: ReadonlySet<string> } = {},
+): PaletteEntry[] {
+  const favorites = opts.favorites ?? new Set<string>()
+  const fav = (e: PaletteEntry) => (favorites.has(e.key) ? 0 : 1)
+  const fam = (e: PaletteEntry) => FAMILY_RANK.get(e.family) ?? PALETTE_FAMILY_ORDER.length
+  if (!rest) {
+    const recentRank = new Map((opts.recents ?? []).map((id, i) => [id, i]))
+    return entries.slice().sort((a, b) => {
+      const ra = recentRank.get(a.key) ?? Infinity
+      const rb = recentRank.get(b.key) ?? Infinity
+      if (ra !== rb) return ra - rb
+      if (fav(a) !== fav(b)) return fav(a) - fav(b)
+      if (fam(a) !== fam(b)) return fam(a) - fam(b)
+      return byActivityThenLabel(a, b)
+    })
+  }
+  const paused = (e: PaletteEntry) => (e.family === 'source_paused' ? 1 : 0)
+  const scored = entries
+    .map((e) => ({ e, score: Math.max(scoreMatch(rest, e.label), scoreMatch(rest, e.search)) }))
+    .filter((x) => x.score > 0)
+  scored.sort((a, b) => {
+    if (paused(a.e) !== paused(b.e)) return paused(a.e) - paused(b.e)
+    if (a.score !== b.score) return b.score - a.score
+    if (fav(a.e) !== fav(b.e)) return fav(a.e) - fav(b.e)
+    if (fam(a.e) !== fam(b.e)) return fam(a.e) - fam(b.e)
+    return byActivityThenLabel(a.e, b.e)
+  })
+  return scored.map((x) => x.e)
+}
+
+const driveAll: Drive = (actions) => {
+  drive(actions)
+}
+
+export function CommandPalette({ open, mode, onClose, side = 'operator', onDrive = driveAll }: CommandPaletteProps) {
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
   const [favorites, setFavorites] = useState<Set<string>>(() => loadFavorites())
@@ -281,82 +460,58 @@ export function CommandPalette({
 
   // Records are fetched only while the palette is open (lazy index).
   const { records } = usePaletteRecords(open)
+  const consultPanels = useConsultSessions((s) => s.panels)
+  const cases = useMemo(() => recordedCases(consultPanels), [consultPanels])
+  // Subject ACTIVITY — the newest read on record per subject, off the same
+  // reads the rail's Subjects section already holds (one cache entry each).
+  const { verdicts } = useCountryVerdicts()
+  const { desks } = useSupplyChainDesks()
+  const subjects = useSubjectIndex()
+  // RA-1: a reader is never offered the operator side (its reads are refused)
+  const readerOnly = useBelowContributor()
+  const activity = useMemo(() => {
+    const m = new Map<string, number>()
+    const note = (id: string, iso: string | null) => {
+      const t = iso ? Date.parse(iso) : NaN
+      if (id && Number.isFinite(t) && t > (m.get(id) ?? -Infinity)) m.set(id, t)
+    }
+    for (const v of verdicts.values()) note(v.targetId, v.producedAt)
+    for (const d of desks) note(d.targetId, d.latestFindingAt)
+    return m
+  }, [verdicts, desks])
 
-  // The full index: workspaces ∪ records ∪ panels ∪ presets ∪ investigate actions.
+  // The full index — every family compiles to drive actions (or, for a case,
+  // to a replay through the player; for a command, to its shell handler).
   const allEntries = useMemo(
     () => [
-      ...workspaceEntries(onSwitchWorkspace),
-      ...recordEntries(
-        records,
-        onOpenBound,
-        onSelectRecord,
-        onInvestigateTarget,
-        onInvestigateAnalyst,
-      ),
-      ...panelEntries(mode, onOpen),
-      ...presetEntries(onApplyPreset),
+      ...surfaceEntries(onDrive, readerOnly),
+      ...caseEntries(cases),
+      ...recordEntries(records, onDrive, activity, subjects),
+      ...panelEntries(mode, onDrive, side, readerOnly),
+      ...(open ? commandEntries() : []),
     ],
-    [
-      records,
-      mode,
-      onOpen,
-      onOpenBound,
-      onSelectRecord,
-      onApplyPreset,
-      onSwitchWorkspace,
-      onInvestigateTarget,
-      onInvestigateAnalyst,
-    ],
+    [records, mode, onDrive, cases, open, activity, subjects, side, readerOnly],
   )
 
-  // Smart-default ranking: with no query, recents first, then favorites, then
-  // the rest — never an empty alphabetical wall. With a query, fuzzy-filter then
-  // float favorites to the top of the matches.
+  // The order (`orderPaletteEntries`): with no query, recents, favorites, then
+  // by FAMILY — subjects first by activity, paused sources last — never an
+  // alphabetical wall across families. With a query, scored, paused last.
   const filtered = useMemo(() => {
     // Prefix namespacing narrows the FAMILY before the match runs (`#` = the
-    // six workspaces, `>` = panels + layouts); the sigil itself is not part of
-    // the query. Unprefixed behaviour is exactly as it was.
+    // surfaces, `>` = panels + commands); the sigil itself is not part of the
+    // query.
     const { prefix, rest } = parsePalettePrefix(query)
-    const allEntriesInScope = prefix
-      ? allEntries.filter((e) => PREFIX_FAMILIES[prefix].has(e.entryKind))
-      : allEntries
-    if (!rest) {
-      const recents = loadRecents()
-      const recentRank = new Map(recents.map((id, i) => [id, i]))
-      return allEntriesInScope.slice().sort((a, b) => {
-        const ra = recentRank.has(a.key) ? recentRank.get(a.key)! : Infinity
-        const rb = recentRank.has(b.key) ? recentRank.get(b.key)! : Infinity
-        if (ra !== rb) return ra - rb
-        const fa = favorites.has(a.key) ? 0 : 1
-        const fb = favorites.has(b.key) ? 0 : 1
-        if (fa !== fb) return fa - fb
-        return a.label.localeCompare(b.label)
-      })
-    }
-    // Scored match: rank by HOW each entry matched (exact > prefix > word-
-    // boundary > substring > subsequence), best of the label vs the search
-    // haystack. Ties break on favorites, then label.
-    const scored = allEntriesInScope
-      .map((e) => ({ e, score: Math.max(scoreMatch(rest, e.label), scoreMatch(rest, e.search)) }))
-      .filter((x) => x.score > 0)
-    scored.sort((a, b) => {
-      if (a.score !== b.score) return b.score - a.score
-      const fa = favorites.has(a.e.key) ? 0 : 1
-      const fb = favorites.has(b.e.key) ? 0 : 1
-      if (fa !== fb) return fa - fb
-      return a.e.label.localeCompare(b.e.label)
-    })
-    return scored.map((x) => x.e)
+    const inScope = prefix ? allEntries.filter((e) => PREFIX_FAMILIES[prefix].has(e.entryKind)) : allEntries
+    return orderPaletteEntries(inScope, rest, { recents: rest ? [] : loadRecents(), favorites })
   }, [allEntries, query, favorites])
 
-  // Reset transient state each time the palette opens, and focus the input.
+  // Reset transient state each time the palette opens. (Focus is the
+  // dialog's job: `onOpenAutoFocus` below puts it in the search box.)
   useEffect(() => {
     if (!open) return
     setQuery('')
     setActive(0)
     setFavorites(loadFavorites())
-    const id = window.requestAnimationFrame(() => inputRef.current?.focus())
-    return () => window.cancelAnimationFrame(id)
   }, [open])
 
   // Keep the active index in range as the filtered list shrinks.
@@ -370,8 +525,6 @@ export function CommandPalette({
     const el = listRef.current?.querySelector<HTMLElement>(`[data-index="${active}"]`)
     el?.scrollIntoView({ block: 'nearest' })
   }, [active, open])
-
-  if (!open) return null
 
   function choose(entry: PaletteEntry | undefined, useAlt: boolean) {
     if (!entry) return
@@ -387,12 +540,8 @@ export function CommandPalette({
     setFavorites(loadFavorites())
   }
 
+  // The LIST keys. Escape, Tab and the backdrop belong to the Dialog.
   function onKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      onClose()
-      return
-    }
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       setActive((a) => Math.min(filtered.length - 1, a + 1))
@@ -410,23 +559,25 @@ export function CommandPalette({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center pt-[12vh] bg-black/50"
-      role="presentation"
-      data-testid="command-palette-backdrop"
-      onMouseDown={(e) => {
-        // Backdrop click (not a click inside the panel) closes.
-        if (e.target === e.currentTarget) onClose()
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onClose()
       }}
     >
-      <div
-        role="dialog"
-        aria-label="Command palette"
-        aria-modal="true"
+      <DialogContent
+        overlayTestId="command-palette-backdrop"
         data-testid="command-palette"
-        className="w-[34rem] max-w-[90vw] rounded-lg border border-line bg-surf-base shadow-2xl overflow-hidden"
+        aria-describedby={undefined}
+        className="top-[12vh] w-[36rem] max-w-[90vw] translate-y-0 overflow-hidden"
+        onOpenAutoFocus={(e) => {
+          // Into the search box, not the first favorite star.
+          e.preventDefault()
+          inputRef.current?.focus()
+        }}
         onKeyDown={onKeyDown}
       >
+        <DialogTitle className="sr-only">Command palette</DialogTitle>
         <input
           ref={inputRef}
           value={query}
@@ -434,8 +585,8 @@ export function CommandPalette({
             setQuery(e.target.value)
             setActive(0)
           }}
-          placeholder="Jump to a target, analyst, source, panel… (# workspaces, > panels)"
-          aria-label="Search records, panels, and workspaces"
+          placeholder="Jump to a subject, record, view, case… (# surfaces, > views & commands)"
+          aria-label="Search records, views and surfaces"
           data-testid="command-palette-input"
           className="w-full bg-surf-1 px-4 py-3 text-body text-ink-1 placeholder:text-ink-3 outline-none border-b border-line"
         />
@@ -464,7 +615,7 @@ export function CommandPalette({
                 data-testid={`command-palette-fav-${entry.key}`}
                 onClick={(e) => onToggleFavorite(entry, e)}
                 className={cn(
-                  'shrink-0 ml-3 rounded p-0.5 focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]',
+                  'shrink-0 ml-3 rounded-control p-0.5',
                   favorites.has(entry.key)
                     ? 'text-amber-300'
                     : 'text-ink-3 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-ink-1',
@@ -476,6 +627,7 @@ export function CommandPalette({
                 type="button"
                 data-testid={`command-palette-item-${entry.key}`}
                 data-entry-kind={entry.entryKind}
+                data-family={entry.family}
                 onMouseEnter={() => setActive(i)}
                 onClick={(e) => choose(entry, e.metaKey || e.ctrlKey)}
                 className="flex flex-1 min-w-0 items-center gap-3 py-2 pl-2 pr-4 text-left text-body"
@@ -489,12 +641,12 @@ export function CommandPalette({
           ))}
         </ul>
         <div className="flex items-center justify-between px-4 py-2 text-label text-ink-3 border-t border-line">
-          <span>↑↓ navigate · ↵ open/select · ⌘↵ panel · # workspace · ★ favorite · esc</span>
+          <span>↑↓ navigate · ↵ open/select · ⌘↵ view · # surface · ★ favorite · esc</span>
           <span>
             {filtered.length} result{filtered.length === 1 ? '' : 's'}
           </span>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

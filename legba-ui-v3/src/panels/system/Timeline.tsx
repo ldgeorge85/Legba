@@ -18,10 +18,19 @@
  * Data: `GET /api/v1/v3/timeline?target_id=&days=` (added for this panel — no
  * existing read carries validity windows or supersession edges). Desk-scoped to
  * the unified selection's target; click a bar → `selectRow` into the Inspector.
+ *
+ * ONE CLOCK (UI-D1 D6, UI-B1/shell). The axis FOLLOWS the shared window —
+ * `useWorldState`'s, the map's and the scrubber's, the only writer of "when".
+ * Zoom, pan, fit and the selection re-centre are a VIEW LENS over it: they move
+ * this axis only and never write the shared window, and a visible "re-centre"
+ * control drops the lens back onto the shared window. A new shared window (a
+ * mission, a case's `timeline` step, the scrubber) drops the lens too. The
+ * day-window select is the FETCH depth, widened automatically to cover the
+ * shared window — never a second clock.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { HelpCircle, Maximize2, ZoomIn, ZoomOut } from 'lucide-react'
+import { Crosshair, HelpCircle, Maximize2, ZoomIn, ZoomOut } from 'lucide-react'
 import { PanelChrome } from '@/components/PanelChrome'
 import { ProvenanceCard } from '@/components/ProvenanceCard'
 import { useDockviewTileRedraw } from '@/components/useTileRedraw'
@@ -31,6 +40,9 @@ import { useSelection, selectRow } from '@/state/selection'
 import { useScope } from '@/state/scope'
 import type { ProvenanceFacts } from '@/lib/provenance'
 import type { PanelProps } from '@/types'
+import { useCasePlayer } from '@/state/casePlayer'
+import { useWorldState } from '@/v4/world/worldState'
+import { caseTimelineDomain, daysCovering } from '@/lib/caseModel'
 import {
   KIND_COLOR,
   LANE_LABEL,
@@ -138,8 +150,21 @@ export default function TimelinePanel({ registration }: PanelProps) {
       : selection?.kind === 'target'
         ? (selection.label ?? selection.id)
         : undefined
-  const [days, setDays] = useState<number>(30)
+  // The FETCH depth the operator chose; the fetch widens to cover the shared
+  // window whatever this says (see `days` below).
+  const [depth, setDepth] = useState<number>(30)
   const [showProvenance, setShowProvenance] = useState(false)
+
+  // THE ONE CLOCK — the shared window, centred on a case's `at` while a case
+  // drives the clock (the player sets `clockDrive` from a `timeline` step).
+  const clockDrive = useCasePlayer((s) => s.clockDrive)
+  const worldStart = useWorldState((s) => s.windowStartMs)
+  const worldEnd = useWorldState((s) => s.windowEndMs)
+  const sharedDomain = useMemo<[number, number]>(
+    () => caseTimelineDomain(worldStart, worldEnd, clockDrive?.atMs ?? null),
+    [worldStart, worldEnd, clockDrive],
+  )
+  const days = Math.max(depth, daysCovering(sharedDomain[0], Date.now(), DAY_OPTIONS))
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['system-timeline', targetId ?? 'all', days],
@@ -160,12 +185,16 @@ export default function TimelinePanel({ registration }: PanelProps) {
     [shaped, data],
   )
 
-  // The visible (zoom/pan) domain — re-fit whenever the underlying fit changes
-  // (new data / new scope / new window).
-  const [domain, setDomain] = useState<[number, number] | undefined>(fitDomain)
+  // THE VIEW LENS — zoom / pan / fit / the selection re-centre. Null = the
+  // axis IS the shared window. The lens is local state and nothing below ever
+  // writes `useWorldState`: a lens is how this tile looks, not when the wall is.
+  const [lens, setLens] = useState<[number, number] | null>(null)
+  const domain: [number, number] = lens ?? sharedDomain
+  // A new shared window (whoever wrote it) drops the lens — the clock moved,
+  // so the axis follows it.
   useEffect(() => {
-    setDomain(fitDomain)
-  }, [fitDomain])
+    setLens(null)
+  }, [sharedDomain])
 
   // FOCUS centers the window (design §3.1). Before this, a selection inside the
   // visible window produced NO visual reaction at all, and a selected record
@@ -179,9 +208,8 @@ export default function TimelinePanel({ registration }: PanelProps) {
     const item = shaped.find((it) => it.id === selection.id)
     const centre = item ? (item.startMs + item.endMs) / 2 : (selection.preview?.ts ?? null)
     if (centre == null || !Number.isFinite(centre)) return
-    setDomain((cur) => {
-      const base = cur ?? fitDomain
-      if (!base) return cur
+    setLens((cur) => {
+      const base = cur ?? sharedDomain
       const span = base[1] - base[0]
       // Already comfortably inside the window? Leave the operator's pan alone —
       // re-centering on every click would make the axis jitter under a read.
@@ -189,7 +217,7 @@ export default function TimelinePanel({ registration }: PanelProps) {
       if (centre >= base[0] + pad && centre <= base[1] - pad) return cur
       return [centre - span / 2, centre + span / 2]
     })
-  }, [selection, shaped, fitDomain])
+  }, [selection, shaped, sharedDomain])
 
   const [wrapRef, width] = useElementWidth<HTMLDivElement>()
   const plotW = Math.max(0, width - GUTTER)
@@ -199,30 +227,26 @@ export default function TimelinePanel({ registration }: PanelProps) {
   // remeasure once the tile actually becomes visible.
   const redrawTick = useDockviewTileRedraw()
 
-  const vis = useMemo(
-    () => (domain ? visibleItems(shaped, domain) : shaped),
-    [shaped, domain],
-  )
+  const vis = useMemo(() => visibleItems(shaped, domain), [shaped, domain])
 
   // --- interaction: wheel-zoom about the cursor, drag-pan, click-select ---
   const dragRef = useRef<{ startX: number; startDomain: [number, number]; moved: boolean } | null>(null)
 
   const onWheel = useCallback(
     (e: React.WheelEvent) => {
-      if (!domain || plotW <= 0) return
+      if (plotW <= 0) return
       e.preventDefault()
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
       const px = e.clientX - rect.left - GUTTER
       const pivot = Math.max(0, Math.min(1, px / plotW))
       const factor = e.deltaY > 0 ? 1.25 : 1 / 1.25
-      setDomain(zoomDomain(domain, factor, pivot))
+      setLens(zoomDomain(domain, factor, pivot))
     },
     [domain, plotW],
   )
 
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      if (!domain) return
       dragRef.current = { startX: e.clientX, startDomain: domain, moved: false }
     },
     [domain],
@@ -235,7 +259,7 @@ export default function TimelinePanel({ registration }: PanelProps) {
       if (Math.abs(dx) > DRAG_THRESHOLD) d.moved = true
       const span = d.startDomain[1] - d.startDomain[0]
       const deltaMs = -(dx / plotW) * span
-      setDomain(panDomain(d.startDomain, deltaMs))
+      setLens(panDomain(d.startDomain, deltaMs))
     },
     [plotW],
   )
@@ -257,12 +281,11 @@ export default function TimelinePanel({ registration }: PanelProps) {
   }, [])
 
   const zoomBtn = (factor: number) => {
-    if (!domain) return
-    setDomain(zoomDomain(domain, factor, 0.5))
+    setLens(zoomDomain(domain, factor, 0.5))
   }
 
   const totalShown = shaped.length
-  const span = domain ? domain[1] - domain[0] : 0
+  const span = domain[1] - domain[0]
   const scopeText = targetId ? `desk ${targetLabel}` : 'all desks'
 
   // P4-5 — the reusable ProvenanceCard describing THIS panel's data lineage
@@ -291,10 +314,10 @@ export default function TimelinePanel({ registration }: PanelProps) {
         <div className="flex items-center gap-1">
           <select
             value={days}
-            onChange={(e) => setDays(Number(e.target.value))}
+            onChange={(e) => setDepth(Number(e.target.value))}
             className="rounded border border-line bg-surf-1 px-1 py-0.5 text-label text-ink-2"
-            title="window (days)"
-            aria-label="timeline window in days"
+            title="how far back to load (days) — at least the shared window"
+            aria-label="timeline load depth in days"
             data-testid="timeline-days"
           >
             {DAY_OPTIONS.map((d) => (
@@ -325,13 +348,28 @@ export default function TimelinePanel({ registration }: PanelProps) {
           </button>
           <button
             type="button"
-            onClick={() => setDomain(fitDomain)}
+            onClick={() => fitDomain && setLens(fitDomain)}
             className="rounded border border-line p-1 text-ink-2 hover:border-line-strong hover:text-ink-1"
-            title="fit to data"
+            title="fit to data (a view lens — the shared window does not move)"
             aria-label="fit timeline to data"
             data-testid="timeline-fit"
           >
             <Maximize2 className="h-3.5 w-3.5" aria-hidden />
+          </button>
+          <button
+            type="button"
+            onClick={() => setLens(null)}
+            disabled={lens === null}
+            className={`flex items-center gap-1 rounded border border-line px-1 py-0.5 text-label ${
+              lens === null ? 'text-ink-3' : 'text-ink-1 hover:border-line-strong'
+            }`}
+            title="re-centre on the shared window (the map's and the scrubber's)"
+            aria-label="re-centre on the shared window"
+            data-testid="timeline-recentre"
+            data-lens={lens === null ? 'off' : 'on'}
+          >
+            <Crosshair className="h-3.5 w-3.5" aria-hidden />
+            {lens === null ? 'shared window' : 're-centre'}
           </button>
           <button
             type="button"
@@ -384,8 +422,15 @@ export default function TimelinePanel({ registration }: PanelProps) {
             onMouseLeave={endDrag}
             style={{ cursor: dragRef.current?.moved ? 'grabbing' : 'grab' }}
           >
-            {domain && plotW > 0 && (
-              <svg width={width} height={svgH} role="img" aria-label="validity-window timeline">
+            {plotW > 0 && (
+              <svg
+                width={width}
+                height={svgH}
+                role="img"
+                aria-label="validity-window timeline"
+                data-testid="timeline-svg"
+                data-domain={`${Math.round(domain[0])}:${Math.round(domain[1])}`}
+              >
                 {/* lane bands + labels */}
                 {LANE_ORDER.map((kind, lane) => (
                   <g key={kind}>

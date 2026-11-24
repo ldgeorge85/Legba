@@ -75,6 +75,8 @@ import { ArrowDownToLine, EyeOff, Eye, FilePlus2 } from 'lucide-react'
 import { PanelChrome } from '@/components/PanelChrome'
 import { SeverityBadge } from '@/components/SeverityBadge'
 import { VerdictBadge } from '@/components/VerdictBadge'
+import { isVerifyExemptState, unverifiedStateOf, type UnverifiedInfo } from '@/lib/unverifiedState'
+import UnverifiedMark from '@/v4/read/UnverifiedMark'
 import CitedProse from '@/components/CitedProse'
 import { FeedFilterBar, type DeskOption } from '@/components/FeedFilterBar'
 import { extractCitations } from '@/lib/citationsModel'
@@ -166,6 +168,14 @@ function severityRailClass(severity: string | null | undefined): string {
     default:
       return 'border-l-line'
   }
+}
+
+/** X4 READPATH — a feed finding's unverified state, unless the row is
+ *  verify-exempt (its VerdictBadge already says so). */
+function feedUnverified(row: UnifiedRow): UnverifiedInfo | null {
+  if (row.verify_exempt) return null
+  const info = unverifiedStateOf(row)
+  return info && !isVerifyExemptState(info) ? info : null
 }
 
 function stampFinding(r: FindingRestRow): UnifiedRow {
@@ -347,11 +357,12 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
       exactAnalysts,
     })
     for (const [k, v] of Object.entries(pushed)) p.set(k, v)
+    p.set('fields', 'full') // the feed stamps data, body, lineage and the verify folds
     return p
   }, [scope, filter, exactTargets, exactAnalysts])
 
   const signalsParams = useMemo(() => {
-    const p = new URLSearchParams({ limit: '50' })
+    const p = new URLSearchParams({ limit: '50', fields: 'full' })
     for (const [k, v] of Object.entries(scopeParams(scope))) p.set(k, v)
     const pushed = serverFilterParams(filter, { supports: SIGNALS_SERVER_FACETS, exactTargets })
     for (const [k, v] of Object.entries(pushed)) p.set(k, v)
@@ -968,6 +979,7 @@ function FeedCard({
 }) {
   const isSignal = row.source === 'signal'
   const hasPreview = feedPreview(row.body).length > 0
+  const unverified = isSignal ? null : feedUnverified(row)
   return (
     <button
       onClick={onOpen}
@@ -999,22 +1011,25 @@ function FeedCard({
             signal
           </span>
         )}
-        <span className="min-w-0 flex-1 truncate font-semibold text-ink-1" title={row.title ?? ''}>
+        {/* The headline may take TWO lines (X4/D4, W11-F74): one truncated line
+            in the feed's 300 px column showed ~20 characters of an 80-character
+            headline. Rows are measured (`measureElement`), so the height is free. */}
+        <span
+          className="min-w-0 flex-1 break-words font-semibold text-ink-1 line-clamp-2"
+          title={row.title ?? ''}
+          data-testid={`feed-headline-${row.id}`}
+        >
           {row.title}
         </span>
         {row.severity && (
           <SeverityBadge severity={row.severity as Severity} className="shrink-0 self-center" />
         )}
-        <span
-          className="shrink-0 self-center text-label text-ink-3"
-          title={new Date(row.produced_at).toLocaleString()}
-        >
-          {relativeTime(row.produced_at)}
-        </span>
         {!isSignal && <FeedAddToExport id={row.id} title={row.title} />}
       </div>
 
-      {/* meta line */}
+      {/* meta line — the AGE rides here, right-aligned, not on the headline
+          line (X4/D4, W11-F74: the badge shared the line and cut headlines at
+          ~20 characters in the feed's 300 px column). */}
       <div className="mt-0.5 flex items-center gap-2 overflow-hidden whitespace-nowrap text-label text-ink-3">
         {isSignal ? (
           <>
@@ -1045,6 +1060,13 @@ function FeedCard({
             )}
           </>
         )}
+        <span
+          className="ml-auto shrink-0 pl-1 tabular-nums"
+          title={new Date(row.produced_at).toLocaleString()}
+          data-testid={`feed-age-${row.id}`}
+        >
+          {relativeTime(row.produced_at)}
+        </span>
       </div>
 
       {/* verdict — findings only (signals are raw intake, not verify-assessed) */}
@@ -1054,6 +1076,10 @@ function FeedCard({
               stops a tap on either InfoTip chip from also bubbling into
               onOpen (see InfoTip's interactive-parent mode doc). */}
           <VerdictBadge verdict={verdict} interactiveParent />
+          {/* X4 READPATH — no verify verdict: the registry's pending|absent
+              state, not a plain row (a verify-EXEMPT row's badge already
+              reads `unverified — structural`). */}
+          {unverified && <UnverifiedMark info={unverified} className="ml-1.5" />}
         </div>
       )}
 

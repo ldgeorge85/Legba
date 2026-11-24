@@ -43,6 +43,7 @@ from legba.data.analysts.competing_hypotheses import (
     _resolve_topic_entities,
     _score_consistency,
     _score_consistency_matrix_llm,
+    _status_for,
     _thesis_direction,
     _thesis_is_status_quo,
     build_ach_matrix,
@@ -285,6 +286,154 @@ async def test_llm_matrix_scorer_falls_back_on_unparsable_output():
     deps = ACHDeps(llm=llm)
     cells, _ = await _score_consistency_matrix_llm(deps, hypotheses=hyps, evidence=evidence)
     assert cells is None
+
+
+# ---------------------------------------------------------------------------
+# W11-F139 — diagnosticity_mode: shared support is divided, refutation kept
+# ---------------------------------------------------------------------------
+
+
+def _cells_to_map(rows: list[list[int]]) -> dict[tuple[int, int], int]:
+    """{(ev_idx, h_idx): consistency} for a row-major cell table."""
+    return {
+        (e, h): v for e, row in enumerate(rows) for h, v in enumerate(row)
+    }
+
+
+# The lane's Done-test fixture: 3 hypotheses x 6 evidence — 2 items consistent
+# with ALL three hypotheses, 2 consistent with TWO, 2 unique (one of which
+# also refutes a rival, exercising the unchanged refutation path).
+_SHARED3_HYPS = [
+    {"thesis": "H0", "counter_thesis": "not-H0"},
+    {"thesis": "H1", "counter_thesis": "not-H1"},
+    {"thesis": "H2", "counter_thesis": "not-H2"},
+]
+_SHARED3_EVIDENCE = [
+    {"id": f"ev-{i}", "kind": "fact", "text": f"item {i}", "polarity": 0}
+    for i in range(6)
+]
+_SHARED3_CELLS = [
+    [1, 1, 1],   # e0 — consistent with all three
+    [1, 1, 1],   # e1 — consistent with all three
+    [1, 1, 0],   # e2 — consistent with H0 + H1 only
+    [1, 1, 0],   # e3 — consistent with H0 + H1 only
+    [1, -1, 0],  # e4 — unique support for H0, refutes H1
+    [0, 0, 1],   # e5 — unique support for H2
+]
+
+
+def test_shared_mode_done_fixture_scores_as_the_note_says():
+    """3 hypotheses x 6 items (2 shared by all, 2 shared by two, 2 unique)
+    under the DEFAULT `shared` mode — the design note's table."""
+    ach = build_ach_matrix(
+        _SHARED3_HYPS, _SHARED3_EVIDENCE,
+        cell_scores=_cells_to_map(_SHARED3_CELLS),
+    )
+    assert ach["diagnosticity_mode"] == "shared"
+    # Per-item diagnosticity is exposed: consistent_with / weight per row.
+    assert [m["consistent_with"] for m in ach["matrix"]] == [3, 3, 2, 2, 1, 1]
+    assert [m["weight"] for m in ach["matrix"]] == [
+        round(1 / 3, 4), round(1 / 3, 4), 0.5, 0.5, 1.0, 1.0,
+    ]
+    # H0 = 2*(1/3) + 2*(1/2) + 1 = 2.667 -> 3
+    # H1 = 2*(1/3) + 2*(1/2) - 0.5 (e4's refutation, diag .5) = 1.167 -> 1
+    # H2 = 2*(1/3) + 1 = 1.667 -> 2
+    assert ach["balance"] == [3, 1, 2]
+    assert ach["lead_index"] == 0
+    assert _status_for(hypothesis_index=0, ach=ach) == "confirmed"
+    # H2 sits AT +K but is not the lead — only the lead auto-confirms.
+    assert _status_for(hypothesis_index=1, ach=ach) == "active"
+    assert _status_for(hypothesis_index=2, ach=ach) == "active"
+    # The per-evidence map the hypothesis row's data carries.
+    ed = ach["evidence_diagnosticity"]
+    assert ed["ev-0"] == {"consistent_with": 3, "weight": round(1 / 3, 4)}
+    assert ed["ev-3"] == {"consistent_with": 2, "weight": 0.5}
+    assert ed["ev-4"] == {"consistent_with": 1, "weight": 1.0}
+    assert ed["ev-5"] == {"consistent_with": 1, "weight": 1.0}
+
+
+def test_off_mode_reproduces_pre_f139_scoring_exactly():
+    """`diagnosticity_mode: off` = the pre-W11-F139 numbers, goldened before
+    the change (spread-weighted sign counts over diagnostic items only)."""
+    ach = build_ach_matrix(
+        _SHARED3_HYPS, _SHARED3_EVIDENCE,
+        cell_scores=_cells_to_map(_SHARED3_CELLS),
+        diagnosticity_mode="off",
+    )
+    assert ach["diagnosticity_mode"] == "off"
+    # Golden: e0/e1 are non-diagnostic (spread 0 → nothing); e2/e3 (diag .25)
+    # bank +.25 each in H0/H1; e4 (diag .5) banks +.5 in H0 / -.5 in H1;
+    # e5 (diag .25) banks +.25 in H2.  => [1, 0, 0].
+    assert ach["balance"] == [1, 0, 0]
+    # consistent_with/weight are still EXPOSED — they just don't drive balance.
+    assert [m["consistent_with"] for m in ach["matrix"]] == [3, 3, 2, 2, 1, 1]
+
+
+def test_shared_mode_drops_shared_consensus_below_confirm():
+    """The US-frame defect shape: two rival theses ("bounded strike +
+    mediation" and "broader campaign post-vote") were both carried over +K by
+    the SAME evidence indices with zero refutations — consistency, not
+    diagnosticity, drove the score. `off` reproduces it (campaign at +K);
+    `shared` drops campaign below the confirm threshold while bounded — the
+    row with unique support — stays over it."""
+    hyps = [
+        {"thesis": "bounded strike + mediation", "counter_thesis": "wider campaign"},
+        {"thesis": "broader campaign post-vote", "counter_thesis": "bounded only"},
+        {"thesis": "no strike / status quo", "counter_thesis": "strike imminent"},
+    ]
+    labels = [
+        "carrier strike group posture", "96 h readiness", "cargo to Israel",
+        "blockade sorties", "Qeshm activity",
+        "mediation channel opens", "strike package scoped",
+    ]
+    evidence = [
+        {"id": f"us-{i}", "kind": "fact", "text": labels[i], "polarity": 0}
+        for i in range(7)
+    ]
+    cells = _cells_to_map(
+        # 5 items consistent with BOTH theses (+2/+2), refuting the third —
+        # the shared evidence the defect banked twice…
+        [[2, 2, -1]] * 5
+        # …plus 2 items consistent with bounded ALONE, refuting both rivals.
+        + [[2, -1, -1]] * 2
+    )
+
+    off = build_ach_matrix(
+        hyps, evidence, cell_scores=cells, diagnosticity_mode="off",
+    )
+    # The defect, goldened: campaign reaches +K on shared evidence alone
+    # (balance 2 >= CONFIRM_K) — over-threshold with zero refutations.
+    assert off["balance"] == [5, 2, -5]
+    assert off["balance"][1] >= CONFIRM_K
+
+    shared = build_ach_matrix(hyps, evidence, cell_scores=cells)
+    # shared: the 5 shared items bank 1/2 each (2.5); the 2 unique items bank
+    # +1 each in bounded and -0.75 (diag) in each rival.
+    #   bounded  = 2.5 + 2     = 4.5  -> 4   (still >= +K — the lead holds)
+    #   campaign = 2.5 - 1.5   = 1.0  -> 1   (below +K -> active)
+    #   quo      = -3.75 - 1.5 = -5.25 -> -5 (refuted — refutation path kept)
+    assert shared["balance"] == [4, 1, -5]
+    assert _status_for(hypothesis_index=0, ach=shared) == "confirmed"
+    assert _status_for(hypothesis_index=1, ach=shared) == "active"
+    assert _status_for(hypothesis_index=2, ach=shared) == "refuted"
+    assert shared["balance"][1] < CONFIRM_K
+
+
+def test_diagnosticity_mode_declared_in_option_catalog():
+    """The knob must be declared in ANALYST_KIND_OPTIONS before a descriptor
+    can set it (the catalog IS the contract): a str option over shared|off."""
+    from legba.data.option_catalog.handler_options import ANALYST_KIND_OPTIONS
+
+    specs = {
+        sp.name: sp for sp in ANALYST_KIND_OPTIONS["competing_hypotheses"]
+    }
+    spec = specs["diagnosticity_mode"]
+    assert spec.kind == "str"
+    assert set(spec.choices or ()) == {"shared", "off"}
+    ok, _, _ = spec.validate("off")
+    assert ok
+    ok, _, cause = spec.validate("bogus")
+    assert not ok and cause
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:lens_isolationist": {
+      "source": "analyst_lens_isolationist.yaml",
+      "state": "draft"
+    }
+  }
+}

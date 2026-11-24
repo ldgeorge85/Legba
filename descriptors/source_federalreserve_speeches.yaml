@@ -1,0 +1,77 @@
+# X-1 source expansion (2026-11-14) — draft SourceDescriptor. Ships DRAFT;
+# the reference host walks it to CONFIGURED (descriptors/LIFECYCLE.md), never
+# active — activation is the owner's call per source.
+#
+# US Federal Reserve Board — speeches by Board members (the press-release feed
+# is a separate catalog entry). The US central bank's own publication:
+# OFFICIAL; central-bank signalling between decisions.
+# Checked 2026-11-14 by the source-expansion review (one GET, generic client
+# identity): HTTP 200, text/xml, 15 items, newest 2026-11-14 00:00 UTC, oldest
+# 2026-09-28 — about two a week. Every six hours is ample.
+#
+# Language: en. Region: United States — the declared US is the
+# publisher-origin FALLBACK only.
+#
+# robots.txt returned 404 (no rules). Credibility:
+# federalreserve.gov already seeded by the profile's source catalog
+# (0.90 / gov) — no new row.
+#
+# First poll: the default first-poll age cap (30 days).
+
+identity:
+  id: source.federalreserve.speeches
+  name: US Federal Reserve Board — speeches
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: x1_source_expansion
+  created: "2026-11-14T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [US]
+  languages: [en]
+  tags: [central_banks, monetary_policy, gov, finance, economic, us]
+  source_class: official
+  license_class: public_domain    # Board website: public domain unless indicated
+  access_class: public            # free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "53 */6 * * *"
+  cooldown_seconds: 300
+  jitter_seconds: 120
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.federalreserve.gov/feeds/speeches.xml"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

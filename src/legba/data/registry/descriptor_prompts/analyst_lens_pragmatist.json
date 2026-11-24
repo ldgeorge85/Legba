@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:lens_pragmatist": {
+      "source": "analyst_lens_pragmatist.yaml",
+      "state": "draft"
+    }
+  }
+}

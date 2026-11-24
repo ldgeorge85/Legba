@@ -836,3 +836,36 @@ def test_correctness_badge_never_prints_a_fake_number():
     )
     assert unmeasured.startswith("correctness unmeasured (0 decided)")
     assert "100" not in unmeasured
+
+
+@pytest.mark.asyncio
+async def test_claims_ledger_spans_are_an_admins_ra1(client, pg, monkeypatch):
+    """RA-1: the route is a reader's; with `?claims=1` a resolved non-admin
+    caller gets the ledger WITHOUT the decisive spans (they quote the
+    reference text). The top class still gets them."""
+    from legba.data.registry import route_roles as rr
+
+    monkeypatch.setenv(rr.ROLE_OVERRIDE_ENV, "1")
+    target_id = _target("claims-ra1")
+    now = datetime.now(timezone.utc)
+    ref = await _insert_reference(
+        pg, target_id=target_id,
+        window_start=now - timedelta(days=14), window_end=now + timedelta(days=1),
+    )
+    unit = await _insert_unit(
+        pg, target_id=target_id, reference_id=ref,
+        analyst_id="internal_stability", as_of=now,
+        n_contains=1, n_contradicts=0, n_silent=0, n_split=0, n_unparseable=0,
+    )
+    await _insert_claim(
+        pg, correctness_id=unit, claim_id="DR-cccccccc", adjudicated="contains",
+        spans={"F0": {"decisive_span": "a reference quote"}},
+    )
+    reader = (await client.get(_url(target_id, claims=1),
+                               headers={rr.ROLE_HEADER: "read"})).json()
+    claim = reader["data"][0]["claims"][0]
+    assert claim["spans"] == {} and claim["adjudicated"] == "contains"
+    assert "a reference quote" not in json.dumps(reader)
+    admin = (await client.get(_url(target_id, claims=1),
+                              headers={rr.ROLE_HEADER: "operator"})).json()
+    assert admin["data"][0]["claims"][0]["spans"]["F0"]["decisive_span"] == "a reference quote"

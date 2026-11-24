@@ -13,7 +13,9 @@ The contract (spec §4.2 rules 4–6):
     refuses with HTTP 409 and a machine-readable ``detail.state`` naming
     exactly one of ``projection_disabled`` (``LEGBA_GRAPH_PROJECTION`` off —
     the table is never built), ``projection_empty`` (built but holding no
-    arcs — including a projection whose migration has not yet run), or
+    arcs — including a projection whose migration has not yet run),
+    ``projection_rebuilding`` (P-7: the receipt names a build but the
+    unlogged table was emptied by crash recovery), or
     ``projection_stale`` (``projected_at`` older than
     ``LEGBA_GRAPH_PROJECTION_MAX_AGE_SECONDS``). An empty *neighbourhood* on a
     healthy projection is a 200 with ``arcs: []`` — a node that has no arcs
@@ -219,9 +221,12 @@ def _ego_sql(
         elif direction == "in":
             where.append(f"a.to_kind = ${kp} AND a.to_id = ${ip}")
         else:
+            # Parenthesised as ONE term (roll 84, found by P-7): bare, the OR
+            # bound looser than the AND-joined plane and time filters, so
+            # every plane's incoming arcs leaked into the result.
             where.append(
-                f"(a.from_kind = ${kp} AND a.from_id = ${ip}) "
-                f"OR (a.to_kind = ${kp} AND a.to_id = ${ip})"
+                f"((a.from_kind = ${kp} AND a.from_id = ${ip}) "
+                f"OR (a.to_kind = ${kp} AND a.to_id = ${ip}))"
             )
     return _BASE_SELECT + " WHERE " + " AND ".join(where) + f" LIMIT {MAX_LIMIT}"
 
@@ -327,6 +332,11 @@ def build_graph_arcs_router(deps: RegistryAPIDeps) -> APIRouter:
                     "projection_stale": (
                         "projected_at is older than "
                         "LEGBA_GRAPH_PROJECTION_MAX_AGE_SECONDS"
+                    ),
+                    "projection_rebuilding": (
+                        "not yet projected: the receipt names a build but "
+                        "the unlogged table is empty (database crash "
+                        "recovery); the next projector tick rebuilds it"
                     ),
                 }.get(state, "projection unreadable")
                 raise _refuse(state, reason)

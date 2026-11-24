@@ -61,6 +61,8 @@ import math
 from dataclasses import dataclass
 from typing import Mapping
 
+from .unit_names import label_name_sql
+
 HARNESS_VERSION: str = "0.1.0"
 
 DEFAULT_WEIGHTS: Mapping[str, float] = {
@@ -84,7 +86,7 @@ SALIENCE_SATURATION: int = 500
 #: story a month to accumulate a second source.
 RETENTION_STALE_DAYS: int = 30
 
-#: The recommended bar. See docs/TYPING_BAKEOFF_2026-08-03.md for the measured
+#: The recommended bar. See docs/history/TYPING_BAKEOFF.md for the measured
 #: pool size at this and neighbouring settings.
 RECOMMENDED_BAR: float = 0.42
 
@@ -258,6 +260,8 @@ WITH cand AS (
       FROM cand c
       CROSS JOIN LATERAL unnest(c.derived_from) AS d(sig_id)
       JOIN signals s ON s.id = d.sig_id
+       -- C-1: a claim row never counts as an independent source.
+       AND COALESCE(s.payload->'claim'->>'source_class', '') <> 'claim'
 ), dedup AS (
     -- one row per (candidate, distinct content) — syndication collapsed
     SELECT DISTINCT ON (cid, content_key)
@@ -353,9 +357,11 @@ def weights_are_normalised(weights: Mapping[str, float] | None = None) -> bool:
 
 
 #: The active desks, as the score needs them. ``desk_names`` mirrors the Python
-#: derivation used by the K-G2 measurement: an L1 desk's subject is the part of
-#: its ``name`` after the em-dash ('G20 — Germany' → 'Germany'), plus the leading
-#: form of a comma-qualified ISO name ('Korea, Republic of' → 'Korea').
+#: derivation used by the K-G2 measurement: an L1 desk's subject is the NAME
+#: half of its display ``name`` ('G20 — Germany' → 'Germany' — the label's one
+#: parser, ``unit_names.label_name_sql``, profile-styled; W10 SUBJECT-1), plus
+#: the leading form of a comma-qualified ISO name ('Korea, Republic of' →
+#: 'Korea').
 DESK_CTES: str = """
 desk_geo AS (
     SELECT coalesce(array_agg(DISTINCT g), '{}') AS codes
@@ -365,9 +371,7 @@ desk_geo AS (
      WHERE td.is_head AND td.state = 'active' AND td.abstraction_level = 'L1'
 ), desk_subject AS (
     SELECT lower(btrim(
-             CASE WHEN td.name LIKE '%—%'
-                  THEN reverse(split_part(reverse(td.name), '—', 1))
-                  ELSE td.name END)) AS subject
+             """ + label_name_sql("td.name") + """)) AS subject
       FROM target_descriptors td
      WHERE td.is_head AND td.state = 'active' AND td.abstraction_level = 'L1'
 ), desk_names AS (
@@ -399,6 +403,8 @@ cand AS (
       FROM cand c
       CROSS JOIN LATERAL unnest(c.derived_from) AS d(sig_id)
       JOIN signals s ON s.id = d.sig_id
+       -- C-1: a claim row never counts as an independent source.
+       AND COALESCE(s.payload->'claim'->>'source_class', '') <> 'claim'
 ), dedup AS (
     SELECT DISTINCT ON (cid, content_key)
            cid, content_key, source_id, geo, fetched_at

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.bcb.selic_target": {
+      "source": "source_bcb_selic_target.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -98,7 +98,9 @@ def synthesis_system(base_system: str, final_sentinel: str) -> str:
         f"the FINAL reply — the {final_sentinel} line, its header lines, "
         "then your answer as markdown — using only what the tool calls "
         "already returned. Do not request more tools, and do not wrap the "
-        "answer in JSON."
+        "answer in JSON. List at most 30 cited_refs, each once, on one line, "
+        "then a blank line, then the answer prose — the answer prose is "
+        "required."
     )
 
 

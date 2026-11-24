@@ -30,7 +30,7 @@ from legba.data.analysts.deterministic import (
     SUB_HANDLERS,
 )
 from legba.data.analysts.deterministic_handlers import research_measurement as rm
-from legba.data.analysts.handler_options import known_option_names
+from legba.data.option_catalog.handler_options import known_option_names
 from legba.data.provenance.kinds import (
     STRUCTURAL_VERIFY_EXEMPT_ANALYSTS,
     OutputKind,

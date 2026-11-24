@@ -1,0 +1,86 @@
+# WORKED EXAMPLE (machinery only — not registered by any script, no live feed).
+#
+# The `keyword_gate` filter kind, STAGE form: a wide regulator press feed
+# narrowed at ingest to the handful of terms one case reads. The stage lives
+# under `pipeline.ingestion_filters`; SourceCore runs it on every entry the
+# handler yields BEFORE the baseline — so a dropped entry never reaches the
+# `pipeline.enrichment` chain (no NER / fact_extractor / geocode call), is never
+# written and never fanned out. The ingest-dedupe tiers in the same list are
+# not droppers (they alias-link after the write). `keyword_gate` is REFUSED
+# under `pipeline.enrichment` — that chain is annotate-only and could not drop.
+#
+# Decision per entry: any `exclude` term matches -> DROP (exclude wins);
+# `include` non-empty and unmatched -> DROP (`mode: any` = one term suffices,
+# `all` = every term required); else KEEP. Matching is whole-word,
+# Unicode-aware, case-insensitive by default ("iran" never matches
+# "Mirandola"); a multi-word phrase matches across any whitespace but not an
+# inflection ("export controls" needs its own entry). HTML tags are stripped.
+#
+# Drops are counted per source in its `cursor` state row
+# (keyword_filtered_total / _last_poll / _by_reason) and logged at DEBUG with
+# the term that dropped them — never the body.
+#
+# Validate exactly as the registrars do:
+#   SourceDescriptor.model_validate(yaml.safe_load(...), strict=False)
+
+identity:
+  id: source.example.keyword_gate_stage
+  name: Example — regulator press feed, keyword_gate stage
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: active
+  owner: example
+  created: "2026-10-03T00:00:00Z"
+
+scope:
+  owner_tenant: default
+  geo: []
+  languages: [en]
+  tags: [example, regulator]
+  source_class: official
+  access_class: public
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "*/30 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://regulator.example.org/press/rss.xml"
+
+pipeline:
+  ingestion_filters:
+    - kind: keyword_gate
+      config:
+        include: [sanctions, export control, export controls, entity list]
+        exclude: [job vacancy, office closure]
+        fields: [title, text, raw_body]   # payload fields scanned (default)
+        mode: any                         # any | all (applies to include)
+        case_insensitive: true            # default
+    - kind: dedupe_tier_1
+      config: {}
+    - kind: dedupe_tier_2
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

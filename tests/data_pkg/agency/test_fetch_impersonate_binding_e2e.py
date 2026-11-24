@@ -143,23 +143,44 @@ _OWNED_HOSTS: tuple[str, ...] = (
 )
 
 
+async def _scrub_owned(conn, restore_source_credibility_seed=None) -> None:
+    """Delete every row this file owns; at teardown put the migration's baseline back.
+
+    ``apnews.com`` (and ``www.reuters.com``) are migration-SEEDED hosts. The
+    file clears them and ``_clear_host`` writes a bare licence-only row in their
+    place; left behind, that row has no ``score_rationale`` and, because the
+    seed restore is ``ON CONFLICT DO NOTHING``, nothing downstream can repair
+    it -- ``test_filter_source_credibility.py::test_migration_seeds_canonical_
+    baseline`` read "apnews.com missing rationale" whenever it ran after this
+    file (shuffled nightly 10-12, seed 914357387). The restore runs at teardown,
+    so the file leaves the table as it found it.
+    """
+    like = [f"%//{h}/%" for h in _OWNED_HOSTS]
+    await conn.execute(
+        "DELETE FROM evidence_archive WHERE signal_id IN ("
+        "  SELECT id FROM signals WHERE canonical_url LIKE ANY($1::text[]))",
+        like,
+    )
+    await conn.execute(
+        "DELETE FROM signals WHERE canonical_url LIKE ANY($1::text[])", like,
+    )
+    await conn.execute(
+        "DELETE FROM source_credibility WHERE source_host = ANY($1::text[])",
+        list(_OWNED_HOSTS),
+    )
+    if restore_source_credibility_seed is not None:
+        await restore_source_credibility_seed(conn)
+
+
 @pytest_asyncio.fixture(autouse=True)
-async def _reset_db(dsn):
+async def _reset_db(dsn, restore_source_credibility_seed):
     async with _conn(dsn) as conn:
-        like = [f"%//{h}/%" for h in _OWNED_HOSTS]
-        await conn.execute(
-            "DELETE FROM evidence_archive WHERE signal_id IN ("
-            "  SELECT id FROM signals WHERE canonical_url LIKE ANY($1::text[]))",
-            like,
-        )
-        await conn.execute(
-            "DELETE FROM signals WHERE canonical_url LIKE ANY($1::text[])", like,
-        )
-        await conn.execute(
-            "DELETE FROM source_credibility WHERE source_host = ANY($1::text[])",
-            list(_OWNED_HOSTS),
-        )
-    yield
+        await _scrub_owned(conn)
+    try:
+        yield
+    finally:
+        async with _conn(dsn) as conn:
+            await _scrub_owned(conn, restore_source_credibility_seed)
 
 
 @pytest.fixture(autouse=True)
@@ -463,3 +484,21 @@ async def test_the_call_lands_in_action_pack_invocations(dsn, web):
         )
     assert rows, "no invocation ledger row — the bound tool never ran"
     assert rows[-1]["outcome"] == "completed"
+
+
+async def test_the_teardown_scrub_leaves_a_seeded_host_with_its_baseline_rationale(
+    dsn, restore_source_credibility_seed,
+):
+    """X4 NIGHTLY: ``apnews.com`` is a migration-seeded host. After this file's
+    ``_clear_host`` + teardown it must carry its seeded rationale again, not the
+    bare licence-only row the helper writes (which no ON CONFLICT DO NOTHING
+    restore can repair)."""
+    await _clear_host(dsn, "apnews.com")
+    async with _conn(dsn) as conn:
+        bare = await conn.fetchval(
+            "SELECT score_rationale FROM source_credibility WHERE source_host = 'apnews.com'")
+        assert bare is None  # the pollution, reproduced
+        await _scrub_owned(conn, restore_source_credibility_seed)
+        row = await conn.fetchrow(
+            "SELECT score, score_rationale FROM source_credibility WHERE source_host = 'apnews.com'")
+    assert row is not None and row["score"] >= 0.85 and row["score_rationale"]

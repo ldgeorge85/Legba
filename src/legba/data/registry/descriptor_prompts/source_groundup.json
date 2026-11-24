@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.groundup.news": {
+      "source": "source_groundup.yaml",
+      "state": "draft"
+    }
+  }
+}

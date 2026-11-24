@@ -32,6 +32,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from ..tags import BoundTag
 from ..sources._contract import InMemoryStateStore, SourceContext
 from .source_contract import CandidateSource, SourceCandidateValidation
 
@@ -42,11 +43,16 @@ logger = logging.getLogger(__name__)
 _DEFAULT_MAX_TRIAL_SIGNALS = 3
 
 
-def _build_probe_context(candidate: CandidateSource) -> SourceContext:
+def _build_probe_context(
+    candidate: CandidateSource, classification: tuple[BoundTag, ...] = (),
+) -> SourceContext:
     """Build a throwaway :class:`SourceContext` for the trial pull.
 
     The context uses an in-memory state store (no cursor persistence) + the
     candidate's natural_key as the source id, so the probe is a pure dry run.
+    ``classification`` (W10 TAX-2) is the declared classification of the
+    descriptor the candidate materialises under — a candidate has no head of
+    its own yet, so the caller binds its discovery descriptor's scope.
     """
 
     class _ProbeConfig:  # minimal BaseModel-shaped stand-in is not enough;
@@ -63,6 +69,7 @@ def _build_probe_context(candidate: CandidateSource) -> SourceContext:
         source_id=candidate.natural_key,
         config=_OpenConfig(**dict(candidate.probe_config)),
         state_store=InMemoryStateStore(),
+        classification=tuple(classification),
     )
 
 
@@ -74,6 +81,7 @@ async def validate_candidate_source(
     max_trial_signals: int = _DEFAULT_MAX_TRIAL_SIGNALS,
     require_nonempty: bool = False,
     handler: Any = None,
+    classification: tuple[BoundTag, ...] = (),
 ) -> SourceCandidateValidation:
     """Run liveness + trial pull/parse for one :class:`CandidateSource`.
 
@@ -99,6 +107,10 @@ async def validate_candidate_source(
         Optional pre-built handler instance (tests inject a fake to avoid network
         I/O). When omitted, the handler is built via
         :func:`legba.runtime.source_factory.build_source_handler`.
+    classification:
+        W10 TAX-2 — the declared classification the probe context carries
+        (``source_classification.source_classification`` of the discovery
+        descriptor's scope; ``()`` when it declares none).
 
     Returns
     -------
@@ -128,7 +140,7 @@ async def validate_candidate_source(
                 detail={"source_kind": candidate.source_kind},
             )
 
-    ctx = _build_probe_context(candidate)
+    ctx = _build_probe_context(candidate, classification)
     ctx = ctx.model_copy(update={"secrets_resolve": secrets_resolve})
 
     # --- liveness probe -----------------------------------------------------

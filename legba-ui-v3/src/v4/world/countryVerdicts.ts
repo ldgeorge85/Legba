@@ -15,30 +15,13 @@
  * carries. `probability`/`likelihood` ride along in the datum for tooltips.
  */
 import { useQuery } from '@tanstack/react-query'
-import { apiGet } from '@/lib/api'
+import { subjectReadsQuery, type SubjectRead, type SubjectReadsPage } from '@/lib/subjectReads'
 import { buildVerdict, type ConfidenceLevel, type Verdict, type VerificationBlock } from '@/lib/verdictModel'
 
 const COUNTRY_COMPOSITION_ID = 'country_composition'
 
 /** `country_g20_us` / `country_watch_ir` → `US` / `IR`. */
 const TARGET_ISO2_RE = /country_(?:g20|watch)_([a-z]{2})\b/i
-
-interface CompositionRow {
-  id: string
-  target_id: string | null
-  produced_at: string
-  severity?: string | null
-  confidence?: number | null
-  effective_confidence?: number | null
-  verification?: Record<string, unknown> | null
-  title?: string | null
-  data?: { citations?: unknown[]; effective_confidence?: number | null; verification?: Record<string, unknown> | null } | null
-}
-
-interface FindingsResponse {
-  data: CompositionRow[]
-  next_cursor: string | null
-}
 
 export interface CountryVerdict {
   iso2: string
@@ -83,47 +66,43 @@ export const CHOROPLETH_LEGEND: Array<{ level: ConfidenceLevel; label: string }>
   { level: 'unassessed', label: 'Unverified' },
 ]
 
-function citationCount(row: CompositionRow): number {
-  const c = row.data?.citations
-  return Array.isArray(c) ? c.length : 0
-}
-
-function toVerdict(row: CompositionRow): Verdict {
-  const verification =
-    (row.verification as VerificationBlock | null) ??
-    (row.data?.verification as VerificationBlock | null) ??
-    null
+/** One verdict-weight read → its verdict (the same `buildVerdict` the feed's badge uses). */
+function toVerdict(row: SubjectRead): Verdict {
   return buildVerdict({
     confidence: row.confidence,
-    effectiveConfidence: row.effective_confidence ?? row.data?.effective_confidence ?? null,
-    verification,
-    citationCount: citationCount(row),
+    effectiveConfidence: row.effective_confidence,
+    verification: row.verification as VerificationBlock | null,
+    citationCount: row.citation_count,
   })
 }
 
-async function fetchCountryVerdicts(): Promise<Map<string, CountryVerdict>> {
-  const page = await apiGet<FindingsResponse>(
-    `/findings?analyst_id=${COUNTRY_COMPOSITION_ID}&limit=200`,
-  )
+/**
+ * The reads → one verdict per country. U-4: read at VERDICT weight through
+ * the shared subject-reads query (`lib/subjectReads.ts`) — the same key the
+ * globe's blanks read, so the two never ask twice — where this used to pull
+ * 200 full compositions (~23 MB live) to read three numbers off each.
+ */
+export function verdictsFromReads(page: SubjectReadsPage | undefined): Map<string, CountryVerdict> {
   const byIso = new Map<string, CountryVerdict>()
-  for (const row of page.data ?? []) {
+  for (const row of page?.data ?? []) {
     const m = TARGET_ISO2_RE.exec(row.target_id ?? '')
     if (!m) continue
     const iso2 = m[1].toUpperCase()
-    // Keep the freshest composition per country (first-seen wins if the API
-    // returns produced_at DESC; otherwise compare timestamps defensively).
+    // Keep the freshest composition per country.
     const prev = byIso.get(iso2)
     if (prev && Date.parse(prev.producedAt) >= Date.parse(row.produced_at)) continue
     byIso.set(iso2, {
       iso2,
       targetId: row.target_id ?? '',
       verdict: toVerdict(row),
-      title: row.title ?? '(untitled composition)',
+      title: row.title || '(untitled composition)',
       producedAt: row.produced_at,
     })
   }
   return byIso
 }
+
+const EMPTY: Map<string, CountryVerdict> = new Map()
 
 export interface UseCountryVerdictsResult {
   verdicts: Map<string, CountryVerdict>
@@ -131,11 +110,9 @@ export interface UseCountryVerdictsResult {
 }
 
 export function useCountryVerdicts(): UseCountryVerdictsResult {
-  const q = useQuery<Map<string, CountryVerdict>>({
-    queryKey: ['world-country-verdicts'],
-    queryFn: fetchCountryVerdicts,
-    refetchInterval: 120_000,
-    staleTime: 60_000,
+  const q = useQuery<SubjectReadsPage, Error, Map<string, CountryVerdict>>({
+    ...subjectReadsQuery(COUNTRY_COMPOSITION_ID),
+    select: verdictsFromReads,
   })
-  return { verdicts: q.data ?? new Map(), isLoading: q.isLoading }
+  return { verdicts: q.data ?? EMPTY, isLoading: q.isLoading }
 }

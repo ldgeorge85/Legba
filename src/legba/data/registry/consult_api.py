@@ -87,6 +87,7 @@ from pydantic import (
     model_validator,
 )
 
+from ..consult_on_screen import OnScreen
 from ..pinned_context import (
     MAX_PIN_ID_CHARS,
     MAX_PIN_TEXT_CHARS,
@@ -96,7 +97,19 @@ from ..pinned_context import (
     PINNED_KINDS,
     pinned_context_chars,
 )
+from . import auth_state as _auth_state
+from . import cited_ref_kinds as _ref_kinds
+from . import consult_case_front as _case_front
+from . import consult_writes_api as _writes_front
 from . import consult_persistence, consult_synthesis_api
+from . import consult_turn_ceiling as _ceiling
+from . import display_class as _display_class
+from . import session_auth as _session_auth
+from . import workers as _workers
+from . import consult_turn_stamps as _stamps
+from .consult_turn_persist import persist_assistant_turn as _persist_assistant_turn
+from .consult_turn_persist import persist_partial_turn as _persist_partial_turn
+from .consult_usage_api import build_consult_usage_router
 from .api import RegistryAPIDeps, require_bearer
 from .consult_runs import (
     ConsultRun,
@@ -151,12 +164,13 @@ _STOP_PERSIST_WAIT_SECONDS = 10.0
 # F1 model picker — the SMALL server-side allowlist mapping the operator's
 # FRIENDLY choice to a sanctioned LLM stack-component id. The client NEVER passes
 # a raw component id; it sends ``model`` = "opus" | "fable" | "core" (or nothing
-# → the default), and we map here. "opus" = the billed Anthropic Opus plane
-# (``llm.anthropic.opus_4_7``) — TODAY'S default, so no selection preserves
-# current behavior; "fable" = the billed Anthropic Claude Fable 5.1 plane
+# → the default), and we map here. "core" = the self-hosted core
+# (openai_compat) plane, the DEFAULT (see :data:`DEFAULT_CONSULT_MODEL`);
+# "opus" = the billed Anthropic Opus plane (``llm.anthropic.opus_4_7``),
+# selectable but never default; "fable" = the billed Anthropic Claude Fable 5.1 plane
 # (``llm.anthropic.fable_5_1``), selectable but never default (see
 # ``descriptors/stack_component_llm_anthropic_fable_5_1.yaml`` for the
-# registration); "core" = the free self-hosted core (openai_compat) plane.
+# registration).
 # Any other value is rejected by the pydantic ``Literal`` (422) before it reaches
 # this map. The three ids MUST stay in sync with the runtime allowlist
 # (:data:`legba.data.analysts.consult_on_demand.LLM_OVERRIDE_ALLOWLIST`).
@@ -165,11 +179,13 @@ CONSULT_MODEL_ALLOWLIST: dict[str, str] = {
     "fable": "llm.anthropic.fable_5_1",
     "core": "llm.primary.openai_compat",
 }
-#: The default plane when the request omits ``model`` (or sends null) — Opus, so
-#: the picker is default-preserving. When the chosen plane is the default we do
+#: The default plane when the request omits ``model`` (or sends null) — the FREE
+#: core plane since 2026-10-03 (operator, DEC-17a: an accidental press must never
+#: bill Anthropic; Opus and Fable are explicit picks). The descriptor's own primary
+#: route is the core plane to match, because the default choice threads NO override. When the chosen plane is the default we do
 #: NOT thread an override (the cached ACTIVATE-time primary handler is used
 #: unchanged); the override key is threaded ONLY for a non-default choice.
-DEFAULT_CONSULT_MODEL = "opus"
+DEFAULT_CONSULT_MODEL = "core"
 
 
 def resolve_consult_model_override(model: str | None) -> tuple[str, str | None]:
@@ -288,9 +304,9 @@ class ConsultRequest(BaseModel):
     # Chat = no finding, response in the envelope; deep = persist a finding (D3/D4).
     mode: Literal["chat", "deep"] = "chat"
     # F1 model picker — which registered LLM plane answers this request. None /
-    # absent ⇒ "opus" (the billed Anthropic Opus plane, TODAY'S default).
-    # "fable" routes to the billed Anthropic Claude Fable 5.1 plane (selectable,
-    # never default). "core" routes to the free self-hosted core plane. Any
+    # absent ⇒ "core" (DEFAULT_CONSULT_MODEL: the core plane, thinking per T-1).
+    # "opus" routes to the billed Anthropic Opus plane and "fable" routes to the billed Anthropic Claude Fable 5.1 plane (selectable,
+    # never default, like opus). Any
     # other value 422s (the Literal). Mapped friendly→component id
     # server-side (never a raw id).
     model: Literal["opus", "fable", "core"] | None = None
@@ -317,6 +333,19 @@ class ConsultRequest(BaseModel):
     pinned_context: list[PinnedRef] = Field(
         default_factory=list, max_length=MAX_PINNED_RECORDS,
     )
+    # C-1b (decision D1) — "Present as a case": the turn may drive the
+    # workstation. False (the default) threads nothing onto the actor row.
+    present_case: bool = False
+    # C-2b-1 (decision D2) — "Allow changes this turn": the turn may write through
+    # the consult_write pack. False (the default) threads nothing onto the actor row.
+    allow_writes: bool = False
+    # Q-1 — the turn contract's inputs, each threaded ONLY when set (an older
+    # client's invoke body is byte-identical): the console's pinned window
+    # ({start, end} ISO or {hours, end}), the grounding mode, and U-6's
+    # ``on_screen`` report (``consult_on_screen.OnScreen``, ≤ 1,500 bytes).
+    window: dict[str, Any] | None = Field(default=None, max_length=4)
+    grounding_mode: Literal["record_only", "default"] | None = None
+    on_screen: OnScreen | None = None
 
     @model_validator(mode="after")
     def _bounded_pinned_context(self) -> ConsultRequest:
@@ -371,7 +400,7 @@ class ConsultResponse(BaseModel):
     session_id: str | None = None
     # F1 model picker — the FRIENDLY plane that answered ("opus"/"core"), echoed
     # so the UI can surface which model produced the answer. Mirrors the request's
-    # chosen ``model`` (default "opus"), independent of chat/deep transport.
+    # chosen ``model`` (default "core"), independent of chat/deep transport.
     model: str | None = None
     # Detached-run fields (D-7). ``status`` is "complete" when this body carries
     # a finished answer (HTTP 200 — the fast path, byte-identical to the old
@@ -390,9 +419,16 @@ class ConsultResponse(BaseModel):
     # this model — the deep branch, the tests' goldens — is unchanged.
     synthesis_status: Literal["complete", "partial", "none"] = "complete"
     resynthesizable: bool = False
-    # What the run cost: calls, input/output tokens, estimated USD, and the
-    # ceilings they ran against. Empty for a run that predates the spend guard.
+    # What the run cost: the ``consult_usage/1`` receipt (X2 C1 —
+    # ``consult_turn_stamps.usage_receipt``): tokens, calls, model, route,
+    # elapsed, ``cost_usd`` only on a priced route (else null + cost_reason),
+    # and the meter keys the live spend line reads. ``{}`` only on a reply no
+    # run produced (the typed-confirm path).
     usage: dict[str, Any] = Field(default_factory=dict)
+    # X2 C1 — the ``consult_verification/1`` stamp: judged + score,
+    # unassessable + reason (never 0.5), or not_judged + reason. Persisted on
+    # ``consult_turns.verification`` (0234); the turn header prints it.
+    verification: dict[str, Any] | None = None
     # Set only on a re-synthesis: how faithfully the replayed prompt matched
     # the one the original run sent, and the sentence saying what was lost.
     replay_fidelity: str | None = None
@@ -408,6 +444,39 @@ class ConsultResponse(BaseModel):
     # could not be measured: a zero would read as "cites no live reporting",
     # which is a claim.
     provenance_census: dict[str, Any] | None = None
+    # 2026-09-28 §B.3 — THE PROVENANCE HOLD. A token, not prose: the answer
+    # already leads with the banner a reader reads, and this is what the panel
+    # keys the amber frame on. ``None`` is the normal case and means nothing
+    # was held — never "not measured", because the hold is a decision the
+    # server either took or did not.
+    hold_reason: str | None = None
+    # CONSULT_REVIEW_2026-09-28 §B.4 — the two facts that used to ride only the
+    # ``build_consult_response`` step frame. ``uncertainty_floor_applied`` is
+    # ``{from, to, resolved}`` and present ONLY when the evidence floor moved
+    # the number; ``watch_candidates`` is ``None`` when the model wrote none (an
+    # empty list would read as "nothing would change this call"). Both are
+    # persisted on the turn's 0223 response bag so a reload renders them.
+    uncertainty_floor_applied: dict[str, Any] | None = None
+    watch_candidates: list[str] | None = None
+    # W3 / F-4 — what became of each watch candidate: ``{candidate,
+    # hypothesis_id, refused, reason, resolves_by, folded}`` per candidate
+    # (``analysts.consult_watch_mint``). ``None`` = no mint was attempted
+    # (no candidates, the knob off) — never "zero standing".
+    watch_minted: list[dict[str, Any]] | None = None
+    # W2 / F-6 — ``{input_tokens_before, input_tokens_after, results_dropped,
+    # ceiling}`` when the context ceiling withheld tool results from the call
+    # that wrote this answer; ``None`` when it did not bite. Persisted on the
+    # 0223 response bag; the panel renders nothing new from it.
+    context_compaction: dict[str, Any] | None = None
+    # C-1b — the CASE this turn presented (``consult_case_schema.CaseRecord``);
+    # ``None`` = it presented none. Persisted on the 0223 bag; Replay reads it.
+    case: dict[str, Any] | None = None
+    # C-2b-1 — the writes this turn made, staged or was refused (``None`` = not
+    # armed; ``[]`` = armed, nothing written). The ledger is the authority.
+    writes: list[dict[str, Any]] | None = None
+    # Q-1 — ``consult_contract/1``: window in force + reach, coverage by day,
+    # typed explanations, grounding accounting, on_screen. ``None`` = no contract.
+    contract: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -543,7 +612,16 @@ def _project_consult_response(
         model=model,
         synthesis_status=synthesis_status,  # type: ignore[arg-type]
         resynthesizable=bool(inner_data.get("resynthesizable")),
-        usage=dict(usage) if isinstance(usage, dict) else {},
+        usage=_stamps.usage_receipt(
+            usage, plane=model, route=CONSULT_MODEL_ALLOWLIST.get(model or ""),
+        ),
+        # W11-F93: the verdict is checked against THIS answer and ref set —
+        # the ones persisted — and withdrawn (``not_settled``) if they moved.
+        verification=_stamps.verification_stamp(
+            inner_data.get("verification"), reason_if_absent="no_stamp_from_run",
+            answer=str(answer),
+            cited_refs=[str(r) for r in cited_substrate_refs if r is not None],
+        ),
         replay_fidelity=inner_data.get("replay_fidelity"),
         replay_note=inner_data.get("replay_note"),
         # 7g-2 — lifted here or it dies at this boundary, which is exactly
@@ -553,7 +631,40 @@ def _project_consult_response(
             if isinstance(census := inner_data.get("provenance_census"), dict)
             else None
         ),
+        # Lifted here for the same reason the census is: this boundary is where
+        # a field that nobody named goes to die.
+        hold_reason=(
+            str(hold)[:64]
+            if (hold := inner_data.get("hold_reason"))
+            else None
+        ),
+        uncertainty_floor_applied=(
+            dict(floor)
+            if isinstance(floor := inner_data.get("uncertainty_floor_applied"), dict)
+            else None
+        ),
+        watch_candidates=(
+            [str(w) for w in watch]
+            if isinstance(watch := inner_data.get("watch_candidates"), list) and watch
+            else None
+        ),
+        context_compaction=(
+            dict(cc)
+            if isinstance(cc := inner_data.get("context_compaction"), dict)
+            else None
+        ),
+        watch_minted=_lift_watch_minted(inner_data.get("watch_minted")),
+        case=_case_front.project_case(inner_data, model),
+        writes=w if isinstance(w := inner_data.get("writes"), list) else None,
+        contract=dict(ct) if isinstance(ct := inner_data.get("contract"), dict) else None,
     )
+
+
+def _lift_watch_minted(raw: Any) -> list[dict[str, Any]] | None:
+    """F-4's per-candidate stamp, lifted as plain dicts; ``None`` when absent."""
+    if not isinstance(raw, list):
+        return None
+    return [dict(e) for e in raw if isinstance(e, dict)]
 
 
 def _steps_from_payload(consult_payload: dict[str, Any]) -> list[Any]:
@@ -570,35 +681,6 @@ def _steps_from_payload(consult_payload: dict[str, Any]) -> list[Any]:
         if isinstance(steps, list):
             return steps
     return []
-
-
-async def _persist_assistant_turn(
-    pg: Any,
-    session_id: str | None,
-    response: ConsultResponse,
-    *,
-    steps: Any = None,
-) -> None:
-    """Append the assistant turn to the audit trail (0038), best-effort.
-
-    Projects the response's typed tool_calls / cited_refs back to plain dicts
-    for the jsonb columns and threads the FULL ReAct ``steps`` trace into the
-    ``consult_turns.steps`` column so a turn is inspectable after the fact
-    (previously that column was never populated). A no-op when there's no
-    session (the open failed) — the consult answer is unaffected either way.
-    """
-    if not session_id:
-        return
-    await consult_persistence.append_turn(
-        pg,
-        session_id=session_id,
-        role="assistant",
-        content=response.answer,
-        steps=steps if steps is not None else [],
-        tool_calls=[tc.model_dump() for tc in response.tool_calls],
-        cited_refs=[cr.model_dump() for cr in response.cited_refs],
-        finding_id=response.finding_id,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -624,8 +706,8 @@ async def _invoke_and_project(
     request can return without it. Behaviour is unchanged except for two
     things, both deliberate:
 
-    * the read timeout is :func:`consult_runs.invoke_timeout_seconds` (600s by
-      default) rather than the handler's old 300s, because nothing is waiting
+    * the read timeout is :func:`consult_runs.invoke_timeout_seconds` (derived
+      from the loop's own clocks, 1020s by default) rather than the handler's old 300s, because nothing is waiting
       on this connection any more and the analyst's own budget is what should
       end a long run;
     * every failure raises :class:`consult_runs.ConsultRunError` carrying the
@@ -676,6 +758,10 @@ async def _invoke_and_project(
         )
         # H4(a): a plane outage bubbled through the sidecar body → graceful
         # 503 naming the other plane; else the existing 502.
+        if _case_front.is_case_unavailable(dapr_response.text):
+            raise ConsultRunError(status.HTTP_409_CONFLICT, _case_front.CASE_UNAVAILABLE)
+        if _writes_front.is_writes_unavailable(dapr_response.text):  # W5-F7
+            raise ConsultRunError(status.HTTP_409_CONFLICT, _writes_front.WRITES_UNAVAILABLE)
         provider_msg = _classify_provider_error(dapr_response.text)
         if provider_msg is not None:
             raise ConsultRunError(
@@ -714,6 +800,10 @@ async def _invoke_and_project(
             "reason": actor_result.get("reason"),
             "detail": actor_result.get("detail"),
         }
+        if _case_front.is_case_unavailable(detail):
+            raise ConsultRunError(status.HTTP_409_CONFLICT, _case_front.CASE_UNAVAILABLE)
+        if _writes_front.is_writes_unavailable(detail):  # W5-F7
+            raise ConsultRunError(status.HTTP_409_CONFLICT, _writes_front.WRITES_UNAVAILABLE)
         # H4(a): classify a plane outage (Anthropic credit / auth / rate
         # limit, or a core / F-A fail-closed "llm plane unavailable") across
         # the actor's error/reason/detail text and return a graceful 503
@@ -752,6 +842,7 @@ async def _invoke_and_project(
             model=chosen_model,
         )
         projected.request_id = request_id
+        projected.cited_refs = await _ref_kinds.typed_refs(deps.descriptor_registry.pg, projected.cited_refs)
         return {
             "response": projected,
             "steps": _steps_from_payload(consult_payload),
@@ -828,6 +919,7 @@ async def _invoke_and_project(
         model=chosen_model,
     )
     projected.request_id = request_id
+    projected.cited_refs = await _ref_kinds.typed_refs(deps.descriptor_registry.pg, projected.cited_refs)
     return {
         "response": projected,
         "steps": _steps_from_payload(consult_payload),
@@ -839,6 +931,7 @@ async def _deliver_run(
     run: ConsultRun,
     *,
     request_id: str,
+    plane: str | None = None,
 ) -> None:
     """Persist the run's outcome, then publish the terminal frame.
 
@@ -864,28 +957,11 @@ async def _deliver_run(
                 pg, run.session_id, response, steps=steps,
             )
     else:
-        await _persist_partial_turn(pg, run)
+        await _persist_partial_turn(
+            pg, run, plane=plane, route=CONSULT_MODEL_ALLOWLIST.get(plane or ""),
+        )
     await publish_terminal_frame(
         deps.nats_store, request_id=request_id, run=run,
-    )
-
-
-async def _persist_partial_turn(pg: Any, run: ConsultRun) -> None:
-    """Record a failed / cancelled run as an assistant turn carrying its partial.
-
-    Best-effort like every other audit write (``append_turn`` swallows its own
-    errors). The content is :meth:`ConsultRun.partial_summary` — prose, not a
-    status code — and ``steps`` carries whatever the run watched go by, so a
-    reload renders the same partial the live panel showed.
-    """
-    if not run.session_id:
-        return
-    await consult_persistence.append_turn(
-        pg,
-        session_id=run.session_id,
-        role="assistant",
-        content=run.partial_summary(),
-        steps=list(run.steps),
     )
 
 
@@ -920,6 +996,14 @@ def _response_from_run_result(
         )
 
 
+def _refuse_if_turn_ceiling_set() -> None:
+    """503 when the per-turn ceiling knob is set: nothing can enforce it."""
+    try:
+        _ceiling.check_turn_ceiling()
+    except _ceiling.TurnCeilingRefusal as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+
 # ---------------------------------------------------------------------------
 # Router factory
 # ---------------------------------------------------------------------------
@@ -938,6 +1022,12 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
     # One manager per app. It watches each run's step subject so a run that
     # dies still has a trace to persist — see ``consult_runs``.
     runs = ConsultRunManager(nats_store=deps.nats_store)
+    # C-2b-1 — the write plane: armed runs, the executor, its routes.
+    writes = _writes_front.WritesFront(
+        deps, is_live=lambda rid: (r := runs.get(rid)) is not None and r.status == "running",
+    )
+    router.include_router(_writes_front.build_router(writes))
+    router.include_router(build_consult_usage_router(deps))  # X2 C1
 
     @router.post(
         "/consult",
@@ -968,6 +1058,18 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
         before. Errors after it arrive on the stream, and the partial is
         persisted either way.
         """
+        # X3-B3: a signed-in user continues only a session THEY opened, and an
+        # ARMED turn (consult writes = substrate CRUD) stays the operator's.
+        await _session_auth.require_consult_session_owner(pg, request, body.session_id)
+        _session_auth.require_operator_for_writes(request, armed=body.allow_writes)
+        if body.request_id:  # X4 GATE: another user's run id is refused up front
+            await _auth_state.require_run_owner(request, body.request_id)
+        # C-2a §2 — the operator's typed confirm code is matched HERE, before
+        # any actor invoke: a staged write executes and no model runs.
+        typed = await writes.intercept_typed_code(body)
+        if typed is not None:
+            return ConsultResponse(**typed)
+        _refuse_if_turn_ceiling_set()  # X2 C1 — declared, off (SEAMS #72)
         # 1. Resolve head version. Use the descriptor registry's typed
         #    get — same path the v3 promote endpoint uses — so we share
         #    the registry's caching + auto-upgrade behaviour.
@@ -984,6 +1086,10 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
                 ),
             ) from exc
 
+        if body.present_case:
+            await _case_front.require_case_available(deps.descriptor_registry, row)
+        if body.allow_writes:
+            await writes.require_available(row)
         actor_id = _build_actor_id(row.version)
         sidecar_url = _dapr_sidecar_url()
         invoke_url = (
@@ -993,6 +1099,8 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
         # client-supplied id so the browser can subscribe BEFORE it POSTs
         # (subscribe-before-publish), else mint one.
         request_id = body.request_id or str(uuid4())
+        # X4 GATE: a server-minted id gets its owner of record too.
+        await _auth_state.require_run_owner(request, request_id)
         # F1 model picker: normalize the friendly choice + resolve the plane
         # override. ``override`` is None when the choice is the default (Opus) —
         # in that case we DO NOT thread the key, so the run keeps the cached
@@ -1034,6 +1142,12 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
         }
         if llm_component_override is not None:
             first_input["llm_component_override"] = llm_component_override
+        # X2 B4 (merge follow-up): a reader's consult renders cited spans,
+        # never archived text — the class travels with the request. Set only
+        # for a reader so an operator's invoke body stays byte-identical.
+        _cls = _display_class.class_for_principal(_principal, request.state)
+        if _cls != "operator":
+            first_input["display_class"] = _cls
         # Only set the key when there ARE pins: a client that sends none must
         # produce the exact invoke body it produced before this field existed
         # (the golden the chat tests hold). ``by_alias=False`` so the actor
@@ -1041,6 +1155,14 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
         pinned_context = [p.model_dump() for p in body.pinned_context]
         if pinned_context:
             first_input["pinned_context"] = pinned_context
+        for _k, _v in (("window", body.window), ("grounding_mode", body.grounding_mode),
+                       ("on_screen", body.on_screen.wire() if body.on_screen else None)):
+            if _v is not None:
+                first_input[_k] = _v  # Q-1: set only when sent
+        _case_front.arm(
+            first_input, present_case=body.present_case,
+            rounds_chosen="max_tool_rounds" in body.model_fields_set,
+        )
         invoke_body = {
             "trigger_kind": "method",
             "inputs": [first_input],
@@ -1059,13 +1181,25 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
                 question=body.question,
                 principal=_principal,
             )
+        user_turn_id = None
         if session_id:
-            await consult_persistence.append_turn(
+            user_turn_id = await consult_persistence.append_turn(
                 pg,
                 session_id=session_id,
                 role="user",
                 content=body.question,
+                **({"request_id": request_id} if body.allow_writes else {}),
             )
+            # F-4: a watch the run mints names the session it came from.
+            # Set only when a session exists (an audit outage leaves the
+            # invoke body exactly as it was).
+            first_input["session_id"] = session_id
+        # C-2b-1: an armed turn needs a DURABLE operator turn (fail closed).
+        writes.arm(
+            first_input, allow_writes=body.allow_writes, request_id=request_id,
+            session_id=session_id, user_turn_id=user_turn_id, plane=chosen_model,
+            model_component=llm_component_override,
+        )
 
         logger.info(
             "consult.invoke actor_id=%s descriptor_version=%s url=%s "
@@ -1092,7 +1226,12 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
                 chosen_model=chosen_model,
                 request_id=request_id,
             ),
-            on_complete=lambda r: _deliver_run(deps, r, request_id=request_id),
+            on_complete=lambda r: _deliver_run(
+                deps, r, request_id=request_id, plane=chosen_model,
+            ),
+            case=_case_front.start_accumulator(
+                present_case=body.present_case, request_id=request_id, plane=chosen_model,
+            ),
         )
 
         # 3. Wait BRIEFLY for a fast answer. A short consult lands inside this
@@ -1137,6 +1276,7 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
         status_code=status.HTTP_200_OK,
     )
     async def get_consult_run(
+        request: Request,
         request_id: str,
         _principal: str = Depends(require_bearer),
     ) -> dict[str, Any]:
@@ -1156,8 +1296,10 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
                 detail=(
                     f"no live consult run for request_id {request_id!r}; if it "
                     f"completed earlier, read the session's turns instead."
+                    + _workers.run_miss_hint()
                 ),
             )
+        await _session_auth.require_consult_session_owner(pg, request, run.session_id)
         return run.as_status_payload()
 
     @router.post(
@@ -1165,7 +1307,9 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
         status_code=status.HTTP_200_OK,
     )
     async def stop_consult_run(
+        request: Request,
         request_id: str,
+        body: _case_front.StopBody | None = None,
         _principal: str = Depends(require_bearer),
     ) -> dict[str, Any]:
         """Stop a run that is still drilling.
@@ -1189,8 +1333,14 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
                 detail=(
                     f"no live consult run for request_id {request_id!r} — it "
                     f"already finished, or it aged out."
+                    + _workers.run_miss_hint()
                 ),
             )
+        await _session_auth.require_consult_session_owner(pg, request, run.session_id)
+        # C-1b: a case run's stop is acknowledged BEFORE the cancel, so every
+        # case frame that lands after this line stays out of the record.
+        stopped_after = await _case_front.stop_case(deps.nats_store, run, body)
+        await writes.on_stop(request_id, run.session_id)  # C-2a §5: staged → expired
         run.task.cancel()
         await asyncio.wait([run.task], timeout=_STOP_PERSIST_WAIT_SECONDS)
         logger.info("consult.run.stopped request_id=%s", request_id)
@@ -1198,6 +1348,7 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
             "request_id": request_id,
             "status": "stopped",
             "steps": len(run.steps),
+            **({"stopped_after_seq": stopped_after} if stopped_after is not None else {}),
         }
 
     @router.post(
@@ -1208,6 +1359,7 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
     @_limiter.limit(CONSULT_RATE_LIMIT)
     async def synthesize_from_evidence(
         request: Request,
+        response: Response,  # slowapi writes the rate-limit headers here
         request_id: str,
         body: consult_synthesis_api.SynthesizeRequest,
         _principal: str = Depends(require_bearer),
@@ -1222,9 +1374,14 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
         any turn written before migration 0195 (which is every turn that
         existed when this was built, the c8a0105c turn included).
         """
+        _refuse_if_turn_ceiling_set()  # X2 C1 — a recovery is a turn too
         evidence = await consult_persistence.load_turn_for_recovery(
             pg, request_id=request_id, turn_id=body.turn_id,
         )
+        if evidence is not None:  # X3-B3: recover only your OWN turn
+            await _session_auth.require_consult_session_owner(
+                pg, request, evidence.get("session_id"),
+            )
         ok, why = consult_synthesis_api.recovery_precheck(evidence)
         if not ok:
             raise HTTPException(
@@ -1305,6 +1462,9 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
             parent_turn_id=evidence.get("turn_id"),
             synthesis_status=projected.synthesis_status,
             usage=projected.usage,
+            response=consult_synthesis_api.with_recovered_contract(
+                consult_persistence.response_bag(projected), evidence),
+            verification=projected.verification,
         )
         return consult_synthesis_api.project_recovery(
             projected,

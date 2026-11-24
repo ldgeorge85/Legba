@@ -590,8 +590,8 @@ def test_every_declared_outlet_is_a_source_id_the_tree_knows() -> None:
         yaml.safe_load(p.read_text(encoding="utf-8"))["identity"]["id"]
         for p in (REPO_ROOT / "descriptors").glob("source_*.yaml")
     }
-    catalog = (
-        REPO_ROOT / "scripts" / "bringup_register_source_catalog.py"
+    catalog = (  # ROSTER-1: the catalog is profile data
+        REPO_ROOT / "profiles" / "geopolitics" / "rosters" / "source_catalog.yaml"
     ).read_text(encoding="utf-8")
     declared = set(si.SYNDICATION) | {
         sid for members in si.SAME_PUBLISHER.values() for sid in members

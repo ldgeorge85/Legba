@@ -62,7 +62,7 @@ def test_calibration_scoreboard_honest_field_roundtrip() -> None:
         brier=0.20,
         brier_exogenous=0.18,
         exogenous_sample_size=12,
-        sample_size=40,
+        pooled_sample_size=40,
         insufficient_exogenous=False,
         self_consistency_only=False,
         brier_forecast_acute=0.11,
@@ -172,6 +172,12 @@ def _writer_shaped_row():
                 "forecast_acute_degenerate": False,
                 "forecast_acute_sample_size": 3,
                 "forecast_acute_status": "accumulating (n=3/30)",
+                "populations": {
+                    "headline_exogenous": {
+                        "brier": 0.3976, "n": 537,
+                        "newest_member_at": "2026-07-01T00:00:00+00:00",
+                    },
+                },
             },
         }),
     }
@@ -193,6 +199,10 @@ async def test_eval_calibration_reads_writer_shape_nested() -> None:
     assert sb.brier == 0.3976
     assert sb.brier_exogenous == 0.3976
     assert sb.exogenous_sample_size == 537
+    assert sb.pooled_sample_size == 600
+    # lane E: legacy label + staleness ride the route
+    assert sb.label == "untrusted — legacy, under diagnosis"
+    assert sb.stale is True and sb.newest_member_at.startswith("2026-07-01")
     assert sb.calibration_thin is False
     assert sb.forecast_unproven is True
     assert len(sb.refs) == 1

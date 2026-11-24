@@ -37,6 +37,7 @@ import { useSelection } from '@/state/selection'
 import { resetFeedView, useFeedView } from '@/state/feedView'
 import { resetScope, useScope } from '@/state/scope'
 import { scopeFromTarget } from '@/lib/scopeFromReport'
+import { dropCachedGets } from '@/lib/queryCache'
 
 /**
  * jsdom implements no layout, so `scrollTop` is a permanent 0 and the feed's
@@ -268,6 +269,50 @@ describe('Live Feed (reformed, S7-T4)', () => {
 
     await waitFor(() => expect(screen.getByTestId('finding-f-live')).toBeInTheDocument())
     expect(screen.getByTestId('finding-live-f-live')).toBeInTheDocument()
+    // X4 READPATH — a live-tail finding arrived ahead of its verify pass.
+    expect(
+      within(screen.getByTestId('finding-f-live')).getByTestId('unverified-state').textContent,
+    ).toBe('unverified · judge pending')
+  })
+
+  it('X4 READPATH — the badge line carries the registry state of a finding with no verify verdict', async () => {
+    const state = (score_state: 'pending' | 'absent', reason: string) => ({
+      score_state,
+      since: '2026-06-03T10:00:00+00:00',
+      judge_window_s: 900,
+      reason,
+    })
+    stubFetch(undefined, {
+      data: [
+        { ...PAGE.data[0], verification: null, verification_state: state('pending', 'awaiting_verify') },
+        { ...PAGE.data[1], verification: null, verification_state: state('absent', 'no_verdict') },
+        {
+          ...mkFinding('f-judged', {}, '2026-06-03T08:00:00Z', 'Judged read'),
+          verification: { faithfulness_score: 0.9, judge_status: 'llm' },
+          verification_state: null,
+        },
+        {
+          ...mkFinding('f-struct', {}, '2026-06-03T07:00:00Z', 'Graph mining'),
+          analyst_id: 'graph_mining',
+          verify_exempt: 'structural',
+          verification: null,
+          verification_state: state('absent', 'verify_exempt'),
+        },
+      ],
+      next_cursor: null,
+    })
+    render(wrap(feed()))
+    await waitFor(() => expect(screen.getByTestId('finding-f-low')).toBeInTheDocument())
+    const mark = (id: string) => within(screen.getByTestId(`finding-${id}`)).queryByTestId('unverified-state')
+    expect(mark('f-low')?.textContent).toBe('unverified · judge pending')
+    expect(mark('f-crit')?.textContent).toBe('unverified · not judged')
+    // A judged row: the verdict badge speaks; no unverified mark.
+    expect(mark('f-judged')).toBeNull()
+    // A verify-exempt row: its badge already reads `unverified — structural`.
+    expect(mark('f-struct')).toBeNull()
+    expect(within(screen.getByTestId('finding-f-struct')).getByTestId('verdict-badge').textContent).toContain(
+      'unverified — structural',
+    )
   })
 
   it('a severity facet drops a non-matching live finding', async () => {
@@ -419,8 +464,11 @@ function scrollFeedTo(px: number) {
   return list
 }
 
-/** Force the SAME background refetch the 30s poll performs. */
+/** Force the SAME background refetch the 30s poll performs. A real poll lands
+ *  30 s after the last request — past the api layer's GET cache (X4 READPATH,
+ *  `lib/queryCache`) — so the compressed one here drops that cache first. */
 async function backgroundRefetch() {
+  dropCachedGets()
   await act(async () => {
     await currentQc.invalidateQueries({ queryKey: ['feed-findings'] })
   })
@@ -714,5 +762,40 @@ describe('Live Feed — SCOPE filters, FOCUS highlights (defect 3, redone)', () 
       expect(screen.getByTestId('finding-f-crit')).toHaveAttribute('data-active', 'true'),
     )
     expect(screen.getByTestId('finding-f-low')).not.toHaveAttribute('data-active')
+  })
+})
+
+describe('Live Feed — the age is off the headline line (X4/D4, W11-F74)', () => {
+  it('the age rides the meta line, not the title row that carries the headline', async () => {
+    stubFetch()
+    render(wrap(feed()))
+    await waitFor(() => expect(screen.getByTestId('finding-f-crit')).toBeInTheDocument())
+
+    const row = screen.getByTestId('finding-f-crit')
+    const age = screen.getByTestId('feed-age-f-crit')
+    // the headline's own line (the flex row whose child is the truncated title)
+    const titleLine = within(row).getByText('Critical coup signal').parentElement!
+    expect(titleLine.contains(age)).toBe(false)
+    // the headline is allowed two lines, never a single truncated one
+    const headline = screen.getByTestId('feed-headline-f-crit')
+    expect(headline.className).toContain('line-clamp-2')
+    expect(headline.className).not.toContain('truncate')
+    // …and the age sits in the meta line beside the target / analyst text.
+    const metaLine = age.parentElement!
+    expect(metaLine).not.toBe(titleLine)
+    expect(metaLine.textContent ?? '').toContain('brazil')
+    // it still reads an age with its unit (never a bare number)
+    expect((age.textContent ?? '').trim()).toMatch(/ago$|^now$|^just now$|^\d+\s?[smhdw]/i)
+  })
+
+  it('every row carries its age on the meta line (findings; signals too)', async () => {
+    stubFetch()
+    render(wrap(feed()))
+    await waitFor(() => expect(screen.getByTestId('finding-f-low')).toBeInTheDocument())
+    for (const id of ['f-low', 'f-crit']) {
+      const age = screen.getByTestId(`feed-age-${id}`)
+      expect(age.className).toContain('ml-auto')
+      expect(age.getAttribute('title')).toBeTruthy()
+    }
   })
 })

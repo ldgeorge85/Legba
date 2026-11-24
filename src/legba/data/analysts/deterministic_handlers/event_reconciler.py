@@ -26,12 +26,14 @@ fresh frontier is always covered before the stable backlog.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
+from bisect import bisect_left, bisect_right
 from collections import Counter
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from itertools import combinations
 from typing import Any, Callable, Iterator, Iterable, Mapping
 from uuid import UUID, uuid4
@@ -257,11 +259,20 @@ def _event_time_bounds(row: Mapping[str, Any]) -> tuple[datetime | None, datetim
     return start, end
 
 
+def _actor_set(row: Mapping[str, Any]) -> frozenset[UUID]:
+    """The row's resolved actor ids, coerced once (malformed ids dropped)."""
+    coerced = (_uuid(v) for v in (row.get("actor_ids") or ()))
+    return frozenset(x for x in coerced if x is not None)
+
+
 def _shared_actors(left: Mapping[str, Any], right: Mapping[str, Any]) -> int:
     """Count shared resolved actors between two event rows."""
-    a = {_uuid(v) for v in (left.get("actor_ids") or ())}
-    b = {_uuid(v) for v in (right.get("actor_ids") or ())}
-    return len({x for x in a if x is not None} & {x for x in b if x is not None})
+    return len(_actor_set(left) & _actor_set(right))
+
+
+#: Slack on the bisect window so float rounding in the exact ``gap_hours``
+#: predicate can never drop a candidate the all-pairs walk would have kept.
+_WINDOW_SLACK = timedelta(seconds=1)
 
 
 def correlated_pairs(
@@ -305,33 +316,81 @@ def evolves_pairs(
     The source scan is evaluated NEWEST-first (``reversed``): a truncated pass
     then always covers the fresh frontier and the stable backlog catches up as
     capacity allows, rather than starving the live edge of the table.
+
+    N-V (2026-11-13): the walk was all-pairs — 5,000 rows meant 25 M pair
+    visits, each re-coercing both rows' timestamps and ~190 actor ids, ~115 s
+    of pure CPU that held the runtime's event loop every 20 minutes and spent
+    the whole pass budget before a single edge was written (no
+    ``evolves_from`` edge landed after 2026-10-29). Now every row's bounds
+    and actor set are folded ONCE, predecessors are indexed by evidence end,
+    and each source walks only its adjacency window newest-end-first, stopping
+    as soon as no later candidate can beat the best one found. The winner is
+    the same: the max over ``(dst_end, shared, str(id))`` with the earliest
+    row winning an exact tie, exactly as the all-pairs walk chose it (pinned
+    by an equivalence test against the old implementation).
     """
     items = [dict(r) for r in rows if _uuid(r.get("id")) is not None]
     out: list[tuple[Mapping[str, Any], Mapping[str, Any], int]] = []
-    for src in reversed(items):
+    if not items:
+        return out
+    bounds = [_event_time_bounds(item) for item in items]
+    actor_sets = [_actor_set(item) for item in items]
+    # Predecessor index: (evidence_end, row position), ascending. The row
+    # position breaks end ties so the walk below meets equal ends in a
+    # stable order; the winner among them is chosen by key, not position.
+    by_end = sorted(
+        (end, j) for j, (_start, end) in enumerate(bounds) if end is not None
+    )
+    ends = [end for end, _j in by_end]
+    try:
+        reach = timedelta(hours=max_gap_hours) + _WINDOW_SLACK
+    except OverflowError:
+        reach = None
+    for i in range(len(items) - 1, -1, -1):
         if should_stop is not None and should_stop():
             break
-        src_start, _src_end = _event_time_bounds(src)
+        src = items[i]
+        src_start = bounds[i][0]
         if src_start is None:
             continue
-        best: tuple[datetime, int, str, Mapping[str, Any]] | None = None
-        for dst in items:
+        src_actors = actor_sets[i]
+        if min_actors > 0 and len(src_actors) < min_actors:
+            continue  # cannot share more actors than it has
+        hi = bisect_right(ends, src_start)
+        lo = 0
+        if reach is not None:
+            try:
+                lo = bisect_left(ends, src_start - reach)
+            except OverflowError:
+                lo = 0
+        best_key: tuple[datetime, int, str] | None = None
+        best_j = -1
+        for k in range(hi - 1, lo - 1, -1):
+            dst_end, j = by_end[k]
+            if best_key is not None and dst_end < best_key[0]:
+                break  # every remaining candidate ends earlier: cannot win
+            dst = items[j]
             if dst["id"] == src["id"]:
                 continue
-            _dst_start, dst_end = _event_time_bounds(dst)
-            if dst_end is None or dst_end > src_start:
+            # The exact predicates of the all-pairs walk; the bisect window
+            # above is only a superset (it carries a second of slack).
+            if dst_end > src_start:
                 continue
             gap_hours = (src_start - dst_end).total_seconds() / 3600.0
             if gap_hours > max_gap_hours:
                 continue
-            shared = _shared_actors(src, dst)
+            shared = len(src_actors & actor_sets[j])
             if shared < min_actors:
                 continue
-            key = (dst_end, shared, str(dst.get("id")), dst)
-            if best is None or key[:3] > best[:3]:
-                best = key
-        if best is not None:
-            out.append((src, best[3], best[1]))
+            key = (dst_end, shared, str(dst.get("id")))
+            if (
+                best_key is None
+                or key > best_key
+                or (key == best_key and j < best_j)
+            ):
+                best_key, best_j = key, j
+        if best_key is not None:
+            out.append((src, items[best_j], best_key[1]))
     return out
 
 
@@ -459,11 +518,14 @@ async def handle(
         rows = [r for r in inputs if isinstance(r, Mapping)]
         counters["events_examined"] = len(rows)
         with _phase(phase_seconds, "correlated"):
-            counters["correlated_pairs"] = len(correlated_pairs(rows))
+            counters["correlated_pairs"] = len(
+                await asyncio.to_thread(correlated_pairs, rows)
+            )
         with _phase(phase_seconds, "evolves"):
             counters["evolves_pairs"] = len(
-                evolves_pairs(
-                    rows, min_actors=min_actors, max_gap_hours=max_gap
+                await asyncio.to_thread(
+                    evolves_pairs,
+                    rows, min_actors=min_actors, max_gap_hours=max_gap,
                 )
             )
         return _finding(
@@ -481,10 +543,14 @@ async def handle(
         # Each write_event_edge is one atomic upsert — no wrapping
         # transaction, so a budget-truncated pass keeps the edges it did land
         # and the next tick resumes for free on the idempotent writes.
+        # N-V: the pair computations are pure CPU over the fetched rows, so
+        # they run in a worker thread — the event loop (every other actor's
+        # turn, the poll reminders, /healthz) keeps running meanwhile. The
+        # edge writes stay on the loop; each one is an awaited round trip.
         if not budget.exhausted():
             with _phase(phase_seconds, "correlated"):
-                correlated = correlated_pairs(
-                    rows, should_stop=budget.exhausted
+                correlated = await asyncio.to_thread(
+                    correlated_pairs, rows, should_stop=budget.exhausted
                 )
                 counters["correlated_pairs"] = len(correlated)
                 counters["correlated_written"] = await _write_correlated(
@@ -495,7 +561,8 @@ async def handle(
 
         if not budget.exhausted():
             with _phase(phase_seconds, "evolves"):
-                evolves = evolves_pairs(
+                evolves = await asyncio.to_thread(
+                    evolves_pairs,
                     rows,
                     min_actors=min_actors,
                     max_gap_hours=max_gap,

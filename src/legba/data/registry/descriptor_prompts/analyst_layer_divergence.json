@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:layer_divergence": {
+      "source": "analyst_layer_divergence.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -127,7 +127,7 @@ def test_descriptor_validates_and_every_declared_option_resolves():
     silently fall back to the in-source default at deploy time — the exact
     defect X-1 exists to prevent, and the cheapest place to catch a 422 on the
     registration PUT is here rather than on the deploy train."""
-    from legba.data.analysts.handler_options import resolve_handler_options
+    from legba.data.option_catalog.handler_options import resolve_handler_options
     from legba.data.schemas.analyst import AnalystDescriptor
 
     body = yaml.safe_load(

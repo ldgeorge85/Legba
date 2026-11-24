@@ -1,0 +1,8 @@
+{
+  "states": {
+    "action_pack:journal_propose": {
+      "source": "action_pack_journal_propose.yaml",
+      "state": "active"
+    }
+  }
+}

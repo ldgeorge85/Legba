@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:event_clustering": {
+      "source": "analyst_event_clustering.yaml",
+      "state": "draft"
+    }
+  }
+}

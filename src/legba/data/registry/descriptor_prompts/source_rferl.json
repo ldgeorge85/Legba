@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.rferl.news": {
+      "source": "source_rferl.yaml",
+      "state": "draft"
+    }
+  }
+}

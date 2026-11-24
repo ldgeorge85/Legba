@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.aljazeera.world": {
+      "source": "source_aljazeera_world.yaml",
+      "state": "active"
+    }
+  }
+}

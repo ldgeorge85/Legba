@@ -4,7 +4,10 @@ import {
   scaleStampLabel,
   scaleStampTooltip,
   UNSTAMPED_LABEL,
+  UNDECLARED_LABEL,
+  STAMP_ERA_START,
 } from '@/lib/scaleStamp'
+import live from '@/lib/__fixtures__/findings.live-2026-10-08.json'
 
 describe('readScaleStamp', () => {
   it('reads both stamps off a flattened projection row', () => {
@@ -110,5 +113,54 @@ describe('scaleStampTooltip', () => {
     const tip = scaleStampTooltip({ scale: null, method: null, state: 'unstamped' })
     expect(tip).toContain('before the platform stamped scales')
     expect(tip).toContain('not assumed')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// W11-F9 (X1/D1) — the /findings row shape, off the live registry
+// ---------------------------------------------------------------------------
+
+describe('readScaleStamp on a /findings row (W11-F9)', () => {
+  it('reads the stamp where /findings carries it: row.data.data (the finding envelope)', () => {
+    // The live indicator_tracker row: `row.data` is the analyst_outputs.data
+    // column, i.e. the whole envelope; the instrument's stamp rides the
+    // envelope's own `data`. The old reader stopped one level short.
+    const row = live.instrument
+    expect((row.data as Record<string, unknown>).method_version).toBeUndefined()
+    const s = readScaleStamp(row)
+    expect(s).toEqual({
+      scale: 'indicator_status/2026-07',
+      method: 'indicator_tracker/2026-09.1',
+      state: 'full',
+    })
+    expect(scaleStampLabel(s)).toBe('indicator_status/2026-07 · indicator_tracker/2026-09.1')
+  })
+
+  it('never calls the live 2026-10-08 Brazil composition "pre-2026-09"', () => {
+    // The composition carries no stamp at any depth — its producer is not an
+    // instrument on a declared scale. Dated after the stamps began, that is
+    // `undeclared`, not the pre-era absence.
+    const row = live.composition
+    expect(row.produced_at.startsWith('2026-10-08')).toBe(true)
+    const s = readScaleStamp(row)
+    expect(s).toEqual({ scale: null, method: null, state: 'undeclared' })
+    expect(scaleStampLabel(s)).toBe(UNDECLARED_LABEL)
+    expect(scaleStampLabel(s)).not.toContain('pre-2026-09')
+    expect(scaleStampTooltip(s)).toContain('after the platform began stamping')
+  })
+
+  it('keeps the dated pre-era absence for a stampless row written before the stamps', () => {
+    const before = new Date(Date.parse(STAMP_ERA_START) - 60_000).toISOString()
+    expect(readScaleStamp({ produced_at: before, data: { data: {} } }).state).toBe('unstamped')
+    expect(readScaleStamp({ produced_at: STAMP_ERA_START }).state).toBe('undeclared')
+  })
+
+  it('a top-level stamp still wins over the envelope one', () => {
+    const s = readScaleStamp({
+      method_version: 'a/1',
+      data: { data: { method_version: 'b/2', scale_version: 'x/1' } },
+    })
+    expect(s.method).toBe('a/1')
+    expect(s.scale).toBe('x/1')
   })
 })

@@ -28,7 +28,7 @@ function rec(id: string, state = 'active'): RecordDescriptor {
 function realReg(overrides: Partial<PanelRegistration> = {}): PanelRegistration {
   return {
     id: 'row-1',
-    panel_id: 'target_overview',
+    panel_id: 'subject_page',
     descriptor_id: 'brazil',
     descriptor_version: 'a'.repeat(64),
     descriptor_family: 'target',
@@ -46,26 +46,25 @@ function realReg(overrides: Partial<PanelRegistration> = {}): PanelRegistration 
 }
 
 describe('bound-kind sets', () => {
-  it('derive from the bundle registry: binding-required, category-matched, not hidden', () => {
+  it('derive from the bundle registry: binding-required, category-matched', () => {
     for (const kind of TARGET_BOUND_KINDS) {
       const def = PANEL_REGISTRY[kind].definition
       expect(def.requiresBinding).toBe(true)
       expect(def.category).toBe('target')
-      expect(def.hidden).not.toBe(true)
     }
     for (const kind of ANALYST_BOUND_KINDS) {
       const def = PANEL_REGISTRY[kind].definition
       expect(def.requiresBinding).toBe(true)
       expect(def.category).toBe('analyst')
-      expect(def.hidden).not.toBe(true)
     }
     // The shipped sets (T1–T10 / A1–A5): drift here means the registry changed.
     expect(TARGET_BOUND_KINDS).toContain('target.map')
     expect(TARGET_BOUND_KINDS).toContain('target.timeline')
-    // P-A added the desk brief page to the per-target set, so the sidebar and
-    // the palette reach it on every desk without a second opener.
-    expect(TARGET_BOUND_KINDS).toContain('target.desk_brief_page')
-    expect(TARGET_BOUND_KINDS.length).toBe(10)
+    // UI-B3: the eight per-subject reads (the desk brief page among them) are
+    // tabs of ONE bound kind, so every subject reaches all of them through it.
+    expect(TARGET_BOUND_KINDS).toContain('subject.page')
+    expect(TARGET_BOUND_KINDS).not.toContain('target.desk_brief_page')
+    expect(TARGET_BOUND_KINDS.length).toBe(3)
     expect(ANALYST_BOUND_KINDS).toContain('analyst.outputs')
     expect(ANALYST_BOUND_KINDS.length).toBe(4)
   })
@@ -103,8 +102,8 @@ describe('synthesizeBoundRegistrations', () => {
     const personal = synthesizeBoundRegistrations([rec('brazil')], [rec('a1')], 'personal')
     const cis = synthesizeBoundRegistrations([rec('brazil')], [rec('a1')], 'cis')
     expect(cis.length).toBeLessThan(personal.length)
-    // target.signals ships personal-only per the registry table.
-    expect(cis.find((r) => r.panel_id === 'target_signals')).toBeUndefined()
+    // analyst.runs ships personal-only per the registry table.
+    expect(cis.find((r) => r.panel_id === 'analyst_runs')).toBeUndefined()
     expect(cis.find((r) => r.panel_id === 'target_map')).toBeDefined()
   })
 
@@ -118,22 +117,29 @@ describe('synthesizeBoundRegistrations', () => {
 describe('mergeRegistrations', () => {
   it('keeps real rows and drops the synthetic duplicate of the same instance', () => {
     const synthetic = synthesizeBoundRegistrations([rec('brazil')], [], 'personal')
-    const real = [realReg()] // target.overview:brazil
+    const real = [realReg()] // subject.page:brazil
     const merged = mergeRegistrations(real, synthetic)
     expect(merged.length).toBe(synthetic.length) // one synthetic replaced by one real
     expect(merged[0]).toBe(real[0]) // real first + authoritative
-    const overviews = merged.filter((r) => r.panel_id === 'target_overview')
-    expect(overviews.length).toBe(1)
-    expect(overviews[0].id).toBe('row-1')
+    const pages = merged.filter((r) => r.panel_id === 'subject_page')
+    expect(pages.length).toBe(1)
+    expect(pages[0].id).toBe('row-1')
+  })
+
+  it('UI-B3 — a real row naming a RETIRED panel id covers its survivor\'s instance', () => {
+    const synthetic = synthesizeBoundRegistrations([rec('brazil')], [], 'personal')
+    const merged = mergeRegistrations([realReg({ panel_id: 'target_overview' })], synthetic)
+    expect(merged.length).toBe(synthetic.length)
+    expect(merged.filter((r) => r.panel_id === 'subject_page')).toEqual([])
   })
 
   it('a RETIRED real row does not shadow the synthetic instance', () => {
     const synthetic = synthesizeBoundRegistrations([rec('brazil')], [], 'personal')
     const merged = mergeRegistrations([realReg({ retired: true })], synthetic)
-    const overviews = merged.filter((r) => r.panel_id === 'target_overview')
+    const pages = merged.filter((r) => r.panel_id === 'subject_page')
     // retired real row + live synthetic row both present; App filters retired.
-    expect(overviews.length).toBe(2)
-    expect(overviews.some((r) => !r.retired)).toBe(true)
+    expect(pages.length).toBe(2)
+    expect(pages.some((r) => !r.retired)).toBe(true)
   })
 
   it('passes real rows with unknown panel kinds through untouched', () => {

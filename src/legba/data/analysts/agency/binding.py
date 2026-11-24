@@ -270,6 +270,39 @@ class AgencyToolBinding:
             tenant_id=self.tenant_id,
         )
 
+    def for_request(
+        self,
+        *,
+        session_id: str | None,
+        request_id: str | None,
+    ) -> "AgencyToolBinding":
+        """A copy re-pointed at ONE consult request (C-1b; the C-2a idiom).
+
+        The pack, grants, scope and allow leg are the analyst's and constant;
+        what changes per request is WHO is asking. ``requested_by`` gains the
+        session and request ids, so every ``action_pack_invocations`` row and
+        governor event a request's tools land is attributable to that request
+        by a plain ``requested_by LIKE '%::request::<id>'`` — which is how a
+        stopped case is shown to have issued nothing after its stop.
+        """
+        who = self.requested_by
+        if session_id:
+            who += f"::session::{session_id}"
+        if request_id:
+            who += f"::request::{request_id}"
+        return AgencyToolBinding(
+            agency=self.agency,
+            pack=self.pack,
+            pg_pool=self.pg_pool,
+            tool_context=self.tool_context,
+            analyst_grants=self.analyst_grants,
+            target_allows=self.target_allows,
+            scope=self.scope,
+            requested_by=who,
+            budget_account=self.budget_account,
+            tenant_id=self.tenant_id,
+        )
+
 
 #: The action the escalation edge has always invoked. Stays the default so a
 #: pack descriptor that says nothing behaves byte-identically to the literal

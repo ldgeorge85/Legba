@@ -23,6 +23,7 @@ import { initialTab, PanelTabStrip, type PanelTabDef } from '@/components/PanelT
 import { PanelEmbedProvider } from '@/components/PanelEmbedContext'
 import ConsultPanel from '@/panels/system/Consult'
 import DeepConsultPanel from '@/panels/system/DeepConsult'
+import { useConsultFrame } from '@/components/ConsultFrameContext'
 
 type Depth = 'chat' | 'deep'
 
@@ -34,10 +35,18 @@ const TABS: readonly PanelTabDef[] = [
 export default function ConsultMerged(props: PanelProps) {
   // `system.deep_consult` retired onto the "deep" depth (aliases.ts).
   const [depth, setDepth] = useState<Depth>(() => initialTab(props.initialTab, TABS, 'chat') as Depth)
+  // U-6 — in the frame the dock's own head names Consult; as the ask bar
+  // alone the depth strip folds away too (a chat turn is what the bar sends).
+  const frame = useConsultFrame()
+  const compact = !!frame?.compact
   return (
-    <div className="flex h-full w-full flex-col bg-surf-2">
-      <div className="flex items-center gap-2 border-b border-line bg-surf-3 px-density py-1.5">
-        <span className="text-label uppercase tracking-wider text-ink-3">Consult</span>
+    <div className={frame ? 'flex h-full w-full flex-col' : 'flex h-full w-full flex-col bg-surf-2'}>
+      <div
+        className={
+          compact ? 'hidden' : frame ? 'flex items-center gap-2 pb-1.5' : 'flex items-center gap-2 border-b border-line bg-surf-3 px-density py-1.5'
+        }
+      >
+        {!frame && <span className="text-label uppercase tracking-wider text-ink-3">Consult</span>}
         <PanelTabStrip
           tabs={TABS}
           active={depth}
@@ -48,7 +57,7 @@ export default function ConsultMerged(props: PanelProps) {
       </div>
       <div className="min-h-0 flex-1">
         <PanelEmbedProvider>
-          {depth === 'chat' ? <ConsultPanel {...props} /> : <DeepConsultPanel {...props} />}
+          {depth === 'chat' || compact ? <ConsultPanel {...props} /> : <DeepConsultPanel {...props} />}
         </PanelEmbedProvider>
       </div>
     </div>

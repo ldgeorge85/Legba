@@ -1,0 +1,162 @@
+# Statement TYPING seat (plan P1, lane S3) — one cited sentence of a desk
+# finding in, one typed statement draft out.
+#
+# WHAT IT IS. The model half of the statement step: it reads one sentence a desk
+# already wrote with [N] citation markers, the subjects code offers, the cited
+# rows' stored text (a window code picked) and a short list of same-subject
+# standing statements code found, and proposes kind, subject, valid-from and
+# its precision, slots, an exact quote per cited row it relies on, and whether
+# the sentence restates, revises or is new. The library is
+# `legba.data.statement_typing` (`type_sentence`); this descriptor carries the
+# seat's system prompt (the prompt manifest's `statement_typing_seat` entry) and
+# its route.
+#
+# THE MODEL PROPOSES, CODE DECIDES. The statement text is the desk's sentence
+# with markers removed — the model never rewrites it. The subject must be one
+# code offered, each quote must name one of the sentence's own cited rows, and
+# every field is parsed against a closed vocabulary; anything else is a named
+# refusal. The draft then passes the code gates (`statement_gate`: quote in the
+# cited text, numbers and dates in a quote, subject named, valid-from not after
+# publication, the claim-source rule, handed rows, roles, control text, access
+# ceiling, independence). The seat returns a draft and a report. It writes no
+# row and sets no status.
+#
+# STATE: draft. Nothing calls this as a scheduled run: the seat is called as a
+# library by the backfill (lane S4) and the statement step (lane S6), which read
+# this descriptor's prompt and route. A fired run of the sub_handler named below
+# is not built — the deterministic dispatcher refuses an unknown sub_handler
+# loudly (docs/SEAMS.md, the statement seats row). Activation is a roll step.
+
+identity:
+  id: statement_typing_seat
+  name: Statement typing seat
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: p1_statement_layer
+
+subscription:
+  other_analysts: []
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: statement_typing_seat
+  system_prompt: |
+    You type one sentence from an analysis into structured statements, one per
+    piece of the sentence. You do not judge whether it is true, and you do not
+    rewrite it.
+
+    You are given:
+    - SENTENCE: one sentence a desk wrote. Each [N] marker cites ROW N.
+    - PIECES: either the pieces code already split the sentence into (P1, P2,
+      ... each with the rows it cites), or the whole sentence as one piece.
+    - SUBJECTS: the subjects you may choose from, numbered S1, S2, ... S1 is
+      the desk's own subject; others may be countries, places or ACTORS
+      (entity:person, entity:organization, ...) named in the cited rows. Each
+      piece lists the ids it may take.
+    - CITED ROWS: the texts the sentence cited, each with its ROW number, its
+      publication date and its title.
+    - STANDING STATEMENTS: statements already recorded about these subjects,
+      numbered C1, C2, ... (possibly none).
+
+    If code gave you pieces, type each one and do not change their bounds. If the
+    sentence is one piece but makes SEVERAL separate claims (several figures,
+    or several distinct assertions), you may split it: for each piece give
+    "start" and "end", character offsets into SENTENCE, and "text", copied
+    EXACTLY from SENTENCE (markers may be left out). The pieces must follow
+    each other in order and together cover the sentence. Never reword.
+
+    For each piece decide:
+    1. kind — exactly one of:
+       event       something happened on a date (an attack, a vote, a decision).
+       state       a condition that holds over time (a ban in force, a closure).
+       level       a measured quantity at a time (a rate, a count, a price).
+       absence     nothing of a stated kind was reported in a stated window.
+       attributed  a named party said or claimed something; the statement is
+                   about the saying, not about whether it is true.
+       assessment  a judgement or forecast, not a reported fact.
+       coverage    what the cited reporting shows AS reporting, not whether
+                   the reported event happened: how many outlets or sources
+                   carried something, how long a span it covers, how the
+                   reporting framed it ("three outlets reported ...",
+                   "the framing spans 16 hours", "reporting framed X as Y").
+       If the piece reports what a party said, claimed or alleged, use
+       attributed. A piece about what this desk's collection or slice does
+       NOT contain ("no signal in this window ...") is absence; one about
+       what it DOES contain, counted or characterised as reporting, is
+       coverage. A piece marked code-typed is not yours to type.
+    2. subject — the id (S1, S2, ...) of an offered subject the piece is
+       ABOUT: the actor that did, said, holds or suffered it. Not the outlet
+       that published a row, and not a place named only as where something
+       happened. Use only ids listed for that piece, or null if none fits.
+       Never invent a subject. If the piece is about a relation between two
+       actors (one strikes, meets, sanctions, accuses ... the other), the
+       acting one is the subject and the other goes in slots.counterpart, as
+       its id (e.g. "S3") or as words copied from the sentence.
+    3. valid_from — when the statement starts to hold in the world, as stated
+       by the piece AND a cited row: "YYYY-MM-DD" (precision "day"),
+       "YYYY-MM" (precision "month"), or null (precision "unknown"). Never
+       infer a date from the publication date alone, and never use your own
+       knowledge of events. "As of <date>" is when the analysis was written,
+       not when the statement became true.
+    4. slots — only where the kind needs them: "predicate" (a short snake_case
+       name), "value" (a number, for a level), "unit", "counterpart" (the other
+       party). Use no other slot names. Omit slots you cannot fill.
+    5. support — for each row THIS piece cites and relies on: its ROW number
+       and a quote of at least five words copied EXACTLY, character for
+       character, from that row's TEXT, that states what the piece states (its
+       numbers, dates and names). Prefer the whole sentence of the row; give
+       several quotes from one row (one entry each) when the piece's content
+       is spread across it. Do not paraphrase, shorten inside, join pieces or
+       fix spelling. If no passage of a row states it, leave that row out.
+       An assessment, an absence or a coverage piece takes NO quotes: give
+       "support": [] (code counts the rows a coverage piece cites).
+       An assessment may instead give "premises": the ids of the OTHER
+       pieces of this sentence it rests on (e.g. ["P1"]), or [].
+       narrow — if the quotes support only PART of a piece (the piece adds a
+       cause, a consequence, a judgement or a second claim that no row
+       states), you may give "narrow": {"start": ..., "end": ..., "text":
+       "..."}: the part the quotes do support, a whole clause copied EXACTLY
+       from SENTENCE with its offsets. Never narrow away a negation, an
+       attribution ("X said", "according to") or a condition ("if").
+    6. relation — "restates" if the piece says the same as one standing
+       statement, "revises" if it updates one (a new count, an end, a narrower
+       scope), else "new"; for restates/revises give its id (C1, ...).
+
+    Reply with ONE JSON object and nothing else:
+    {"pieces": [
+      {"piece": 1, "start": 0, "end": 42, "text": "...",
+       "kind": "...", "subject": "S1", "valid_from": "YYYY-MM-DD",
+       "valid_from_precision": "day", "slots": {},
+       "support": [{"row": 3, "quote": "..."}],
+       "relation": {"action": "new", "candidate": null}}
+    ]}
+    ("start", "end" and "text" are needed only when you split the sentence
+    yourself; "narrow" and "premises" only when they apply.)
+  llm:
+    # THE $0 CORE PLANE, and nothing else. The deterministic deps builder
+    # hard-refuses an Anthropic component for a deterministic sub-handler, and
+    # the seat library's `assert_core_route` refuses a priced component, a
+    # non-core subprovider and the consult plane's `deep` alias before any call.
+    temperature: 1.0
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+  # The core plane is $0 and is never budgeted by token count (house rule).
+  budget_tokens_per_day: 0
+
+# No cadence: the seat is called, never scheduled.
+cadence: {}
+
+outputs: []

@@ -48,29 +48,43 @@ export type ConfidenceLevel = 'low' | 'moderate' | 'high' | 'unassessed'
  * (`legba.data.provenance.kinds.STRUCTURAL_VERIFY_EXEMPT_ANALYSTS`, which
  * stamps `/findings` rows with `verify_exempt: "structural"`). The client
  * mirror exists because live-tail rows (NATS envelopes) never pass through
- * the reads-API projection. Keep in sync with the server set — the server
- * side is drift-guarded in tests/data_pkg/test_trace_only_output_split.py.
+ * the reads-API projection. GENERATED (R-1) from the server's type registry
+ * (the deterministic handlers declared with `output="finding"`) by
+ * scripts/gen_type_tables.py; the gate runs it with `--check`, so the mirror
+ * cannot drift again (before R-1 it had silently fallen seven ids behind).
  */
 export const STRUCTURAL_VERIFY_EXEMPT_ANALYSTS: ReadonlySet<string> = new Set([
-  'graph_mining',
+  // BEGIN GENERATED structural-verify-exempt (scripts/gen_type_tables.py; do not edit)
+  'adversarial_signals',
+  'analyst_traces_retention',
   'anomaly_detection',
   'band_calibration_tracker',
   'calibration_tracking',
-  'unit_correctness_scorer',
-  'composition_lineage_sweep',
-  'adversarial_signals',
-  'situation_clustering',
-  'thematic_proposal',
-  'indicator_tracker',
   'collection_gap',
-  'hypothesis_lifecycle',
-  'signals_retention',
-  'analyst_traces_retention',
-  'geo_convergence_scan',
-  'fact_decay_scan',
-  'source_track_record',
-  'narrative_mapper',
+  'composition_lineage_sweep',
+  'correctness_grader',
   'desk_baseline',
+  'desk_reference',
+  'due_and_absent',
+  'fact_decay_scan',
+  'geo_convergence_scan',
+  'graph_mining',
+  'hypothesis_lifecycle',
+  'indicator_tracker',
+  'inquiry_yield',
+  'kev_digest',
+  'layer_divergence',
+  'narrative_mapper',
+  'reference_builder',
+  'reference_deterministic',
+  'research_measurement',
+  'series_change',
+  'signals_retention',
+  'situation_clustering',
+  'source_track_record',
+  'thematic_proposal',
+  'unit_correctness_scorer',
+  // END GENERATED structural-verify-exempt
 ])
 
 /** One-line explanation of the structural exemption, for tooltips/subtext. */
@@ -111,6 +125,19 @@ export const FAITHFULNESS_EXPLAIN =
 export const UNVERIFIED_EXPLAIN =
   'No faithfulness-verify pass has run on this read yet — an honest "not yet ' +
   'checked," not a failure.'
+
+/** JUDGE-2 — why a read whose judge was ASKED and did not answer is unverified
+ *  (the deterministic floor checked citation structure only). */
+export const JUDGE_UNAVAILABLE_EXPLAIN =
+  'The faithfulness judge was asked and did not answer (every route in its ' +
+  'fallback chain failed), so only the deterministic floor ran: it checks that ' +
+  'citations exist, not that they support the prose. This read is not ' +
+  're-judged automatically when the judge recovers.'
+
+/** JUDGE-2 — a verdict a LATER rung of the judge fallback chain wrote. */
+export const FALLBACK_JUDGE_EXPLAIN =
+  "The configured judge's route was gone (auth / credit / retired model), so a " +
+  'fallback judge graded this read.'
 
 /** Why a structural/mining analyst's row never gets a faithfulness score. */
 export const STRUCTURAL_UNVERIFIED_EXPLAIN =
@@ -225,6 +252,88 @@ export interface VerificationBlock {
   judge_status?: string | null
   confidence_ceiling?: number | null
   overall_score?: number | null
+  /** JUDGE-2 — stamped when the judge was asked and every rung failed. */
+  unverified_reason?: UnverifiedReason | null
+  /** JUDGE-2 — stamped when a LATER rung of the judge chain answered. */
+  judge_chain?: JudgeChainStamp | null
+}
+
+/** JUDGE-2 — `data.verification.unverified_reason` (server shape). */
+export interface UnverifiedReason {
+  class?: string | null
+  http_status?: string | null
+  component_id?: string | null
+  at?: string | null
+  judge_unavailable_reason?: string | null
+  rungs_tried?: number | null
+}
+
+/** JUDGE-2 — `data.verification.judge_chain` (server shape). */
+export interface JudgeChainStamp {
+  used?: string | null
+  rung?: number | null
+  model?: string | null
+  weak?: boolean | null
+  head?: string | null
+}
+
+/** The badge's reading of an unverified-by-outage critique. */
+export interface UnverifiedFact {
+  /** ISO time of the failing judge call; null when the row did not record one. */
+  since: string | null
+  /** The http status when there was one (`402`), else the failure class. */
+  cause: string
+}
+
+/** The badge's reading of a fallback-rung verdict. */
+export interface FallbackJudge {
+  model: string | null
+  rung: number | null
+  weak: boolean
+}
+
+/** `2026-10-03T06:12:03+00:00` → `2026-10-03 06:12Z`; unparseable → as given. */
+function utcMinute(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}Z`
+}
+
+/** JUDGE-2 — the unverified fact, or null when the block carries none. */
+export function unverifiedFact(v: VerificationBlock | null | undefined): UnverifiedFact | null {
+  const r = v?.unverified_reason
+  if (!r || typeof r !== 'object') return null
+  const http = typeof r.http_status === 'string' && r.http_status.trim() ? r.http_status.trim() : null
+  const cls = typeof r.class === 'string' && r.class.trim() ? r.class.trim() : null
+  return {
+    since: typeof r.at === 'string' && r.at ? r.at : null,
+    cause: http ?? cls ?? 'unknown',
+  }
+}
+
+/** The one line every reader shows: `unverified since T (judge unavailable: 402)`.
+ *  A missing time renders `—`, never an invented one. */
+export function unverifiedLine(f: UnverifiedFact): string {
+  return `unverified since ${f.since ? utcMinute(f.since) : '—'} (judge unavailable: ${f.cause})`
+}
+
+/** JUDGE-2 — the fallback rung that judged, or null (rung 1 / no chain). */
+export function fallbackJudge(v: VerificationBlock | null | undefined): FallbackJudge | null {
+  const c = v?.judge_chain
+  if (!c || typeof c !== 'object' || typeof c.used !== 'string' || !c.used) return null
+  return {
+    model: typeof c.model === 'string' && c.model ? c.model : null,
+    rung: typeof c.rung === 'number' ? c.rung : null,
+    weak: c.weak === true,
+  }
+}
+
+/** The tooltip sentence for a fallback verdict (weak rung said so). */
+export function fallbackJudgeLine(f: FallbackJudge): string {
+  const who = f.model ?? 'a fallback judge'
+  const rung = f.rung != null ? ` (chain rung ${f.rung})` : ''
+  return `judged by ${who}${rung}${f.weak ? ' — a WEAK in-house judge, not pooled with hosted verdicts' : ''}`
 }
 
 /** The two-axis verdict a badge renders. */
@@ -255,6 +364,10 @@ export interface Verdict {
   /** D-5 — true when the rollup's declared arithmetic was re-derived and
    *  matched (server stamp `deterministic-rollup-verified`). */
   rollupVerified: boolean
+  /** JUDGE-2 — set when the judge was asked and every rung failed. */
+  unverified: UnverifiedFact | null
+  /** JUDGE-2 — set when a later rung of the judge chain wrote the verdict. */
+  fallbackJudge: FallbackJudge | null
 }
 
 /** ICD-203 probability bands, as [low, high] inclusive-low/exclusive-high cuts
@@ -352,6 +465,8 @@ export function buildVerdict(input: VerdictInput): Verdict {
     structuralVerified: isStructuralVerified(input.verifyExempt),
     rollup: isDeterministicRollup(input.analystId, input.verifyExempt, input.data),
     rollupVerified: isRollupVerified(input.verifyExempt),
+    unverified: unverifiedFact(input.verification),
+    fallbackJudge: fallbackJudge(input.verification),
   }
 }
 

@@ -1,0 +1,169 @@
+{
+  "_generated": "scripts/gen_profile_ui.py from profiles/geopolitics/profile.yaml - do not edit by hand",
+  "frames": [
+    {
+      "id": "world",
+      "label": "World",
+      "producer": "world_assessor"
+    },
+    {
+      "id": "assessment",
+      "label": "Assessment",
+      "producer": "world_assessment"
+    },
+    {
+      "id": "region",
+      "label": "Region",
+      "parent": "world",
+      "producer": "region_composition"
+    },
+    {
+      "id": "country",
+      "label": "Country",
+      "parent": "region",
+      "producer": "country_composition"
+    },
+    {
+      "id": "thematic",
+      "label": "Thematic",
+      "producer": "escalation_composition"
+    }
+  ],
+  "labels": {
+    "overview_title": "World at a glance",
+    "read_title": "World Assessment",
+    "roster": {
+      "g20": "G20",
+      "watch": "Watch list"
+    },
+    "unscoped_subject": "No desk (world / unscoped)"
+  },
+  "landing": "morning_read",
+  "map": {
+    "geometry": "iso2",
+    "title": "World Map"
+  },
+  "missions": [
+    {
+      "id": "morning_read",
+      "label": "Morning Read"
+    },
+    {
+      "id": "desk_watch",
+      "label": "Desk Watch"
+    },
+    {
+      "id": "crisis",
+      "label": "Crisis"
+    },
+    {
+      "id": "release",
+      "label": "Release"
+    }
+  ],
+  "plane": "geopolitics",
+  "profile": "geopolitics",
+  "rosters": {
+    "scored_subject_tags": [
+      "g20",
+      "watch"
+    ],
+    "subject_tags": [
+      "g20",
+      "watch",
+      "supply_chain"
+    ],
+    "units": [
+      {
+        "id": "leadership_transition",
+        "label": "Leadership transition",
+        "short": "LT"
+      },
+      {
+        "id": "energy_security",
+        "label": "Energy security",
+        "short": "ES"
+      },
+      {
+        "id": "escalation",
+        "label": "Escalation",
+        "short": "ESC"
+      },
+      {
+        "id": "narrative_coordination",
+        "label": "Narrative / coordination",
+        "short": "NC"
+      },
+      {
+        "id": "internal_stability",
+        "label": "Internal stability",
+        "short": "IS"
+      },
+      {
+        "id": "military_posture",
+        "label": "Military posture",
+        "short": "MP"
+      },
+      {
+        "id": "economic_coercion",
+        "label": "Economic coercion",
+        "short": "EC"
+      },
+      {
+        "id": "proliferation_watch",
+        "label": "Proliferation watch",
+        "scope_note": "only nuclear-relevant desks run this unit",
+        "scope_tag": "nuclear_watch",
+        "short": "PW"
+      },
+      {
+        "id": "disruption_status",
+        "label": "Disruption status",
+        "scope_tag": "supply_chain",
+        "short": "DS"
+      }
+    ]
+  },
+  "schema": "legba/profile_ui/1",
+  "stances": [
+    {
+      "id": "morning_read",
+      "label": "Morning Read",
+      "question": "What happened, what moved, what does it mean?"
+    },
+    {
+      "id": "desk",
+      "label": "Desk",
+      "question": "Everything about the one place or lane I have selected."
+    },
+    {
+      "id": "investigate",
+      "label": "Investigate",
+      "question": "Follow this one thing to the bottom."
+    },
+    {
+      "id": "trust",
+      "label": "Trust",
+      "question": "Is what it produced any good?"
+    },
+    {
+      "id": "gate",
+      "label": "The Gate",
+      "question": "Work the human queues \u2014 journal proposals, grading, optimizer candidates."
+    },
+    {
+      "id": "engine",
+      "label": "Engine",
+      "question": "Is the machine running, and what is it configured as?"
+    }
+  ],
+  "subject": {
+    "plural": "Desks",
+    "singular": "Desk"
+  },
+  "top_floor": "world_assessor",
+  "unit_noun": {
+    "plural": "units",
+    "singular": "unit"
+  }
+}

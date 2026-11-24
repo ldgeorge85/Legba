@@ -9,6 +9,7 @@ import {
   addToBasket,
   buildDeskBrief,
   buildDeskBriefAppendix,
+  DESK_BRIEF_APPENDIX_MAX_CHARS,
   composeDeskBrief,
   parseBasket,
   removeFromBasket,
@@ -267,6 +268,31 @@ describe('buildDeskBriefAppendix', () => {
     ])
     expect(appendix).toContain('Quiet frame')
     expect(appendix).toContain('none linked yet')
+  })
+
+  it('stops before the size cap and SAYS how many situations it withheld (W11-F78)', () => {
+    // A G20 desk: 20 situations × 20 events ran to ~23,000 chars and the export
+    // route refused the whole brief at 20,000. The composer now stays under
+    // DESK_BRIEF_APPENDIX_MAX_CHARS and names the withheld count.
+    const big = Array.from({ length: 60 }, (_, i) => ({
+      id: `s${i}`,
+      name: `Situation number ${i} with a long descriptive name for size`,
+      status: 'active',
+      category: 'civil_unrest',
+      intensityScore: 1 - i / 100,
+      eventCount: 25,
+      events: Array.from({ length: 25 }, (__, j) => ({
+        id: `e${i}-${j}`,
+        title: `Tracked event ${j} of situation ${i} — a title long enough to count`,
+        lifecycleState: 'ongoing',
+      })),
+    }))
+    const appendix = buildDeskBriefAppendix(big as never) ?? ''
+    expect(appendix.length).toBeLessThanOrEqual(DESK_BRIEF_APPENDIX_MAX_CHARS)
+    expect(appendix).toMatch(/\d+ more open situations withheld from this brief/)
+    // The highest-intensity situations are the ones kept.
+    expect(appendix).toContain('Situation number 0 ')
+    expect(appendix).not.toContain('Situation number 59 ')
   })
 })
 

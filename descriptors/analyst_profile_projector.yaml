@@ -1,0 +1,63 @@
+# Profile Projector analyst descriptor — W9 VIEW-1 (Review A §2.2d, DEC-12).
+#
+# A `deterministic`-kind META analyst that whole-rebuilds every declared
+# PLANE of `profile_projection` — one plane per profile, built from the
+# profile's view (profiles/<id>/projection/view.yaml, packaged as
+# src/legba/data/profile_projection.json) and the live substrate (the frame
+# family's subject groups and their members, each unit's own cadence, the
+# crosswalk rows) — one transaction per plane, and stamps the plane's
+# (`_meta`, `build`) receipt row (projected_at / row_count / section_counts /
+# unmeasured / build_seconds / the view digest). Read at
+# GET /api/v1/registry/projection/<plane>[/<section>].
+#
+# There is NO incremental path: a structure only ever built by SELECT can be
+# stale, never wrong.
+#
+# state: draft — the handler no-ops while LEGBA_PROFILE_PROJECTION is off.
+# Activation is a separate operator step after the roll (/transition +
+# descriptors/LIFECYCLE.md), deliberately not part of the VIEW-1 commit.
+
+identity:
+  id: profile_projector
+  name: Profile Projector
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: view1_profile_projection
+
+subscription:
+  # META sweep: the handler reads vocabulary_entries, target_descriptors and
+  # analyst_descriptors directly through deps.pg_pool; no per-target slice.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: profile_projector
+  budget_tokens_per_day: 0
+  options:
+    # First-activation probe: build every plane's rows and report the
+    # receipt without writing. Set false for production.
+    dry_run: false
+
+cadence:
+  # Hourly at :27 — clear of every single-minute and stepped slot the analyst
+  # tree declares (graph_projector :07, the event ticks, the reconciler).
+  # Staleness beyond LEGBA_PROFILE_PROJECTION_MAX_AGE_SECONDS (default 7200 s)
+  # refuses readers by name.
+  fallback_schedule: "27 * * * *"
+  cooldown_seconds: 3000
+
+# The projection is a side-write; the run summary is TRACE_ONLY.
+outputs: []

@@ -58,6 +58,8 @@ import {
   sentinelRows,
   statusMix,
   summaryLine,
+  JUDGE_COLUMN,
+  JUDGE_DEFAULT_WINDOW_DAYS,
 } from '@/lib/judgeStats'
 import type { PanelProps } from '@/types'
 
@@ -72,7 +74,7 @@ const STATUS_TONE: Record<string, string> = {
 }
 
 export default function JudgeStatsPanel({ registration }: PanelProps) {
-  const [days, setDays] = useState<number>(14)
+  const [days, setDays] = useState<number>(JUDGE_DEFAULT_WINDOW_DAYS)
 
   const { data, isLoading, error, refetch } = useQuery<JudgeStatsResponse>({
     queryKey: ['judge-stats', days],
@@ -198,7 +200,9 @@ export default function JudgeStatsPanel({ registration }: PanelProps) {
                 <tr className="text-label uppercase tracking-wider text-ink-3">
                   <th className="py-0.5 text-left font-normal">stamp</th>
                   <th className="py-0.5 text-right font-normal">verdicts</th>
-                  <th className="py-0.5 text-right font-normal">faithfulness</th>
+                  <th className="py-0.5 text-right font-normal" title={JUDGE_COLUMN.faithfulnessTip}>
+                    {JUDGE_COLUMN.faithfulness}
+                  </th>
                   <th className="py-0.5 text-left font-normal">providers</th>
                 </tr>
               </thead>
@@ -309,8 +313,20 @@ function ProviderTable({
         <tr className="text-label uppercase tracking-wider text-ink-3">
           <th className="py-0.5 text-left font-normal">served by</th>
           <th className="py-0.5 text-left font-normal">verdict mix</th>
-          <th className="py-0.5 text-right font-normal">adjudicated</th>
-          <th className="py-0.5 text-right font-normal">faithfulness</th>
+          <th
+            className="py-0.5 text-right font-normal"
+            title={JUDGE_COLUMN.adjudicatedTip}
+            data-testid="judge-stats-col-adjudicated"
+          >
+            {JUDGE_COLUMN.adjudicated}
+          </th>
+          <th
+            className="py-0.5 text-right font-normal"
+            title={JUDGE_COLUMN.faithfulnessTip}
+            data-testid="judge-stats-col-faithfulness"
+          >
+            {JUDGE_COLUMN.faithfulness}
+          </th>
           <th className="py-0.5 text-right font-normal">calls</th>
           <th className="py-0.5 text-right font-normal">p95</th>
         </tr>

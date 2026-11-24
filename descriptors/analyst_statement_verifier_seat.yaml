@@ -1,0 +1,104 @@
+# Statement VERIFIER seat (plan P1 gate G4, lane S3) — the clean-context
+# support check.
+#
+# WHAT IT IS. For each new statement and each revision, the verifier sees ONLY
+# the statement (text, kind, valid-from) and its quoted support — never the
+# desk's prose, its reasoning, the source titles or the typing seat's reply —
+# and answers supports / partly / does_not_support with a closed reason code.
+# The library is `legba.data.statement_verifier` (`verify_support`); this
+# descriptor carries the seat's system prompt (the prompt manifest's
+# `statement_verifier_seat` entry) and its route.
+#
+# CODE FIRST. Before the model is asked, code checks every evidence quote is in
+# the stored text it cites (G1) and every number and date in the statement is in
+# a quote (G2). A statement that fails is does_not_support, decided by code,
+# and no call is spent. Only a model `supports` on a statement code passed
+# establishes; an unreadable reply establishes nothing.
+#
+# MEASURED. The seat's catch rate on planted wrong statements
+# (`legba.data.statement_planted`: wrong number, wrong date, wrong subject,
+# quote from another version, unsupported inference, claim recorded as fact)
+# and its false-reject rate on the twenty-item canary
+# (`legba.data.statement_seat_canary`) are published beside every figure the
+# seat feeds, with n. Below the 0.90 catch floor establishment pauses;
+# candidates accumulate and nothing is lost.
+#
+# SAME FAMILY AS THE PROPOSER — DISCLOSED. The verifier runs on the core plane,
+# the typing seat's own family, until a second family is free (plan d09). A more
+# agreeable model passes more borderline items; the published catch rate is the
+# control, and the reason it is measured on every canary run.
+#
+# STATE: draft. Called as a library (lanes S4, S6); a fired run of the
+# sub_handler below is not built and the deterministic dispatcher refuses it
+# loudly (docs/SEAMS.md, the statement seats row). Activation is a roll step.
+
+identity:
+  id: statement_verifier_seat
+  name: Statement verifier seat
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: p1_statement_layer
+
+subscription:
+  other_analysts: []
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: statement_verifier_seat
+  system_prompt: |
+    You check whether quoted text supports a statement. You see only the
+    statement and the quotes. Judge only from the quotes: do not use your own
+    knowledge, and do not assume anything the quotes do not say.
+
+    Each quote is shown with the date its source was published. Read a
+    relative date in a quote ("on Saturday", "today", "yesterday") against
+    that date; an event a quote reports as happening on its publication day
+    has that date. Use the publication date for nothing else.
+
+    Answer "supports" only if the quotes, read together, state everything the
+    statement states: the same subject, the same numbers, the same dates, the
+    same event or condition, and nothing more. Answer "partly" if the quotes
+    state some of it but not all. Answer "does_not_support" if they state
+    something different or nothing of it.
+
+    Check each of these, and give the first that fails as reason_code:
+    - number_mismatch: a number in the statement differs from the quotes.
+    - date_mismatch: a date in the statement differs from the quotes.
+    - subject_mismatch: the statement is about a different person, place,
+      body or thing than the quotes.
+    - attribution_dropped: the quotes report that someone said, claimed or
+      alleged it, but the statement (unless its KIND is attributed) states it
+      as fact.
+    - beyond_quote: the statement adds a cause, an intent, a consequence or a
+      forecast that the quotes do not state.
+    - not_stated: the quotes do not state the statement's content at all.
+    If all pass, the verdict is "supports" and reason_code is "fully_stated".
+
+    Reply with ONE JSON object and nothing else:
+    {"verdict": "supports" | "partly" | "does_not_support",
+     "reason_code": "...", "note": "one short sentence"}
+  llm:
+    # THE $0 CORE PLANE, and nothing else — see the typing seat's descriptor.
+    temperature: 1.0
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+  # The core plane is $0 and is never budgeted by token count (house rule).
+  budget_tokens_per_day: 0
+
+# No cadence: the seat is called, never scheduled.
+cadence: {}
+
+outputs: []

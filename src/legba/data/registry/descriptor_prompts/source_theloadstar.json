@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.theloadstar.news": {
+      "source": "source_theloadstar.yaml",
+      "state": "draft"
+    }
+  }
+}

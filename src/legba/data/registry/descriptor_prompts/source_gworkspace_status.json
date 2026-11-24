@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.gworkspace.status": {
+      "source": "source_gworkspace_status.yaml",
+      "state": "draft"
+    }
+  }
+}

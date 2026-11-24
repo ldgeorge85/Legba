@@ -29,6 +29,9 @@ from __future__ import annotations
 import logging
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 
+from .. import frames as _frames
+from .. import rosters as _rosters
+
 logger = logging.getLogger(__name__)
 
 #: Injected BASIS gather: ``(conn, **kwargs) -> list[dict]``. See the module
@@ -98,6 +101,42 @@ REGION_FRAME_TAG: str = "region"
 keys on it (``(body->'scope'->'tags') ? 'region'``) — the member country desks
 carry the SPECIFIC ``region_<slug>`` tag, NOT this one, so it matches ONLY the
 five frames."""
+
+#: W7 FRAME-1 — the convention the ``frame`` vocabulary family replaces, handed
+#: to ``data/frames.py`` as its FALLBACK when the family is not loadable: a
+#: frame id carries :data:`REGION_TARGET_PREFIX`, every frame head the kind tag
+#: :data:`REGION_FRAME_TAG`, and a frame's members carry the frame's own id.
+LEGACY_FRAMES = _frames.LegacyFrames(id_prefix=REGION_TARGET_PREFIX, kind=REGION_FRAME_TAG)
+
+
+def _frame_is_region(target_filter: Any, catalog: "_frames.FrameCatalog | None") -> bool:
+    """W10 SPLIT-3 — the flag-on twin of :func:`_is_region_target`: the id names
+    a frame of the :data:`REGION_FRAME_TAG` kind. A loaded ``frame`` family is
+    authoritative (any frame whose parent walk reaches the kind, whatever its
+    id); unloaded, :data:`LEGACY_FRAMES` (the prefix) is the fallback."""
+    frame = _frames.composite_frame(target_filter, catalog, legacy=LEGACY_FRAMES)
+    if frame is None:
+        return False
+    if catalog is not None and catalog.loaded:
+        return REGION_FRAME_TAG in catalog.ancestors(frame.id)
+    return frame.parent_id == REGION_FRAME_TAG
+
+
+async def is_region_target(
+    conn, target_filter: Any, *, catalog: "_frames.FrameCatalog | None" = None,
+) -> bool:
+    """READ_SLICE's REGION switch (W7-F3). ``LEGBA_FRAME_FAMILY`` off: the
+    prefix test, no read — byte-for-byte :func:`_is_region_target`. On: the
+    ``frame`` family decides (:func:`_frame_is_region`), one vocabulary read
+    when no ``catalog`` is handed in."""
+    if not _frames.frame_family_enabled():
+        return _is_region_target(target_filter)
+    if not target_filter:
+        return False
+    if catalog is None:
+        catalog = await _frames.load_frame_catalog(conn)
+    return _frame_is_region(target_filter, catalog)
+
 
 REGION_COMPOSITION_ANALYST_ID: str = "region_composition"
 """The per-region composition analyst id (S2-T2). The world read's declared
@@ -212,16 +251,20 @@ unchanged). Only meaningful alongside ``THEMATIC_DIMENSION_KEY``. Lives in the o
 # scorecard — a card with 7 country dimensions reading `insufficient-evidence`
 # plus one supply-chain dimension would misrepresent what the pack measures),
 # ``alert_trigger_scan._DESKS_SQL`` (no `baseline_deviation` alerts for these
-# desks) and ``desk_baseline._DESKS_SQL`` (no desk baselines). Those three keep
-# the bare ``array['g20', 'watch']`` predicate. This roster is the ONLY one that
-# must see a supply-chain desk, because it is the only one whose job is naming
-# ABSENCE.
+# desks) and ``desk_baseline._DESKS_SQL`` (no desk baselines). Those three bind
+# the SCORED roster (``rosters.scored_roster_tags()``). This roster is the ONLY
+# one that must see a supply-chain desk, because it is the only one whose job
+# is naming ABSENCE.
+#
+# ROSTER-1: the tags are the profile's ``rosters.subject_tags``
+# (``rosters.subject_roster_tags()``), bound as ``$1`` — a tag added to the
+# profile joins the coverage with no code change; nothing here spells one.
 _DESK_ROSTER_SQL = """
     SELECT descriptor_id, name
       FROM target_descriptors
      WHERE is_head = TRUE
        AND COALESCE(state, 'active') <> 'retired'
-       AND (body -> 'scope' -> 'tags') ?| array['g20', 'watch', 'supply_chain']
+       AND (body -> 'scope' -> 'tags') ?| $1::text[]
      ORDER BY descriptor_id
 """
 
@@ -245,7 +288,9 @@ _REGION_MEMBERS_SQL = """
 """
 
 
-async def _resolve_region_member_target_ids(conn, region_id: str) -> list[str]:
+async def _resolve_region_member_target_ids(
+    conn, region_id: str, *, catalog: "_frames.FrameCatalog | None" = None,
+) -> list[str]:
     """Resolve a REGION FRAME's member COUNTRY desks (S2-T2).
 
     The member desks are the active head targets whose ``scope.tags`` carry the
@@ -260,7 +305,15 @@ async def _resolve_region_member_target_ids(conn, region_id: str) -> list[str]:
     ``?`` element-test needs no cast. An EMPTY result (a region with no tagged
     member desks) is a HONEST gap — the caller's SET filter then reads zero
     country reads and the synth narrates the region as unassessed.
+
+    W7 FRAME-1: ``LEGBA_FRAME_FAMILY`` on ⇒ the members come from the ``frame``
+    family (``data/frames.py``), this convention its fallback; off ⇒ the read
+    below, byte-for-byte.
     """
+    if _frames.frame_family_enabled():
+        return await _frames.resolve_members(
+            str(region_id), conn, catalog=catalog, legacy=LEGACY_FRAMES,
+        )
     rows = await conn.fetch(_REGION_MEMBERS_SQL, str(region_id))
     return [str(r["descriptor_id"]) for r in rows]
 
@@ -279,7 +332,9 @@ _REGION_ROSTER_SQL = """
 """
 
 
-async def _resolve_region_roster(conn) -> list[dict[str, str]]:
+async def _resolve_region_roster(
+    conn, *, catalog: "_frames.FrameCatalog | None" = None,
+) -> list[dict[str, str]]:
     """Resolve the active REGION-FRAME roster (S2-T3).
 
     Returns ``[{"region_id", "region_name"}, ...]`` for every active head target
@@ -288,7 +343,17 @@ async def _resolve_region_roster(conn) -> list[dict[str, str]]:
     which regions DEGRADE to their country reads and which are HONEST gaps. An
     empty roster (a pre-S2-T1 topology with no region frames) tells the caller to
     fall back to a plain region-head read (no gap/degrade frame to reason over).
+
+    W7 FRAME-1: flag on ⇒ the groups registered under the ``frame`` kind
+    :data:`REGION_FRAME_TAG` (the same token, so the fallback is this read).
     """
+    if _frames.frame_family_enabled():
+        return [
+            {"region_id": g["frame_id"], "region_name": g["frame_name"]}
+            for g in await _frames.resolve_frame_roster(
+                REGION_FRAME_TAG, conn, catalog=catalog, legacy=LEGACY_FRAMES,
+            )
+        ]
     rows = await conn.fetch(_REGION_ROSTER_SQL, REGION_FRAME_TAG)
     roster: list[dict[str, str]] = []
     for r in rows:
@@ -334,7 +399,13 @@ async def _assemble_world_region_slice(
     same empty-slice contract every meta read already honors.
     """
     _read_basis = basis_reader or _default_basis_reader()
-    roster = await _resolve_region_roster(conn)
+    # W10 SPLIT-3: flag on ⇒ ONE frame-family read serves the roster and the
+    # region/thematic partition below; off ⇒ no read, the prefix test.
+    catalog = (
+        await _frames.load_frame_catalog(conn)
+        if _frames.frame_family_enabled() else None
+    )
+    roster = await _resolve_region_roster(conn, catalog=catalog)
 
     # The region_composition heads — one HEAD per region via DISTINCT ON, verify-
     # floored + meta-inclusive (region_composition rows are meta=True). This is
@@ -357,7 +428,7 @@ async def _assemble_world_region_slice(
     thematic_by_analyst: dict[str, list[dict[str, Any]]] = {}
     for r in region_rows:
         tid = str(r.get("target_id") or "")
-        if not _is_region_target(tid):
+        if not (_frame_is_region(tid, catalog) if catalog is not None else _is_region_target(tid)):
             aid = str(r.get("analyst_id") or "thematic")
             r["_region_id"] = f"thematic:{aid}"
             r["_region_mode"] = REGION_MODE_THEMATIC
@@ -865,12 +936,18 @@ async def resolve_region_membership(conn, region_id: str) -> dict[str, Any]:
     ONLY on the rollup path, so the legacy region run issues not one extra
     query.
     """
-    rows = await conn.fetch(_REGION_MEMBER_ROSTER_SQL, str(region_id))
-    members: list[dict[str, str]] = []
-    for r in rows:
-        did = str(r["descriptor_id"])
-        name = r["name"]
-        members.append({"target_id": did, "target_name": str(name) if name else did})
+    if _frames.frame_family_enabled():
+        # W7 FRAME-1 — the rollup's roster walk reads the ``frame`` family.
+        members = await _frames.resolve_member_roster(
+            str(region_id), conn, legacy=LEGACY_FRAMES,
+        )
+    else:
+        rows = await conn.fetch(_REGION_MEMBER_ROSTER_SQL, str(region_id))
+        members = []
+        for r in rows:
+            did = str(r["descriptor_id"])
+            name = r["name"]
+            members.append({"target_id": did, "target_name": str(name) if name else did})
     frame = await conn.fetchrow(_REGION_NAME_SQL, str(region_id))
     region_name = str(frame["name"]) if frame and frame["name"] else str(region_id)
     return {
@@ -1125,7 +1202,13 @@ async def _assemble_world_country_slice(
     uses, reused verbatim.
     """
     _read_basis = basis_reader or _default_basis_reader()
-    roster = await _resolve_region_roster(conn)
+    # W7 FRAME-1 — one ``frame`` family read serves the roster and every
+    # member walk below; flag off ⇒ none, and both reads are the legacy SQL.
+    catalog = (
+        await _frames.load_frame_catalog(conn)
+        if _frames.frame_family_enabled() else None
+    )
+    roster = await _resolve_region_roster(conn, catalog=catalog)
 
     # W-2 — the basis set and the PERIPHERY set are now one list, named once
     # (:func:`world_admissible_analyst_ids`). The thematic-gap pass below reads
@@ -1182,7 +1265,9 @@ async def _assemble_world_country_slice(
     region_by_member: dict[str, dict[str, str]] = {}
     for region in roster:
         rid = region["region_id"]
-        for member_id in await _resolve_region_member_target_ids(conn, rid):
+        for member_id in await _resolve_region_member_target_ids(
+            conn, rid, catalog=catalog,
+        ):
             # A desk tagged into two frames is filed under the FIRST by
             # descriptor_id order — deterministic, and the duplicate would
             # otherwise double-count the desk in the world's coverage totals.
@@ -1280,17 +1365,20 @@ async def _assemble_world_country_slice(
 
 
 async def _resolve_desk_roster(conn) -> list[dict[str, str]]:
-    """Resolve the active g20+watch DESK roster (S2-T4).
+    """Resolve the active DESK roster (S2-T4).
 
-    Returns ``[{"desk_id", "desk_name"}, ...]`` for every active head target
-    tagged ``g20`` or ``watch`` (the desks the units fan out to). The thematic
-    compose diffs this authoritative desk set against the desks that actually have
-    an escalation head to decide which desks are HONEST gaps. Tag-based (matches
-    scorecard_producer + the units' subscription) so registering a new desk with
-    the g20/watch tag auto-joins the coverage with zero code change. An empty
-    roster (a pre-tag topology) tells the caller to skip the gap/coverage frame.
+    Returns ``[{"desk_id", "desk_name"}, ...]`` for every non-retired head
+    target carrying any of the profile's subject-roster tags
+    (``rosters.subject_roster_tags()``; the geopolitics profile: ``g20``,
+    ``watch``, ``supply_chain`` — the desks the units fan out to). The thematic
+    compose diffs this authoritative desk set against the desks that actually
+    have an escalation head to decide which desks are HONEST gaps. Tag-based
+    (matches scorecard_producer + the units' subscription) so registering a new
+    desk with a roster tag — or adding a tag to the profile — auto-joins the
+    coverage with zero code change. An empty roster (a pre-tag topology) tells
+    the caller to skip the gap/coverage frame.
     """
-    rows = await conn.fetch(_DESK_ROSTER_SQL)
+    rows = await conn.fetch(_DESK_ROSTER_SQL, list(_rosters.subject_roster_tags()))
     roster: list[dict[str, str]] = []
     for r in rows:
         did = str(r["descriptor_id"])
@@ -1316,7 +1404,7 @@ async def _assemble_thematic_unit_slice(
     (``dedupe_heads=True`` folds superseded prior-cycle rows + ``DISTINCT ON
     (analyst_id, target_id)`` yields one head per desk; ``include_meta=False`` — the
     unit is a FIRST-ORDER finding). Then diffs the assessed-desk roster
-    (``_DESK_ROSTER_SQL``: g20 + watch + supply_chain):
+    (``_DESK_ROSTER_SQL``: the profile's subject-roster tags):
 
       * a desk WITH a head feeds the compose (mode ``present``);
       * a desk with NO head is a GAP (mode ``gap``, 0 inputs) — NAMED, not dropped.

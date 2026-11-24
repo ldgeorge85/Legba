@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:country_g20_tr": {
+      "source": "target_country_g20_tr.yaml",
+      "state": "active"
+    }
+  }
+}

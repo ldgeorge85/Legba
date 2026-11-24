@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:band_calibration_tracker": {
+      "source": "analyst_band_calibration_tracker.yaml",
+      "state": "draft"
+    }
+  }
+}

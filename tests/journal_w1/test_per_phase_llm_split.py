@@ -134,6 +134,11 @@ class _IdHandler:
         self.subprovider = component_id
         self.component_id = component_id
 
+    def thinking_available(self) -> bool:
+        # T-2: the journal's voice thinks (method.llm.narrate.thinking), so the
+        # core component this stands in for declares a thinking alias.
+        return True
+
     async def chat_complete(self, *a: Any, **k: Any) -> Any:  # pragma: no cover
         raise NotImplementedError
 

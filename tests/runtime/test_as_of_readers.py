@@ -414,24 +414,50 @@ async def test_findings_believed_as_of_returns_superseded_since(pg_pool, port):
     the open read and absent from a belief read AFTER supersession."""
     t0 = datetime(2026, 8, 1, tzinfo=timezone.utc)
     t2 = datetime(2026, 8, 10, tzinfo=timezone.utc)
+    # SCOPED to a target of its own: an open read pages the newest 20
+    # unsuperseded findings in the session-shared database, and this finding
+    # (2026-08-01) is older than whatever any other file left there.
+    tid = f"asof_t_{uuid4().hex[:8]}"
     fid = await _finding(
         pg_pool, title=f"belief_{uuid4().hex[:6]}",
-        produced_at=t0, superseded_at=t2,
+        produced_at=t0, superseded_at=t2, target_id=tid,
     )
     async with pg_pool.acquire() as conn:
         await conn.execute(
             "UPDATE analyst_outputs SET superseded_by = $1 WHERE id = $2",
             uuid4(), fid)
 
-    on_d = await port.list_findings(believed_as_of="2026-08-05")
+    on_d = await port.list_findings(believed_as_of="2026-08-05", target_id=tid)
     assert str(fid) in [r["id"] for r in on_d["rows"]]
     assert on_d["believed_as_of"].startswith("2026-08-05")
 
-    after = await port.list_findings(believed_as_of="2026-08-20")
+    after = await port.list_findings(believed_as_of="2026-08-20", target_id=tid)
     assert str(fid) not in [r["id"] for r in after["rows"]]
 
-    now = await port.list_findings()  # open read: superseded → absent
+    now = await port.list_findings(target_id=tid)  # open read: superseded → absent
     assert str(fid) not in [r["id"] for r in now["rows"]]
+
+
+@pytest.mark.asyncio
+async def test_an_open_findings_read_pages_newest_first_so_an_old_row_needs_its_own_scope(pg_pool, port):
+    """X4 NIGHTLY: the mechanism behind the 10-09 .. 10-12 shuffled failures. An
+    open ``list_findings`` returns the newest 20 unsuperseded findings in the
+    session-shared table; a finding dated 2026-08-01 is invisible to it once 20
+    fresher ones exist, and visible to a read scoped to its own target."""
+    tid = f"asof_t_{uuid4().hex[:8]}"
+    old = await _finding(pg_pool, title=f"old_{uuid4().hex[:6]}", produced_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+                         target_id=tid)
+    crowd_tid = f"asof_crowd_{uuid4().hex[:8]}"
+    try:
+        for i in range(21):
+            await _finding(pg_pool, title=f"crowd_{i}", target_id=crowd_tid)
+        unscoped = await port.list_findings()
+        assert len(unscoped["rows"]) == 20 and str(old) not in unscoped["refs"]
+        scoped = await port.list_findings(target_id=tid)
+        assert scoped["refs"] == [str(old)]
+    finally:
+        async with pg_pool.acquire() as conn:
+            await conn.execute("DELETE FROM analyst_outputs WHERE target_id = ANY($1::text[])", [crowd_tid, tid])
 
 
 @pytest.mark.asyncio
@@ -439,21 +465,22 @@ async def test_findings_believed_as_of_folds_the_verdict_at_d(pg_pool, port):
     """The critic score on a believed_as_of read is the verdict Legba HELD
     on D — a critique landed after D must not leak in."""
     t0 = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    tid = f"asof_t_{uuid4().hex[:8]}"  # scoped: see the superseded-since test
     fid = await _finding(
         pg_pool, title=f"verdict_{uuid4().hex[:6]}",
-        confidence=0.9, produced_at=t0,
+        confidence=0.9, produced_at=t0, target_id=tid,
     )
     # The verdict lands AFTER D — on D the finding was ungraded.
     await _critique(
         pg_pool, analyzed_id=fid, score=0.5,
         produced_at=datetime(2026, 8, 10, tzinfo=timezone.utc),
     )
-    on_d = await port.list_findings(believed_as_of="2026-08-05")
+    on_d = await port.list_findings(believed_as_of="2026-08-05", target_id=tid)
     row = next(r for r in on_d["rows"] if r["id"] == str(fid))
     assert row["critic_score"] is None            # ungraded on D
     assert row["effective_confidence"] == pytest.approx(0.9)     # confidence alone then
 
-    now = await port.list_findings()
+    now = await port.list_findings(target_id=tid)
     row_now = next(r for r in now["rows"] if r["id"] == str(fid))
     assert row_now["critic_score"] == pytest.approx(0.5)         # graded today
     assert row_now["effective_confidence"] == pytest.approx(0.5)
@@ -483,17 +510,18 @@ async def test_belief_as_of_as_of_fold_counts_pending(pg_pool, port):
     """fold='as_of': the finding ungraded by D is pending; the graded one
     carries its verdict. No pooled number anywhere."""
     t0 = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    tid = f"asof_t_{uuid4().hex[:8]}"  # scoped: a 20-row page of a shared table
     graded = await _finding(
         pg_pool, title=f"graded_{uuid4().hex[:6]}", confidence=0.9,
-        produced_at=t0)
+        produced_at=t0, target_id=tid)
     pending = await _finding(
         pg_pool, title=f"pending_{uuid4().hex[:6]}", confidence=0.7,
-        produced_at=t0)
+        produced_at=t0, target_id=tid)
     await _critique(
         pg_pool, analyzed_id=graded, score=0.6,
         produced_at=datetime(2026, 8, 3, tzinfo=timezone.utc))
 
-    out = await port.belief_as_of(as_of="2026-08-05", fold_verdicts="as_of")
+    out = await port.belief_as_of(as_of="2026-08-05", fold_verdicts="as_of", target_id=tid)
     assert out["fold_verdicts"] == "as_of"
     by_id = {r["id"]: r for r in out["rows"]}
     grow = by_id[str(graded)]
@@ -513,14 +541,15 @@ async def test_belief_as_of_latest_fold_uses_todays_verdict(pg_pool, port):
     """fold='latest': the verdict that landed AFTER D still scores the row —
     but pending_at_as_of still reports it was ungraded on D."""
     t0 = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    tid = f"asof_t_{uuid4().hex[:8]}"  # scoped: a 20-row page of a shared table
     fid = await _finding(
         pg_pool, title=f"late_{uuid4().hex[:6]}", confidence=0.9,
-        produced_at=t0)
+        produced_at=t0, target_id=tid)
     await _critique(
         pg_pool, analyzed_id=fid, score=0.4,
         produced_at=datetime(2026, 8, 10, tzinfo=timezone.utc))  # after D
 
-    out = await port.belief_as_of(as_of="2026-08-05", fold_verdicts="latest")
+    out = await port.belief_as_of(as_of="2026-08-05", fold_verdicts="latest", target_id=tid)
     row = next(r for r in out["rows"] if r["id"] == str(fid))
     assert row["verdict_score"] == pytest.approx(0.4)            # today's verdict
     assert row["effective_confidence"] == pytest.approx(0.4)

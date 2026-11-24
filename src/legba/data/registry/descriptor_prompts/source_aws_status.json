@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.aws.status": {
+      "source": "source_aws_status.yaml",
+      "state": "draft"
+    }
+  }
+}

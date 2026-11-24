@@ -7,12 +7,14 @@ Each handler is a registered stack-component conforming to the L-102 §1
 (`chat_complete`, `stream_complete`, native tool-calling per M-061/062,
 budget reporting hooks, cost-aware healthcheck).
 
-Three concrete subproviders:
+Three concrete chat subproviders, and one decision client:
 
   * `AnthropicProviderHandler` — Anthropic Messages API (Claude family).
   * `VLLMProviderHandler`      — OpenAI-compatible vLLM endpoint. Used for
                                  gpt-oss-120b at `llm.example.internal`.
   * `OpenAIProviderHandler`    — OpenAI Chat Completions API (GPT-5, o3, …).
+  * `DecisionProviderHandler`  — a DECISION model's `POST /decide` (typed
+                                 answers about a state; no chat surface).
 
 All three share `LLMProviderHandler` (base) and the unified
 `LLMResponse` / `LLMUsage` / `LLMToolCall` / `LLMChunk` shapes — analyst
@@ -41,10 +43,12 @@ from .base import (
     LLMUsage,
     ModelPrice,
     RuntimeContextLike,
+    StreamInterruptedFailure,
     TelemetryHandle,
     TransientLLMFailure,
     estimate_cost,
 )
+from .decide import DecisionProviderHandler
 from .openai import OpenAIProviderHandler
 from .vllm import VLLMProviderHandler
 
@@ -52,6 +56,7 @@ LLM_HANDLERS: dict[str, type[LLMProviderHandler]] = {
     AnthropicProviderHandler.subprovider: AnthropicProviderHandler,
     VLLMProviderHandler.subprovider: VLLMProviderHandler,
     OpenAIProviderHandler.subprovider: OpenAIProviderHandler,
+    DecisionProviderHandler.subprovider: DecisionProviderHandler,
 }
 
 
@@ -84,10 +89,12 @@ __all__ = [
     "RuntimeContextLike",
     "TelemetryHandle",
     "TransientLLMFailure",
+    "StreamInterruptedFailure",
     # Subproviders
     "AnthropicProviderHandler",
     "VLLMProviderHandler",
     "OpenAIProviderHandler",
+    "DecisionProviderHandler",
     # Registry
     "LLM_HANDLERS",
     "resolve_handler",

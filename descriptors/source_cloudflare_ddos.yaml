@@ -1,0 +1,76 @@
+# C-3 claims sources (2026-11-15) — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# Cloudflare blog, DDoS tag — the vendor's quarterly DDoS threat reports and
+# attack write-ups (Cloudforce One), including the part geopolitical tension
+# and hacktivist campaigns play in attack volumes. ANALYST REPORTING, not a
+# list of claims: ordinary `reporting` class. The tag feed is used rather than
+# the whole-blog feed to keep the volume on topic.
+#
+# Probed 2026-11-15 (one GET, generic client identity):
+# https://blog.cloudflare.com/tag/ddos/rss/ -> HTTP 200, application/rss+xml,
+# dated items (newest the Q3 2026 DDoS threat report).
+# Blog robots.txt (read 2026-11-15) is `User-agent: *` / `Allow: /`.
+# Credibility: no seeded host row.
+
+identity:
+  id: source.cloudflare_ddos.news
+  name: Cloudflare blog — DDoS reporting
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: claims_c3
+  created: "2026-11-15T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  # `cyber_desk` = on the cyber desk's feed roster (analyst_cyber_watch
+  # method.options.feed_roster, kind vendor_research); the owner put it there 2026-11-16.
+  tags: [cyber, news, vendor, ddos, cyber_desk]
+  classifications: ["geopolitics.topic:cyber"]
+  source_class: reporting
+  license_class: permissive_feed_unreviewed
+  access_class: public          # free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "47 */6 * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 60
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://blog.cloudflare.com/tag/ddos/rss/"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor (the conservative default of the official-feed drafts).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

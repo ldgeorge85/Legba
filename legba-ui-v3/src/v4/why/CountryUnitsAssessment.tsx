@@ -3,13 +3,13 @@
  *
  * The PRODUCT surface for a country: the bounded reasoning units, each a single
  * cited + faithfulness-verified + measured read answering ONE bounded question.
- * There are now EIGHT (leadership transition, energy security, escalation,
- * narrative / coordination, internal stability, military posture, economic
- * coercion, proliferation watch); the desk renders however many it actually
- * has — a unit with no finding yet is shown HONESTLY ("no read yet") rather
- * than hidden or hard-coded. `proliferation_watch` is narrower still — it is
- * tag-scoped to nuclear-relevant desks only, so most desks will NEVER produce
- * one; its empty state says so instead of implying a read is merely pending.
+ * ROSTER-2: the units are the instance profile's (`subjectUnits()` in
+ * `lib/profileUi.ts` — every unit a scored subject's desk carries), never a
+ * list spelled here; the desk renders however many it actually has — a unit
+ * with no finding yet is shown HONESTLY ("no read yet") rather than hidden. A
+ * unit the profile scopes to a tag (its `scope_tag`) is narrower still — most
+ * desks will NEVER produce one; its empty state says why (the profile's
+ * `scope_note`) instead of implying a read is merely pending.
  *
  * Each unit card carries its honest eval badge (P2-T6) and links its latest
  * finding into the Inspector (the full cited card + evidence).
@@ -22,21 +22,21 @@ import { selectRow } from '@/state/selection'
 import { UnitEvalBadge } from '@/components/inspector/UnitEvalBadge'
 import { UnitCorrectnessBadge } from '@/components/inspector/UnitCorrectnessBadge'
 import { SEVERITY_COLOR } from '@/v4/world/types'
+import { PROFILE_UI, subjectUnits, type ProfileUnit } from '@/lib/profileUi'
 
-/** The bounded units + their display labels, in headline order. Kept in ONE place
- *  (also mirrored by the eval scorecard's dimension order). Render is dynamic —
- *  the desk shows each unit that applies, with an honest empty for one not run. */
-export const UNITS: { id: string; label: string }[] = [
-  { id: 'leadership_transition', label: 'Leadership transition' },
-  { id: 'energy_security', label: 'Energy security' },
-  { id: 'escalation', label: 'Escalation' },
-  { id: 'narrative_coordination', label: 'Narrative / coordination' },
-  { id: 'internal_stability', label: 'Internal stability' },
-  { id: 'military_posture', label: 'Military posture' },
-  { id: 'economic_coercion', label: 'Economic coercion' },
-  { id: 'proliferation_watch', label: 'Proliferation watch' },
-]
+/** The bounded units + their display labels, in headline order — the profile's
+ *  (ROSTER-2). Render is dynamic — the desk shows each unit that applies, with
+ *  an honest empty for one not run. */
+export const UNITS: ProfileUnit[] = subjectUnits()
 const UNIT_IDS = UNITS.map((u) => u.id).join(',')
+
+/** Why a unit has no read: its profile scope note when it is scoped, else the
+ *  shared cadence. */
+export function noReadReason(u: ProfileUnit): string {
+  return u.scopeNote
+    ? `no read yet — narrower scope: ${u.scopeNote}`
+    : `no read yet — this ${PROFILE_UI.unit_noun.singular} runs on a 12h cadence`
+}
 
 interface UnitFindingRow {
   id: string
@@ -72,7 +72,7 @@ export function CountryUnitsAssessment({ targetId }: { targetId: string }) {
     // P1-T1 facet: analyst_id_in filters findings to the eight units, target-scoped.
     queryFn: () =>
       apiGet<FindingsResponse>(
-        `/findings?analyst_id_in=${UNIT_IDS}&target_id=${encodeURIComponent(targetId)}&limit=40`,
+        `/findings?analyst_id_in=${UNIT_IDS}&target_id=${encodeURIComponent(targetId)}&limit=40&fields=summary`,
       ),
   })
 
@@ -144,11 +144,7 @@ export function CountryUnitsAssessment({ targetId }: { targetId: string }) {
                 </button>
               ) : (
                 <div className="mt-1 text-sm text-slate-600" data-testid="unit-no-read">
-                  {isLoading
-                    ? 'loading…'
-                    : u.id === 'proliferation_watch'
-                      ? 'no read yet — narrower scope: only nuclear-relevant desks run this unit'
-                      : 'no read yet — this unit runs on a 12h cadence'}
+                  {isLoading ? 'loading…' : noReadReason(u)}
                 </div>
               )}
             </div>

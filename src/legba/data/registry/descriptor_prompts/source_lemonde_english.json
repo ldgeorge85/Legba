@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.lemonde.english": {
+      "source": "source_lemonde_english.yaml",
+      "state": "draft"
+    }
+  }
+}

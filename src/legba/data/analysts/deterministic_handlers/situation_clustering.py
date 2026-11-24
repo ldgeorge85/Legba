@@ -81,8 +81,11 @@ from typing import Any, Mapping
 from uuid import UUID, uuid4
 
 from ... import _frame_content
+from ... import profile_constants as _profile_constants
 from ...provenance.models import _SEVERITY_RANK
 from ...provenance.models import FindingPayload
+from ...case_columns import bind_category_for_write, stamp_category_data
+from ...tags import tag_vocabulary_index
 from ...situations.trajectory import (
     DORMANCY_DAYS as _TRAJECTORY_DORMANCY_DAYS,
     STATE_CLOSED as _TRAJECTORY_CLOSED,
@@ -95,6 +98,7 @@ from ....runtime.analyst_method import AnalystMethodResult
 from ....runtime.grounding import is_non_event_situation_name
 from .finding_supersession import (
     _COMPOSITION_ANALYST_IDS,
+    resolve_composition_analyst_ids,
     signature_dimension as _signature_dimension,
     strip_dimension as _strip_dimension,
     with_dimension as _with_dimension,
@@ -148,8 +152,16 @@ def _target_for_category(category: str, fallback: str | None) -> str | None:
     ``category==slug`` coincidence; a future THEMATIC situation then has a
     distinct target_id and never leaks into a country assessor's grounding).
     A non-country topic has no country home → fall back to the run's target_id
-    (usually None for this meta analyst)."""
-    if isinstance(category, str) and category.startswith("country"):
+    (usually None for this meta analyst).
+
+    SPLIT-3 (W9-F7): the prefix is the instance profile's SUBJECT FRAME
+    (``constants.subject_frame``; the exemplar's ``country`` desks are
+    ``country_<tier>_<iso2>``), so another instance homes its own subjects
+    (``regime_*``) and a profile with no subject frame homes none. Lanes and
+    flows keep no home: resolving every registered target would move their
+    grounding, which is a decision this does not take."""
+    prefix = _profile_constants.subject_frame()
+    if prefix and isinstance(category, str) and category.startswith(prefix):
         return category
     return fallback
 
@@ -297,19 +309,59 @@ def _produced_key(row: dict[str, Any]) -> str:
     return iso() if callable(iso) else str(v)
 
 
-def _situation_name(rows: list[dict[str, Any]], sig: str) -> str:
+#: CONSULT_REVIEW_2026-09-28 §B.6 — a ``cross_doc_corroborator`` title carries a
+#: live corroboration VERDICT in its own tail ("...— corroborated by 3
+#: independent outlets" / "...— single-sourced", the descriptor's own prompt
+#: example: ``analyst_cross_doc_corroborator.yaml``). :func:`_situation_name`
+#: copies that title onto ``situations.name`` at whichever cluster first names
+#: the frame, and the UPSERT then holds that snapshot until a later member
+#: outranks it (:func:`_name_rank`) — so a frame that goes on to corroborate
+#: keeps announcing, forever, that it never did (Greenland 3b60b8e2: 23 events,
+#: still "single-sourced"). Matches either dash the model might have used for
+#: the verdict's own em/en-dash punctuation.
+_SINGLE_SOURCED_SUFFIX_RE = re.compile(
+    r"\s*[—–]\s*single-sourced\.?\s*$", re.IGNORECASE
+)
+
+
+def _strip_single_sourced_suffix(title: str) -> str:
+    """Remove a frozen trailing "— single-sourced" / "– single-sourced"
+    corroboration verdict from a derived situation name. A no-op on a title
+    that never carried the suffix, and returns ``title`` unchanged rather than
+    an empty string on the (unreachable in practice) case where the suffix
+    were the whole title."""
+    stripped = _SINGLE_SOURCED_SUFFIX_RE.sub("", title).rstrip()
+    return stripped or title
+
+
+def _situation_name(
+    rows: list[dict[str, Any]], sig: str, *, corroboration_count: int = 0
+) -> str:
     """Human label — the member title that best NAMES the frame (see the
     FRAME-2 note above and :func:`_name_rank` for the ordering).
 
     Falls back to the signature's topic label when NO member carries a usable
     title, so a report receipt never mints a situation named after a raw JSON
     fragment or a churning date (DQ P6).
+
+    §B.6 — a frame the caller can show has moved past "single-sourced" (more
+    than one member finding, OR a positive ``corroboration_count`` off the
+    trajectory ledger) has that suffix stripped from its derived name, so the
+    frame's own frozen-at-first-cluster label stops contradicting evidence the
+    frame has since gained. Re-derived here every run (this function's only
+    caller UPSERTs ``name=EXCLUDED.name`` on every tick), so a frame that later
+    corroborates re-labels itself with no backfill required. A title that is
+    still, genuinely, single-sourced — one member, no corroboration — is left
+    exactly as its member wrote it.
     """
     if not rows:
         return f"Situation {sig}"[:512]
     best = max(rows, key=_name_rank)
     if _name_rank(best)[0]:
-        return str(best.get("title") or "").strip()[:512]
+        name = str(best.get("title") or "").strip()[:512]
+        if len(rows) > 1 or corroboration_count > 0:
+            name = _strip_single_sourced_suffix(name)
+        return name
     topic = _topic_from_signature(sig)
     return (f"Situation: {topic}" if topic else f"Situation {sig}")[:512]
 
@@ -704,7 +756,7 @@ def _situation_fields(
         corroborated=corroborated,
         trajectory_state=trajectory_state,
     )
-    name = _situation_name(rows, sig)
+    name = _situation_name(rows, sig, corroboration_count=corroboration_count)
     return {
         "situation_signature": sig,
         "name": name,
@@ -769,7 +821,10 @@ def _situation_fields(
     }
 
 
-def _group_by_signature(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+def _group_by_signature(
+    rows: list[dict[str, Any]],
+    exclude: frozenset[str] = _COMPOSITION_ANALYST_IDS,
+) -> dict[str, list[dict[str, Any]]]:
     """Members by signature, DIMENSIONED (#64).
 
     The grouping key is the member's stored ``situation_signature`` normalized
@@ -786,7 +841,8 @@ def _group_by_signature(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, 
         # situation (the live SQL fetch already excludes them; this also covers
         # the synthetic deps=None path). ``analyst_id`` is absent on some legacy
         # synthetic rows → treated as non-composition (unchanged behavior).
-        if str(r.get("analyst_id") or "") in _COMPOSITION_ANALYST_IDS:
+        # ``exclude`` is the registry-derived set on the live path (OPEN-1).
+        if str(r.get("analyst_id") or "") in exclude:
             continue
         sig = r.get("situation_signature")
         if not sig:
@@ -882,6 +938,13 @@ async def _upsert_situation(
         except (ValueError, TypeError):
             run_uuid = None
 
+    # TAX-4 — the topic is the producer's value, not the column's: a desk id
+    # is a SUBJECT (data.subject_id), the column holds a registered class or
+    # `unclassified`, and data.category_raw keeps the topic byte for byte
+    # (the tower's situation leg signs events from it). `target_id` is still
+    # resolved from the raw topic, exactly as before.
+    families = await tag_vocabulary_index()
+    cat = await bind_category_for_write(conn, fields["category"], families=families)
     row = await conn.fetchrow(
         """
         INSERT INTO situations
@@ -904,8 +967,10 @@ async def _upsert_situation(
             updated_at=NOW()
         RETURNING (xmax = 0) AS inserted
         """,
-        uuid4(), json.dumps(data), fields["name"], fields["status"],
-        fields["category"], fields["last_event_at"], fields["event_count"],
+        uuid4(),
+        json.dumps(stamp_category_data("situations", cat, data, families=families)),
+        fields["name"], fields["status"],
+        cat.category, fields["last_event_at"], fields["event_count"],
         fields["intensity_score"],
         _target_for_category(fields["category"], target_id),
         analyst_id, analyst_version,
@@ -1004,6 +1069,9 @@ async def _resolve_pool(
     updated = 0
     clusters: list[dict[str, Any]] = []
     async with pool.acquire() as conn:
+        # OPEN-1 — every report-producing analyst head in the registry (∪ the
+        # literal floor): an UNLISTED composition producer never reaches here.
+        exclude = await resolve_composition_analyst_ids(conn)
         rows = await conn.fetch(
             f"""
             -- FRAME-2: ``severity`` joins the projection so the frame NAME can
@@ -1019,9 +1087,9 @@ async def _resolve_pool(
               AND analyst_id <> ALL($1::text[])
             ORDER BY produced_at ASC, id ASC
             """,
-            list(_COMPOSITION_ANALYST_IDS),
+            sorted(exclude),
         )
-        groups = _group_by_signature([dict(r) for r in rows])
+        groups = _group_by_signature([dict(r) for r in rows], exclude)
         ledger = await _read_ledger_state(
             conn, analyst_id=analyst_id, signatures=groups.keys(),
         )

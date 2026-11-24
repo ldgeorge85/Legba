@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.boe.bank_rate_daily": {
+      "source": "source_boe_bank_rate_daily.yaml",
+      "state": "draft"
+    }
+  }
+}

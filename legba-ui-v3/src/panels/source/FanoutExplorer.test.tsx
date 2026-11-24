@@ -11,6 +11,7 @@ import type { ReactElement } from 'react'
 import FanoutExplorerPanel from './FanoutExplorer'
 import type { PanelRegistration } from '@/types'
 import { useSelection } from '@/state/selection'
+import { pickScopeOption } from '@/test/pickScope'
 
 function reg(): PanelRegistration {
   return {
@@ -105,7 +106,7 @@ const DESCRIPTORS = [{ descriptor_id: 'source.rss.brazil', name: 'Brazil RSS', s
 
 function mockFetch() {
   const fetchMock = vi.fn().mockImplementation((url: string) => {
-    if (url.includes('/registry/descriptors'))
+    if ((url.includes('/registry/descriptors') || url.includes('/v3/roster')))
       return Promise.resolve({ ok: true, json: async () => DESCRIPTORS })
     if (url.includes('/findings')) return Promise.resolve({ ok: true, json: async () => FINDINGS })
     if (url.includes('/signals')) return Promise.resolve({ ok: true, json: async () => SIGNALS })
@@ -117,9 +118,7 @@ function mockFetch() {
 
 /** Pick a source in the ScopePicker once its options have loaded. */
 async function pickSource(value: string) {
-  const select = screen.getByTestId('fanout-source-id')
-  await waitFor(() => expect(select.querySelector(`option[value="${value}"]`)).toBeInTheDocument())
-  fireEvent.change(select, { target: { value } })
+  await pickScopeOption('fanout-source-id', value)
 }
 
 describe('FanoutExplorerPanel', () => {

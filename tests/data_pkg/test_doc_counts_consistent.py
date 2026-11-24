@@ -181,15 +181,18 @@ def _pinned_unit_count() -> int:
     return int(m.group(1))
 
 
-def _pinned_desk_counts() -> tuple[int, int, int]:
+def _pinned_desk_counts() -> tuple[int, int, int] | None:
     """``(total, g20, watch)`` country desks, parsed from the generated
-    manifest's Country desks section."""
+    manifest's Country desks section — or ``None`` for the PUBLIC edition
+    (``--public``), which omits the per-deployment sections and says so."""
     text = RELEASE_STATE.read_text(encoding="utf-8")
     m = re.search(
         r"^- \*\*Total: (\d+)\*\* — (\d+) G20 \+ (\d+) watch tier$",
         text,
         re.MULTILINE,
     )
+    if m is None and "_Public edition:" in text:
+        return None
     assert m is not None, (
         f"could not find the generated country-desk total line in "
         f"{RELEASE_STATE}; see _pinned_unit_count for why that is fatal"
@@ -229,8 +232,11 @@ def test_release_state_manifest_is_parseable() -> None:
     and to plausible numbers — so a manifest shape change fails loud here
     rather than silently disarming every assertion below."""
     units = _pinned_unit_count()
-    total, g20, watch = _pinned_desk_counts()
     assert units >= 1, "manifest reports zero bounded units"
+    desks = _pinned_desk_counts()
+    if desks is None:  # public edition: no per-deployment sections to parse
+        return
+    total, g20, watch = desks
     assert total == g20 + watch, (
         f"generated desk total {total} != {g20} G20 + {watch} watch — the "
         f"manifest disagrees with itself"
@@ -263,7 +269,25 @@ def test_country_desk_counts_agree_across_docs() -> None:
     grew from 6 desks to 13 and the prose that said "25 country desks (19 G20 +
     the 6-desk watch tier)" simply stayed behind in the docs nobody re-read.
     """
-    total, g20, watch = _pinned_desk_counts()
+    desks = _pinned_desk_counts()
+    if desks is None:
+        # Public edition: the manifest carries no roster to pin against, so
+        # the docs must at least agree with EACH OTHER — for each noun there
+        # is one number that every statement of it matches.
+        for noun, pattern in (
+            ("country desks", _COUNTRY_DESKS_RE),
+            ("G20", _G20_RE),
+            ("watch tier", _WATCH_TIER_RE),
+        ):
+            fewest = min(
+                (_violations(pattern, n) for n in range(0, 80)), key=len
+            )
+            assert not fewest, (
+                f"docs disagree with each other on the {noun} count:\n  "
+                + "\n  ".join(fewest)
+            )
+        return
+    total, g20, watch = desks
     bad = (
         _violations(_COUNTRY_DESKS_RE, total)
         + _violations(_G20_RE, g20)
@@ -342,7 +366,9 @@ def test_source_layer_counts_agree_across_docs() -> None:
     rather than as agreement — which makes the vocabulary size load-bearing
     prose rather than decoration.
     """
-    expected = len(_closed_vocabulary("src/legba/data/layers/_vocab.py", "LAYER_VOCAB"))
+    # W7 TAXON-1: LAYER_VOCAB is the `source_layer` family's fallback, whose
+    # literal lives in the taxon leaf (`layers/_vocab.py` re-exports it).
+    expected = len(_closed_vocabulary("src/legba/data/taxon_families.py", "SOURCE_LAYERS"))
     bad = _violations(_SOURCE_LAYERS_RE, expected) + _violations(_ALL_LAYERS_RE, expected)
     assert not bad, (
         f"docs disagree with LAYER_VOCAB on the source-layer count "

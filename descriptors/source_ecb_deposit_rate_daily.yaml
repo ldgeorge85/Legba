@@ -1,0 +1,125 @@
+# X-1 source expansion (2026-11-14) — the ECB deposit facility rate, daily,
+# as a SERIES. Ships DRAFT; the reference host walks it to CONFIGURED
+# (descriptors/LIFECYCLE.md), never active — activation is the owner's call.
+# Kind: series_api (the generic series kind, S-1).
+#
+# WHY: the euro area's policy rate from the issuing central bank itself. The
+# BIS policy-rate series (source.bis.policy_rates_daily) carries a euro-area
+# row compiled at one remove and a few days behind; this one is the primary
+# publication, same day.
+#
+# THE ENDPOINT. ECB Data Portal SDMX REST, dataflow FM, key
+# D.U2.EUR.4F.KR.DFR.LEV (daily, euro area, key rate: deposit facility,
+# level), `format=csvdata`. Checked 2026-11-14 by the source-expansion review
+# (one GET, generic client identity): no key; text/csv; header KEY, FREQ,
+# REF_AREA, CURRENCY, PROVIDER_FM, INSTRUMENT_FM, PROVIDER_FM_ID,
+# DATA_TYPE_FM, TIME_PERIOD, OBS_VALUE, OBS_STATUS, ...; the 2026-11-14 row
+# (a Saturday — the series runs on calendar days) read 2.5. Every poll asks
+# for the last 60 observations (only the parameters the review used); the
+# handler keeps the rows inside its window.
+#
+# SUBJECT. The euro area, written as `XM` with subject_kind `entity` — the
+# same subject the BIS series uses for the euro area (the ECB's own REF_AREA
+# code for it is U2). A rate CHANGE is a step, not a count: series_change
+# (descriptors/analyst_series_change.yaml) judges every live series, and one
+# named by no rule gets the count band. series_change/2026-11.3 (I-5) names
+# a rule for this family — `series_rules: ["ecb.fm.*=policy_rate", ...]`
+# (every change is an event). Registering that option is a roll step, not
+# this file's (the analyst is live and this series is not).
+#
+# robots.txt allows the path for `*`.
+
+identity:
+  id: source.ecb.deposit_rate_daily
+  name: ECB — deposit facility rate, daily (series)
+  kind: series_api
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: x1_source_expansion
+  created: "2026-11-14T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [central_banks, monetary_policy, interest_rates, markets, series, eu]
+  source_class: official
+  license_class: open_gov_attribution   # free use, accurate reproduction, ECB cited
+  attribution: "Source: ECB Data Portal (data.ecb.europa.eu), FM D.U2.EUR.4F.KR.DFR.LEV"
+  access_class: public
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "23 16 * * *"            # daily; the rate moves only on a decision
+  cooldown_seconds: 3600
+  jitter_seconds: 120
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://data-api.ecb.europa.eu/service/data/FM/D.U2.EUR.4F.KR.DFR.LEV"
+  params:
+    factory_kind: list
+    raw:
+      - ["format", "csvdata"]
+      - ["lastNObservations", "60"]
+  format:
+    factory_kind: text
+    raw: csv
+  date_field:
+    factory_kind: text
+    raw: TIME_PERIOD
+  date_format:
+    factory_kind: text
+    raw: iso_date
+  provenance_fields:
+    factory_kind: list
+    raw: [OBS_STATUS, REF_AREA]
+  outputs:
+    factory_kind: list
+    raw:
+      - series: ecb.fm.deposit_facility_rate
+        value_field: OBS_VALUE
+        subject: XM
+        where:
+          - {field: FREQ, values: [D]}
+          - {field: REF_AREA, values: [U2]}
+        unit: percent
+        period: day
+        subject_kind: entity
+        methodology_version: ecb-fm-dfr-daily/1
+  lag_days:
+    factory_kind: number
+    raw: 1
+  revision_days:
+    factory_kind: number
+    raw: 14
+  backfill_days:
+    factory_kind: number
+    raw: 55
+
+sink:
+  family: observation
+  config:
+    series:
+      - id: ecb.fm.deposit_facility_rate
+        field: OBS_VALUE
+        unit: percent
+        period: day
+        subject_kind: entity
+        methodology_version: ecb-fm-dfr-daily/1
+        description: "ECB deposit facility rate, per cent per year, level in force on the day (subject XM = the euro area)"
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  media: reference
+
+deps: {}
+
+subscription_policy: open

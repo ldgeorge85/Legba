@@ -39,13 +39,23 @@ function makeReg(overrides: Partial<PanelRegistration> = {}): PanelRegistration 
 
 describe('resolvePanel', () => {
   it('dispatches a known panel_id to its kind + component', () => {
-    const reg = makeReg({ panel_id: 'target_overview' })
+    const reg = makeReg({ panel_id: 'subject_page' })
     const result = resolvePanel(reg)
     expect(result.ok).toBe(true)
     if (result.ok) {
-      expect(result.kind).toBe('target.overview')
+      expect(result.kind).toBe('subject.page')
       expect(result.definition.scopeKey).toBe('target_id')
+      expect(result.tab).toBeUndefined()
       expect(typeof result.Component).toBe('object') // React.lazy is an object
+    }
+  })
+
+  it('UI-B3 — a RETIRED per-subject panel_id resolves onto the subject page, on its tab', () => {
+    const result = resolvePanel(makeReg({ panel_id: 'target_overview' }))
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.kind).toBe('subject.page')
+      expect(result.tab).toBe('runtime')
     }
   })
 
@@ -127,9 +137,7 @@ describe('extractScope', () => {
 
 describe('instanceId', () => {
   it('uses kind + scope value when bound', () => {
-    expect(instanceId('target.overview', { target_id: 'brazil' })).toBe(
-      'target.overview:brazil',
-    )
+    expect(instanceId('subject.page', { target_id: 'brazil' })).toBe('subject.page:brazil')
   })
   it('uses kind alone when unbound (singleton)', () => {
     expect(instanceId('system.consult', {})).toBe('system.consult')

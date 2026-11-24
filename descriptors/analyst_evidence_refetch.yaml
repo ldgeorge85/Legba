@@ -1,0 +1,93 @@
+# evidence_refetch — W11-F138 challenge-block backlog drain.
+#
+# A `deterministic`-kind META analyst over the SHARED substrate. Every Times
+# of Israel and Jerusalem Post signal of the last 30 days was ingested with
+# a summary and no `payload.text`: both hosts answer every fetch with an
+# anti-bot challenge (http_403 — logged `evidence_archiver.blocked_by_challenge`
+# several times a day), so no body ever landed in the substrate and a consult
+# needing the quote cannot find it. The per-host fetch policy
+# (legba.data.sources._fetch_policy) now gives those hosts the impersonated
+# transport; this sweep drains the ALREADY-INGESTED textless backlog the
+# archiver's citation-selection never reaches.
+#
+# Per tick it selects the newest `refetch_max_per_tick` signals whose
+# canonical host carries a non-default fetch policy (the registry's
+# impersonate=on set), that have no `payload.text` and no `payload.
+# archived_text`, inside `refetch_window_days` — and re-runs THE ARCHIVER'S
+# OWN fetch leg (`evidence_archiver._archive_one`: licence gates, two-leg
+# client, CAS store, challenge/boilerplate detection, evidence_archive
+# sidecar upsert, signal stamp, per-feed counters) on each, OLDEST FIRST.
+# A re-fetched body lands as `payload.archived_text` — the corpus best_body
+# upgrade — which is the surface a consult reads; this sweep deliberately
+# does not rewrite the ingest-time `payload.text`.
+#
+# Method:
+#   * kind = deterministic — NO LLM block, no token budget: select + fetch +
+#     store + SQL only.
+#   * sub_handler = evidence_refetch — injected into the run options at fire
+#     time. Idempotent: a successful re-fetch stamps object_ref +
+#     archived_text and the row leaves the predicate; a failure is
+#     attempt-capped in the same sidecar the archiver writes.
+#   * TRACE_ONLY (deterministic.py OUTPUT_KIND_BY_SUB_HANDLER) — the real
+#     product is the archived bodies + the sidecar rows; the per-run counters
+#     (refetched / archived / blocked_by_challenge / per_source) land in the
+#     analyst_traces receipt.
+#
+# Options (all optional; handler defaults in parentheses). Declared in
+# legba.data.option_catalog (handler_options_enrichment.py) — an undeclared
+# key or an out-of-range value is dropped with a WARNING and a
+# `handler_options` note on the run's analyst_traces receipt; the handler
+# default then stands:
+#   refetch_max_per_tick (50) · refetch_window_days (30)
+#
+# Ships DRAFT — the VM applies it; nothing runs it against live data from
+# the tree.
+
+identity:
+  id: evidence_refetch
+  name: Evidence Refetch
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: evidence_archiver
+
+subscription:
+  # No `targets` block → META analyst: one global sweep per cadence tick over
+  # the whole shared pool, directly via deps.pg_pool.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: evidence_refetch
+  options:
+    # The shipped defaults, stated so the operator sees the two knobs the
+    # lane added. 50 re-fetches/tick drains the ~2.4k backlog in ~50 ticks;
+    # 30 days is the window the defect was measured over.
+    refetch_max_per_tick: 50
+    refetch_window_days: 30
+
+cadence:
+  # deterministic kind → token-budget-EXEMPT. META: a SINGLE global sweep per
+  # tick. Hourly at :53, offset from the other maintenance crons (the
+  # archiver itself fires "19-59/30").
+  fallback_schedule: "53 * * * *"
+  # Idempotent forward-progressing sweep bounded by refetch_max_per_tick; a
+  # short re-fire floor is plenty.
+  cooldown_seconds: 900
+
+# No extra output sinks: TRACE_ONLY — the run receipt lands in
+# analyst_traces; the real product is the re-fetched bodies + the updated
+# evidence_archive sidecar + the stamped signal rows.
+outputs: []

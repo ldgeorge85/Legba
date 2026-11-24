@@ -1,5 +1,6 @@
 import { cn } from '@/lib/cn'
 import {
+  isStampAbsent,
   readScaleStamp,
   scaleStampLabel,
   scaleStampTooltip,
@@ -19,7 +20,9 @@ import {
  * The rule the chip exists to hold: **an unstamped row renders as unstamped.**
  * `—` and `0` and a back-filled current version would each be a claim the
  * platform has not earned; "unstamped (pre-2026-09)" is the one truthful
- * render, and it is muted so it reads as a caveat rather than a value.
+ * render, and it is muted so it reads as a caveat rather than a value. A row
+ * written after the stamps existed with none reads "no declared scale" (its
+ * producer publishes on no declared scale — W11-F9), muted the same way.
  *
  * Takes EITHER a raw row (`row` — the stamps read off the top level or out of
  * `data`) or an already-read `stamp`, so a call site that has the halves as
@@ -44,8 +47,8 @@ export function ScaleStamp({
   testId?: string
 }) {
   const s = stamp ?? readScaleStamp(row)
-  if (s.state === 'unstamped' && !showUnstamped) return null
-  const unstamped = s.state === 'unstamped'
+  const unstamped = isStampAbsent(s.state)
+  if (unstamped && !showUnstamped) return null
   return (
     <span
       className={cn(

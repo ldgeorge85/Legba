@@ -32,11 +32,15 @@ from typing import Any
 from uuid import uuid4
 
 import legba.data.provenance.assembly_arms as assembly_arms
+import legba.data.provenance.assembly_floor_arm as assembly_floor_arm
 import legba.data.provenance.composition_integrity as composition_integrity
+import legba.data.provenance.grounding_backstops as grounding_backstops
 import legba.data.provenance.judge_input_checks as judge_input_checks
 import legba.data.provenance.judge_verdict_parsing as judge_verdict_parsing
 import legba.data.provenance.verify as verify
 import legba.data.provenance.world_knowledge_guards as world_knowledge_guards
+import legba.data.subject_homonyms as subject_homonyms
+import legba.runtime.actor_critic as actor_critic
 from legba.data.provenance.models import CritiquePayload
 from legba.data.provenance.verify import (
     FAIL_CLASS_HARD,
@@ -111,6 +115,8 @@ def test_fail_class_mapping_table() -> None:
         # class, DISTINCT reason so calibration can tell it from the heuristic.
         "stale_leader_vs_facts": FAIL_CLASS_HARD,
         "cross_target_leak": FAIL_CLASS_HARD,
+        # B6 (W11-F13): a desk claim naming only a HOMONYM of its subject.
+        "off_subject": FAIL_CLASS_HARD,
         "no_citation": FAIL_CLASS_SOFT,
         "judge_unsupported": FAIL_CLASS_SOFT,
         "hedge_laundering": FAIL_CLASS_SOFT,
@@ -123,6 +129,15 @@ def test_fail_class_mapping_table() -> None:
         # claims a verification status the product's own bookkeeping cannot
         # carry. Nothing fabricated, nothing contradicted — SOFT.
         "register_self_corroboration": FAIL_CLASS_SOFT,
+        # Q4 (2026-09-28) — a DATED or NUMERIC claim whose only resolved citations
+        # are MEMORY blocks (the prior read, the window ledger). The block is real
+        # and the model was shown it; what the sentence claims is that a date or a
+        # figure is ESTABLISHED, which memory cannot say — it says what this desk
+        # SAID. Same overclaim family as H1, SOFT for the same reason, and inert on
+        # any finding that cites no memory block.
+        "carried_unsupported": FAIL_CLASS_SOFT,
+        # C-1: a clause resting only on CLAIM rows stating the claimed event.
+        "claim_as_fact": FAIL_CLASS_SOFT,
         "double_counted": FAIL_CLASS_SOFT,
         "indicator_uncited_triggered": FAIL_CLASS_SOFT,
         # W31: a world-scoped absence claim with no collection-scoping language
@@ -235,6 +250,8 @@ def test_fail_class_mapping_table() -> None:
         "drop_count_mismatch": FAIL_CLASS_HARD,
         "drop_why_unknown": FAIL_CLASS_HARD,
         "drop_order_violation": FAIL_CLASS_HARD,
+        # W4 F-3 — ARM 4(c): the world floor's ledger contradicts itself.
+        "drop_floor_violation": FAIL_CLASS_HARD,
     }
     # Unknown reasons degrade conservatively (soft, never a fabricated hard).
     assert fail_class_for_reason("some_future_reason") == FAIL_CLASS_SOFT
@@ -253,7 +270,14 @@ def _reason_literals(node: ast.AST) -> tuple[set[str], bool]:
         # the constant, and a literal at the emission site would put the name
         # and its argument in two places. Widening the resolver can only ever
         # make the guard see MORE, which is the safe direction for a guard.
-        for mod in (verify, judge_input_checks, composition_integrity, assembly_arms):
+        for mod in (
+            verify,
+            judge_input_checks,
+            composition_integrity,
+            assembly_arms,
+            grounding_backstops,
+            subject_homonyms,  # B6: OFF_SUBJECT_REASON
+        ):
             resolved = getattr(mod, node.id, None)
             if isinstance(resolved, str):
                 return {resolved}, False
@@ -322,6 +346,21 @@ def test_fail_class_drift_guard() -> None:
             judge_verdict_parsing,
             world_knowledge_guards,
             assembly_arms,
+            # 2026-09-28 (Q4): the SEVENTH module, and the fourth hand edit the
+            # D-1 §3.7 note counts. The DESK-GROUNDING BACKSTOPS left verify.py
+            # when its 5,900-line ceiling had no room for Q4's carried-anchor
+            # guard; H1's ``register_self_corroboration`` moved house with it,
+            # so without this line a class that has been firing since August
+            # would report DEAD alongside the new one.
+            grounding_backstops,
+            # 2026-10-03 (W4 F-3): the EIGHTH module. ARM 4(c), the world
+            # floor's own identities, emits ``drop_floor_violation`` from its
+            # own leaf; the constant is spelled in ``assembly_arms`` (resolved
+            # above) so verify's table carries it through FAIL_CLASSES.
+            assembly_floor_arm,
+            # 2026-10-08 (B6, W11-F13): the NINTH. The subject-relevance check
+            # emits ``off_subject`` from the verify seam in runtime.actor_critic.
+            actor_critic,
         )
     ]
     emitted: set[str] = set()

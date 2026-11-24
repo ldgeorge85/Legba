@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.middleeasteye.news": {
+      "source": "source_middleeasteye.yaml",
+      "state": "draft"
+    }
+  }
+}

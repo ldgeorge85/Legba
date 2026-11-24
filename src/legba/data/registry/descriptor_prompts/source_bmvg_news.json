@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.bmvg.news": {
+      "source": "source_bmvg_news.yaml",
+      "state": "draft"
+    }
+  }
+}

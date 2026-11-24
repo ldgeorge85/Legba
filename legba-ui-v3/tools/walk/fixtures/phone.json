@@ -1,0 +1,1219 @@
+{
+ "note": "INVENTED example answers for the phone shell (M-2): written by hand, never recorded; overlaid on api.json by walk.mjs. The \"since\" envelope reuses the recorded synthetic rows of api.json (already sanitized) and adds invented needs-you episodes (example_* subjects, the ex-alert-* ids of watch.json) and an invented due forecast. No owner content.",
+ "entries": {
+  "/api/v1/v3/since?cursor=2026-11-13T00:00:00.000Z&include=needs_you": {
+   "status": 200,
+   "body": {
+    "cursor": "2026-11-12T23:28:04.583000Z",
+    "server_now": "2026-11-13T23:28:09.774993Z",
+    "counts": {
+     "new_findings": 291,
+     "superseded": 416,
+     "band_changes": 16,
+     "situations": 240,
+     "alerts": 224,
+     "forecasts_due": 1,
+     "needs_you": 3
+    },
+    "new_findings": {
+     "items": [
+      {
+       "id": "ex_o0bkwz",
+       "analyst_id": "country_composition",
+       "target_id": "country_1fjf7b",
+       "title": "prairie_g20_ar, 2026-11-13 — 3 verified garnet note, 0 lantern flint",
+       "severity": "critical",
+       "confidence": 0.7,
+       "faithfulness_score": 0.8,
+       "effective_confidence": 0.7,
+       "produced_at": "2026-11-13T23:30:03.915105Z"
+      },
+      {
+       "id": "ex_34tjnw",
+       "analyst_id": "energy_security",
+       "target_id": "country_24hc2g",
+       "title": "Lantern Cove nimbus ochre harbor quill: ochre-otter mesa topaz bramble no new alpha anchor flint",
+       "severity": "high",
+       "confidence": 0.6000000238418579,
+       "faithfulness_score": 0.7142857313156128,
+       "effective_confidence": 0.6000000238418579,
+       "produced_at": "2026-11-13T23:04:50.411389Z"
+      },
+      {
+       "id": "ex_xhspzw",
+       "analyst_id": "internal_stability",
+       "target_id": "country_24hc2g",
+       "title": "Lantern Sorrel: granite dune harbor as cove bramble kestrel lantern topaz; Anchor mineral harbor of 25 Mosaic pending",
+       "severity": "high",
+       "confidence": 0.6000000238418579,
+       "faithfulness_score": 0.9166666865348816,
+       "effective_confidence": 0.6000000238418579,
+       "produced_at": "2026-11-13T23:04:29.751108Z"
+      },
+      {
+       "id": "ex_37f3p0",
+       "analyst_id": "economic_coercion",
+       "target_id": "country_390kio",
+       "title": "US 50% sage beacon river Indigo; fable mosaic Fable coral canopy linen a Mosaic neutral-text walnut pebble, no new timber",
+       "severity": "high",
+       "confidence": 0.699999988079071,
+       "faithfulness_score": 1,
+       "effective_confidence": 0.699999988079071,
+       "produced_at": "2026-11-13T21:00:28.663429Z"
+      },
+      {
+       "id": "ex_1e8pzx",
+       "analyst_id": "energy_security",
+       "target_id": "country_33ittk",
+       "title": "Mosaic mesa ISLAND plume thistle as mosaic spruce Rs2, walnut nimbus ochre high on a river no linen pebble cedar",
+       "severity": "high",
+       "confidence": 0.6000000238418579,
+       "faithfulness_score": 1,
+       "effective_confidence": 0.6000000238418579,
+       "produced_at": "2026-11-13T20:55:54.948368Z"
+      },
+      {
+       "id": "ex_fzi43s",
+       "analyst_id": "escalation",
+       "target_id": "country_33ittk",
+       "title": "Birch: meadow shale on fable garnet lantern sable fable cove as a fresh mesa delta linen a 74-delta spruce sable prairie sable fjord dune, spruce no new garnet fable in sorrel prairie",
+       "severity": "high",
+       "confidence": 0.6000000238418579,
+       "faithfulness_score": 1,
+       "effective_confidence": 0.6000000238418579,
+       "produced_at": "2026-11-13T20:55:39.708143Z"
+      },
+      {
+       "id": "ex_1s4774",
+       "analyst_id": "military_posture",
+       "target_id": "country_33ittk",
+       "title": "Mosaic example umber timber quill: 74 topaz nectar garnet in Timber linen KP summit, no new quartz indigo",
+       "severity": "high",
+       "confidence": 0.699999988079071,
+       "faithfulness_score": 1,
+       "effective_confidence": 0.699999988079071,
+       "produced_at": "2026-11-13T20:54:15.552738Z"
+      },
+      {
+       "id": "ex_2m43w9",
+       "analyst_id": "energy_security",
+       "target_id": "country_38ryk5",
+       "title": "Quill nimbus ochre timber delta-walnut as a juniper Meadow cedar meadow plume mineral entry",
+       "severity": "high",
+       "confidence": 0.5,
+       "faithfulness_score": 1,
+       "effective_confidence": 0.5,
+       "produced_at": "2026-11-13T20:52:42.698668Z"
+      },
+      {
+       "id": "ex_2wx7nz",
+       "analyst_id": "economic_coercion",
+       "target_id": "country_g20_sa",
+       "title": "Note Timber: Entry ochre-linen-yarrow river spruce spruce indigo linen violet fern as EU sable-alpha item quartz",
+       "severity": "high",
+       "confidence": 0.7799999713897705,
+       "faithfulness_score": 1,
+       "effective_confidence": 0.7799999713897705,
+       "produced_at": "2026-11-13T20:50:44.442672Z"
+      },
+      {
+       "id": "ex_22c4ws",
+       "analyst_id": "energy_security",
+       "target_id": "country_g20_sa",
+       "title": "Note Timber: Entry dune linen violet fern ridge Bramble linen Beacon bramble raven thistle linen nectar cedar cedar sable river",
+       "severity": "high",
+       "confidence": 0.699999988079071,
+       "faithfulness_score": 1,
+       "effective_confidence": 0.699999988079071,
+       "produced_at": "2026-11-13T20:50:23.429054Z"
+      },
+      {
+       "id": "ex_3dj57v",
+       "analyst_id": "escalation",
+       "target_id": "country_g20_sa",
+       "title": "Entry fern on Bramble indigo linen Nectar-Valley violet tamarack as Note nectar basin raven",
+       "severity": "high",
+       "confidence": 0.699999988079071,
+       "faithfulness_score": 1,
+       "effective_confidence": 0.699999988079071,
+       "produced_at": "2026-11-13T20:50:03.704005Z"
+      }
+     ],
+     "total": 291,
+     "truncated": true
+    },
+    "superseded": {
+     "items": [
+      {
+       "id": "ex_b1jslf",
+       "analyst_id": "narrative_coordination",
+       "target_id": "country_4qyqfq",
+       "title": "No sage-fern harbor in Indigo 72h prairie; flint heron pebble on granite oak cove, Quartz Fable shale, Delta Cove beacon",
+       "severity": "low",
+       "superseded_at": "2026-11-13T22:20:01.694118Z",
+       "superseded_by": {
+        "id": "ex_wulgyg",
+        "analyst_id": "narrative_coordination",
+        "title": "Willow kestrel sierra fjord linen flint topaz pebble alpha; no copper delta in sorrel alpha 72h prairie",
+        "produced_at": "2026-11-13T22:01:03.788470Z"
+       }
+      },
+      {
+       "id": "ex_41aleb",
+       "analyst_id": "narrative_coordination",
+       "target_id": "country_236thr",
+       "title": "Nimbus-sable-harbor heron timber flint; slate ridge reed all Text item-umber quill, no hazel-glade harbor otter 12 Mosaic",
+       "severity": "low",
+       "superseded_at": "2026-11-13T22:20:01.678889Z",
+       "superseded_by": {
+        "id": "ex_2v8dh3",
+        "analyst_id": "narrative_coordination",
+        "title": "Text item-umber quill tamarack entry nimbus-sample heron; no hazel-glade copper delta in Timber prairie to 13 Mosaic",
+        "produced_at": "2026-11-13T22:01:29.186151Z"
+       }
+      },
+      {
+       "id": "ex_34bnth",
+       "analyst_id": "narrative_coordination",
+       "target_id": "country_1j4rym",
+       "title": "Ochre fern slate ridge all dune to indigo item velvet on sable 66-note quill; no copper delta in sorrel prairie",
+       "severity": "low",
+       "superseded_at": "2026-11-13T22:20:01.638301Z",
+       "superseded_by": {
+        "id": "ex_28eodd",
+        "analyst_id": "narrative_coordination",
+        "title": "Granite Sample Quartz oak canopy cinder fern larch 5 otter; valley-anchor heron timber tundra nimbus",
+        "produced_at": "2026-11-13T22:01:42.937076Z"
+       }
+      },
+      {
+       "id": "ex_y1a9em",
+       "analyst_id": "narrative_coordination",
+       "target_id": "country_38ryk5",
+       "title": "No copper delta in Winter birch; canopy RIVER item-umber thistle on ENTRY juniper",
+       "severity": "low",
+       "superseded_at": "2026-11-13T21:00:02.711302Z",
+       "superseded_by": {
+        "id": "ex_3oe6ws",
+        "analyst_id": "narrative_coordination",
+        "title": "No copper delta in Winter birch otter 13 Mosaic; ochre indigo arbor canopy RIVER item thistle on ENTRY juniper",
+        "produced_at": "2026-11-13T20:53:16.848221Z"
+       }
+      },
+      {
+       "id": "ex_1dnd6v",
+       "analyst_id": "narrative_coordination",
+       "target_id": "country_g20_cn",
+       "title": "Text H200 meadow topaz in sorrel fable, entry no sage-fern hazel-glade thistle is nimbus larch Mosaic birch",
+       "severity": "low",
+       "superseded_at": "2026-11-13T18:00:03.441642Z",
+       "superseded_by": {
+        "id": "ex_qmy6c1",
+        "analyst_id": "narrative_coordination",
+        "title": "No copper delta larch Mosaic birch in 72h; Larch-ochre sable raven linen canopy item umber island island otter",
+        "produced_at": "2026-11-13T17:57:32.195940Z"
+       }
+      },
+      {
+       "id": "ex_m2bv9g",
+       "analyst_id": "narrative_coordination",
+       "target_id": "country_1yrdm0",
+       "title": "Sample otter-larch note beacon canopy ember item-umber saffron maple larch walnut otter; no copper delta in sorrel alpha umber",
+       "severity": "low",
+       "superseded_at": "2026-11-13T17:40:00.719467Z",
+       "superseded_by": {
+        "id": "ex_ysweqh",
+        "analyst_id": "narrative_coordination",
+        "title": "No sage-fern thistle nimbus larch Lantern Basin birch in 72h prairie; GARNET ochre, indigo-kestrel linen nimbus granite valley hazel",
+        "produced_at": "2026-11-13T17:36:46.259273Z"
+       }
+      },
+      {
+       "id": "ex_26x7wu",
+       "analyst_id": "cross_321aiu",
+       "target_id": null,
+       "title": "Sorrel fern 6 major otter fable shale prairie larch Walnut — anchor-mineral to Birch Zephyr / PM Cinder",
+       "severity": "moderate",
+       "superseded_at": "2026-11-13T17:21:02.957970Z",
+       "superseded_by": {
+        "id": "ex_4rqiqm",
+        "analyst_id": "cross_321aiu",
+        "title": "Glade-Birch island mineral velvet sample in Oak, 13 Mosaic — reed by 2 zephyr valley",
+        "produced_at": "2026-11-13T17:17:18.444937Z"
+       }
+      },
+      {
+       "id": "ex_1oiaor",
+       "analyst_id": "narrative_coordination",
+       "target_id": "country_3krmsk",
+       "title": "Canopy pebble maple in Cedar 72h prairie is Ochre quill larch-granite ad; AI-entry, Bramble linen REED31 heron lantern maple-zephyr",
+       "severity": "low",
+       "superseded_at": "2026-11-13T16:21:01.775426Z",
+       "superseded_by": {
+        "id": "ex_1amjh4",
+        "analyst_id": "narrative_coordination",
+        "title": "No copper delta in Cedar 72h prairie; ochre fern canopy ridge reed AP item umber of sable flint sage",
+        "produced_at": "2026-11-13T16:11:39.150676Z"
+       }
+      },
+      {
+       "id": "ex_23hx02",
+       "analyst_id": "leadership_transition",
+       "target_id": "country_watch_ir",
+       "title": "Marble: fable yarrow violet raven as Tundra linen Fable orchard sample river ochre, spruce granite prairie winter unresolved",
+       "severity": "moderate",
+       "superseded_at": "2026-11-13T15:21:02.396158Z",
+       "superseded_by": {
+        "id": "ex_2e7xv4",
+        "analyst_id": "leadership_transition",
+        "title": "Marble: fable yarrow violet raven as SAFFRON fern US umber in Sorrel linen Prairie nectar garnet beacon",
+        "produced_at": "2026-11-13T15:18:47.363374Z"
+       }
+      },
+      {
+       "id": "ex_1u6fba",
+       "analyst_id": "military_posture",
+       "target_id": "country_o26ggj",
+       "title": "Kestrel Saffron: summit beacon-mineral umber harbor; MOSAIC mineral saffron linen ID entry record a quiet 72h",
+       "severity": "high",
+       "superseded_at": "2026-11-13T14:41:02.729651Z",
+       "superseded_by": {
+        "id": "ex_3qxdip",
+        "analyst_id": "military_posture",
+        "title": "Kestrel Saffron: summit beacon-mineral umber harbor; MOSAIC mineral alpha mosaic beacon, no quartz mosaic",
+        "produced_at": "2026-11-13T14:21:43.104122Z"
+       }
+      }
+     ],
+     "total": 416,
+     "truncated": true
+    },
+    "band_changes": {
+     "items": [
+      {
+       "target_id": "country_1fjf7b",
+       "dimension": "leadership_transition",
+       "from_band": "low",
+       "to_band": "watch",
+       "direction": "deterioration",
+       "severity": "high",
+       "from_scorecard_row_id": "ex_3bf5ds",
+       "to_scorecard_row_id": "ex_2rtdxe",
+       "changed_at": "2026-11-13T04:41:00.996453Z"
+      },
+      {
+       "target_id": "country_3iof3z",
+       "dimension": "leadership_transition",
+       "from_band": "low",
+       "to_band": "watch",
+       "direction": "deterioration",
+       "severity": "high",
+       "from_scorecard_row_id": "ex_1h3fyp",
+       "to_scorecard_row_id": "ex_26rzdl",
+       "changed_at": "2026-11-13T04:41:02.143160Z"
+      },
+      {
+       "target_id": "country_3atsvr",
+       "dimension": "internal_stability",
+       "from_band": "watch",
+       "to_band": "elevated",
+       "direction": "deterioration",
+       "severity": "high",
+       "from_scorecard_row_id": "ex_3pl6hf",
+       "to_scorecard_row_id": "ex_v60fdi",
+       "changed_at": "2026-11-13T04:41:02.348157Z"
+      },
+      {
+       "target_id": "country_236thr",
+       "dimension": "escalation",
+       "from_band": "watch",
+       "to_band": "elevated",
+       "direction": "deterioration",
+       "severity": "high",
+       "from_scorecard_row_id": "ex_3e3rcp",
+       "to_scorecard_row_id": "ex_1ohih6",
+       "changed_at": "2026-11-13T04:41:02.559089Z"
+      },
+      {
+       "target_id": "country_rturc6",
+       "dimension": "economic_coercion",
+       "from_band": "watch",
+       "to_band": "elevated",
+       "direction": "deterioration",
+       "severity": "high",
+       "from_scorecard_row_id": "ex_3pehd9",
+       "to_scorecard_row_id": "ex_hopw4o",
+       "changed_at": "2026-11-13T04:41:04.005622Z"
+      },
+      {
+       "target_id": "country_1j4rym",
+       "dimension": "escalation",
+       "from_band": "elevated",
+       "to_band": "high",
+       "direction": "deterioration",
+       "severity": "high",
+       "from_scorecard_row_id": "ex_2bwena",
+       "to_scorecard_row_id": "ex_25bh98",
+       "changed_at": "2026-11-13T04:41:05.587045Z"
+      },
+      {
+       "target_id": "country_z0y1le",
+       "dimension": "escalation",
+       "from_band": "watch",
+       "to_band": "elevated",
+       "direction": "deterioration",
+       "severity": "high",
+       "from_scorecard_row_id": "ex_35afoy",
+       "to_scorecard_row_id": "ex_2zk0gt",
+       "changed_at": "2026-11-13T04:41:17.824235Z"
+      },
+      {
+       "target_id": "country_1fjf7b",
+       "dimension": "narrative_coordination",
+       "from_band": "insufficient-evidence",
+       "to_band": "low",
+       "direction": "evidence-gained",
+       "severity": "medium",
+       "from_scorecard_row_id": "ex_3bf5ds",
+       "to_scorecard_row_id": "ex_2rtdxe",
+       "changed_at": "2026-11-13T04:41:00.996453Z"
+      },
+      {
+       "target_id": "country_g20_br",
+       "dimension": "internal_stability",
+       "from_band": "elevated",
+       "to_band": "insufficient-evidence",
+       "direction": "evidence-lost",
+       "severity": "medium",
+       "from_scorecard_row_id": "ex_meitsc",
+       "to_scorecard_row_id": "ex_2ezqhv",
+       "changed_at": "2026-11-13T04:41:01.781060Z"
+      },
+      {
+       "target_id": "country_g20_br",
+       "dimension": "leadership_transition",
+       "from_band": "watch",
+       "to_band": "low",
+       "direction": "improvement",
+       "severity": "medium",
+       "from_scorecard_row_id": "ex_meitsc",
+       "to_scorecard_row_id": "ex_2ezqhv",
+       "changed_at": "2026-11-13T04:41:01.781060Z"
+      }
+     ],
+     "total": 16,
+     "truncated": false
+    },
+    "situations": {
+     "items": [
+      {
+       "id": "ex_9angrl",
+       "name": "SAFFRON mesa it nimbus a US marble-example umber in Sorrel on 13 Anchor 2026 — reed as a oak nectar SAFFRON mesa, entry anchor-pebble (Violet fjord/SAFFRON harbor) spruce no zephyr birch of sable mineral indigo",
+       "target_id": null,
+       "category": "delta",
+       "change": "escalating",
+       "from_status": null,
+       "to_status": "active",
+       "status": "dormant",
+       "last_event_at": "2026-11-13T05:17:53.639861Z",
+       "updated_at": "2026-11-13T23:25:04.683245Z",
+       "intensity_score": 0
+      },
+      {
+       "id": "ex_2gmnz5",
+       "name": "Glade-Birch island mineral velvet sample in Oak, 13 Mosaic — reed by 2 zephyr valley",
+       "target_id": null,
+       "category": "delta",
+       "change": "escalating",
+       "from_status": null,
+       "to_status": "active",
+       "status": "dormant",
+       "last_event_at": "2026-11-13T17:17:18.444937Z",
+       "updated_at": "2026-11-13T23:25:04.680718Z",
+       "intensity_score": 0
+      },
+      {
+       "id": "ex_b4p2jx",
+       "name": "Bramble alpha Q1 (Sample bramble $95 on Anchor 8 Larch-garnet juniper) is LANTERN cinder by sorrel hazel: no pebble in sable mesa spruce or bramble birch juniper sable Mosaic 8, 2026 Larch garnet juniper or a $95 Sample beacon on amber shale — sable hazel pebble canopy an nimbus 2026 saffron of fable-orchard Sample timber (Violet 11 garnet juniper, Dune 22 >$95, Pebble 9 >$100, Pebble 14 $107.54, Willow 24 $93.38).",
+       "target_id": null,
+       "category": "delta",
+       "change": "escalating",
+       "from_status": null,
+       "to_status": "active",
+       "status": "dormant",
+       "last_event_at": "2026-11-13T15:37:49.880040Z",
+       "updated_at": "2026-11-13T23:25:04.661347Z",
+       "intensity_score": 0.008200000040233135
+      },
+      {
+       "id": "ex_3fvwg2",
+       "name": "Glade: No new copper delta nimbus in umber prairie",
+       "target_id": "country_rturc6",
+       "category": "delta",
+       "change": "escalating",
+       "from_status": null,
+       "to_status": "active",
+       "status": "dormant",
+       "last_event_at": "2026-11-13T17:47:13.215233Z",
+       "updated_at": "2026-11-13T23:25:04.655117Z",
+       "intensity_score": 0
+      },
+      {
+       "id": "ex_20n0yn",
+       "name": "Larch garnet harbor spruce no umber pebble; prairie orchard no cinder-valley mesa pebble",
+       "target_id": null,
+       "category": "delta",
+       "change": "escalating",
+       "from_status": null,
+       "to_status": "active",
+       "status": "dormant",
+       "last_event_at": "2026-11-13T12:42:35.455375Z",
+       "updated_at": "2026-11-13T23:25:04.637211Z",
+       "intensity_score": 0
+      },
+      {
+       "id": "ex_3229a5",
+       "name": "Garnet Nimbus reed beacon basin all pebble maple; no copper delta in 13 Mosaic prairie",
+       "target_id": "country_watch_sd",
+       "category": "delta",
+       "change": "escalating",
+       "from_status": null,
+       "to_status": "active",
+       "status": "dormant",
+       "last_event_at": "2026-11-13T22:02:05.486527Z",
+       "updated_at": "2026-11-13T23:25:04.615463Z",
+       "intensity_score": 0
+      },
+      {
+       "id": "ex_35v79s",
+       "name": "Ochre fern walnut ridge reed all island-glade item or Indigo 24 thistle-river; no copper delta in sorrel alpha Larch umber",
+       "target_id": "country_1siz22",
+       "category": "delta",
+       "change": "escalating",
+       "from_status": null,
+       "to_status": "active",
+       "status": "dormant",
+       "last_event_at": "2026-11-13T20:17:27.939761Z",
+       "updated_at": "2026-11-13T23:25:04.598821Z",
+       "intensity_score": 0
+      },
+      {
+       "id": "ex_11fo2h",
+       "name": "HAZEL tamarack item umber tamarack sable canopy sage-fern topaz; no copper delta in sorrel alpha umber otter 13 Mosaic",
+       "target_id": "country_z0y1le",
+       "category": "delta",
+       "change": "escalating",
+       "from_status": null,
+       "to_status": "active",
+       "status": "dormant",
+       "last_event_at": "2026-11-13T22:02:07.054924Z",
+       "updated_at": "2026-11-13T23:25:04.580927Z",
+       "intensity_score": 0
+      },
+      {
+       "id": "ex_10y3mq",
+       "name": "No hazel-glade harbor in Shale prairie; COPPER velvet harbor, HERON-cinder raven copper thistle, RIVER thistle-river record",
+       "target_id": "country_17s4i1",
+       "category": "delta",
+       "change": "escalating",
+       "from_status": null,
+       "to_status": "active",
+       "status": "dormant",
+       "last_event_at": "2026-11-13T22:02:04.334127Z",
+       "updated_at": "2026-11-13T23:25:04.574438Z",
+       "intensity_score": 0.022600000724196434
+      },
+      {
+       "id": "ex_2mur8g",
+       "name": "No hazel-glade delta thistle in Kestrel Saffron prairie; lantern-ID prairie linen Violet-mosaic raven summit lantern anchor-fable",
+       "target_id": "country_o26ggj",
+       "category": "delta",
+       "change": "escalating",
+       "from_status": null,
+       "to_status": "active",
+       "status": "dormant",
+       "last_event_at": "2026-11-13T10:03:12.881089Z",
+       "updated_at": "2026-11-13T23:25:04.558405Z",
+       "intensity_score": 0
+      }
+     ],
+     "total": 240,
+     "truncated": true
+    },
+    "alerts": {
+     "items": [
+      {
+       "id": "ex_3kqp73",
+       "severity": "high",
+       "channel": "verified_finding",
+       "summary": "Verified quill-marble quill: Lantern Sorrel: granite dune harbor as cove bramble kestrel lantern topaz; Anchor mineral harbor of 25 Mosaic pending",
+       "target_id": "country_24hc2g",
+       "produced_at": "2026-11-13T23:13:01.186290Z",
+       "finding_id": "ex_xhspzw"
+      },
+      {
+       "id": "ex_34herk",
+       "severity": "high",
+       "channel": "verified_finding",
+       "summary": "Verified quill-marble quill: Lantern Cove nimbus ochre harbor quill: ochre-otter mesa topaz bramble no new alpha anchor flint",
+       "target_id": "country_24hc2g",
+       "produced_at": "2026-11-13T23:13:01.150240Z",
+       "finding_id": "ex_34tjnw"
+      },
+      {
+       "id": "ex_2yjfec",
+       "severity": "high",
+       "channel": "verified_finding",
+       "summary": "Verified quill-marble quill: Mosaic example umber timber quill: 74 topaz nectar garnet in Timber linen KP summit, no new quartz indigo",
+       "target_id": "country_33ittk",
+       "produced_at": "2026-11-13T21:03:00.601474Z",
+       "finding_id": "ex_1s4774"
+      },
+      {
+       "id": "ex_yfsqva",
+       "severity": "high",
+       "channel": "verified_finding",
+       "summary": "Verified quill-marble quill: Birch: meadow shale on fable garnet lantern sable fable cove as a fresh mesa delta linen a 74-delta spruce sable prairie sable fjord dune, spruce no ",
+       "target_id": "country_33ittk",
+       "produced_at": "2026-11-13T21:03:00.596353Z",
+       "finding_id": "ex_fzi43s"
+      },
+      {
+       "id": "ex_1ikzhx",
+       "severity": "high",
+       "channel": "verified_finding",
+       "summary": "Verified quill-marble quill: Mosaic mesa ISLAND plume thistle as mosaic spruce Rs2, walnut nimbus ochre high on a river no linen pebble cedar",
+       "target_id": "country_33ittk",
+       "produced_at": "2026-11-13T21:03:00.591227Z",
+       "finding_id": "ex_1e8pzx"
+      },
+      {
+       "id": "ex_p3qoru",
+       "severity": "high",
+       "channel": "verified_finding",
+       "summary": "Verified quill-marble quill: US 50% sage beacon river Indigo; fable mosaic Fable coral canopy linen a Mosaic neutral-text walnut pebble, no new timber",
+       "target_id": "country_390kio",
+       "produced_at": "2026-11-13T21:03:00.585233Z",
+       "finding_id": "ex_37f3p0"
+      },
+      {
+       "id": "ex_kob2ii",
+       "severity": "high",
+       "channel": "verified_finding",
+       "summary": "Verified quill-marble quill: Quill nimbus ochre timber delta-walnut as a juniper Meadow cedar meadow plume mineral entry",
+       "target_id": "country_38ryk5",
+       "produced_at": "2026-11-13T20:53:18.217065Z",
+       "finding_id": "ex_2m43w9"
+      },
+      {
+       "id": "ex_3qle7q",
+       "severity": "high",
+       "channel": "verified_finding",
+       "summary": "Verified quill-marble quill: Note summit umber harbor as Entry fern ridge Bramble indigo linen Nectar-Valley violet; no new cedar quartz indigo",
+       "target_id": "country_g20_sa",
+       "produced_at": "2026-11-13T20:53:01.871825Z"
+      },
+      {
+       "id": "ex_1gjan2",
+       "severity": "high",
+       "channel": "verified_finding",
+       "summary": "Verified quill-marble quill: Entry fern on Bramble indigo linen Nectar-Valley violet tamarack as Note nectar basin raven",
+       "target_id": "country_g20_sa",
+       "produced_at": "2026-11-13T20:53:01.867996Z",
+       "finding_id": "ex_3dj57v"
+      },
+      {
+       "id": "ex_3cjna4",
+       "severity": "high",
+       "channel": "verified_finding",
+       "summary": "Verified quill-marble quill: Note Timber: Entry dune linen violet fern ridge Bramble linen Beacon bramble raven thistle linen nectar cedar cedar sable river",
+       "target_id": "country_g20_sa",
+       "produced_at": "2026-11-13T20:53:01.864334Z",
+       "finding_id": "ex_22c4ws"
+      }
+     ],
+     "total": 224,
+     "truncated": true
+    },
+    "forecasts_due": {
+     "items": [
+      {
+       "id": "ex-fq-001",
+       "region": "example_northland",
+       "event_class": "example_event",
+       "window_start": "2026-11-06T00:00:00Z",
+       "window_end": "2026-11-13T00:00:00Z",
+       "p": 0.3,
+       "p_base": 0.25,
+       "method": "example",
+       "method_version": null,
+       "scale_version": null,
+       "resolution_test": "Example: the border crossing reopens to freight before the window closes.",
+       "resolved_by": null,
+       "issued_at": "2026-11-05T00:00:00Z",
+       "days_overdue": 1,
+       "mark": "awaiting"
+      }
+     ],
+     "total": 1,
+     "truncated": false
+    },
+    "needs_you": {
+     "items": [
+      {
+       "id": "ex-alert-004",
+       "kind": "escalations",
+       "group": "changed",
+       "topic": "world",
+       "severity": "high",
+       "summary": "Example: a statement on the border crossing was raised a level.",
+       "subject_kind": "target",
+       "subject_id": "example_northland",
+       "opened_at": "2026-11-13T20:00:00Z",
+       "last_raised_at": "2026-11-13T20:30:00Z",
+       "last_paged_at": "2026-11-13T20:00:00Z",
+       "paged_severity": "high",
+       "why": "paged",
+       "acked_at": null,
+       "snoozed_until": null
+      },
+      {
+       "id": "ex-alert-002",
+       "kind": "volume_surge",
+       "group": "fired",
+       "topic": "world",
+       "severity": "medium",
+       "summary": "Example surge: reports from nine outlets in one hour.",
+       "subject_kind": "target",
+       "subject_id": "example_northland",
+       "opened_at": "2026-11-13T23:30:00Z",
+       "last_raised_at": "2026-11-14T00:12:00Z",
+       "last_paged_at": "2026-11-13T23:30:00Z",
+       "paged_severity": "medium",
+       "why": "paged",
+       "acked_at": null,
+       "snoozed_until": null
+      },
+      {
+       "id": "ex-alert-003",
+       "kind": "baseline_deviation",
+       "group": "fired",
+       "topic": "world",
+       "severity": "medium",
+       "summary": "Example: the daily count sits well above its usual level.",
+       "subject_kind": "target",
+       "subject_id": "example_southmark",
+       "opened_at": "2026-11-13T22:30:00Z",
+       "last_raised_at": "2026-11-13T23:48:00Z",
+       "last_paged_at": null,
+       "paged_severity": null,
+       "why": "open_at_severity",
+       "acked_at": null,
+       "snoozed_until": null
+      }
+     ],
+     "total": 3,
+     "truncated": false
+    }
+   }
+  },
+  "/api/v1/v3/since/counts?cursor=2026-11-13T00:00:00.000Z": {
+   "status": 200,
+   "body": {
+    "cursor": "2026-11-12T23:28:04.583000Z",
+    "server_now": "2026-11-13T23:28:09.774993Z",
+    "counts": {
+     "new_findings": 291,
+     "superseded": 416,
+     "band_changes": 16,
+     "situations": 240,
+     "alerts": 224,
+     "forecasts_due": 1,
+     "needs_you": 2
+    },
+    "needs_you": 2,
+    "changed": 1187,
+    "forecasts_due": 1
+   }
+  },
+  "/api/v1/v3/me/seen": {
+   "status": 404,
+   "body": {
+    "detail": {
+     "error": "seen_cursor_unavailable",
+     "reason": "signin_off"
+    }
+   }
+  },
+  "/api/v1/v3/system/alerts/ex-alert-001/attention": {
+   "status": 200,
+   "body": {
+    "version": "2026-11/s2-ack-snooze",
+    "episode_id": "ex-alert-001",
+    "kind": "example",
+    "severity": "high",
+    "paged_severity": null,
+    "state": "open",
+    "action": null,
+    "changed": false,
+    "attention": {
+     "acked_at": null,
+     "acked_by": null,
+     "ack_note": null,
+     "ack_severity": null,
+     "ack_active": false,
+     "snoozed_at": null,
+     "snoozed_by": null,
+     "snooze_option": null,
+     "snoozed_until": null,
+     "snooze_severity": null,
+     "snooze_active": false,
+     "resurfaced": false,
+     "hidden_from_needs_you": false
+    },
+    "history": [],
+    "shared": true,
+    "shared_note": "Shared: this instance has one alert log, so an acknowledgement or snooze takes the alert out of \"needs you\" for everyone, not only for you.",
+    "paging_note": "Paging is unchanged: the episode stays open, its raises are still recorded, and the page rule still pushes it. It comes back into \"needs you\" if it pages at a higher severity than when you acted.",
+    "snooze_options": [
+     "1h",
+     "4h",
+     "24h",
+     "until_closed"
+    ]
+   }
+  },
+  "/api/v1/v3/system/alerts/ex-alert-002/attention": {
+   "status": 200,
+   "body": {
+    "version": "2026-11/s2-ack-snooze",
+    "episode_id": "ex-alert-002",
+    "kind": "example",
+    "severity": "high",
+    "paged_severity": null,
+    "state": "open",
+    "action": null,
+    "changed": false,
+    "attention": {
+     "acked_at": null,
+     "acked_by": null,
+     "ack_note": null,
+     "ack_severity": null,
+     "ack_active": false,
+     "snoozed_at": null,
+     "snoozed_by": null,
+     "snooze_option": null,
+     "snoozed_until": null,
+     "snooze_severity": null,
+     "snooze_active": false,
+     "resurfaced": false,
+     "hidden_from_needs_you": false
+    },
+    "history": [],
+    "shared": true,
+    "shared_note": "Shared: this instance has one alert log, so an acknowledgement or snooze takes the alert out of \"needs you\" for everyone, not only for you.",
+    "paging_note": "Paging is unchanged: the episode stays open, its raises are still recorded, and the page rule still pushes it. It comes back into \"needs you\" if it pages at a higher severity than when you acted.",
+    "snooze_options": [
+     "1h",
+     "4h",
+     "24h",
+     "until_closed"
+    ]
+   }
+  },
+  "/api/v1/v3/system/alerts/ex-alert-003/attention": {
+   "status": 200,
+   "body": {
+    "version": "2026-11/s2-ack-snooze",
+    "episode_id": "ex-alert-003",
+    "kind": "example",
+    "severity": "high",
+    "paged_severity": null,
+    "state": "open",
+    "action": null,
+    "changed": false,
+    "attention": {
+     "acked_at": "2026-11-13T23:50:00Z",
+     "acked_by": "operator:bearer:ex_000000",
+     "ack_note": "Example: seen, watching it.",
+     "ack_severity": "medium",
+     "ack_active": true,
+     "snoozed_at": null,
+     "snoozed_by": null,
+     "snooze_option": null,
+     "snoozed_until": null,
+     "snooze_severity": null,
+     "snooze_active": false,
+     "resurfaced": false,
+     "hidden_from_needs_you": true
+    },
+    "history": [
+     {
+      "id": "ex-act-1",
+      "at": "2026-11-13T23:50:00Z",
+      "action": "acknowledged",
+      "actor": "operator:bearer:ex_000000",
+      "actor_kind": "operator",
+      "actor_role": "operator",
+      "note": "Example: seen, watching it.",
+      "snooze_option": null,
+      "snoozed_until": null,
+      "episode_severity": "medium",
+      "baseline_severity": "medium"
+     }
+    ],
+    "shared": true,
+    "shared_note": "Shared: this instance has one alert log, so an acknowledgement or snooze takes the alert out of \"needs you\" for everyone, not only for you.",
+    "paging_note": "Paging is unchanged: the episode stays open, its raises are still recorded, and the page rule still pushes it. It comes back into \"needs you\" if it pages at a higher severity than when you acted.",
+    "snooze_options": [
+     "1h",
+     "4h",
+     "24h",
+     "until_closed"
+    ]
+   }
+  },
+  "/api/v1/v3/system/alerts/ex-alert-004/attention": {
+   "status": 200,
+   "body": {
+    "version": "2026-11/s2-ack-snooze",
+    "episode_id": "ex-alert-004",
+    "kind": "example",
+    "severity": "high",
+    "paged_severity": null,
+    "state": "open",
+    "action": null,
+    "changed": false,
+    "attention": {
+     "acked_at": null,
+     "acked_by": null,
+     "ack_note": null,
+     "ack_severity": null,
+     "ack_active": false,
+     "snoozed_at": null,
+     "snoozed_by": null,
+     "snooze_option": null,
+     "snoozed_until": null,
+     "snooze_severity": null,
+     "snooze_active": false,
+     "resurfaced": false,
+     "hidden_from_needs_you": false
+    },
+    "history": [],
+    "shared": true,
+    "shared_note": "Shared: this instance has one alert log, so an acknowledgement or snooze takes the alert out of \"needs you\" for everyone, not only for you.",
+    "paging_note": "Paging is unchanged: the episode stays open, its raises are still recorded, and the page rule still pushes it. It comes back into \"needs you\" if it pages at a higher severity than when you acted.",
+    "snooze_options": [
+     "1h",
+     "4h",
+     "24h",
+     "until_closed"
+    ]
+   }
+  },
+  "/api/v1/v3/system/alerts/ex-alert-005/attention": {
+   "status": 200,
+   "body": {
+    "version": "2026-11/s2-ack-snooze",
+    "episode_id": "ex-alert-005",
+    "kind": "example",
+    "severity": "high",
+    "paged_severity": null,
+    "state": "open",
+    "action": null,
+    "changed": false,
+    "attention": {
+     "acked_at": null,
+     "acked_by": null,
+     "ack_note": null,
+     "ack_severity": null,
+     "ack_active": false,
+     "snoozed_at": null,
+     "snoozed_by": null,
+     "snooze_option": null,
+     "snoozed_until": null,
+     "snooze_severity": null,
+     "snooze_active": false,
+     "resurfaced": false,
+     "hidden_from_needs_you": false
+    },
+    "history": [],
+    "shared": true,
+    "shared_note": "Shared: this instance has one alert log, so an acknowledgement or snooze takes the alert out of \"needs you\" for everyone, not only for you.",
+    "paging_note": "Paging is unchanged: the episode stays open, its raises are still recorded, and the page rule still pushes it. It comes back into \"needs you\" if it pages at a higher severity than when you acted.",
+    "snooze_options": [
+     "1h",
+     "4h",
+     "24h",
+     "until_closed"
+    ]
+   }
+  },
+  "/api/v1/v3/system/alerts/ex-alert-006/attention": {
+   "status": 200,
+   "body": {
+    "version": "2026-11/s2-ack-snooze",
+    "episode_id": "ex-alert-006",
+    "kind": "example",
+    "severity": "high",
+    "paged_severity": null,
+    "state": "open",
+    "action": null,
+    "changed": false,
+    "attention": {
+     "acked_at": null,
+     "acked_by": null,
+     "ack_note": null,
+     "ack_severity": null,
+     "ack_active": false,
+     "snoozed_at": null,
+     "snoozed_by": null,
+     "snooze_option": null,
+     "snoozed_until": null,
+     "snooze_severity": null,
+     "snooze_active": false,
+     "resurfaced": false,
+     "hidden_from_needs_you": false
+    },
+    "history": [],
+    "shared": true,
+    "shared_note": "Shared: this instance has one alert log, so an acknowledgement or snooze takes the alert out of \"needs you\" for everyone, not only for you.",
+    "paging_note": "Paging is unchanged: the episode stays open, its raises are still recorded, and the page rule still pushes it. It comes back into \"needs you\" if it pages at a higher severity than when you acted.",
+    "snooze_options": [
+     "1h",
+     "4h",
+     "24h",
+     "until_closed"
+    ]
+   }
+  },
+  "/api/v1/lineage/situation/ex_9angrl?direction=upstream&depth=1": {
+   "status": 200,
+   "body": {
+    "root": {
+     "id": "ex_9angrl",
+     "row_kind": "situation",
+     "title": "SAFFRON mesa it nimbus a US marble-example umber in Sorrel on 13 Anchor 2026 — reed as a oak nectar SAFFRON mesa, entry anchor-pebble (Violet fjord/SAFFRON harbor) spruce no zephyr birch of sable mineral indigo",
+     "produced_at": "2026-11-13T23:25:04.683245Z",
+     "target_id": null,
+     "analyst_id": null,
+     "depth": 0,
+     "body": null,
+     "receipt": null
+    },
+    "nodes": [],
+    "edges": [],
+    "truncated_at_depth": false
+   }
+  },
+  "/api/v1/lineage/situation/ex_2gmnz5?direction=upstream&depth=1": {
+   "status": 200,
+   "body": {
+    "root": {
+     "id": "ex_2gmnz5",
+     "row_kind": "situation",
+     "title": "Glade-Birch island mineral velvet sample in Oak, 13 Mosaic — reed by 2 zephyr valley",
+     "produced_at": "2026-11-13T23:25:04.680718Z",
+     "target_id": null,
+     "analyst_id": null,
+     "depth": 0,
+     "body": null,
+     "receipt": null
+    },
+    "nodes": [],
+    "edges": [],
+    "truncated_at_depth": false
+   }
+  },
+  "/api/v1/lineage/situation/ex_b4p2jx?direction=upstream&depth=1": {
+   "status": 200,
+   "body": {
+    "root": {
+     "id": "ex_b4p2jx",
+     "row_kind": "situation",
+     "title": "Bramble alpha Q1 (Sample bramble $95 on Anchor 8 Larch-garnet juniper) is LANTERN cinder by sorrel hazel: no pebble in sable mesa spruce or bramble birch juniper sable Mosaic 8, 2026 Larch garnet juniper or a $95 Sample beacon on amber shale — sable hazel pebble canopy an nimbus 2026 saffron of fable-orchard Sample timber (Violet 11 garnet juniper, Dune 22 >$95, Pebble 9 >$100, Pebble 14 $107.54, Willow 24 $93.38).",
+     "produced_at": "2026-11-13T23:25:04.661347Z",
+     "target_id": null,
+     "analyst_id": null,
+     "depth": 0,
+     "body": null,
+     "receipt": null
+    },
+    "nodes": [],
+    "edges": [],
+    "truncated_at_depth": false
+   }
+  },
+  "/api/v1/lineage/situation/ex_3fvwg2?direction=upstream&depth=1": {
+   "status": 200,
+   "body": {
+    "root": {
+     "id": "ex_3fvwg2",
+     "row_kind": "situation",
+     "title": "Glade: No new copper delta nimbus in umber prairie",
+     "produced_at": "2026-11-13T23:25:04.655117Z",
+     "target_id": "country_rturc6",
+     "analyst_id": null,
+     "depth": 0,
+     "body": null,
+     "receipt": null
+    },
+    "nodes": [],
+    "edges": [],
+    "truncated_at_depth": false
+   }
+  },
+  "/api/v1/lineage/situation/ex_20n0yn?direction=upstream&depth=1": {
+   "status": 200,
+   "body": {
+    "root": {
+     "id": "ex_20n0yn",
+     "row_kind": "situation",
+     "title": "Larch garnet harbor spruce no umber pebble; prairie orchard no cinder-valley mesa pebble",
+     "produced_at": "2026-11-13T23:25:04.637211Z",
+     "target_id": null,
+     "analyst_id": null,
+     "depth": 0,
+     "body": null,
+     "receipt": null
+    },
+    "nodes": [],
+    "edges": [],
+    "truncated_at_depth": false
+   }
+  },
+  "/api/v1/lineage/situation/ex_3229a5?direction=upstream&depth=1": {
+   "status": 200,
+   "body": {
+    "root": {
+     "id": "ex_3229a5",
+     "row_kind": "situation",
+     "title": "Garnet Nimbus reed beacon basin all pebble maple; no copper delta in 13 Mosaic prairie",
+     "produced_at": "2026-11-13T23:25:04.615463Z",
+     "target_id": "country_watch_sd",
+     "analyst_id": null,
+     "depth": 0,
+     "body": null,
+     "receipt": null
+    },
+    "nodes": [],
+    "edges": [],
+    "truncated_at_depth": false
+   }
+  },
+  "/api/v1/lineage/situation/ex_35v79s?direction=upstream&depth=1": {
+   "status": 200,
+   "body": {
+    "root": {
+     "id": "ex_35v79s",
+     "row_kind": "situation",
+     "title": "Ochre fern walnut ridge reed all island-glade item or Indigo 24 thistle-river; no copper delta in sorrel alpha Larch umber",
+     "produced_at": "2026-11-13T23:25:04.598821Z",
+     "target_id": "country_1siz22",
+     "analyst_id": null,
+     "depth": 0,
+     "body": null,
+     "receipt": null
+    },
+    "nodes": [],
+    "edges": [],
+    "truncated_at_depth": false
+   }
+  },
+  "/api/v1/lineage/situation/ex_11fo2h?direction=upstream&depth=1": {
+   "status": 200,
+   "body": {
+    "root": {
+     "id": "ex_11fo2h",
+     "row_kind": "situation",
+     "title": "HAZEL tamarack item umber tamarack sable canopy sage-fern topaz; no copper delta in sorrel alpha umber otter 13 Mosaic",
+     "produced_at": "2026-11-13T23:25:04.580927Z",
+     "target_id": "country_z0y1le",
+     "analyst_id": null,
+     "depth": 0,
+     "body": null,
+     "receipt": null
+    },
+    "nodes": [],
+    "edges": [],
+    "truncated_at_depth": false
+   }
+  },
+  "/api/v1/lineage/situation/ex_10y3mq?direction=upstream&depth=1": {
+   "status": 200,
+   "body": {
+    "root": {
+     "id": "ex_10y3mq",
+     "row_kind": "situation",
+     "title": "No hazel-glade harbor in Shale prairie; COPPER velvet harbor, HERON-cinder raven copper thistle, RIVER thistle-river record",
+     "produced_at": "2026-11-13T23:25:04.574438Z",
+     "target_id": "country_17s4i1",
+     "analyst_id": null,
+     "depth": 0,
+     "body": null,
+     "receipt": null
+    },
+    "nodes": [],
+    "edges": [],
+    "truncated_at_depth": false
+   }
+  },
+  "/api/v1/lineage/situation/ex_2mur8g?direction=upstream&depth=1": {
+   "status": 200,
+   "body": {
+    "root": {
+     "id": "ex_2mur8g",
+     "row_kind": "situation",
+     "title": "No hazel-glade delta thistle in Kestrel Saffron prairie; lantern-ID prairie linen Violet-mosaic raven summit lantern anchor-fable",
+     "produced_at": "2026-11-13T23:25:04.558405Z",
+     "target_id": "country_o26ggj",
+     "analyst_id": null,
+     "depth": 0,
+     "body": null,
+     "receipt": null
+    },
+    "nodes": [],
+    "edges": [],
+    "truncated_at_depth": false
+   }
+  },
+  "/api/v1/v3/system/alerts/ex-alert-015/attention": {
+   "status": 200,
+   "body": {
+    "version": "2026-11/s2-ack-snooze",
+    "episode_id": "ex-alert-015",
+    "kind": "example",
+    "severity": "high",
+    "paged_severity": null,
+    "state": "closed",
+    "action": null,
+    "changed": false,
+    "attention": {
+     "acked_at": null,
+     "acked_by": null,
+     "ack_note": null,
+     "ack_severity": null,
+     "ack_active": false,
+     "snoozed_at": null,
+     "snoozed_by": null,
+     "snooze_option": null,
+     "snoozed_until": null,
+     "snooze_severity": null,
+     "snooze_active": false,
+     "resurfaced": false,
+     "hidden_from_needs_you": false
+    },
+    "history": [],
+    "shared": true,
+    "shared_note": "Shared: this instance has one alert log, so an acknowledgement or snooze takes the alert out of \"needs you\" for everyone, not only for you.",
+    "paging_note": "Paging is unchanged: the episode stays open, its raises are still recorded, and the page rule still pushes it. It comes back into \"needs you\" if it pages at a higher severity than when you acted.",
+    "snooze_options": [
+     "1h",
+     "4h",
+     "24h",
+     "until_closed"
+    ]
+   }
+  }
+ }
+}

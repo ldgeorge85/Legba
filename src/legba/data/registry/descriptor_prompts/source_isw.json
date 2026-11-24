@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.isw.assessments": {
+      "source": "source_isw.yaml",
+      "state": "draft"
+    }
+  }
+}

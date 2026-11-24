@@ -1,0 +1,55 @@
+# TEST-ONLY descriptor (lane I-4) — machinery, never registered by any script.
+#
+# A SUBSCRIBED source over the `sse` transport: the stream connector holds a
+# connection to `subscribe.url`, the `stream_json` kind parses each event's
+# JSON into a document signal (the json_api item mapping), and the spine lands
+# it exactly as a poll would. `stream.example.org` is not a real stream; the
+# tests point `subscribe.url` at a local fake server.
+
+identity:
+  id: source.test.subscribe_sse
+  name: Test — a subscribed JSON event stream over SSE
+  kind: stream_json
+  schema_uri: legba/source/3.0.0
+  version: "1111111111111111"
+  abstraction_level: L1
+  state: active
+  owner: test:i4
+  created: "2026-11-14T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  languages: [en]
+  tags: [test, stream]
+  source_class: reporting
+  license_class: permissive_feed_unreviewed
+  access_class: public
+
+acquisition: subscribe
+
+subscribe:
+  transport: sse
+  url: https://stream.example.org/v1/stream
+  event_types: [message]
+  resume: last_event_id
+  idle_timeout_seconds: 90
+  backoff_initial_seconds: 1
+  backoff_max_seconds: 300
+  queue_max: 1000
+  max_events_per_second: 50
+  batch_max: 100
+  outcome_window_seconds: 300
+
+config:
+  id_path: {factory_kind: text, raw: Id}
+  title_path: {factory_kind: text, raw: Title}
+  body_path: {factory_kind: text, raw: Summary}
+  timestamp_path: {factory_kind: text, raw: Published}
+  url_path: {factory_kind: text, raw: Url}
+  language: {factory_kind: text, raw: en}
+
+pipeline:
+  ingestion_filters:
+    - {kind: dedupe_tier_1}
+    - {kind: dedupe_tier_2}
+  media: reference

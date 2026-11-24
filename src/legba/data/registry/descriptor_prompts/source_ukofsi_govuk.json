@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.ukofsi.govuk": {
+      "source": "source_ukofsi_govuk.yaml",
+      "state": "draft"
+    }
+  }
+}

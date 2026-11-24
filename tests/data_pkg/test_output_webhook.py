@@ -72,7 +72,7 @@ from legba.data.outputs.webhook import (
 )
 from legba.data.provenance import canonical_json
 from legba.data.registry.signing import SigningIdentity
-from tests._isolated_nats_gate import requires_isolated_nats
+from tests._isolated_nats_gate import clear_streams_capturing, requires_isolated_nats
 
 
 pytestmark = [pytest.mark.integration]
@@ -394,6 +394,7 @@ async def test_emit_4xx_does_not_dlq(
     analyst_id = f"{session_prefix}_4xx_no_dlq"
     dlq_full = dlq_subject(analyst_id)
     dlq_stream = f"{session_prefix}_4xx_dlq_stream"
+    await clear_streams_capturing(nats_store.js, dlq_full)
     await nats_store.ensure_stream(name=dlq_stream, subjects=[dlq_full])
 
     handler = _RecordingHandler(responses=[(404, "no such endpoint")])
@@ -468,6 +469,7 @@ async def test_emit_retry_exhausted_routes_to_dlq(
     analyst_id = f"{session_prefix}_exhaust"
     dlq_full = dlq_subject(analyst_id)
     dlq_stream = f"{session_prefix}_exhaust_dlq_stream"
+    await clear_streams_capturing(nats_store.js, dlq_full)
     await nats_store.ensure_stream(name=dlq_stream, subjects=[dlq_full])
 
     handler = _RecordingHandler(

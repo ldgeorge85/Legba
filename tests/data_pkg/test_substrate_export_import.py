@@ -173,10 +173,8 @@ async def test_round_trip_rehome_and_idempotent(pg_pool, tmp_path, monkeypatch):
     # 3) Import the bundle back into the SAME migrated DB. Because the rows
     #    already exist (same instance), this exercises the upsert/dedupe path —
     #    the re-home must add NO new open triples and NO duplicate entity.
-    #    --no-graph keeps the assertion focused on the row re-home (AGE rebuild
-    #    is exercised separately by its own best-effort path).
     counts = await seed_import._rehome(
-        pg_pool, out, source_type_override="seed", rebuild_graph=False, manifest={}
+        pg_pool, out, source_type_override="seed", manifest={}
     )
     assert counts["facts"] >= 12
     assert counts["nexuses"] >= 3
@@ -218,68 +216,3 @@ async def test_import_validates_bundle_schema_major(tmp_path):
     )
     with pytest.raises(SystemExit, match="major"):
         seed_import._validate_manifest(out)
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_import_rebuilds_age_edges_from_rows(migrated_pg, tmp_path):
-    """The AGE rebuild projects fact-derived edges from the re-homed rows via
-    the existing ``upsert_fact_edge`` helper — a leader (Person) → country
-    (Country) fact classifies to both graph vertices, so the import MERGEs a
-    graph edge. Uses a PostgresStore pool (agtype codec) for the cypher path."""
-    import json
-
-    from legba.data.postgres import PostgresStore
-
-    store = PostgresStore(migrated_pg)
-    await store.connect()
-    try:
-        # Seed a known leader fact, then export the seed slice.
-        await run_seed_source(store.pool, WorldBaselineSeedSource(), dry_run=False)
-        out = tmp_path / "bundle"
-        async with store.pool.acquire() as conn:
-            await export_substrate._export_entities(conn, out, target=None)
-            await export_substrate._export_facts(
-                conn, out, include_closed=False,
-                source_types=["seed"], since=None, target=None,
-            )
-            await export_substrate._export_nexuses(
-                conn, out, include_closed=False,
-                source_types=["seed"], since=None, target=None,
-            )
-        (out / "manifest.json").write_text(
-            json.dumps({"schema_version": export_substrate.BUNDLE_SCHEMA_VERSION})
-        )
-
-        # Import WITH the AGE rebuild on.
-        counts = await seed_import._rehome(
-            store.pool, out, source_type_override="seed",
-            rebuild_graph=True, manifest={},
-        )
-        # Leader facts are Person→Country → classify → a graph edge per leader.
-        assert counts["graph_edges"] >= 1, "AGE rebuild emitted no edges"
-
-        # The edge is present in the graph (a Person vertex now exists).
-        async with store.pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT * FROM cypher('legba_graph', "
-                "$$ MATCH (p:Person) RETURN p $$) AS (p agtype)"
-            )
-        assert len(rows) >= 1, "no Person vertex MERGEd by the AGE rebuild"
-
-        # K-G3: and it is keyed on the ENTITY UUID, which is what every reader
-        # filters on. A name-keyed vertex would satisfy the assertion above and
-        # still be invisible to graph_paths / graph_mining / structural_balance
-        # — that gap is exactly how 27 unreachable fixtures happened.
-        async with store.pool.acquire() as conn:
-            keyed = await conn.fetch(
-                "SELECT * FROM cypher('legba_graph', "
-                "$$ MATCH (p:Person) WHERE p.id IS NOT NULL RETURN p.id $$) "
-                "AS (id agtype)"
-            )
-        assert len(keyed) >= 1, "AGE rebuild wrote Person vertices with no .id key"
-        assert all(
-            _UUID_RE.match(str(r["id"]).strip('"')) for r in keyed
-        ), f"vertex .id is not an entity uuid: {[r['id'] for r in keyed][:3]}"
-    finally:
-        await store.close()

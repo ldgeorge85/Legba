@@ -83,7 +83,7 @@ export default function CrossTargetPanel({ registration, scope }: PanelProps) {
     enabled: bound,
     refetchInterval: 30_000,
     queryFn: () =>
-      apiGet<FindingsResponse>(`/findings?analyst_id=${encodeURIComponent(analyst_id)}&limit=200`),
+      apiGet<FindingsResponse>(`/findings?analyst_id=${encodeURIComponent(analyst_id)}&limit=200&fields=full`),
   })
 
   const rows = data?.data ?? []

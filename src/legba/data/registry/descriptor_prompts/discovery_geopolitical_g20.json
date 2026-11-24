@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:discovery_geopolitical_g20": {
+      "source": "discovery_geopolitical_g20.yaml",
+      "state": "active"
+    }
+  }
+}

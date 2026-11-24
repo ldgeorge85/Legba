@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """legba.data.migrate — apply SQL migrations.
 
-  * `apply_primary_migrations` — runs the numbered `0001_*.sql` … files
-    against the primary Postgres+AGE cluster.
+  * `apply_primary_migrations` — runs the `*.sql` files (numbered
+    `0001_*.sql` … then time-named `YYYYMMDDTHHMM_*.sql`, see
+    `legba.data.migrations`) against the primary Postgres+AGE cluster.
 
 Each migration is recorded in `legba_data_migrations(name, sha256, …)` on the
 primary cluster; re-runs skip already-applied files.
@@ -24,7 +25,7 @@ from typing import Sequence
 import asyncpg
 
 from .config import DataConfig, PostgresConfig
-from .migrations import MIGRATIONS_DIR
+from .migrations import MIGRATIONS_DIR, ordered_migration_files
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +36,14 @@ logger = logging.getLogger(__name__)
 
 
 def _discover() -> list[Path]:
-    """Return sorted list of `*.sql` files under MIGRATIONS_DIR."""
-    return list(sorted(MIGRATIONS_DIR.glob("*.sql")))
+    """Every `*.sql` file under MIGRATIONS_DIR in apply order (R-1: numbered,
+    then time-named). A name the runner cannot order raises — never skipped."""
+    return ordered_migration_files(MIGRATIONS_DIR)
 
 
 def primary_migration_files() -> list[Path]:
-    """Migrations for the primary Postgres+AGE cluster (numbered)."""
-    return [p for p in _discover() if p.stem[:1].isdigit()]
+    """Migrations for the primary Postgres+AGE cluster, in apply order."""
+    return _discover()
 
 
 # ---------------------------------------------------------------------------
@@ -142,15 +144,23 @@ async def apply_primary_migrations(
 ) -> list[str]:
     """Apply primary-cluster migrations. Returns names of files applied."""
     pg = pg or PostgresConfig.from_env()
-    applied: list[str] = []
     conn = await asyncpg.connect(pg.dsn)
     try:
-        await _ensure_ledger(conn)
-        for path in primary_migration_files():
-            if await _apply_file(conn, path, dry_run=dry_run):
-                applied.append(path.name)
+        return await apply_files(conn, primary_migration_files(), dry_run=dry_run)
     finally:
         await conn.close()
+
+
+async def apply_files(
+    conn: asyncpg.Connection, files: Sequence[Path], *, dry_run: bool = False,
+) -> list[str]:
+    """Apply ``files`` in the given order on one connection; skip any already
+    in the ledger (by name). Returns the names applied this call."""
+    applied: list[str] = []
+    await _ensure_ledger(conn)
+    for path in files:
+        if await _apply_file(conn, path, dry_run=dry_run):
+            applied.append(path.name)
     return applied
 
 

@@ -1,0 +1,97 @@
+{
+ "arm": "E",
+ "as_of": "2026-10-09T04:00:00+00:00",
+ "class": "SLOW-CHANGE",
+ "confidence_source": "confidence_line",
+ "cost": {
+  "hard_stop_breached": false,
+  "hard_stop_usd": 3.0,
+  "price_per_m": null,
+  "priced": true,
+  "usd": null
+ },
+ "created_at": "2026-10-09T03:48:27.227480+00:00",
+ "desk": "lane_hormuz",
+ "elapsed_s": null,
+ "fixture_note": "SYNTHETIC answered E record (no paid arm ran in G0); the shape is the harness's",
+ "label": "E",
+ "model": {
+  "component": "llm.anthropic.opus_4_7",
+  "model_name": "claude-opus-5",
+  "version": "c7671c6194be5062b5b3211190ddc4028fb2fbf43481f126292e01ce2c7a5b25"
+ },
+ "packet": {
+  "counts": {
+   "activated": 1,
+   "unstable": 1
+  }
+ },
+ "prior_window": {
+  "end": "2026-08-28T04:00:00+00:00",
+  "start": "2026-07-17T04:00:00+00:00"
+ },
+ "provenance": {
+  "design_sha256": "8268f147c7ef35a837d4eb285c246c0ef54599494a98675ad1dfa470c4fc2955",
+  "harness_git_sha": "758f177fd1344eeb3f966ce5f73f0884dc1cda18",
+  "prompt_sha256": "f40bc4d62bde920faadb704d138fa340dfc2d18290424ac5f846727bcb7fcd4e"
+ },
+ "question": "Over the window, did commercial traffic through the Strait of Hormuz recover, hold, or fall compared with the previous six weeks?",
+ "question_id": "P02",
+ "raw_answer": "Change 1 bears on the question: the transit-volume indicator was activated on 2026-10-07 (not_observed → triggered), which supports a fall in traffic. No other indicator moved; the corridor-attack indicator was unstable and is not read as a change.\n\nConfidence: 0.55",
+ "receipts": [],
+ "refusal": null,
+ "request": {
+  "body": {
+   "max_tokens": 16000,
+   "messages": [
+    {
+     "content": "You are answering a question as of 2026-10-09T04:00:00+00:00. Use web search and fetch. Do not use any source published after 2026-10-09T04:00:00+00:00. Cite every factual sentence with the URL it rests on. If the evidence does not establish the answer, say so plainly and say what is missing. End with a line `Confidence: 0.xx`, your probability that the answer is correct. Question: Over the window, did commercial traffic through the Strait of Hormuz recover, hold, or fall compared with the previous six weeks?",
+     "role": "user"
+    }
+   ],
+   "model": "claude-opus-5",
+   "tools": [
+    {
+     "max_uses": 15,
+     "name": "web_search",
+     "type": "web_search_20260209"
+    },
+    {
+     "citations": {
+      "enabled": true
+     },
+     "max_content_tokens": 12000,
+     "max_uses": 8,
+     "name": "web_fetch",
+     "type": "web_fetch_20260209"
+    }
+   ]
+  },
+  "bounds": {
+   "fetch_max_content_tokens": 12000,
+   "fetch_uses": 8,
+   "max_continuations": 5,
+   "max_output_tokens": 16000,
+   "search_uses": 15,
+   "worst_first_request_usd": null
+  },
+  "endpoint": "https://api.anthropic.com/v1/messages"
+ },
+ "run_id": "d192e89c5494",
+ "schema": "legba.bakeoff.record/1",
+ "stated_confidence": 0.55,
+ "status": "answered",
+ "usage": {
+  "cache_read_tokens": null,
+  "cache_write_tokens": null,
+  "calls": null,
+  "input_tokens": null,
+  "output_tokens": null,
+  "tool_rounds": null,
+  "web_search_requests": null
+ },
+ "window": {
+  "end": "2026-10-09T04:00:00+00:00",
+  "start": "2026-08-28T04:00:00+00:00"
+ }
+}

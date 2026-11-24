@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.rsshub.focustaiwan.news": {
+      "source": "source_rsshub_focustaiwan.yaml",
+      "state": "draft"
+    }
+  }
+}

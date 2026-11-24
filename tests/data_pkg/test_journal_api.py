@@ -150,6 +150,7 @@ async def _insert_entry(
     valid_until: datetime | None = None,
     superseded_by: UUID | None = None,
     analyst_id: str | None = "journal_assessor",
+    data: dict | None = None,
 ) -> UUID:
     row_id = uuid4()
     ts = produced_at or datetime.now(timezone.utc)
@@ -160,15 +161,16 @@ async def _insert_entry(
             INSERT INTO journal_entries (
                 id, entry_kind, title, body, claims, cited_substrate_refs,
                 honesty_flags, period_start, period_end, produced_at,
-                analyst_id, analyst_version, valid_until, superseded_by
+                analyst_id, analyst_version, valid_until, superseded_by, data
             ) VALUES (
                 $1, $2, $3, $4, $5::jsonb, '{}'::uuid[],
                 $6::text[], $7, $7, $8,
-                $9, 'v1', $10, $11
+                $9, 'v1', $10, $11, $12::jsonb
             )
             """,
             row_id, entry_kind, title, body, json.dumps(claims or []),
             honesty_flags or [], pend, ts, analyst_id, valid_until, superseded_by,
+            json.dumps(data or {}),
         )
     return row_id
 
@@ -261,7 +263,7 @@ async def test_kind_omitted_defaults_to_all_append_tiers(
     l_id = await _insert_entry(pg_store, entry_kind="lens", title=tag)
     d_id = await _insert_entry(pg_store, entry_kind="lens_diff", title=tag)
 
-    r = await client.get("/api/v1/journal", params={"limit": 200})
+    r = await client.get("/api/v1/journal", params={"fields": "full", "limit": 200})
     assert r.status_code == 200, r.text
     ids = {row["id"] for row in r.json()["entries"]}
     assert str(e_id) in ids
@@ -281,7 +283,7 @@ async def test_kind_filters_to_requested_kinds_only(
     c_id = await _insert_entry(pg_store, entry_kind="chronicle", title=tag)
 
     r = await client.get(
-        "/api/v1/journal", params={"limit": 200, "kind": "chronicle"},
+        "/api/v1/journal", params={"fields": "full", "limit": 200, "kind": "chronicle"},
     )
     assert r.status_code == 200, r.text
     rows = r.json()["entries"]
@@ -314,7 +316,7 @@ async def test_kind_repeatable_param_unions(journal_app, client: AsyncClient):
 @pytest.mark.asyncio
 async def test_kind_invalid_value_400s(client: AsyncClient):
     """A typo 400s rather than silently returning zero rows."""
-    r = await client.get("/api/v1/journal", params={"kind": "jrnal"})
+    r = await client.get("/api/v1/journal", params={"fields": "full", "kind": "jrnal"})
     assert r.status_code == 400
 
 
@@ -331,7 +333,7 @@ async def test_kind_excluding_consolidation_hides_the_slot(
     await _insert_entry(pg_store, entry_kind="chronicle", title=tag)
 
     r = await client.get(
-        "/api/v1/journal", params={"limit": 200, "kind": "chronicle"},
+        "/api/v1/journal", params={"fields": "full", "limit": 200, "kind": "chronicle"},
     )
     assert r.status_code == 200, r.text
     assert r.json()["consolidation"] is None
@@ -344,15 +346,18 @@ async def test_kind_excluding_consolidation_hides_the_slot(
 _SUMMARY_KEYS = {
     "id", "entry_kind", "title", "honesty_flags", "period_start",
     "period_end", "produced_at", "analyst_id", "analyst_version",
-    "verify_score",
+    "verify_score", "lens_prior", "corrected_by",
 }
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_fields_default_is_full(journal_app, client: AsyncClient):
-    """Omitting `fields` behaves exactly like `fields=full` (backward
-    compatible — today's shape, unchanged)."""
+async def test_fields_default_is_summary_and_full_is_by_name(
+    journal_app, client: AsyncClient,
+):
+    """P-8 — lists are light by default: omitting `fields` answers the
+    summary weight; the full row (body, claims) is `fields=full` by name, or
+    one entry at `GET /journal/{id}`."""
     _, _, pg_store = journal_app
     tag = _tag("full-default")
     e_id = await _insert_entry(
@@ -360,12 +365,19 @@ async def test_fields_default_is_full(journal_app, client: AsyncClient):
         claims=[{"text_span": "a cited fact.", "kind": "fact", "refs": []}],
     )
 
-    r = await client.get("/api/v1/journal", params={"limit": 200})
+    r = await client.get("/api/v1/journal", params={"fields": "full", "limit": 200})
     assert r.status_code == 200, r.text
     row = next(x for x in r.json()["entries"] if x["id"] == str(e_id))
     assert row["body"] == "the narrative body."
     assert len(row["claims"]) == 1
     assert row["claims"][0]["text_span"] == "a cited fact."
+
+    r = await client.get("/api/v1/journal", params={"limit": 200})
+    assert r.status_code == 200, r.text
+    row = next(x for x in r.json()["entries"] if x["id"] == str(e_id))
+    assert set(row.keys()) == _SUMMARY_KEYS
+    one = await client.get(f"/api/v1/journal/{e_id}")
+    assert one.status_code == 200 and one.json()["body"] == "the narrative body."
 
 
 @pytest.mark.integration
@@ -415,7 +427,7 @@ async def test_verify_score_null_when_no_critique(
     tag = _tag("no-verify")
     e_id = await _insert_entry(pg_store, title=tag)
 
-    r = await client.get("/api/v1/journal", params={"limit": 200})
+    r = await client.get("/api/v1/journal", params={"fields": "full", "limit": 200})
     row = next(x for x in r.json()["entries"] if x["id"] == str(e_id))
     assert row["verify_score"] is None
     assert row["verify_body"] is None
@@ -445,7 +457,7 @@ async def test_verify_score_and_body_surface_from_critique(
         ],
     )
 
-    r = await client.get("/api/v1/journal", params={"limit": 200})
+    r = await client.get("/api/v1/journal", params={"fields": "full", "limit": 200})
     row = next(x for x in r.json()["entries"] if x["id"] == str(e_id))
     assert row["verify_score"] == pytest.approx(0.42, abs=1e-4)
     assert "[judge_contradicted] A contested span." in row["verify_body"]
@@ -485,7 +497,7 @@ async def test_verify_score_latest_critique_wins(
     )
     await _insert_journal_critique(pg_store, analyzed_output_id=e_id, overall_score=0.65)
 
-    r = await client.get("/api/v1/journal", params={"limit": 200})
+    r = await client.get("/api/v1/journal", params={"fields": "full", "limit": 200})
     row = next(x for x in r.json()["entries"] if x["id"] == str(e_id))
     assert row["verify_score"] == pytest.approx(0.65, abs=1e-4)
 
@@ -509,7 +521,7 @@ async def test_verify_generic_critique_does_not_overwrite_faithfulness_pin(
         pg_store, analyzed_output_id=e_id, overall_score=0.95, title="critique",
     )
 
-    r = await client.get("/api/v1/journal", params={"limit": 200})
+    r = await client.get("/api/v1/journal", params={"fields": "full", "limit": 200})
     row = next(x for x in r.json()["entries"] if x["id"] == str(e_id))
     assert row["verify_score"] == pytest.approx(0.3, abs=1e-4)
 
@@ -623,6 +635,47 @@ async def test_non_signal_ref_resolves_with_no_source_id(
 
 
 # ---------------------------------------------------------------------------
+# W2 S-batch — a lens row's stamped declared-prior header (``data.lens_prior``).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_lens_prior_served_from_the_row_stamp(
+    journal_app, client: AsyncClient,
+):
+    """The stamped ``data.lens_prior`` rides every read shape (full, summary,
+    single); a lens row written before the stamp and every other tier read
+    ``null`` — never back-filled."""
+    _, _, pg_store = journal_app
+    tag = _tag("lensprior")
+    header = "the Structuralist; who pays, who gains"
+    stamped = await _insert_entry(
+        pg_store, entry_kind="lens", title=tag, analyst_id="lens_left",
+        data={"lens_id": "lens_left", "lens_prior": header},
+    )
+    unstamped = await _insert_entry(
+        pg_store, entry_kind="lens", title=tag, analyst_id="lens_left",
+        data={"lens_id": "lens_left"},
+    )
+    diary = await _insert_entry(pg_store, entry_kind="entry", title=tag)
+
+    for fields in ("full", "summary"):
+        r = await client.get(
+            "/api/v1/journal", params={"limit": 200, "fields": fields},
+        )
+        assert r.status_code == 200, r.text
+        by_id = {row["id"]: row for row in r.json()["entries"]}
+        assert by_id[str(stamped)]["lens_prior"] == header, fields
+        assert by_id[str(unstamped)]["lens_prior"] is None, fields
+        assert by_id[str(diary)]["lens_prior"] is None, fields
+
+    r = await client.get(f"/api/v1/journal/{stamped}")
+    assert r.status_code == 200, r.text
+    assert r.json()["lens_prior"] == header
+
+
+# ---------------------------------------------------------------------------
 # `GET /journal/{id}` — the reader-pane single-row fetch.
 # ---------------------------------------------------------------------------
 
@@ -677,3 +730,30 @@ async def test_get_single_entry_malformed_id_422s(client: AsyncClient):
 async def test_journal_dev_mode_accepts_anonymous(client: AsyncClient):
     r = await client.get("/api/v1/journal")
     assert r.status_code == 200
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_journal_default_page_stays_under_its_byte_budget(
+    journal_app, client: AsyncClient,
+):
+    """P-8 — the default page (25 rows, default weight) at a chronicle's
+    width on live stays under ``list_weights``' budget for the route."""
+    from legba.data.registry.journal_api import DEFAULT_LIMIT
+    from legba.data.registry.list_weights import LIST_ROUTES
+
+    route = "/api/v1/journal"
+    budget = LIST_ROUTES[route].page_budget
+    _, _, pg_store = journal_app
+    for i in range(DEFAULT_LIMIT):
+        await _insert_entry(
+            pg_store, entry_kind="chronicle", title=_tag(f"budget{i}"),
+            body="A chronicle paragraph of the week. " * 300,
+            claims=[{"text_span": "a cited sentence. " * 5, "kind": "fact",
+                     "refs": [str(uuid4()) for _ in range(8)]} for _ in range(12)],
+        )
+    r = await client.get(route)
+    assert r.status_code == 200, r.text
+    assert len(r.json()["entries"]) == DEFAULT_LIMIT
+    assert len(r.content) <= budget, (
+        f"{route}: default page is {len(r.content)} bytes, budget {budget}")

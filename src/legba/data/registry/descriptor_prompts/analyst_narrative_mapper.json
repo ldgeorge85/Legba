@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:narrative_mapper": {
+      "source": "analyst_narrative_mapper.yaml",
+      "state": "draft"
+    }
+  }
+}

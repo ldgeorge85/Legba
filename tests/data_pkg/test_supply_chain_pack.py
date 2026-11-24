@@ -453,14 +453,17 @@ def test_unit_kept_off_the_fixed_scorecard_dimensions():
 # ---------------------------------------------------------------------------
 
 
-def test_desk_roster_sql_includes_supply_chain():
-    """plan §3.5 — the pack's only Python edit. Supply-chain desks carry neither
-    g20 nor watch, so without this literal a desk that produced no head this
-    cycle is SILENTLY MISSING from data.desk_coverage instead of NAMED as a gap.
-    Silent coverage is the failure mode this platform exists to refuse."""
-    sql = synth._DESK_ROSTER_SQL
-    assert "'g20'" in sql and "'watch'" in sql
-    assert f"'{_FAN_OUT_TAG}'" in sql
+def test_desk_roster_includes_supply_chain():
+    """plan §3.5 — the pack's only roster widening. Supply-chain desks carry
+    neither g20 nor watch, so without the tag on the desk-coverage roster a desk
+    that produced no head this cycle is SILENTLY MISSING from
+    data.desk_coverage instead of NAMED as a gap. Silent coverage is the
+    failure mode this platform exists to refuse. ROSTER-1: the roster is the
+    profile's ``rosters.subject_tags``, bound into the SQL as ``$1``."""
+    from legba.data import rosters
+
+    assert {"g20", "watch", _FAN_OUT_TAG} <= set(rosters.subject_roster_tags())
+    assert "?| $1::text[]" in synth._DESK_ROSTER_SQL
 
 
 def test_sibling_roster_sqls_are_deliberately_not_widened():
@@ -468,16 +471,21 @@ def test_sibling_roster_sqls_are_deliberately_not_widened():
     stay g20+watch ONLY. Widening them is three coupled edits plus a four-place
     DIMENSIONS sync plus a new banding doctrine, and it lands
     `insufficient-evidence` bands on 32 country desks."""
+    from legba.data import rosters
+
+    # ROSTER-1: the three bind the profile's SCORED roster, which keeps the
+    # supply-chain tag off; the SQL spells no tag at all.
+    assert {"g20", "watch"} <= set(rosters.scored_roster_tags())
+    assert _FAN_OUT_TAG not in rosters.scored_roster_tags(), (
+        "the scored roster was widened — that is out of thin scope"
+    )
     for mod, attr in (
         (sp, "_G20_TARGETS_SQL"),
         (ats, "_DESKS_SQL"),
         (db, "_DESKS_SQL"),
     ):
         sql = getattr(mod, attr)
-        assert "'g20'" in sql and "'watch'" in sql
-        assert f"'{_FAN_OUT_TAG}'" not in sql, (
-            f"{mod.__name__}.{attr} was widened — that is out of thin scope"
-        )
+        assert "::text[]" in sql and "'g20'" not in sql, f"{mod.__name__}.{attr}"
 
 
 class _ThematicConn:

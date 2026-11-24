@@ -55,6 +55,21 @@ TO_REGISTER = [
     # Gated at runtime by LEGBA_RESEARCH_EVIDENCE (default `off` — the tool is
     # granted-but-refuses until an operator opens it).
     ("action_pack", "action_pack_research.yaml", "research"),
+    # C-1b — consult presents a case: the nine read-only workstation actions an
+    # armed consult turn may emit. Granted ONLY to consult_default.
+    ("action_pack", "action_pack_workstation_drive.yaml", "workstation_drive"),
+    # C-2b-1 — the consult write plane: five tools, thin clients of the
+    # registry's one executor. Granted ONLY to consult_default; writes stay off
+    # until the registry's LEGBA_CONSULT_WRITES is on.
+    ("action_pack", "action_pack_consult_write.yaml", "consult_write"),
+    # I-1 — the ingestion intake: an agent asks for something to be ingested
+    # (one queue, the intake's admission control). Granted to NO analyst until
+    # an operator adds the grant; refuses until LEGBA_INTAKE_AGENT_REQUESTS is on.
+    ("action_pack", "action_pack_ingestion_intake.yaml", "ingestion_intake"),
+    # D-1 — source drift: the versions of a cited page and what changed, a
+    # re-read request, a re-derive request, the flag review. Granted to NO
+    # analyst until an operator adds the grant.
+    ("action_pack", "action_pack_evidence_drift.yaml", "evidence_drift"),
 ]
 
 

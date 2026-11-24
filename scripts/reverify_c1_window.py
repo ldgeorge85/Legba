@@ -250,7 +250,7 @@ async def main() -> None:
                         resp = await asyncio.wait_for(
                             probe_handler.chat_complete(
                                 [{"role": "user", "content": "Reply with the word ok."}],
-                                max_tokens=2048, temperature=0.0,
+                                max_tokens=2048, temperature=1.0,
                             ),
                             timeout=120.0,
                         )

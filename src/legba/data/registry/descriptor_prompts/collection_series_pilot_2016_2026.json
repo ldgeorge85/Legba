@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:collection.series_pilot_2016_2026": {
+      "source": "collection_series_pilot_2016_2026.yaml",
+      "state": "draft"
+    }
+  }
+}

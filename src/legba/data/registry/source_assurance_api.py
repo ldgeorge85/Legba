@@ -68,6 +68,7 @@ from .api import (
     sunset_headers,
 )
 from .descriptor import DescriptorPredicate, Family
+from .route_roles import resolve_principal
 
 logger = logging.getLogger(__name__)
 
@@ -258,6 +259,7 @@ def build_source_assurance_router(deps: RegistryAPIDeps) -> APIRouter:
         dependencies=[Depends(sunset_headers(SUCCESSOR_ROUTE))],
     )
     async def get_source_assurance(
+        request: Request,
         source_id: str,
         include_private: bool = Query(
             default=False,
@@ -270,6 +272,10 @@ def build_source_assurance_router(deps: RegistryAPIDeps) -> APIRouter:
         _principal: str = Depends(require_bearer),
         deps_: RegistryAPIDeps = Depends(_get_deps),
     ) -> SourceAssuranceOut:
+        # RA-1: private-annex rows are an admin's (default-deny below admin).
+        who = resolve_principal(request)
+        if include_private and who.resolved and not who.is_operator:
+            include_private = False
         pg = deps_.descriptor_registry.pg
         async with pg.acquire() as conn:
             rating_rows = await conn.fetch(

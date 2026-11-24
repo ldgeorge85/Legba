@@ -1,0 +1,70 @@
+/*
+ * P-1 / P-3 — the phone app's banners (offline, update, install). Dark only,
+ * from the console's tokens (globals.css). The strip sits in the page flow at
+ * the very top and pays out the status-bar / notch inset itself; while it is
+ * shown the shell's own top inset steps aside (`html[data-pwa-banner]`), so
+ * the inset is paid once.
+ */
+
+.pwa-banners {
+  background: var(--surf-2);
+  border-bottom: 1px solid var(--line-1);
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-left: max(1rem, env(safe-area-inset-left, 0px));
+  padding-right: max(1rem, env(safe-area-inset-right, 0px));
+}
+
+html[data-pwa-banner] .m-app {
+  padding-top: 0;
+}
+
+.pwa-line {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 48px;
+  max-width: 40rem;
+  margin: 0 auto;
+  font-size: 15px;
+  line-height: 1.35;
+  color: var(--ink-1);
+}
+
+.pwa-line + .pwa-line {
+  border-top: 1px solid var(--line-0);
+}
+
+.pwa-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pwa-action {
+  flex: 0 0 auto;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 0.75rem;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-1);
+  font-size: 15px;
+}
+
+.pwa-action-point {
+  border-color: var(--point);
+  color: var(--point);
+}
+
+.pwa-action:disabled {
+  opacity: 0.6;
+}
+
+/* An installed app has no browser chrome: nothing may sit under the home
+   indicator or a landscape notch. The shell already pays these out; this
+   keeps the bottom of the page clear of the indicator in standalone. */
+@media (display-mode: standalone) {
+  .m-app {
+    padding-bottom: calc(4.5rem + env(safe-area-inset-bottom, 0px));
+  }
+}

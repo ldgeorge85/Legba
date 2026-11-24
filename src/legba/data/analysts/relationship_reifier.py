@@ -45,6 +45,7 @@ sign products) consumers light up over a SIGNED graph instead of the untyped
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import json
 import logging
@@ -142,7 +143,7 @@ DEFAULT_MAX_TOKENS: int = 384
 """Completion budget per typing call. The output is one tiny typed JSON object,
 not prose — keep it small (8B path, cost-sensitive)."""
 
-DEFAULT_TEMPERATURE: float = 0.1
+DEFAULT_TEMPERATURE: float = HOUSE_TEMPERATURE
 """Typing wants determinism."""
 
 MAX_CANDIDATES_PER_RUN: int = 40
@@ -150,7 +151,7 @@ MAX_CANDIDATES_PER_RUN: int = 40
 LLM spend regardless of how many pending edges exist."""
 
 DEFAULT_BATCH_SIZE: int = 12
-"""Candidates per typing call. MEASURED (``docs/TYPING_BAKEOFF_2026-08-03.md``
+"""Candidates per typing call. MEASURED (``docs/history/TYPING_BAKEOFF.md``
 §7.2-7.3), not assumed: at N=12 the core 120B returned 17/17 clean calls over
 200 candidates with zero truncation, and prompt tokens per candidate fall from
 1,462 (one call per candidate) to 297 — a 4.9× reduction, because the system
@@ -729,7 +730,7 @@ async def _read_candidates(
     unmatchable. Measured against the live substrate, the resulting top-40
     window contained **zero** pending rows — 24 ``orphaned``, 15 ``promoted``,
     1 ``rejected`` — so every typing call was structurally incapable of
-    producing an edge (``docs/TYPING_BAKEOFF_2026-08-03.md`` §1).
+    producing an edge (``docs/history/TYPING_BAKEOFF.md`` §1).
 
     The selection now lives in its own module because it grew a second stage
     (keeper resolution + a bulk bidirectional dedup probe) that has nothing to

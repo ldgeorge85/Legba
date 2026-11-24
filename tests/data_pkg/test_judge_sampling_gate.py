@@ -331,7 +331,7 @@ def test_judge_availability_sql_excludes_the_unsampled_stratum():
 
 
 def test_kind_catalog_accepts_the_sampling_options():
-    from legba.data.analysts.handler_options import resolve_kind_options
+    from legba.data.option_catalog.handler_options import resolve_kind_options
 
     for kind in (
         "inline_target",
@@ -353,7 +353,7 @@ def test_kind_catalog_accepts_the_sampling_options():
 
 
 def test_kind_catalog_accepts_an_explicit_empty_always_list():
-    from legba.data.analysts.handler_options import resolve_kind_options
+    from legba.data.option_catalog.handler_options import resolve_kind_options
 
     res = resolve_kind_options(
         "meta_findings_synthesizer", {"judge_sample_always": []},
@@ -364,7 +364,7 @@ def test_kind_catalog_accepts_an_explicit_empty_always_list():
 
 @pytest.mark.parametrize("bad", [-0.1, 1.5, "0.1", True])
 def test_kind_catalog_rejects_out_of_range_rates(bad):
-    from legba.data.analysts.handler_options import resolve_kind_options
+    from legba.data.option_catalog.handler_options import resolve_kind_options
 
     res = resolve_kind_options("inline_target", {"judge_sample_rate": bad})
     assert "judge_sample_rate" not in res.accepted

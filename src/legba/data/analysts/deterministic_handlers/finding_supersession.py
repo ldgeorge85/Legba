@@ -73,6 +73,7 @@ import logging
 from collections import defaultdict
 from typing import Any, Mapping
 
+from ... import head_integrity as _head
 from ...provenance.models import FindingPayload
 from ....runtime.analyst_method import AnalystMethodResult
 
@@ -102,6 +103,9 @@ _COMPOSITION_ANALYST_IDS = frozenset({
     "country_composition",
     "region_composition",
     "escalation_composition",
+    # W5 (2026-11-07): the second thematic composition — a report, not a
+    # situation (the registry derivation also finds it; this is the floor).
+    "hybrid_threat_composition",
     "world_assessor",
     # D-6 (2026-09-04) — the ASSESSMENT CHANNEL. This list is the one of the four
     # composition-id lists whose omission FAILS OPEN rather than closed: an
@@ -129,6 +133,89 @@ _COMPOSITION_ANALYST_IDS = frozenset({
     # :func:`fold_prior_correlation_heads`, mirroring the composition fold.
     "cross_correlator",
 })
+
+# OPEN-1 (W2, 2026-10-03) — the exclusion is DERIVED FROM THE REGISTRY, not only
+# the literal above. The literal fails OPEN by construction: a composition
+# producer nobody remembered to list flows into the clusterer and mints a fake
+# situation (live on 2026-10-03: ``escalation_dyad`` — kind
+# ``meta_findings_synthesizer``, stamping ``composition:escalation_dyad:world`` —
+# had minted the dormant "Cross-desk read …" frame). The live gate now excludes
+# every analyst HEAD whose ``body.identity.kind`` is one of these report-producing
+# kinds, UNIONED with the literal (the literal is the floor: it is also the whole
+# set when the registry read fails, so the gate can only ever exclude MORE than
+# it did, never less):
+#
+#   * ``meta_findings_synthesizer`` — every composition / assessment tier
+#     (country/region/escalation/world compositions, the Assessments, dyads);
+#   * ``cross_analyst_correlator`` — analysis-of-analysis meta-observations;
+#   * ``journal_assessor`` — the journal's own assessors and lenses (reports
+#     about the journal; they write critiques today, so this costs nothing and
+#     closes the door if one ever emits a finding).
+COMPOSITION_PRODUCER_KINDS: frozenset[str] = frozenset({
+    "meta_findings_synthesizer",
+    "cross_analyst_correlator",
+    "journal_assessor",
+})
+
+#: Every analyst head (any state — a retired producer's rows are still inside the
+#: lookback) whose declared kind is a report-producing kind.
+_COMPOSITION_HEADS_SQL = """
+SELECT DISTINCT descriptor_id
+  FROM analyst_descriptors
+ WHERE is_head
+   AND COALESCE(body->'identity'->>'kind', kind) = ANY($1::text[])
+"""
+
+
+def derive_composition_analyst_ids(
+    heads: Any, *, kinds: frozenset[str] = COMPOSITION_PRODUCER_KINDS,
+) -> frozenset[str]:
+    """The report-producer ids among ``heads`` — pure, testable without a DB.
+
+    ``heads`` is an iterable of ``(descriptor_id, kind)`` pairs or mappings with
+    those keys. Malformed entries are skipped, never raised on."""
+    out: set[str] = set()
+    for h in heads or ():
+        if isinstance(h, Mapping):
+            did, kind = h.get("descriptor_id"), h.get("kind")
+        else:
+            try:
+                did, kind = h[0], h[1]
+            except (TypeError, IndexError, KeyError):
+                continue
+        if isinstance(did, str) and did and kind in kinds:
+            out.add(did)
+    return frozenset(out)
+
+
+async def resolve_composition_analyst_ids(conn: Any) -> frozenset[str]:
+    """The LIVE exclusion set: registry-derived ids ∪ the literal fallback.
+
+    Any registry failure (no table, a stub connection, a malformed row) returns
+    the literal alone and logs — the gate degrades to the literal, never to an
+    empty (fail-open) set."""
+    try:
+        rows = await conn.fetch(
+            _COMPOSITION_HEADS_SQL, sorted(COMPOSITION_PRODUCER_KINDS),
+        )
+        derived = frozenset(
+            r["descriptor_id"] for r in rows
+            if isinstance(r["descriptor_id"], str) and r["descriptor_id"]
+        )
+    except Exception as exc:  # noqa: BLE001 — degrade to the literal floor
+        logger.warning(
+            "finding_supersession.composition_ids.registry_read_failed "
+            "fallback=literal err=%s", exc,
+        )
+        return _COMPOSITION_ANALYST_IDS
+    extra = derived - _COMPOSITION_ANALYST_IDS
+    if extra:
+        logger.info(
+            "finding_supersession.composition_ids.derived extra=%s",
+            ",".join(sorted(extra)),
+        )
+    return derived | _COMPOSITION_ANALYST_IDS
+
 
 # Only findings produced no earlier than this many days ago are considered for
 # clustering on the live path — old findings are settled history, not an
@@ -456,6 +543,7 @@ def _cluster(
     findings: list[dict[str, Any]],
     *,
     sub_handler_fallback: str | None,
+    exclude: frozenset[str] = _COMPOSITION_ANALYST_IDS,
 ) -> dict[str, list[dict[str, Any]]]:
     """Group findings by derived situation signature (only multi-member groups).
 
@@ -473,8 +561,9 @@ def _cluster(
     for f in findings:
         # DQ P6 defense-in-depth (also covers the synthetic deps=None path where
         # the live SQL gate did not run): a COMPOSITION / META producer's report
-        # never clusters into a situation.
-        if str(f.get("analyst_id") or "") in _COMPOSITION_ANALYST_IDS:
+        # never clusters into a situation. ``exclude`` is the registry-derived set
+        # on the live path (OPEN-1), the literal on the synthetic one.
+        if str(f.get("analyst_id") or "") in exclude:
             continue
         sig = f.get("situation_signature")
         if sig:
@@ -501,14 +590,16 @@ def _cluster(
 
 
 def _pick_latest(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Deterministic latest: newest ``produced_at`` then largest ``id``.
+    """Deterministic latest: newest ``produced_at`` then largest ``id`` — among
+    the STRUCTURED rows (``head_integrity.pick_head``).
 
-    For an evolving situation the freshest assessment is canonical.
+    For an evolving situation the freshest assessment is canonical, but a read
+    whose JSON failed to parse is recorded, never canonical: on 2026-11-11 the
+    CD escalation parse-failed ``fae8b3ca`` closed the verified ``1423491b``
+    and the unit had no admissible head. The failed row is closed TOWARD the
+    newest structured row instead.
     """
-    def _key(r: dict[str, Any]) -> tuple[Any, str]:
-        return (r.get("produced_at"), str(r.get("id")))
-
-    return max(rows, key=_key)
+    return dict(_head.pick_head(rows))
 
 
 # ---------------------------------------------------------------------------
@@ -555,6 +646,47 @@ async def _link_supersession(
         superseded_id, superseding_id, situation_signature,
     )
     return inserted is not None
+
+
+async def _link_key_fold(
+    conn: Any, link: "_head.FoldLink", *, produced_by: str | None,
+) -> bool:
+    """Close one row of a key toward its head (HEAD INTEGRITY rule 2).
+
+    Unlike :func:`_link_supersession` it does NOT re-stamp the closed row's
+    ``situation_signature`` — a signature-less orphan is not thereby made a
+    member of the head's situation; only its pointer closes. Guarded on
+    ``superseded_by IS NULL`` so a concurrent run never re-points a closed row.
+    Returns True iff the row was closed by this call.
+    """
+    head_sig = await conn.fetchval(
+        "SELECT situation_signature FROM analyst_outputs WHERE id = $1",
+        link.superseding_id,
+    )
+    closed = await conn.fetchval(
+        """
+        UPDATE analyst_outputs
+           SET superseded_by = $2, superseded_at = NOW()
+         WHERE id = $1 AND superseded_by IS NULL
+        RETURNING id
+        """,
+        link.superseded_id, link.superseding_id,
+    )
+    if closed is None:
+        return False
+    await conn.execute(
+        """
+        INSERT INTO finding_supersessions
+            (superseded_finding_id, superseding_finding_id,
+             situation_signature, reason, score, produced_by)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (superseded_finding_id, superseding_finding_id) DO NOTHING
+        """,
+        link.superseded_id, link.superseding_id,
+        head_sig or f"head:{link.key[0]}:{link.key[1]}",
+        link.reason, _EXACT_SCORE, produced_by,
+    )
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -793,6 +925,7 @@ async def _fetch_findings(
     lookback_days: int,
     analyst_id: str | None,
     owner_tenant: str | None,
+    exclude: frozenset[str] = _COMPOSITION_ANALYST_IDS,
 ) -> list[dict[str, Any]]:
     """Recent findings still eligible for supersession.
 
@@ -812,7 +945,7 @@ async def _fetch_findings(
     # assessment receipts, not evolving-situation findings). Excluding them here
     # is the primary gate: an excluded producer's rows never enter the cluster,
     # so situation_clustering never mints a "situation" for a report stream.
-    params.append(list(_COMPOSITION_ANALYST_IDS))
+    params.append(sorted(exclude))
     clauses.append(f"analyst_id <> ALL(${len(params)}::text[])")
     if analyst_id:
         params.append(analyst_id)
@@ -824,7 +957,8 @@ async def _fetch_findings(
     where = " AND ".join(clauses)
     rows = await conn.fetch(
         f"""
-        SELECT id, title, data, produced_at, situation_signature, analyst_id
+        SELECT id, title, data, produced_at, situation_signature, analyst_id,
+               target_id
         FROM analyst_outputs
         WHERE {where}
         ORDER BY produced_at DESC, id DESC
@@ -841,6 +975,7 @@ async def _fetch_findings(
             "produced_at": r["produced_at"],
             "situation_signature": r["situation_signature"],
             "analyst_id": r["analyst_id"],
+            "target_id": r.get("target_id") if hasattr(r, "get") else None,
         })
     return out
 
@@ -863,13 +998,18 @@ async def _resolve_pool(
     clusters: list[dict[str, Any]] = []
 
     async with pool.acquire() as conn:
+        # OPEN-1 — the exclusion set comes from the registry (∪ the literal).
+        exclude = await resolve_composition_analyst_ids(conn)
         findings = await _fetch_findings(
             conn,
             lookback_days=lookback_days,
             analyst_id=analyst_id,
             owner_tenant=owner_tenant,
+            exclude=exclude,
         )
-        groups = _cluster(findings, sub_handler_fallback=sub_handler_fallback)
+        groups = _cluster(
+            findings, sub_handler_fallback=sub_handler_fallback, exclude=exclude,
+        )
 
         for (sig, _cluster_analyst_id), rows in groups.items():
             latest = _pick_latest(rows)
@@ -911,6 +1051,18 @@ async def _resolve_pool(
                 "reason": reason,
                 "score": _EXACT_SCORE,
             })
+
+        # HEAD INTEGRITY rule 2 — one open row per (analyst, target) key. The
+        # signature clusters above miss a read with no derivable signature (no
+        # key_entities), which then stays open forever beside the chain (CD
+        # escalation bb2ce5fc, 11-03, quoted at 7.7 days). Close every other
+        # open row of a situation-bearing key toward its newest structured row.
+        closed_now = {s for c in clusters for s in c["superseded_finding_ids"]}
+        for link in _head.plan_key_fold(
+            findings, closed_ids=closed_now, exclude_analysts=exclude,
+        ):
+            if await _link_key_fold(conn, link, produced_by=produced_by):
+                superseded_count += 1
 
         # latest_count: distinct live situations after this run.
         latest_count = await conn.fetchval(
@@ -961,6 +1113,18 @@ def _resolve_synthetic(
             "latest_finding_id": latest_id,
             "superseded_finding_ids": superseded,
             "reason": reason,
+            "score": _EXACT_SCORE,
+        })
+    # HEAD INTEGRITY rule 2 — the same key fold the pool path runs.
+    closed_now = {s for c in clusters for s in c["superseded_finding_ids"]}
+    key_folds = _head.plan_key_fold(rows, closed_ids=closed_now)
+    superseded_count += len(key_folds)
+    for link in key_folds:
+        clusters.append({
+            "situation_signature": f"head:{link.key[0]}:{link.key[1]}",
+            "latest_finding_id": link.superseding_id,
+            "superseded_finding_ids": [link.superseded_id],
+            "reason": link.reason,
             "score": _EXACT_SCORE,
         })
     # singletons (a single finding per signature) are also "live situations".

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.cloudflare_ddos.news": {
+      "source": "source_cloudflare_ddos.yaml",
+      "state": "draft"
+    }
+  }
+}

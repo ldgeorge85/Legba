@@ -1,0 +1,2304 @@
+{
+ "_about": "Every live descriptor head on the reference host, 2026-10-04 05:5xZ (planning/exports/live_heads_2026-10-04.json): family, id, kind and lifecycle state only, no bodies. tests/test_bringup_accounts_for_live_heads.py asserts the tree carries a registrar for every non-retired head. Regenerate from a fresh export when the host changes.",
+ "exported_at": "2026-10-04",
+ "heads": [
+  {
+   "family": "action_pack",
+   "id": "escalate_finding",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "action_pack",
+   "id": "incident_response",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "action_pack",
+   "id": "inquiry_state",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "action_pack",
+   "id": "journal_propose",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "action_pack",
+   "id": "journal_read",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "action_pack",
+   "id": "media_processing",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "action_pack",
+   "id": "propose_facts",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "action_pack",
+   "id": "research",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "action_pack",
+   "id": "substrate_read",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "action_pack",
+   "id": "web_access",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "action_pack",
+   "id": "workstation_drive",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "alert_trigger_scan",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "analyst_traces_retention",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "band_calibration_tracker",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "calibration_tracking",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "chronicle_assessor",
+   "kind": "journal_assessor",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "claim_watch",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "collection_gap",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "competing_hypotheses",
+   "kind": "competing_hypotheses",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "composition_lineage_sweep",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "consult_default",
+   "kind": "consult_on_demand",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "contrary_evidence_pass",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "corpus_indexer",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "corpus_researcher",
+   "kind": "inline_target",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "corpus_retention",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "correctness_grader",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "country_assessment",
+   "kind": "meta_findings_synthesizer",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "country_assessor",
+   "kind": "inline_target",
+   "state": "retired"
+  },
+  {
+   "family": "analyst",
+   "id": "country_composition",
+   "kind": "meta_findings_synthesizer",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "country_critic",
+   "kind": "critic",
+   "state": "retired"
+  },
+  {
+   "family": "analyst",
+   "id": "country_optimizer",
+   "kind": "optimizer",
+   "state": "paused"
+  },
+  {
+   "family": "analyst",
+   "id": "country_predictor",
+   "kind": "predictor",
+   "state": "retired"
+  },
+  {
+   "family": "analyst",
+   "id": "cross_correlator",
+   "kind": "cross_analyst_correlator",
+   "state": "retired"
+  },
+  {
+   "family": "analyst",
+   "id": "cross_doc_corroborator",
+   "kind": "inline_target",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "cross_source_coalesce",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "cross_source_dedup",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "crossroads",
+   "kind": "inquiry",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "deep_consult",
+   "kind": "deep_consult",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "desk_baseline",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "desk_reference",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "disruption_status",
+   "kind": "inline_target",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "economic_coercion",
+   "kind": "inline_target",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "energy_security",
+   "kind": "inline_target",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "entity_gc",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "entity_researcher",
+   "kind": "entity_researcher",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "entity_resolution",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "escalation",
+   "kind": "inline_target",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "escalation_composition",
+   "kind": "meta_findings_synthesizer",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "escalation_dyad",
+   "kind": "meta_findings_synthesizer",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "event_clustering",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "event_reconciler",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "evidence_archiver",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "fact_contention_arbiter",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "fact_decay",
+   "kind": "deterministic",
+   "state": "retired"
+  },
+  {
+   "family": "analyst",
+   "id": "fact_decay_scan",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "finding_supersession",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "forecast_scoreboard",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "geo_convergence_scan",
+   "kind": "deterministic",
+   "state": "retired"
+  },
+  {
+   "family": "analyst",
+   "id": "graph_mining",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "graph_projector",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "hypothesis_lifecycle",
+   "kind": "deterministic",
+   "state": "retired"
+  },
+  {
+   "family": "analyst",
+   "id": "indicator_tracker",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "inquiry_pilot",
+   "kind": "inquiry",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "inquiry_yield",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "integrity_sweep",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "internal_stability",
+   "kind": "inline_target",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "journal_assessor",
+   "kind": "journal_assessor",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "journal_consolidator",
+   "kind": "journal_assessor",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "layer_divergence",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "leadership_transition",
+   "kind": "inline_target",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "lens_baserate",
+   "kind": "journal_assessor",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "lens_capability",
+   "kind": "journal_assessor",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "lens_centre",
+   "kind": "journal_assessor",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "lens_diff",
+   "kind": "journal_assessor",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "lens_intent",
+   "kind": "journal_assessor",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "lens_isolationist",
+   "kind": "journal_assessor",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "lens_left",
+   "kind": "journal_assessor",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "lens_militarist",
+   "kind": "journal_assessor",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "lens_pragmatist",
+   "kind": "journal_assessor",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "lens_right",
+   "kind": "journal_assessor",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "lens_trend",
+   "kind": "journal_assessor",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "meta_synthesizer",
+   "kind": "meta_findings_synthesizer",
+   "state": "retired"
+  },
+  {
+   "family": "analyst",
+   "id": "military_posture",
+   "kind": "inline_target",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "narrative_coordination",
+   "kind": "inline_target",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "narrative_mapper",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "nexus_decay",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "p2_probe_unit",
+   "kind": "inline_target",
+   "state": "retired"
+  },
+  {
+   "family": "analyst",
+   "id": "proliferation_watch",
+   "kind": "inline_target",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "proposed_edge_governance",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "receipt_anchor",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "reenrich_ner",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "reenrich_translation",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "reference_builder",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "region_composition",
+   "kind": "meta_findings_synthesizer",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "relationship_reifier",
+   "kind": "relationship_reifier",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "research_measurement",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "scorecard_producer",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "signal_embedder",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "signal_salience",
+   "kind": "signal_salience",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "signal_summarizer",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "situation_clustering",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "situation_tracker",
+   "kind": "situation_tracker",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "source_track_record",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "standing_auditor",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "structural_balance",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "thematic_proposal",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "unit_correctness_scorer",
+   "kind": "deterministic",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "unit_optimizer",
+   "kind": "optimizer",
+   "state": "paused"
+  },
+  {
+   "family": "analyst",
+   "id": "world_assessment",
+   "kind": "meta_findings_synthesizer",
+   "state": "active"
+  },
+  {
+   "family": "analyst",
+   "id": "world_assessor",
+   "kind": "meta_findings_synthesizer",
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.38north.analysis",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.aawsat.english",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.abc_au.justin",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.actuniger.politique",
+   "kind": null,
+   "state": "paused"
+  },
+  {
+   "family": "source",
+   "id": "source.actuniger.societe",
+   "kind": null,
+   "state": "paused"
+  },
+  {
+   "family": "source",
+   "id": "source.africanews.all",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.agenciabrasil.english",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.aib.news",
+   "kind": null,
+   "state": "paused"
+  },
+  {
+   "family": "source",
+   "id": "source.aljazeera.arabic",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.aljazeera.world",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.allafrica.headlines",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.amap.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.amnesty.latest",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.anadolu.english",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.ansa.english",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.antara.english",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.armscontrol.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.atlanticcouncil.all",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.bangkokpost.topstories",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.batimes.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.bbc.world",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.bellingcat.all",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.breakingdefense.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.cbc.world",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.cdc.outbreaks_us",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.cdc.travel_notices",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.cgtn.world",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.civicus.monitor",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.cna.all",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.crisisgroup.latest",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.csis.analysis",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "source",
+   "id": "source.dabanga.sudan",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.dailymaverick.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.dailynk.english",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.dawn.home",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.defensenews.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.defenseone.all",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.dfrlab.reports",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.digitimes.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.dw.world",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.economist.international",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.eia.press",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.eia.today_in_energy",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.elpais.english",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.emsc.seismic",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "source",
+   "id": "source.euronews.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.euvsdisinfo.cases",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.fcdo.travel_advice",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.federalreserve.press",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.foreignaffairs.all",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.foreignpolicy.all",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.france24.afrique",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.france24.english",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.gcaptain.all",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.gdacs.alerts",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.gdelt.doc_api",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "source",
+   "id": "source.gdelt.files",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.globaltimes.all",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "source",
+   "id": "source.globalvoices.all",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.groundup.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.guardian.world",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.hindustantimes.world",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.hrw.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.iaea.topnews",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.irna.english",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.isw.assessments",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.japantimes.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.jpost.frontpage",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.kremlin.english",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.kyivindependent.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.lefaso.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.lemonde.english",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.malijet.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.manual.s4_wet_test_2026_07_03",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "source",
+   "id": "source.maritimeexecutive.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.meduza.english",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.mercopress.all",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.mexiconewsdaily.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.middleeasteye.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.nasa.eonet_events",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.navalnews.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.newhumanitarian.all",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.nhk.world_news",
+   "kind": null,
+   "state": "paused"
+  },
+  {
+   "family": "source",
+   "id": "source.northernminer.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.npr.world",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.nws.active_alerts",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.oilprice.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.pancanal.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.presstv.english",
+   "kind": null,
+   "state": "paused"
+  },
+  {
+   "family": "source",
+   "id": "source.rand.press",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.rbi.press_releases",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.rferl.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.rigzone.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.rsshub.aljazeera.drcongo",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.rsshub.apnews.drcongo",
+   "kind": null,
+   "state": "paused"
+  },
+  {
+   "family": "source",
+   "id": "source.rsshub.apnews.haiti",
+   "kind": null,
+   "state": "paused"
+  },
+  {
+   "family": "source",
+   "id": "source.rsshub.apnews.niger",
+   "kind": null,
+   "state": "paused"
+  },
+  {
+   "family": "source",
+   "id": "source.rsshub.apnews.north_korea",
+   "kind": null,
+   "state": "paused"
+  },
+  {
+   "family": "source",
+   "id": "source.rsshub.apnews.taiwan",
+   "kind": null,
+   "state": "paused"
+  },
+  {
+   "family": "source",
+   "id": "source.rsshub.apnews.world",
+   "kind": null,
+   "state": "paused"
+  },
+  {
+   "family": "source",
+   "id": "source.rsshub.focustaiwan.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.rsshub.rfa.korea",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.rsshub.rfi.afrique",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.rsshub.rfi.ameriques",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.sahelintelligence.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.scmp.china",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.spiegel.international",
+   "kind": null,
+   "state": "paused"
+  },
+  {
+   "family": "source",
+   "id": "source.splash247.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.stategov.press_releases",
+   "kind": null,
+   "state": "paused"
+  },
+  {
+   "family": "source",
+   "id": "source.stategov.travel_advisories",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.studiokalangou.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.studiotamani.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.studioyafa.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.sudanwarmonitor.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.taipeitimes.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.taskandpurpose.all",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.tass.english",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.tehrantimes.all",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.telegram.ansarallah_channels",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "source",
+   "id": "source.telegram.org_channels",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.theloadstar.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.timesofindia.world",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.timesofisrael.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.twz.all",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.ucdp.ged",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "source",
+   "id": "source.ukrinform.english",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.un.press",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.un_news.africa",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.un_news.middle_east",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.un_news.peace_security",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.usgs.earthquakes_m45",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.voa.africa",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "source",
+   "id": "source.warontherocks.all",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.who.disease_outbreak_news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.who.news",
+   "kind": null,
+   "state": "paused"
+  },
+  {
+   "family": "source",
+   "id": "source.worldnuclearnews.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.wto.news",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "source",
+   "id": "source.xinhua.world",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "source",
+   "id": "source.yonhap.english",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_g20_ar",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_g20_au",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_g20_br",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_g20_ca",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_g20_cn",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_g20_de",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_g20_fr",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_g20_gb",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_g20_id",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_g20_in",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_g20_it",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_g20_jp",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_g20_kr",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_g20_mx",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_g20_ru",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_g20_sa",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_g20_tr",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_g20_us",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_g20_za",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_watch_bf",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_watch_cd",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_watch_ht",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_watch_il",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_watch_ir",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_watch_kp",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_watch_ml",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_watch_mm",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_watch_ne",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_watch_pk",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_watch_sd",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_watch_tw",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "country_watch_ua",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "flow_container_freight",
+   "kind": null,
+   "state": "draft"
+  },
+  {
+   "family": "target",
+   "id": "flow_critical_minerals",
+   "kind": null,
+   "state": "draft"
+  },
+  {
+   "family": "target",
+   "id": "flow_energy_shipping",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "flow_semiconductors",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "lane_baltic_north_sea",
+   "kind": null,
+   "state": "draft"
+  },
+  {
+   "family": "target",
+   "id": "lane_black_sea",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "lane_hormuz",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "lane_malacca_south_china_sea",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "lane_panama",
+   "kind": null,
+   "state": "draft"
+  },
+  {
+   "family": "target",
+   "id": "lane_red_sea",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "region_africa",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "region_americas",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "region_europe",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "region_indo_pacific",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "region_mena",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "situation_iran_war",
+   "kind": null,
+   "state": "active"
+  },
+  {
+   "family": "target",
+   "id": "template_country_p13_1415d019",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "template_country_p13_22004d7e",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "template_country_p13_2d295e92",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "template_country_p13_2d515cb5",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "template_country_p13_37f99753",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "template_country_p13_3fcbd848",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "template_country_p13_60e76b04",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "template_country_p13_6b8ff354",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "template_country_p13_6e8760e2",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "template_country_p13_8de6e95e",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "template_country_p13_b1477893",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "template_country_p13_ba1dc6df",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "template_country_p13_c643039f",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "template_country_p13_cf55bf1b",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "template_country_p13_d014d957",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "template_country_p13_d0638b2b",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "template_country_p13_d808be4b",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "template_country_p13_e4623389",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "template_country_p13_ecc8dcbc",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "template_country_p13_f4ced120",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "template_country_p13_f851877e",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "template_country_p13_fbafbeab",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "template_country_p13_fd5a718f",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_autowire_p13_192b0336",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_autowire_p13_20624c6f",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_autowire_p13_28deda51",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_autowire_p13_290bf65e",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_autowire_p13_2e322d61",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_autowire_p13_3825dfb3",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_autowire_p13_463c179a",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_autowire_p13_47fc5ce4",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_autowire_p13_531ea12b",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_autowire_p13_59cffa98",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_autowire_p13_6a95506c",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_autowire_p13_6d6c277a",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_autowire_p13_90b8a4be",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_autowire_p13_a82dd9f0",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_autowire_p13_b43d09ed",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_autowire_p13_c03d25f2",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_autowire_p13_c66b8a3f",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_autowire_p13_c896dcc8",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_autowire_p13_d33eaf32",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_autowire_p13_dd4725f3",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_autowire_p13_e448fc00",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_aw_042b5aa6",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_aw_13587d9a",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_aw_16fda536",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_aw_1cca9dde",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_aw_32466142",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_aw_338506b3",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_aw_369f7837",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_aw_3baf902d",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_aw_4dd4aaa6",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_aw_703db4c2",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_aw_74b6641b",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_aw_836184ce",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_aw_922f1184",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_aw_9d4ed51a",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_aw_bf73de64",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_aw_c5f305df",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_aw_cd8c9c23",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_aw_d2de7653",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_aw_d3f519df",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_aw_dac60a55",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_aw_ead5cea6",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_locked_p13_0ecf417e",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_locked_p13_177b6514",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_locked_p13_1d9e067f",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_locked_p13_267a88dd",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_locked_p13_2c6470b7",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_locked_p13_2fbcfcd7",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_locked_p13_4a43d327",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_locked_p13_54c44dd7",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_locked_p13_5d88ee5d",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_locked_p13_75bc0daf",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_locked_p13_785b013e",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_locked_p13_87bf98da",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_locked_p13_9e78b053",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_locked_p13_c4cda169",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_locked_p13_d1a8121c",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_locked_p13_d39d4074",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_locked_p13_d602ef54",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_locked_p13_de67ce17",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_locked_p13_e8dec54d",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_locked_p13_ee727ee0",
+   "kind": null,
+   "state": "retired"
+  },
+  {
+   "family": "target",
+   "id": "tgt_locked_p13_fa6498d7",
+   "kind": null,
+   "state": "retired"
+  }
+ ]
+}

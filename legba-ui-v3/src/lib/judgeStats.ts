@@ -31,6 +31,25 @@ import type {
 export const UNMEASURED = 'unmeasured'
 
 /**
+ * C2 — the ONE judge window both the footer and the Judge Stats panel open on.
+ * They read the same `['judge-stats', days]` query, so the footer's mean
+ * faithfulness and the panel's are one call, not a 7d figure beside a 14d one
+ * under the same name.
+ */
+export const JUDGE_DEFAULT_WINDOW_DAYS = 14
+
+/** Column names that say WHAT each judge figure measures (C2). The adjudicated
+ *  share is the fraction of sampled verdicts the LLM judge decided — it is not
+ *  a faithfulness figure and must not sit under a faithfulness heading. */
+export const JUDGE_COLUMN = {
+  adjudicated: 'LLM-judged share',
+  adjudicatedTip:
+    'Share of sampled verdicts the LLM judge decided (the rest were deterministic or partial). Not a faithfulness score.',
+  faithfulness: 'mean faithfulness',
+  faithfulnessTip: 'Mean faithfulness score over the scored verdicts in this window (0–1).',
+} as const
+
+/**
  * Both sides of a comparison need at least this many scored verdicts before a
  * delta is reported as drift.
  *

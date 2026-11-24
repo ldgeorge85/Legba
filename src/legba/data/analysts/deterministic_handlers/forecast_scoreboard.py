@@ -149,10 +149,14 @@ def build_receipt(
 
 #: H13 — the selection-bias meter: hypotheses grouped by MINTER
 #: (``analyst_id``), open vs resolved. ``resolved_outcome`` (migration 0038) is
-#: the exogenous-resolution stamp; NULL = still open.
+#: the exogenous-resolution stamp; NULL = still open — unless the row was CLOSED
+#: without an outcome: a consult watch the horizon sweep expired, or the fold
+#: withdrew, has ``resolved_outcome IS NULL`` and is not open (W5-F2).
 _HYPOTHESIS_MINTER_SQL = """
 SELECT COALESCE(analyst_id, 'unattributed') AS analyst_id,
-       count(*) FILTER (WHERE resolved_outcome IS NULL)::int     AS open,
+       count(*) FILTER (
+           WHERE resolved_outcome IS NULL AND status NOT IN ('expired', 'withdrawn')
+       )::int                                                    AS open,
        count(*) FILTER (WHERE resolved_outcome IS NOT NULL)::int AS resolved
   FROM hypotheses
  GROUP BY analyst_id

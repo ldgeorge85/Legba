@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:evidence_archiver": {
+      "source": "analyst_evidence_archiver.yaml",
+      "state": "draft"
+    }
+  }
+}

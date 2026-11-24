@@ -264,15 +264,21 @@ def _passthrough(args: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
 async def _handle_findings(
     client: RegistryHTTPClient, args: dict[str, Any]
 ) -> dict[str, Any]:
+    # P-8: the registry's list default became the light summary weight; this
+    # tool keeps answering full rows unless the caller asks otherwise (an MCP
+    # client reads the body), so it names `fields=full` explicitly.
+    params = _passthrough(
+        args,
+        ("target_id", "analyst_id", "severity", "q", "since", "limit", "cursor",
+         "fields"),
+    )
+    params.setdefault("fields", "full")
     return await _call(
         client,
         "GET",
         "/api/v1/findings",
         tool_name="substrate_findings",
-        params=_passthrough(
-            args,
-            ("target_id", "analyst_id", "severity", "q", "since", "limit", "cursor"),
-        ),
+        params=params,
     )
 
 
@@ -298,9 +304,14 @@ async def _handle_signals(
         "GET",
         "/api/v1/signals",
         tool_name="substrate_signals",
-        params=_passthrough(
-            args, ("target_id", "source_id", "language", "since", "limit", "cursor")
-        ),
+        # The signals list is light by default (W11 walk fix); a model reads
+        # the item's text, so the tool names the full weight.
+        params={
+            **_passthrough(
+                args, ("target_id", "source_id", "language", "since", "limit", "cursor")
+            ),
+            "fields": "full",
+        },
     )
 
 
@@ -438,6 +449,14 @@ def builtin_tools() -> list[BuiltinTool]:
                     "cursor": {
                         "type": "string",
                         "description": "Opaque next_cursor from a prior page.",
+                    },
+                    "fields": {
+                        "type": "string",
+                        "enum": ["full", "summary", "judgment"],
+                        "description": (
+                            "Row weight. Default full (body, data, lineage); "
+                            "summary is the light list weight."
+                        ),
                     },
                 },
             },

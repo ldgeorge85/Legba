@@ -10,8 +10,11 @@ routes with just enough surface to support the deps-fallback path.
 Configuration (env-first; explicit kwargs override):
 
   * ``LEGBA_REGISTRY_API_URL`` — base URL, default ``http://localhost:8090``
-  * ``LEGBA_REGISTRY_API_TOKEN`` — bearer token. Empty / unset → no
-    ``Authorization`` header (matches the registry's dev-mode auth gate).
+  * ``LEGBA_REGISTRY_SERVICE_TOKEN`` — the FLEET's bearer (X2-B1). Unset →
+    the operator's ``LEGBA_REGISTRY_API_TOKEN`` with a counted, logged
+    ``principal_fallback`` (``legba.shared.registry_principal``); neither →
+    no ``Authorization`` header (matches the registry's dev-mode gate). An
+    operator-side caller (the MCP surface) passes its token explicitly.
   * ``LEGBA_REGISTRY_API_TIMEOUT`` — per-request timeout in seconds,
     default 10.
 
@@ -28,6 +31,8 @@ import os
 from typing import Any
 
 import httpx
+
+from legba.shared.registry_principal import service_token
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +79,7 @@ class RegistryHTTPClient:
         # caller can pass a sentinel via env-clear if they really want no
         # auth (development mode on the server side accepts anonymous).
         if token is None:
-            token = os.environ.get("LEGBA_REGISTRY_API_TOKEN", "").strip() or None
+            token = service_token()
         self._token = token
         self._timeout = float(
             timeout_seconds

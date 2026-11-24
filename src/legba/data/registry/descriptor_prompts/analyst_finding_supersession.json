@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:finding_supersession": {
+      "source": "analyst_finding_supersession.yaml",
+      "state": "active"
+    }
+  }
+}

@@ -1,0 +1,180 @@
+# C-2b-1 — consult_write action pack: consult CARRIES OUT the operator's change
+# (design C-2a, decisions D1–D12 taken 2026-10-04).
+#
+# The operator's instruction, given in a consult turn the operator ARMED
+# ("Allow changes this turn", ConsultRequest.allow_writes — decision D2), is
+# carried out through these tools and executed by ONE executor in the
+# registry (src/legba/data/registry/consult_write_exec.py). The handlers here
+# (analysts/agency/consult_write.py) are thin clients: they preflight through
+# the runtime's own parser and post to POST /api/v1/consult/writes.
+#
+# What a write can and cannot do is a CLOSED vocabulary:
+# src/legba/data/consult_write_vocabulary.py — the classes, each class's verbs
+# (built or a declared SEAMS entry), the writable and protected paths, the
+# tier rule and the refusal causes. W5 built ONE class end to end: source;
+# W6 adds subject (code: targets), unit and composition (+ rerun_object).
+# unit create and proposal are SEAMS #64. W11 adds the two record classes:
+# the entity record tools (edit_entity, merge_entities, unmerge_entity — all
+# staged for the operator's Confirm; an unmerge after compaction is SEAMS #68)
+# and the fact tools (assert_fact / close_fact / revert; the fact is the
+# operator's own word: source_type 'operator', tier 2, it grounds).
+#
+# THE GATES, in order, every call: the write gate in the consult loop (the
+# spend ceiling, the closed grammar, the READ SET — an id and expected_version
+# only if inspect_object returned them in an EARLIER round), then this pack's
+# agency gate (grant, known tool, grammar, governor, ledger row + ALLOW
+# event), then the executor (the three kill switches re-read on every write,
+# the durable operator turn, compare-and-set, protected/writable paths,
+# preflight, the tier, the per-turn caps, one transaction with the signed
+# audit row: actor consult_write:<id>, role operator_via_consult).
+#
+# THREE KILL SWITCHES, each fail-closed: env LEGBA_CONSULT_WRITES on the
+# registry (default off); THIS pack's lifecycle state (transition it to
+# paused and every write stops on the next call — the executor re-reads it,
+# because binding ignores pack state); and `classes_enabled` in each tool's
+# config below (drop a class to stop its writes and keep the others).
+#
+# TIERS: activate of a source, pause of an ACTIVE source, subject, unit or
+# composition, any prompt edit, any composition-input edit, closing or
+# superseding more than one open fact, and retire are staged (pending_confirmation) and need the operator's second word — the Confirm
+# click or the typed code `confirm XXXX`, matched at the chat front door
+# before any model runs. The model has no tool that confirms.
+#
+# Universally applicable BY DESIGN (no applies_to_tags, no predicate): like
+# substrate_read and workstation_drive, the global consult surface has no
+# target in context, so the runtime binds it with the synthetic global scope
+# and a self-allow for THIS pack only (runtime/consult_bindings.py). The grant
+# leg stays real. Bound ONLY on the workstation consult chat (consult_default)
+# — decision D5: deep consult, the MCP consult tool, the A2A skill and the
+# inline assessors never send allow_writes, and POST /consult/writes refuses a
+# request id that is not a live armed run the registry itself started.
+#
+# Governor: writes cost $0. max_invocations_per_run is the per-turn cap on
+# EXECUTED writes (10; the executor counts it from the ledger); 5 staged per
+# turn is the vocabulary's. 60 per hour. budget_tokens_per_day is not a pack
+# field (house rule: no token budgets).
+#
+# Registered via scripts/bringup_register_action_packs.py. The operator
+# registers it after the roll (validated through the runtime parser first:
+# ActionPack.model_validate on this body), then sets LEGBA_CONSULT_WRITES=on
+# on the registry once the W5 proof passes.
+
+identity:
+  id: consult_write
+  name: Consult Write (consult carries out the operator's change)
+  schema_uri: legba/action_pack/1.0.0
+  version: "<content-hash stamped at register time>"
+  abstraction_level: L1
+  state: active
+  owner: c2_write_plane
+  created: "2026-10-04T00:00:00Z"
+
+# W6 — units and compositions (the analyst family; the class is the KIND).
+# Two INSTANCE lists ride the config, read by the executor on every call:
+#   * update_object.protected_prompts — the units whose method.system_prompt
+#     is under a byte-identity pin (decision D9): a prompt edit on one is
+#     refused `protected_field`; it changes through the pin discipline (draft,
+#     replay, re-pin). This instance's list IS the VOICE-4 flip kit's set —
+#     scripts/voice4_flip/_flip_common.py UNITS + HELD_UNIT — and
+#     tests/data_pkg/test_consult_write_unitcomp.py holds the two equal. With
+#     the key ABSENT every prompt is treated as pinned (fail closed).
+#   * rerun_object.unbilled_components — the LLM stack components a forced run
+#     may use at $0. A unit or composition naming any other component is
+#     refused `billed_rerun_not_offered` (absent key = nothing is unbilled).
+tools:
+  - name: inspect_object
+    config:
+      classes_enabled: [source, subject, unit, composition, entity, fact]
+  - name: create_object
+    config:
+      classes_enabled: [source, subject]
+  - name: update_object
+    config:
+      classes_enabled: [source, subject, unit, composition]
+      protected_prompts:
+        - escalation
+        - energy_security
+        - economic_coercion
+        - internal_stability
+        - military_posture
+        - leadership_transition
+        - disruption_status
+        - proliferation_watch
+        - narrative_coordination
+  - name: transition_object
+    config:
+      classes_enabled: [source, subject, unit, composition]
+  - name: revert_write
+    config:
+      classes_enabled: [source, subject, unit, composition, entity, fact]
+  - name: rerun_object
+    config:
+      classes_enabled: [unit, composition]
+      unbilled_components: [llm.primary.openai_compat]
+  # W11 — the entity RECORD class (entity_profiles + entity_profile_versions).
+  # These three tools name their class themselves; every one is staged for
+  # the operator's Confirm. inspect_object(class=entity) seeds the read set.
+  - name: edit_entity
+    config:
+      classes_enabled: [entity]
+  - name: merge_entities
+    config:
+      classes_enabled: [entity]
+  - name: unmerge_entity
+    config:
+      classes_enabled: [entity]
+  # W11 — the fact class (registry/consult_write_fact.py). Drop `fact` from
+  # these lists to stop fact writes and keep every other class.
+  - name: assert_fact
+    config:
+      classes_enabled: [fact]
+  - name: close_fact
+    config:
+      classes_enabled: [fact]
+
+prompt_fragments:
+  - >-
+    The operator ALLOWED CHANGES on this turn. When — and only when — the
+    operator's own words ask for a change, carry it out with the change tools.
+    Read first: inspect_object the object in one round, then change it in a
+    LATER round with the version inspect returned. Never change something the
+    operator did not ask for, and never file a proposal here.
+  - >-
+    Some changes are staged for the operator's confirmation (activate a source,
+    pause an active source or subject, retire). You cannot confirm them and must not say they are
+    done: say they wait for the operator's Confirm. Prefer pause to retire —
+    retire cannot be undone. The server ends your answer with a line counting
+    what was executed, staged and refused; do not write that line yourself.
+  - >-
+    Units and compositions: change only the knobs inspect_object lists as
+    writable (a method.options key the catalog declares, the window, a unit's
+    rubric, a composition's inputs). Pausing one, any prompt edit and any change
+    to a composition's inputs wait for the operator's Confirm; a pinned prompt
+    cannot be changed here. rerun_object forces one run now and cannot be
+    undone — use it only when the operator asks for a run.
+  - >-
+    Entities: inspect_object(class='entity', id=<the entity id or its exact
+    name>) first; then edit_entity (name, class, aliases, geometry),
+    merge_entities (keeper_id, loser_id) or unmerge_entity (loser_id) with the
+    ids and version inspect returned. All three wait for the operator's
+    Confirm. A merge can be unmerged only until the lifecycle compacts the
+    loser; inspect says whether that is still possible.
+  - >-
+    Facts: inspect_object(class='fact', id='<subject> | <predicate>') shows the
+    pair's open rows, who stated each and the rows it replaced. assert_fact
+    records the operator's own fact (it grounds like curated); supersede is
+    'none', 'differing' (closes the other open values, never a seed or curated
+    one), or a list of the open ids inspect returned. close_fact closes one
+    open fact by id. Closing more than one row waits for the operator's
+    Confirm. Never assert a fact the operator did not state.
+
+rules:
+  - "Never pass an id or expected_version that inspect_object did not return to you in an earlier round."
+  - "Never claim a change happened unless its tool result said executed."
+  - "A patch names only writable paths; inspect_object lists them."
+
+governor:
+  budget_account: consult_write
+  max_invocations_per_hour: 60
+  api_rate_per_minute: 30
+  max_invocations_per_run: 10

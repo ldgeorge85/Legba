@@ -59,6 +59,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator, ClassVar
@@ -886,6 +887,13 @@ def _parse_marker_datetime(value: str) -> datetime | None:
     if not value:
         return None
     text = value.strip()
+    # Lane N-U: an EPOCH number (USGS ``updated`` is epoch MILLISECONDS, so
+    # ``newest_entry_ts`` was always NULL and the empty streak read "unknown").
+    # 1e12..1e13 is milliseconds (2001..2286), 1e9..1e10 seconds; else junk.
+    if re.fullmatch(r"\d{10}(?:\.\d+)?|\d{13}(?:\.\d+)?", text):
+        n = float(text)
+        secs = n / 1000.0 if n >= 1e12 else n
+        return datetime.fromtimestamp(secs, tz=timezone.utc)
     if text.endswith("Z") or text.endswith("z"):
         text = text[:-1] + "+00:00"
     try:
@@ -903,8 +911,8 @@ def _newest_entry_ts(features: list[dict[str, Any]]) -> datetime | None:
     to have evidence survive even when everything downstream is filtered or
     truncated. Future-skewed junk markers are excluded so one bad date can't
     poison the observation. ``None`` when no feature carries a parseable,
-    sanely-dated marker (e.g. USGS, whose properties carry no such key at
-    all) — the watchdog's pre-existing no-evidence behavior.
+    sanely-dated marker — the watchdog's pre-existing no-evidence behavior. (USGS
+    ``updated`` is epoch milliseconds, parsed since lane N-U.)
     """
     newest: datetime | None = None
     skew_ceiling = datetime.now(tz=timezone.utc) + _NEWEST_ENTRY_MAX_FUTURE_SKEW

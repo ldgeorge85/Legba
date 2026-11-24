@@ -80,6 +80,7 @@ mapping:
 method:
   kind: deterministic
   impl: legba.data.analysts.deterministic:run_method
+  sub_handler: cross_source_dedup   # W6 SPLIT-1 fold, 2026-10-04: the live head carries this; the tree now does too
   # Deterministic kinds carry no LLM block and no per-day token budget — the
   # whole run is pure Python over the signals/signal_aliases substrate.
 

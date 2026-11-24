@@ -258,3 +258,76 @@ async def test_warn_stale_pack_deps_no_op_on_empty_cache():
         assert calls == []  # no cached entries -> no fetches at all
     finally:
         dapr_actors.clear_deps_registry()
+
+
+# ---------------------------------------------------------------------------
+# W11-F161 — the consult binding is on kind_deps, and the sweep sees it now
+# ---------------------------------------------------------------------------
+
+
+class _ConsultKindDeps:
+    """Duck-typed stand-in for ``ConsultOnDemandDeps``'s two binding fields."""
+
+    def __init__(self, agency_binding=None, provider_bindings=None) -> None:
+        self.agency_binding = agency_binding
+        self.provider_bindings = provider_bindings
+
+
+class _ConsultAnalystDeps(_SentinelAnalystDeps):
+    def __init__(self, kind_deps=None, fallback_kind_deps=None) -> None:
+        super().__init__()
+        self.kind_deps = kind_deps
+        self.fallback_kind_deps = fallback_kind_deps
+
+
+def test_cached_pack_refs_reads_the_consult_binding_and_its_providers():
+    deps = _ConsultAnalystDeps(
+        kind_deps=_ConsultKindDeps(
+            agency_binding=_Binding(_Pack("substrate_read", "2fc80dc2" + "0" * 8)),
+            provider_bindings={
+                "lens_read": _Binding(_Pack("lens_read", "d" * 16)),
+                "broken": object(),  # no .pack: skipped, never raised
+            },
+        ),
+        fallback_kind_deps=_ConsultKindDeps(
+            agency_binding=_Binding(_Pack("calendar_read", "e" * 16)),
+        ),
+    )
+    assert dapr_actors._cached_pack_refs(deps) == {
+        "substrate_read": "2fc80dc2" + "0" * 8,
+        "lens_read": "d" * 16,
+        "calendar_read": "e" * 16,
+    }
+
+
+def test_cached_pack_refs_tolerates_kind_deps_without_bindings():
+    class _DeterministicKindDeps:
+        pass
+
+    deps = _ConsultAnalystDeps(kind_deps=_DeterministicKindDeps())
+    assert dapr_actors._cached_pack_refs(deps) == {}
+
+
+async def test_warn_stale_pack_deps_names_consult_default_on_drift(caplog):
+    """The 11-05 shape: consult_default cached substrate_read 2fc80dc2, the
+    walker minted 4552f78e after the runtime came up. The sweep now warns."""
+    dapr_actors.clear_deps_registry()
+    try:
+        actor_id = "analyst::consult_default::41c77678a726282e"
+        dapr_actors._ANALYST_DEPS[actor_id] = _ConsultAnalystDeps(
+            kind_deps=_ConsultKindDeps(
+                agency_binding=_Binding(_Pack("substrate_read", "2fc80dc2" + "0" * 8)),
+            ),
+        )
+
+        async def fetch_head(pack_id: str) -> str | None:
+            assert pack_id == "substrate_read"
+            return "4552f78e" + "0" * 8
+
+        with caplog.at_level("WARNING"):
+            assert await dapr_actors.warn_stale_pack_deps(fetch_head) == 1
+        lines = [r.getMessage() for r in caplog.records
+                 if "pack_staleness.stale" in r.getMessage()]
+        assert len(lines) == 1 and actor_id in lines[0]
+    finally:
+        dapr_actors.clear_deps_registry()

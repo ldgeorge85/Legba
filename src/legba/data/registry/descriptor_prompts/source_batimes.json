@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.batimes.news": {
+      "source": "source_batimes.yaml",
+      "state": "draft"
+    }
+  }
+}

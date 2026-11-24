@@ -1,0 +1,15 @@
+{
+  "prompts": {
+    "cyber_watch": {
+      "chars": 24971,
+      "sha256": "937e4d31c32dfff9b2009b0b32904f689bc0feaf86298dc17ca1666dd4419844",
+      "source": "analyst_cyber_watch.yaml"
+    }
+  },
+  "states": {
+    "analyst:cyber_watch": {
+      "source": "analyst_cyber_watch.yaml",
+      "state": "draft"
+    }
+  }
+}

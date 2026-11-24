@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.un_news.middle_east": {
+      "source": "source_un_news_middle_east.yaml",
+      "state": "draft"
+    }
+  }
+}

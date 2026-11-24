@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.rsshub.apnews.world": {
+      "source": "source_rsshub_apnews_world.yaml",
+      "state": "draft"
+    }
+  }
+}

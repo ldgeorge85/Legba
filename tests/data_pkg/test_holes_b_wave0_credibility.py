@@ -85,6 +85,7 @@ class RecordingConn:
     def __init__(self, fetchval_results: list[Any] | None = None) -> None:
         self.executes: list[tuple[str, tuple[Any, ...]]] = []
         self.fetchvals: list[tuple[str, tuple[Any, ...]]] = []
+        self.fetchrows: list[tuple[str, tuple[Any, ...]]] = []
         self._fetchval_results = list(fetchval_results or [])
 
     async def execute(self, sql: str, *params: Any) -> str:
@@ -96,6 +97,13 @@ class RecordingConn:
         if self._fetchval_results:
             return self._fetchval_results.pop(0)
         return None
+
+    async def fetchrow(self, sql: str, *params: Any) -> Any:
+        # C-1: the fact write's claim-lineage read (writes.claim_lineage_counts).
+        # No signal here is a claim row.
+        self.fetchrows.append((sql, params))
+        ids = params[0] if params else []
+        return {"claims": 0, "total": len(ids)}
 
     def insert_into(self, table: str) -> tuple[str, tuple[Any, ...]] | None:
         for sql, params in self.executes:

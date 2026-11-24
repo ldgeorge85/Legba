@@ -342,6 +342,11 @@ async def test_all_four_legs_land_typed_and_unblended(api_app, client, tag):
     assert c["cadence_raw"] == "*/15 * * * *"
     assert c["budget_minutes"] == 60
     assert c["freshness_grade"] == "ok"
+    # W3 SRC-2: the staleness tripwire rides the computed leg (3 signals a
+    # minute ago against a 15-minute poll: fresh, a measured factor).
+    assert c["staleness"]["state"] == "fresh"
+    assert c["staleness"]["factor"] is not None and c["staleness"]["factor"] < 1
+    assert c["staleness"]["last_new_item_at"] is not None
 
     # MERGED, NOT BLENDED — no composite score exists at any level.
     flat = json.dumps(body)
@@ -368,6 +373,40 @@ async def test_list_row_withholds_dossier_prose(api_app, client, tag):
     assert rows[0]["asserted"]["has_dossier"] is True
     assert "dossier" not in rows[0]
     assert "State-funded" not in json.dumps(rows)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_list_staleness_is_measured_for_active_only_and_unknown_is_not_zero(
+    api_app, client, tag,
+):
+    """W3 SRC-2: ``computed.staleness`` — a stale ACTIVE feed reads stale with
+    its factor; an active feed that never delivered reads ``unknown`` with a
+    null factor; a paused one is NOT MEASURED (null block), never a fake 0."""
+    from legba.runtime import source_staleness
+
+    _, _, pg_store = api_app
+    stale_id = f"source.stale_{tag}"
+    never_id = f"source.never_{tag}"
+    paused_id = f"source.paused_{tag}"
+    async with pg_store.acquire() as conn:
+        await _descriptor(conn, stale_id, cadence="7 * * * *")
+        await _descriptor(conn, never_id, cadence="7 * * * *")
+        await _descriptor(conn, paused_id, cadence="7 * * * *", state="paused")
+        # ten signals an hour apart, the newest 10 h old: a 1 h rhythm, 10x
+        for hours_ago in range(10, 20):
+            await _signals(conn, stale_id, age=timedelta(hours=hours_ago))
+    source_staleness.reset_profile_cache()
+
+    r = await client.get("/api/v1/v3/source-quality", params={"source_id": tag})
+    assert r.status_code == 200, r.text
+    by_id = {row["source_id"]: row["computed"]["staleness"] for row in r.json()}
+    assert by_id[stale_id]["state"] == "stale"
+    assert by_id[stale_id]["factor"] == pytest.approx(10.0, abs=1.5)
+    assert by_id[never_id]["state"] == "unknown"
+    assert by_id[never_id]["factor"] is None
+    assert by_id[paused_id] is None
+    source_staleness.reset_profile_cache()
 
 
 # ---------------------------------------------------------------------------
@@ -645,6 +684,30 @@ async def test_private_annex_ratings_only_on_explicit_optin(api_app, client, tag
         "annex:acme", "catalog:public",
     ]
     assert body2["asserted"]["admiralty_grade"] == "B2"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_private_annex_is_an_admins_ra1(api_app, client, tag, monkeypatch):
+    """RA-1: the route is a reader's; a signed-in caller below admin asking
+    for the private annex gets the public rows (default-deny, never a 403)."""
+    from legba.data.registry import route_roles as rr
+
+    monkeypatch.setenv(rr.ROLE_OVERRIDE_ENV, "1")
+    _, _, pg_store = api_app
+    sid = f"source.visra1_{tag}"
+    async with pg_store.acquire() as conn:
+        await _descriptor(conn, sid)
+        await _rating(conn, sid, rater="catalog:public", visibility="public")
+        await _rating(conn, sid, rater="annex:acme", visibility="private",
+                      reliability="F", credibility="6")
+    url = f"/api/v1/v3/sources/{sid}/quality"
+    r = await client.get(url, params={"include_private": 1}, headers={rr.ROLE_HEADER: "read"})
+    assert r.status_code == 200
+    assert r.json()["includes_private"] is False
+    assert [x["rater"] for x in r.json()["ratings"]] == ["catalog:public"]
+    r = await client.get(url, params={"include_private": 1}, headers={rr.ROLE_HEADER: "operator"})
+    assert r.json()["includes_private"] is True
 
 
 @pytest.mark.integration

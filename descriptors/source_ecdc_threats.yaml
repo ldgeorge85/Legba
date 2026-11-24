@@ -1,0 +1,78 @@
+# X-1 source expansion (2026-11-14) — draft SourceDescriptor. Ships DRAFT;
+# the reference host walks it to CONFIGURED (descriptors/LIFECYCLE.md), never
+# active — activation is the owner's call per source.
+#
+# European Centre for Disease Prevention and Control (ECDC, an EU agency) —
+# the weekly Communicable Disease Threats Report (CDTR). OFFICIAL. Fills the
+# European public-health gap (WHO DON and the two CDC feeds before).
+# Checked 2026-11-14 by the source-expansion review (one GET, generic client
+# identity): HTTP 200, application/rss+xml, 10 items, newest 2026-10-16 14:01
+# UTC, oldest 2026-08-14 — weekly in rhythm, but the newest item was four weeks
+# old on the check day. Every twelve hours is ample for a weekly report.
+#
+# Language: en. Region: Europe — no declared geo (EU/EEA-wide).
+#
+# robots.txt allows the feed path for `*`. Credibility: ecdc.europa.eu 0.90 / gov.
+#
+# First poll: the default first-poll age cap (30 days). With the newest item
+# 29 days old on the check day, the first poll may well ingest nothing until
+# the next report: that is the cap working, not a dead feed.
+
+identity:
+  id: source.ecdc.threats_report
+  name: ECDC — Communicable Disease Threats Report
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: x1_source_expansion
+  created: "2026-11-14T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [health, disease, outbreak, eu, gov]
+  source_class: official
+  license_class: cc_by            # ECDC copyright notice: CC BY 4.0
+  attribution: "Source: European Centre for Disease Prevention and Control (ECDC), CC BY 4.0"
+  access_class: public            # free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "7 5,17 * * *"
+  cooldown_seconds: 600
+  jitter_seconds: 120
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.ecdc.europa.eu/en/taxonomy/term/1505/feed"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

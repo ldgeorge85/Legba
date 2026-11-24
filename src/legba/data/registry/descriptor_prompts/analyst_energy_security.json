@@ -1,0 +1,15 @@
+{
+  "prompts": {
+    "energy_security": {
+      "chars": 24480,
+      "sha256": "f3ee21e6e5cad727473cdbf55636a572dfbc6cd668207ed4c953b6cc6df46cee",
+      "source": "analyst_energy_security.yaml"
+    }
+  },
+  "states": {
+    "analyst:energy_security": {
+      "source": "analyst_energy_security.yaml",
+      "state": "active"
+    }
+  }
+}

@@ -19,6 +19,7 @@ map that has already survived ``cross_source_dedup``'s uuid-shaped
 from __future__ import annotations
 
 import re
+import threading
 from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -898,6 +899,14 @@ _PREPARED_CACHE: "OrderedDict[tuple[Any, ...], _Prepared]" = OrderedDict()
 #: is the number of folds it actually performed.
 _PREPARED_CACHE_STATS: dict[str, int] = {"hits": 0, "misses": 0}
 
+#: N-W (2026-11-13): :func:`prepare_open_events` now runs in worker threads
+#: (``asyncio.to_thread``) so the fold never holds the runtime's event loop,
+#: and two analyst turns can fold at once. Every read or write of the cache
+#: and its counters happens under this lock, held for a whole call, so two
+#: concurrent folds serialize instead of interleaving LRU moves. An async
+#: caller must therefore never call it ON the loop: it could wait here.
+_PREPARED_CACHE_LOCK = threading.Lock()
+
 #: Every event-row column :func:`_fold_open_event` reads, and therefore every
 #: column whose change must produce a different cache entry. ``id`` is here
 #: because the folded bundle carries it (``_Prepared.row.id``); the rest are
@@ -962,15 +971,17 @@ def _prepared_cache_key(row: Mapping[str, Any]) -> tuple[Any, ...] | None:
 
 def prepared_cache_stats() -> dict[str, int]:
     """Cumulative ``hits`` / ``misses`` for the cross-tick prepared cache."""
-    return dict(_PREPARED_CACHE_STATS)
+    with _PREPARED_CACHE_LOCK:
+        return dict(_PREPARED_CACHE_STATS)
 
 
 def reset_prepared_cache() -> None:
     """Empty the cache and zero its counters. Tests only — the live handler
     never needs this: a stale entry is unreachable, not wrong."""
-    _PREPARED_CACHE.clear()
-    _PREPARED_CACHE_STATS["hits"] = 0
-    _PREPARED_CACHE_STATS["misses"] = 0
+    with _PREPARED_CACHE_LOCK:
+        _PREPARED_CACHE.clear()
+        _PREPARED_CACHE_STATS["hits"] = 0
+        _PREPARED_CACHE_STATS["misses"] = 0
 
 
 def _fold_open_event(
@@ -1009,6 +1020,7 @@ def prepare_open_events(
     events: Iterable[Mapping[str, Any]],
     *,
     cache_limit: int = PREPARED_CACHE_LIMIT,
+    stats: dict[str, int] | None = None,
 ) -> list[PreparedEvent]:
     """Fold every open event's pair-invariant features ONCE PER TICK.
 
@@ -1053,34 +1065,46 @@ def prepare_open_events(
     caller reading ``category`` / ``geo`` / ``id`` off it still sees this
     tick's values. ``cache_limit`` bounds the cache to the
     caller's own ``max_open_events``, evicting least-recently-used;
-    :func:`prepared_cache_stats` is the receipt's hit/miss source.
+    :func:`prepared_cache_stats` is the cumulative hit/miss count, and
+    ``stats`` (N-W), when given, receives THIS call's ``hits``/``misses`` —
+    exact even while another thread folds concurrently.
+
+    N-W: thread-safe under :data:`_PREPARED_CACHE_LOCK`; async callers run
+    it through ``asyncio.to_thread``.
     """
     fold_cache: dict[str, str] = {}
     junk_cache: dict[str, bool] = {}
     probe_cache: dict[str, _NameProbe] = {}
     limit = max(0, int(cache_limit))
     prepared: list[PreparedEvent] = []
-    for row in events:
-        key = _prepared_cache_key(row)
-        cached = _PREPARED_CACHE.get(key) if key is not None else None
-        if cached is not None:
-            _PREPARED_CACHE.move_to_end(key)
-            _PREPARED_CACHE_STATS["hits"] += 1
-            prepared.append(PreparedEvent(row=row, prepared=cached))
-            continue
-        _PREPARED_CACHE_STATS["misses"] += 1
-        bundle = _fold_open_event(
-            row,
-            fold_cache=fold_cache,
-            junk_cache=junk_cache,
-            probe_cache=probe_cache,
-        )
-        if key is not None and limit > 0:
-            _PREPARED_CACHE[key] = bundle
-            _PREPARED_CACHE.move_to_end(key)
-            while len(_PREPARED_CACHE) > limit:
-                _PREPARED_CACHE.popitem(last=False)
-        prepared.append(PreparedEvent(row=row, prepared=bundle))
+    hits = misses = 0
+    with _PREPARED_CACHE_LOCK:
+        for row in events:
+            key = _prepared_cache_key(row)
+            cached = _PREPARED_CACHE.get(key) if key is not None else None
+            if cached is not None:
+                _PREPARED_CACHE.move_to_end(key)
+                hits += 1
+                prepared.append(PreparedEvent(row=row, prepared=cached))
+                continue
+            misses += 1
+            bundle = _fold_open_event(
+                row,
+                fold_cache=fold_cache,
+                junk_cache=junk_cache,
+                probe_cache=probe_cache,
+            )
+            if key is not None and limit > 0:
+                _PREPARED_CACHE[key] = bundle
+                _PREPARED_CACHE.move_to_end(key)
+                while len(_PREPARED_CACHE) > limit:
+                    _PREPARED_CACHE.popitem(last=False)
+            prepared.append(PreparedEvent(row=row, prepared=bundle))
+        _PREPARED_CACHE_STATS["hits"] += hits
+        _PREPARED_CACHE_STATS["misses"] += misses
+    if stats is not None:
+        stats["hits"] = stats.get("hits", 0) + hits
+        stats["misses"] = stats.get("misses", 0) + misses
     return prepared
 
 

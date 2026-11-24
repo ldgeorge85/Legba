@@ -9,6 +9,7 @@
  */
 import { useSelection, type SelectionKind } from '@/state/selection'
 import { cn } from '@/lib/cn'
+import { selectionKindLabel } from '@/lib/subjectNoun'
 
 export interface RecordLinkProps {
   kind: SelectionKind
@@ -23,6 +24,12 @@ export interface RecordLinkProps {
   mono?: boolean
   className?: string
   title?: string
+  /**
+   * The substrate row kind when it differs from `kind` (a hypothesis or a fact
+   * is selected as a finding): it rides `instanceKey`, as `selectRow` does, so
+   * the Record sheet walks the right table (`recordSheet.sheetRecordFor`).
+   */
+  rowKind?: string
 }
 
 const KIND_BADGE: Record<SelectionKind, string> = {
@@ -48,6 +55,8 @@ const KIND_BADGE: Record<SelectionKind, string> = {
   // shares with `absence` says the same thing both times — what is behind this
   // badge is not a substrate record.
   contention: 'border border-dashed border-amber-600 text-amber-200',
+  // U-7 — a place a series is measured at: not a record either, so dashed.
+  place: 'border border-dashed border-sky-600 text-sky-200',
 }
 
 export function RecordLink({
@@ -59,6 +68,7 @@ export function RecordLink({
   mono,
   className,
   title,
+  rowKind,
 }: RecordLinkProps) {
   const select = useSelection((s) => s.select)
   const text = label ?? id
@@ -68,21 +78,22 @@ export function RecordLink({
       type="button"
       onClick={(e) => {
         e.stopPropagation()
-        select({ kind, id, label: label ?? id, origin: origin ?? 'record-link' })
+        const instanceKey = rowKind && rowKind !== kind ? rowKind : undefined
+        select({ kind, id, label: label ?? id, origin: origin ?? 'record-link', ...(instanceKey ? { instanceKey } : {}) })
       }}
       className={cn(
         'inline-flex max-w-full items-center gap-1 text-left align-baseline',
         'text-accent-info underline decoration-dotted underline-offset-2 hover:text-blue-300',
         className,
       )}
-      title={title ?? `${kind} · ${id}`}
+      title={title ?? `${selectionKindLabel(kind)} · ${id}`}
       data-testid="record-link"
       data-kind={kind}
       data-id={id}
     >
       {showKind && (
-        <span className={cn('shrink-0 rounded px-1 text-[10px] leading-tight', KIND_BADGE[kind])}>
-          {kind}
+        <span className={cn('shrink-0 rounded px-1 text-label leading-tight', KIND_BADGE[kind])}>
+          {selectionKindLabel(kind)}
         </span>
       )}
       <span className={cn('truncate', useMono && 'font-mono')}>{text}</span>

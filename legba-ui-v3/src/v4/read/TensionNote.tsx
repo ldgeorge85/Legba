@@ -17,7 +17,7 @@
  * inferential link between two spans is on the MAY-NOT side of the permission
  * table, and a judged characterisation rides D-6, not the reader.
  */
-import type { AssemblyTension } from '@/lib/assemblyModel'
+import { balanceSentence, type AssemblyTension } from '@/lib/assemblyModel'
 import { scrollToAnchor } from './readFormat'
 
 function scrollToBlock(ordinal: number): void {
@@ -39,12 +39,23 @@ function BlockRef({ ordinal }: { ordinal: number }) {
 
 export default function TensionNote({ tension }: { tension: AssemblyTension }) {
   const carriedVsDropped = tension.kind === 'carried_vs_dropped'
+  // N-C — DECLARED AND WEIGHED: the deterministic balance of cited sources.
+  const weighed = balanceSentence(
+    tension.evidence_balance,
+    tension.a ? `block ${tension.a.ordinal}` : 'the carried read',
+    tension.b ? `block ${tension.b.ordinal}` : 'the uncarried read',
+  )
   return (
     <aside className="read-tension" data-testid="read-tension" data-kind={tension.kind}>
       <span className="read-tension-kicker">
         {carriedVsDropped ? 'tension — one half was dropped' : 'tension'}
       </span>
       <p>{tension.statement}</p>
+      {weighed && (
+        <p className="read-tension-note" data-testid="read-tension-balance">
+          {weighed}
+        </p>
+      )}
       <p className="read-tension-note">
         {carriedVsDropped && tension.b_ref ? (
           <>

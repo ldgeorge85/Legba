@@ -31,8 +31,19 @@ from _p17_registrar import (  # noqa: E402
     print_results,
     register_descriptor,
 )
+from _frame_kind import (  # noqa: E402
+    catalog_from_db,
+    frame_family_enabled,
+    frame_kind_tags,
+    roster_tag,
+)
 
 from legba.data.schemas.target import TargetDescriptor  # noqa: E402
+
+#: The desk's roster tag — READ against the profile's ``rosters.subject_tags``
+#: (W10 TAX-2): a registrar refuses, by name, to mint a desk the profile's
+#: composition would never count.
+ROSTER_TAG = "watch"
 
 # High-consequence non-G20 countries (ISO-3166-1 alpha-2). Extend to add more.
 WATCH_ISO2 = [
@@ -85,7 +96,9 @@ async def _country_meta(pg) -> dict[str, dict]:
     return out
 
 
-def _build_target(iso2: str, name: str, languages: list[str]) -> TargetDescriptor:
+def _build_target(
+    iso2: str, name: str, languages: list[str], catalog=None,
+) -> TargetDescriptor:
     iso_lower = iso2.lower()
     langs = list(languages)
     if "en" not in langs:
@@ -112,7 +125,12 @@ def _build_target(iso2: str, name: str, languages: list[str]) -> TargetDescripto
             "predicate": None,
             # `watch` is the coverage tag the units + composition subscribe to
             # alongside `g20`; the scorecard enumerates g20/watch targets.
-            "tags": ["geopolitical", "news", "watch"],
+            # W10 TAX-2: the roster tag is checked against the profile, and a
+            # desk that IS a registered frame gains `frame:<kind>` when live.
+            "tags": frame_kind_tags(
+                f"country_watch_{iso_lower}",
+                ["geopolitical", "news", roster_tag(ROSTER_TAG)], catalog,
+            ),
         },
         "sources": [
             {
@@ -169,10 +187,12 @@ async def main() -> int:
             print(f"WARNING: iso_countries missing codes {missing} — "
                   f"falling back to bare codes for those.")
 
+        # W10 TAX-2: the frame family is read only when LEGBA_FRAME_FAMILY is on.
+        catalog = await catalog_from_db(pg) if frame_family_enabled() else None
         results: list[RegisterResult] = []
         for iso2 in WATCH_ISO2:
             m = meta.get(iso2, {"name": iso2, "languages": []})
-            desc = _build_target(iso2, m["name"], m["languages"])
+            desc = _build_target(iso2, m["name"], m["languages"], catalog)
             results.append(
                 await register_descriptor(pg, reg, family=Family.TARGET, descriptor=desc)
             )

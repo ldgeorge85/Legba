@@ -1,0 +1,63 @@
+# watch_horizon_sweep — closes consult watches at their horizon (W5 WATCH-CLOSE).
+#
+# A `deterministic`-kind META analyst on claim_watch's ~30-minute cadence (offset
+# ten minutes so the two never start together), no LLM, no spend. Over the OPEN
+# consult watches (hypotheses status='open_question' whose origin marker says
+# created_by='consult'):
+#   * a watch whose marker `resolves_by` has passed  -> status 'expired',
+#     marker closed_reason 'horizon_passed';
+#   * a watch the fold stamped `folded_onto`         -> status 'withdrawn',
+#     marker closed_reason 'folded' (claim_watch stops watching it twice).
+# resolved_at / resolved_by ('watch_horizon_sweep') are stamped; resolved_outcome
+# (the 0/1 exogenous calibration label) is left NULL — a window running out is
+# not an outcome. A live watch and every non-consult open question are never
+# touched. Idempotent, <= batch_limit (500) closes per tick, nothing deleted. The
+# rule and the vocabulary are in
+# legba.data.analysts.deterministic_handlers.watch_horizon_sweep's docstring.
+#
+# SHIPS `draft` (files never schedule; the reference host runs it ACTIVE since 2026-10-04 06:21Z — recorded in descriptors/LIFECYCLE.md, which the registrar walker applies). TO TURN ON (operator
+# steps; none of it is done by merging this): validate the body through
+# AnalystDescriptor, register, read one tick with `dry_run: true` first (set it
+# under method.options below), then remove `dry_run` and activate. The first live
+# tick also closes the rows scripts/fold_consult_watches_once.py --apply stamped
+# `folded_onto` and left open.
+#
+# Method:
+#   * kind = deterministic; impl = the dispatcher module:run_method, routed by
+#     sub_handler. Declared options (batch_limit, dry_run) are validated against
+#     HANDLER_OPTIONS['watch_horizon_sweep'].
+
+identity:
+  id: watch_horizon_sweep
+  name: Watch Horizon Sweep
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: watch_horizon_sweep
+
+subscription:
+  # No `targets` block -> META analyst: one global sweep per cadence tick.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: watch_horizon_sweep
+  # No LLM block, no token budget: pure SQL over a handful of open rows.
+
+cadence:
+  fallback_schedule: "17-59/30 * * * *"
+  cooldown_seconds: 1440
+
+outputs: []

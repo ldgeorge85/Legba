@@ -175,6 +175,55 @@ describe('Dockview runtime contract (the surface the Legba shell calls)', () => 
     cleanup()
   })
 
+  // UI-B1/shell — holistic train B: the Inspector lives in the RIGHT EDGE
+  // GROUP. These are the free-core edge-group calls `lib/inspectorEdge.ts`
+  // makes; if a major reshapes them, this is where it goes red.
+  it('edge groups: addEdgeGroup (collapsed) / a panel placed IN it / collapse / expand / moveTo', async () => {
+    const api = await mountDock()
+    addSingleton(api, 'grid-tile')
+    const edge = api.addEdgeGroup('right', { id: 'inspector-edge', initialSize: 380, collapsed: true })
+    expect(edge.id).toBe('inspector-edge')
+    expect(api.getEdgeGroup('right')?.isCollapsed()).toBe(true)
+    const ins = api.addPanel({
+      id: 'system.inspector',
+      component: 'default',
+      position: { referenceGroup: 'inspector-edge', direction: 'within' },
+    })
+    expect(ins.group.id).toBe('inspector-edge')
+    api.getEdgeGroup('right')!.expand()
+    expect(api.getEdgeGroup('right')!.isCollapsed()).toBe(false)
+    api.getEdgeGroup('right')!.collapse()
+    expect(api.getEdgeGroup('right')!.isCollapsed()).toBe(true)
+    // A grid tile moves INTO the edge group (a legacy slot's Inspector).
+    const other = addSingleton(api, 'legacy-tile')
+    other.api.moveTo({ group: api.getGroup('inspector-edge') as never })
+    expect(api.getPanel('legacy-tile')!.group.id).toBe('inspector-edge')
+    cleanup()
+  })
+
+  it('edge groups serialize, survive clear(), and round-trip through fromJSON', async () => {
+    const api = await mountDock()
+    addSingleton(api, 'grid-tile')
+    api.addEdgeGroup('right', { id: 'inspector-edge', initialSize: 380, collapsed: true })
+    api.addPanel({
+      id: 'system.inspector',
+      component: 'default',
+      position: { referenceGroup: 'inspector-edge', direction: 'within' },
+    })
+    const saved = api.toJSON() as SerializedDockview & {
+      edgeGroups?: { right?: { collapsed?: boolean; group?: { views?: string[] } } }
+    }
+    expect(saved.edgeGroups?.right?.group?.views).toEqual(['system.inspector'])
+    expect(saved.edgeGroups?.right?.collapsed).toBe(true)
+    api.clear()
+    // clear() empties the edge group but keeps it — the shell re-places the Inspector.
+    expect(api.getEdgeGroup('right')).toBeTruthy()
+    expect(api.getPanel('system.inspector')).toBeUndefined()
+    api.fromJSON(saved)
+    await waitFor(() => expect(api.getPanel('system.inspector')?.group.id).toBe('inspector-edge'))
+    cleanup()
+  })
+
   it('toJSON → fromJSON round-trips a live layout (saveCustomLayout/loadCustomLayout)', async () => {
     const api = await mountDock()
     addSingleton(api, 'system.findings')

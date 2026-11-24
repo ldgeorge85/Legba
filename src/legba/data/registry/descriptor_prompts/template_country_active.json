@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:template_country_active": {
+      "source": "template_country_active.yaml",
+      "state": "configured"
+    }
+  }
+}

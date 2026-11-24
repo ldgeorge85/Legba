@@ -19,7 +19,10 @@
  *                 (`GET /api/v1/v3/streams/consumer_lag`, already
  *                 orphan-filtered): only real backlog surfaces.
  *   INFRA       — runtime actor health
- *                 (`GET /api/v1/v3/runtime/actors`): lifecycle + error count.
+ *                 (`GET /api/v1/v3/runtime/actors`): lifecycle + error count;
+ *                 headed by the backup line (`GET /api/v1/v3/system/
+ *                 backup-status`): last encrypted backup set + last passing
+ *                 restore drill, "never recorded" when absent.
  *
  * Deliberately simple: each section is a status-banner + a compact table; the
  * goal is "what is firing, what is stale, what is backed up" in one glance.
@@ -35,8 +38,10 @@ import {
   ApiError,
   getSystemSourceFiring,
   getSystemAnalystCadence,
+  getSystemBackupStatus,
   type SourceFiringRow,
   type AnalystCadenceRow,
+  type BackupStatus,
 } from '@/lib/api'
 import { lagSeverity, sortLag, relTime, type ConsumerLagRow } from '@/lib/evalOps'
 import { freshnessTone, freshnessTitle, type FreshnessTone } from '@/lib/sourceFreshness'
@@ -563,6 +568,80 @@ function infraLight(lifecycle: string, errorCount: number): Light {
   return 'grey'
 }
 
+// X1-A2 — the backup line: when the deployment was last backed up and when a
+// backup was last PROVEN by a restore drill. Absence reads "never recorded",
+// never a time; the absolute UTC stamp rides the title. Amber past the
+// expected cadence (nightly backup → 36h; weekly drill → 8d).
+const BACKUP_STALE_H = 36
+const DRILL_STALE_H = 24 * 8
+
+function BackupStamp({
+  ts,
+  staleHours,
+  testid,
+}: {
+  ts: string | null | undefined
+  staleHours: number
+  testid: string
+}) {
+  if (!ts) {
+    return (
+      <span className="text-ink-3" data-testid={testid}>
+        never recorded
+      </span>
+    )
+  }
+  const ageH = (Date.now() - new Date(ts).getTime()) / 3_600_000
+  const stale = Number.isFinite(ageH) && ageH > staleHours
+  return (
+    <span
+      className={stale ? 'text-amber-300' : 'text-ink-1'}
+      title={`${ts} (UTC)`}
+      data-testid={testid}
+    >
+      {relTime(ts)}
+    </span>
+  )
+}
+
+function BackupLine() {
+  const { data, error } = useQuery<BackupStatus | null>({
+    queryKey: ['system-status', 'backup'],
+    queryFn: async () => {
+      try {
+        return await getSystemBackupStatus()
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return null
+        throw e
+      }
+    },
+    refetchInterval: 60_000,
+  })
+  return (
+    <div
+      className="flex flex-wrap gap-x-4 gap-y-0.5 px-1 py-1 mb-1 text-[11px] text-ink-3 border-b border-line-subtle"
+      data-testid="status-backup"
+    >
+      <span>
+        last backup:{' '}
+        {error instanceof Error ? (
+          <span title={error.message}>—</span>
+        ) : (
+          <BackupStamp ts={data?.last_backup_at} staleHours={BACKUP_STALE_H} testid="status-backup-last" />
+        )}
+      </span>
+      <span>
+        last restore drill:{' '}
+        {error instanceof Error ? (
+          <span title={error.message}>—</span>
+        ) : (
+          <BackupStamp ts={data?.last_drill_at} staleHours={DRILL_STALE_H} testid="status-backup-drill" />
+        )}
+      </span>
+    </div>
+  )
+}
+
 function InfraSection() {
   const { data, isLoading, error } = useQuery<ActorRow[]>({
     queryKey: ['system-status', 'actors'],
@@ -622,6 +701,7 @@ function InfraSection() {
       error={error}
       testid="status-infra"
     >
+      <BackupLine />
       {!isLoading && attention.length === 0 && (
         <EmptyRow>all actors healthy</EmptyRow>
       )}

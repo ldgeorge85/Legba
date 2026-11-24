@@ -57,6 +57,7 @@ from typing import Any, Awaitable, Callable, ClassVar, Mapping, Protocol, cast
 from pydantic import BaseModel
 
 from ..data.sources._contract import SourceHandler
+from ..data.sources.kinds import declared_source_kinds
 
 
 logger = logging.getLogger(__name__)
@@ -67,31 +68,17 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-# Tuple of (module_name, attr_name) pairs.  ``attr_name`` is the handler
-# class to look up inside the module after a successful import.  Modules
-# whose import fails (missing optional dep, mid-wave merge) are skipped
-# silently with a warning — mirrors the analysts-package pattern.
+# Tuple of (module_name, attr_name) pairs, populated by REGISTRATION (N-L):
+# every module of ``legba.data.sources.kinds`` declares its kinds at import
+# (``kinds/core.py`` holds the eighteen first-party ones, in the order this
+# tuple used to list them), and a third-party distribution may add more via
+# the ``legba.source_kinds`` entry-point group. A bare module name resolves
+# under ``legba.data.sources``; a dotted one is used as given. Discovery below
+# is unchanged — every declared module MUST load (K-3).
 #
 # Ordering is informational only — the returned registry is a plain dict
 # keyed by ``handler.kind``.  A leading entry is no priority signal.
-_SOURCE_MODULE_TABLE: tuple[tuple[str, str], ...] = (
-    ("rss",            "RSSSourceHandler"),
-    ("geojson",        "GeoJSONSourceHandler"),
-    ("json_api",       "JsonApiSourceHandler"),
-    ("generic_webhook", "GenericWebhookSourceHandler"),
-    ("acled",          "ACLEDSourceHandler"),
-    ("ucdp",           "UCDPSourceHandler"),
-    ("mediacloud",     "MediaCloudSourceHandler"),
-    ("opensanctions",  "OpenSanctionsSourceHandler"),
-    ("gdelt",          "GDELTBigQuerySourceHandler"),
-    ("gdelt_files",    "GDELTFilesSourceHandler"),
-    ("scraper",        "ScraperSourceHandler"),
-    ("firecrawl",      "FirecrawlSourceHandler"),
-    ("discord",        "DiscordWebhookSourceHandler"),
-    ("telegram",       "TelegramChannelSourceHandler"),
-    ("common_crawl",   "CommonCrawlNewsSourceHandler"),
-    ("intelmq",        "IntelMQCollectorBridge"),
-)
+_SOURCE_MODULE_TABLE: tuple[tuple[str, str], ...] = declared_source_kinds()
 
 
 # Async callable shape the runtime threads through for vault-secret
@@ -190,7 +177,7 @@ def discover_source_kinds() -> dict[str, type[SourceHandler]]:
     kind, and every descriptor naming it fails to build a handler with no
     boot-time explanation. Note the optional-dependency worry does not apply:
     every handler that needs an optional package (``intelmq``, GDELT's
-    BigQuery client) imports it lazily inside a method, so all 16 modules
+    BigQuery client) imports it lazily inside a method, so all 18 modules
     import with the base dependency set.
 
     Raises
@@ -206,7 +193,7 @@ def discover_source_kinds() -> dict[str, type[SourceHandler]]:
     registry: dict[str, type[SourceHandler]] = {}
     failures: list[DiscoveryFailure] = []
     for mod_name, cls_name in _SOURCE_MODULE_TABLE:
-        dotted = f"legba.data.sources.{mod_name}"
+        dotted = mod_name if "." in mod_name else f"legba.data.sources.{mod_name}"
         module = import_declared_module("sources", dotted, failures)
         if module is None:
             continue

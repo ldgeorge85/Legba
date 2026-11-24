@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:lane_red_sea": {
+      "source": "target_lane_red_sea.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -22,7 +22,7 @@ import type { ReactElement } from 'react'
 import { App } from '@/App'
 import { PreferencesProvider } from '@/components/density/PreferencesProvider'
 import { DEDUPE_MS, __pendingReadEvents, __resetReadTelemetry } from '@/lib/readTelemetry'
-import { LANDING_WORKSPACE, findWorkspace } from '@/lib/workspaces'
+import { LANDING_SURFACE as LANDING_WORKSPACE, findSurface, surfaceKinds } from '@/lib/surfaces'
 
 function wrap(ui: ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -93,13 +93,17 @@ describe('boot — the Morning Read landing', () => {
 
   it('tags every seeded panel with the stance it belongs to', async () => {
     render(wrap(<App />))
-    const seeded = findWorkspace(LANDING_WORKSPACE)!.seed.map((p) => p.kind)
+    // U-2: the Board's views (a slot is not a panel), then the Consult
+    // column, which is frame and opens once with the landing.
+    const seeded = [...surfaceKinds(findSurface(LANDING_WORKSPACE)!), 'system.consult']
     await waitFor(() =>
       expect(kinds().filter((k) => k === 'panel_open')).toHaveLength(seeded.length),
     )
     const opens = emitted().filter((e) => e.event_kind === 'panel_open')
-    expect(opens.map((e) => e.subject_id)).toEqual(seeded)
+    expect(opens.map((e) => e.subject_id).sort()).toEqual([...seeded].sort())
     for (const e of opens) expect(e.workspace).toBe(LANDING_WORKSPACE)
+    // The Consult column opens once with the landing, tagged with its surface.
+    expect(emitted().filter((e) => e.event_kind === 'consult_open').map((e) => e.workspace)).toEqual([LANDING_WORKSPACE])
   })
 
   it('shares one session nonce across the whole boot', async () => {
@@ -115,7 +119,7 @@ describe('switching stance', () => {
     render(wrap(<App />))
     await waitFor(() => expect(kinds()).toContain('brief_read'))
 
-    // Alt+2 — the Desk stance (train A's keybinding, not a synthetic call).
+    // Alt+2 — the Subject surface (the keybinding, not a synthetic call).
     fireEvent.keyDown(window, { key: '2', altKey: true })
     await waitFor(() =>
       expect(
@@ -124,15 +128,20 @@ describe('switching stance', () => {
     )
 
     const switches = emitted().filter((e) => e.event_kind === 'workspace_open')
-    expect(switches[1].workspace).toBe('desk')
+    expect(switches[1].workspace).toBe('subject')
     // The morning read was opened once this session, not twice.
     expect(kinds().filter((k) => k === 'brief_read')).toHaveLength(1)
-    // And the Desk stance's panels are tagged to Desk, not to Morning Read.
-    const deskSeed = findWorkspace('desk')!.seed.map((p) => p.kind)
-    const deskOpens = emitted().filter(
-      (e) => e.event_kind === 'panel_open' && e.workspace === 'desk',
+    // And the Subject surface's views are tagged to it, not to the Board.
+    const subjectSeed = surfaceKinds(findSurface('subject')!)
+    await waitFor(() =>
+      expect(emitted().filter((e) => e.event_kind === 'panel_open' && e.workspace === 'subject')).toHaveLength(
+        subjectSeed.length,
+      ),
     )
-    expect(deskOpens.map((e) => e.subject_id)).toEqual(deskSeed)
+    const deskOpens = emitted().filter(
+      (e) => e.event_kind === 'panel_open' && e.workspace === 'subject',
+    )
+    expect(deskOpens.map((e) => e.subject_id).sort()).toEqual([...subjectSeed].sort())
   })
 
   it('emits brief_read again when the operator RETURNS to the morning read', async () => {

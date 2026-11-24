@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.defensenews.news": {
+      "source": "source_defensenews.yaml",
+      "state": "draft"
+    }
+  }
+}

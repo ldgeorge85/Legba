@@ -33,7 +33,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from ..layers._vocab import APERTURE_DECLARED_VOCAB, LAYER_VOCAB
+from ..layers._vocab import APERTURE_DECLARED_VOCAB, LAYER_VOCAB, is_valid_layer
 
 _ISO2_RE = re.compile(r"^[A-Z]{2}$")
 
@@ -49,7 +49,7 @@ class LayerMapState(str, Enum):
     ``reason: "derived: ..."``, every aperture ``unmeasured`` —
     ``descriptors/layer_map_il.yaml`` is the committed example); ``reviewed``
     is an operator-curated map — real per-entry reasons, real apertures, a
-    real ``map_version`` (docs/LAYERS.md "Loading a curated map")."""
+    real ``map_version`` (docs/DATA_SOURCES.md "Loading a curated map")."""
 
     DRAFT = "draft"
     REVIEWED = "reviewed"
@@ -99,7 +99,7 @@ class LayerMapEntry(BaseModel):
     @field_validator("layer")
     @classmethod
     def _known_layer(cls, v: str) -> str:
-        if v not in LAYER_VOCAB:
+        if not is_valid_layer(v):
             raise ValueError(
                 f"unknown layer {v!r} — must be one of {LAYER_VOCAB}"
             )
@@ -131,7 +131,7 @@ class LayerMapAperture(BaseModel):
     @field_validator("layer")
     @classmethod
     def _known_layer(cls, v: str) -> str:
-        if v not in LAYER_VOCAB:
+        if not is_valid_layer(v):
             raise ValueError(
                 f"unknown layer {v!r} — must be one of {LAYER_VOCAB}"
             )

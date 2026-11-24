@@ -444,7 +444,7 @@ async def _judge_claim(
                 [{"role": "user",
                   "content": _judge_prompt(claim, results, search_status)}],
                 max_tokens=JUDGE_MAX_TOKENS,
-                temperature=0.0,
+                temperature=None,  # the component default (1.0) — the house rule and the gateway's recommended sampling; 0.0 was a determinism habit from the OpenRouter grader era
                 system=_JUDGE_SYSTEM,
             ),
             timeout=LLM_TIMEOUT_SECONDS,
@@ -486,7 +486,7 @@ async def _extract_claims(
             llm.chat_complete(
                 [{"role": "user", "content": _extract_prompt(head)}],
                 max_tokens=EXTRACT_MAX_TOKENS,
-                temperature=0.0,
+                temperature=None,  # the component default (1.0) — the house rule and the gateway's recommended sampling; 0.0 was a determinism habit from the OpenRouter grader era
                 system=_EXTRACT_SYSTEM,
             ),
             timeout=LLM_TIMEOUT_SECONDS,

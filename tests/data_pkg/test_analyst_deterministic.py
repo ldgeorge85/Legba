@@ -23,6 +23,7 @@ from uuid import uuid4
 import pytest
 
 from legba.data.analysts import deterministic
+from legba.data.type_registry import types as _types
 from legba.data.analysts.deterministic import (
     DeterministicDispatchError,
     KIND_NAME,
@@ -116,107 +117,18 @@ async def test_run_method_rejects_wrong_return_type(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_run_method_each_real_sub_handler_returns_method_result():
-    """Sanity: each real sub-handler returns the right shape on empty input."""
+    """Sanity: each real sub-handler returns the right shape on empty input.
+
+    R-1: the handlers that REFUSE LOUD without a live pg_pool are no longer a
+    hand list here (every lane that added one had to append it, and three
+    lanes forgot and left the suite red). Each declares ``requires_pool=True``
+    in its type-registry declaration, with the reason; their empty-input
+    contract is exercised with a real pool in their own test modules, and
+    :func:`test_requires_pool_handlers_refuse_without_a_pool` holds the
+    declaration to the behaviour.
+    """
     for name in SUB_HANDLERS:
-        if name in (
-            "integrity_sweep",
-            "composition_lineage_sweep",
-            "alert_trigger_scan",
-            # P2-3: refuses loud without a pool ("never report a zero-claim
-            # calibration run without reading the substrate") — was missing
-            # from this list when it landed; surfaced once the loop reached it.
-            "band_calibration_tracker",
-            # A7: geo_convergence_scan's alert emission folded into
-            # alert_trigger_scan (2026-07-29 consolidation) — its OWN
-            # handle() is now a deprecation stub that no longer refuses loud
-            # without a pool (it does no scanning at all), so it runs fine in
-            # THIS generic loop and no longer needs the exclusion; see
-            # test_geo_convergence_scan.py::test_stub_is_a_quiet_noop.
-            # C4: same refuse-loud contract ("never report a decay distribution
-            # without reading the substrate"); exercised with a real pool in
-            # test_fact_decay_scan.py.
-            "fact_decay_scan",
-            # A6 P3-3: same refuse-loud contract ("never report a zero-record
-            # run without reading the substrate"); exercised with a real pool in
-            # test_source_track_record_db.py.
-            "source_track_record",
-            # A7 P3-7: same refuse-loud contract ("never report a zero-desk
-            # baseline without reading the substrate"); exercised with a real
-            # pool in test_desk_baseline.py.
-            "desk_baseline",
-            # P4-1 (75958a5): same refuse-loud contract ("never report a
-            # quiet zero-narrative run without reading the substrate") — was
-            # missing from this list when it landed; surfaced once the loop
-            # reached it (E-1 suite run). Exercised with a real pool in
-            # test_narrative_mapper_db.py.
-            "narrative_mapper",
-            # KW-3: same refuse-loud contract ("never report a zero-match run
-            # without reading the substrate"); exercised with a real pool in
-            # test_claim_watch.py.
-            "claim_watch",
-            # D5: same refuse-loud contract ("never report a clean external
-            # audit without reading the tower"). Note the deliberate asymmetry
-            # inside that handler — a missing POOL raises, but a missing LLM or
-            # search binding DEGRADES to a heartbeat that names the gap, because
-            # an auditor that dies is invisible while one that reports "I ran
-            # and audited nothing" is actionable. Both paths are exercised with
-            # a real pool in test_standing_auditor.py.
-            "standing_auditor",
-            # R-D: same refuse-loud contract, and here the reason is sharper
-            # than elsewhere — ZERO is also this handler's honest verified
-            # baseline (229,945 signals, 100% NULL retrieval_origin), so a
-            # zeroed finding emitted because the pool was missing would be
-            # byte-indistinguishable from the real pre-R-A measurement.
-            # Exercised with a real pool in test_research_measurement_db.py.
-            "research_measurement",
-            # A-1 desk_reference: same refuse-loud contract — it must read the
-            # desk's slice, so without a live pg_pool it raises rather than
-            # report an attention measurement it never took. Exercised with a
-            # real pool in test_desk_reference.py.
-            "desk_reference",
-            # G1 correctness_grader: same refuse-loud contract, with the
-            # sharpest version of the reason on the board — this handler's whole
-            # product is a CORRECTNESS number, and one emitted without reading
-            # the reference table, the heads and the calibration row would be a
-            # measurement of nothing wearing the label of a measurement of
-            # truth. Exercised with a real pool in test_correctness_grader.py,
-            # which also pins the flag-off, no-reference and no-calibration
-            # paths (each of which DEGRADES to a named status rather than
-            # raising — the same deliberate asymmetry as the standing auditor).
-            "correctness_grader",
-            # R2 reference_builder: same refuse-loud contract — the roster, the
-            # cadence, the attempt ledger and the write all live in the
-            # substrate, so without a live pg_pool it raises rather than emit a
-            # clean-looking zero for a build it never ran. WAS MISSING FROM THIS
-            # LIST WHEN R2 LANDED (merge 66469577) and has been red on the
-            # merged tree since, the same way band_calibration_tracker and
-            # narrative_mapper were before it; found by the R2-FIX(2) sweep.
-            # Exercised with a real pool throughout
-            # test_reference_builder.py, which also pins the flag-off, no-model
-            # and no-web paths — each of which DEGRADES to a named status
-            # rather than raising, the same deliberate asymmetry as the
-            # standing auditor's.
-            "reference_builder",
-            # 7a contrary_evidence_pass: same refuse-loud contract — it takes
-            # the standing auditor's own material claims from the tower and
-            # lands contention records, so without a live pg_pool it raises
-            # rather than report a clean contrary pass over claims it never
-            # read ("requires a live deps.pg_pool — refusing to report a clean
-            # contrary pass without reading the tower"). Exercised with a real
-            # pool and the real web_access binding in
-            # test_contrary_evidence_pass.py, which also pins the no-binding
-            # and 0221-missing paths (each DEGRADES to a named heartbeat).
-            "contrary_evidence_pass",
-        ):
-            # These REFUSE LOUD without a live pg_pool by design — they must never
-            # emit a zeroed clean finding without actually running their checks
-            # (integrity_sweep per DIRECTION §9; composition_lineage_sweep per
-            # P3-T6, "refuse rather than emit a zeroed clean lineage finding
-            # without walking the tower"; alert_trigger_scan per P1-3, "refuse
-            # rather than report a zero-alert scan without reading the
-            # substrate"), so unlike the other deterministic handlers they have
-            # no synthetic/no-pool path. Their empty-input contract is
-            # exercised with a real/fake pool in their own test modules.
+        if name in _REQUIRES_POOL:
             continue
         result = await run_method(
             [],
@@ -229,3 +141,18 @@ async def test_run_method_each_real_sub_handler_returns_method_result():
         assert result.usage == {
             "prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0,
         }, name
+
+
+_REQUIRES_POOL = frozenset(
+    d.id for d in _types("deterministic_handler") if d.attr("requires_pool"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", sorted(_REQUIRES_POOL))
+async def test_requires_pool_handlers_refuse_without_a_pool(name):
+    """A handler declared ``requires_pool=True`` must RAISE on a run with no
+    deps rather than return a zeroed result it never measured."""
+    with pytest.raises(Exception):  # noqa: B017 — each refuses with its own type
+        await run_method(
+            [], {"sub_handler": name, "analyst_id": "test", "run_id": uuid4()}, None,
+        )

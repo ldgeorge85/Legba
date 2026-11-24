@@ -1229,7 +1229,10 @@ def test_every_counter_this_brick_can_bump_is_declared() -> None:
     """The receipts are enumerable from code (the V-G8 fidelity rule) rather than
     by grepping for ``bump(``. Two emission shapes: the literal counters, and the
     ``assembly_drops_{key}`` family the drop ledger publishes verbatim."""
-    src = inspect.getsource(AA)
+    from legba.data.provenance import assembly_floor_arm
+
+    # W4 F-3: ARM 4(c) lives in its own leaf and declares its counters here.
+    src = inspect.getsource(AA) + inspect.getsource(assembly_floor_arm)
     bumped = set(re.findall(r'bump\(\s*"([a-z_]+)"', src))
     bumped |= {f"assembly_drops_{k}" for k in AA._DROP_COUNT_KEYS}
     assert bumped == set(AA.COUNTERS), bumped ^ set(AA.COUNTERS)
@@ -1255,6 +1258,7 @@ def test_the_coverage_status_literals_mirror_the_ledger_that_writes_them() -> No
         cw.COVERAGE_BELOW_FLOOR,
         cw.COVERAGE_UNVERIFIED,
         cw.COVERAGE_NO_HEAD,
+        cw.COVERAGE_CARRIED,
     }
 
 

@@ -38,30 +38,17 @@ import pytest
 
 SUITE = Path(__file__).resolve().parents[2] / "scripts" / "host_nightly_suite.sh"
 
-# Two known-failure node ids, both from KNOWN_FAILURES (LEGBA_TEST_STRICT
-# infra escalation) — demonstrates the combined check recognizes MULTIPLE
-# distinct known failures in one run, not just a single hardcoded one.
-# These constants must track the LIVE lists — the 2026-08-09 stale-entry
-# retirement moved KNOWN off the collection_requirements entry (retired after
-# three clean nights) onto one that still fires. RUST-4 (2026-08-21) retired
-# the whole dspy-worker-only KNOWN_FAILURES section this constant used to
-# point into (those 11 tests now carry an explicit `pytest.mark.skip` instead
-# of an allowlist entry — see docs/SEAMS.md #53) — KNOWN now points at a
-# still-live entry from the infra-escalation section.
-#
-# KNOWN_SHARED (used through 2026-08-24) pointed into KNOWN_SHARED_STATE,
-# which the 2026-08-25 retirement emptied — the array's last two entries
-# (test_conversion_webhooks / test_postgres_pool_search_path) matched
-# nothing on two consecutive nightly runs and were retired, quiet-streak-plus
-# -direct-reproduction basis (see the script's own RETIRED 2026-08-25 note).
-# KNOWN2 replaces it, from KNOWN_FAILURES instead — is_known() still unions
-# both arrays, so this still exercises "multiple known failures across a
-# combined run are all recognized"; it no longer exercises KNOWN_SHARED_STATE
-# specifically because there is currently nothing live in it to point at.
-# test_known_shared_state_is_currently_empty_and_is_known_does_not_choke
-# below covers that array's empty-case directly.
-KNOWN = "tests/data_pkg/agency/test_agency_hard_gate.py::test_process_media_pack_enqueues_real_job"
-KNOWN2 = "tests/data_pkg/test_output_webhook.py::test_emit_4xx_does_not_dlq"
+# Two known-failure node ids. They used to point into the live KNOWN_FAILURES
+# array (and before that into KNOWN_SHARED_STATE), which meant every
+# retirement of a live entry had to rewrite this test's premise. Both arrays
+# are now empty (KNOWN_SHARED_STATE retired 2026-08-25, the last eight
+# KNOWN_FAILURES entries 2026-11-06 once the isolated test namespace removed
+# their cause), so the tests below run a COPY of the real script whose only
+# difference is these two synthetic entries spliced into KNOWN_FAILURES
+# (``_suite_with_known``). The classifier, the parsing and the verdict logic
+# are the script's own, byte for byte.
+KNOWN = "tests/data_pkg/test_synthetic_known_one.py::test_known_rig_failure"
+KNOWN2 = "tests/data_pkg/test_synthetic_known_two.py::test_known_rig_failure"
 UNKNOWN = "tests/data_pkg/test_totally_new_regression.py::test_something_real_broke"
 
 
@@ -81,8 +68,24 @@ def _stub_repo(tmp_path: Path, *, stdout: str, rc: int) -> Path:
     return root
 
 
+def _suite_with_known(tmp_path: Path) -> Path:
+    """A copy of the real suite script with KNOWN and KNOWN2 spliced in as
+    the first entries of its KNOWN_FAILURES array (escaped as the script's
+    own entries are: node-id regexes with literal dots)."""
+    src = SUITE.read_text(encoding="utf-8")
+    marker = "KNOWN_FAILURES=(\n"
+    assert src.count(marker) == 1, "KNOWN_FAILURES array declaration moved"
+    entries = "".join(
+        "  '" + nodeid.replace(".", "\\.") + "'\n" for nodeid in (KNOWN, KNOWN2)
+    )
+    copy = tmp_path / "host_nightly_suite.sh"
+    copy.write_text(src.replace(marker, marker + entries), encoding="utf-8")
+    return copy
+
+
 def _run_nightly(tmp_path: Path, repo_root: Path, phases: str = "ordered") -> str:
-    """Run the suite script against the stub repo; return its summary text."""
+    """Run the suite script (a copy carrying the two synthetic allowlist
+    entries) against the stub repo; return its summary text."""
     log_dir = tmp_path / "logs"
     env = {
         **os.environ,
@@ -93,11 +96,15 @@ def _run_nightly(tmp_path: Path, repo_root: Path, phases: str = "ordered") -> st
         # Unroutable: `page` swallows the curl failure and warns. No alert is
         # sent from a test run.
         "NTFY_URL": "http://127.0.0.1:9/none",
+        # X1-A4: the nightly posts to its own topic through this variable.
+        "LEGBA_NIGHTLY_NTFY_URL": "http://127.0.0.1:9/none",
+        "LEGBA_TEST_LOCK_FILE": str(tmp_path / "tests.lock"),
         "PHASES": phases,
         "LEGBA_NIGHTLY_PHASE_TIMEOUT": "60",
     }
     proc = subprocess.run(
-        ["bash", str(SUITE)], env=env, capture_output=True, text=True, timeout=180,
+        ["bash", str(_suite_with_known(tmp_path))], env=env,
+        capture_output=True, text=True, timeout=180,
     )
     # The script tees its summary to stdout as well as to the run dir.
     return proc.stdout
@@ -156,7 +163,7 @@ def test_known_shared_state_is_currently_empty_and_is_known_does_not_choke():
     ]
     assert live_entries == [], (
         "KNOWN_SHARED_STATE grew a live entry again — update this test's "
-        "premise (and probably KNOWN2 back to a KNOWN_SHARED_STATE pointer)"
+        "premise"
     )
 
     import tempfile
@@ -173,6 +180,38 @@ def test_known_shared_state_is_currently_empty_and_is_known_does_not_choke():
     assert "ordered:infra" not in out
     assert "VERDICT PASS" in out, out
     assert "all 1 reported failure(s) known" in out
+
+
+def test_known_failures_is_currently_empty():
+    """The 2026-11-06 retirement emptied KNOWN_FAILURES. An entry added back
+    must carry its rig-not-code reason in the script; this pin makes the
+    addition a deliberate edit here too rather than a silent mask."""
+    import re as _re
+
+    src = SUITE.read_text(encoding="utf-8")
+    body = _re.search(r"KNOWN_FAILURES=\((.*?)^\)", src, _re.S | _re.M)
+    assert body is not None, "KNOWN_FAILURES array declaration went missing"
+    live_entries = [
+        line for line in body.group(1).splitlines()
+        if line.strip().startswith("'")
+    ]
+    assert live_entries == []
+
+
+def test_a_stale_synthetic_entry_is_reported_not_paged():
+    """With the synthetic entries matching nothing, the stale-entry report
+    names them and the night still passes."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        tmp_path = Path(td)
+        out = _run_nightly(
+            tmp_path,
+            _stub_repo(tmp_path, stdout="10382 passed in 984.99s\n", rc=0),
+        )
+
+    assert "VERDICT PASS" in out, out
+    assert "allowlist entry matched nothing (retire it?): tests/data_pkg/test_synthetic_known_one" in out
 
 
 def test_rc1_with_nothing_parsed_still_reports_infra():
@@ -250,3 +289,22 @@ def test_captured_error_logging_is_not_mistaken_for_a_failure():
         out = _run_nightly(tmp_path, _stub_repo(tmp_path, stdout=log, rc=0))
 
     assert "VERDICT PASS" in out, out
+
+
+def test_the_hygiene_reports_are_logged_and_never_move_the_verdict():
+    """Roll 85: the three read-only P-8 reports run after the test phases;
+    findings (rc=1), a connection error (rc=2) and a clean report are each
+    one summary line, and none of them turns a clean night into a FAIL."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        tmp_path = Path(td)
+        repo = _stub_repo(tmp_path, stdout="10382 passed in 984.99s\n", rc=0)
+        for name, rc in (("report_list_weights", 1), ("report_schema_drift", 2), ("report_unused_indexes", 0)):
+            (repo / "scripts" / f"{name}.py").write_text(
+                f"import sys\nprint('{name} ran', sys.argv[1:])\nsys.exit({rc})\n", encoding="utf-8")
+        out = _run_nightly(tmp_path, repo)
+    assert "hygiene report_list_weights: findings (rc=1)" in out
+    assert "hygiene report_schema_drift: did not run cleanly (rc=2)" in out
+    assert "hygiene report_unused_indexes: clean" in out
+    assert "VERDICT PASS" in out and "VERDICT FAIL" not in out

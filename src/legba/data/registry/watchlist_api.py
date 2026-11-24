@@ -19,9 +19,15 @@ of the registry HTTP plane:
   * ``kind`` is immutable after create (a pattern update revalidates against
     the row's kind); to change kind, delete + recreate;
   * ``created_by`` comes from the request body (default ``operator``), NOT
-    from the bearer principal — the principal is the raw token value when a
-    token is configured, and a secret must never be persisted into a data
-    table.
+    from the bearer principal — that was the raw token value until W4 (it is
+    now a hashed ``bearer:<12 hex>`` label naming a credential, not a person),
+    and a secret must never be persisted into a data table;
+  * OWN ROWS (X2-B2): the writes are ``reader-own-rows`` routes
+    (``route_roles.ROUTE_ROLES``). An operator may create a watch for anyone
+    and change any watch, exactly as before. A ``reader-own-rows`` principal's
+    watch is stamped ``created_by = <its subject>`` (naming someone else in
+    the body is a 403, never a silent rewrite), and PUT / DELETE refuse (403)
+    a watch whose ``created_by`` is not that subject.
 
 ``hits_7d`` on the list read is the count of ``kind='alert'`` rows naming the
 watch (``data.data.watch_id``) over the last 7 days — per-watch rollup rows
@@ -38,7 +44,10 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from ..principals import handle_for_actor
 from .api import RegistryAPIDeps, require_bearer
+from .route_roles import Principal, current_principal, require_row_owner
+from .route_policy import signin as _signin
 
 logger = logging.getLogger(__name__)
 
@@ -292,7 +301,20 @@ def build_watchlist_router(deps: RegistryAPIDeps) -> APIRouter:
     async def create_watch(
         body: WatchCreate,
         principal: str = Depends(require_bearer),
+        who: Principal = Depends(current_principal),
     ) -> WatchOut:
+        created_by = body.created_by.strip()
+        if _signin.signin_enabled():
+            # A-1: the owner is the authenticated caller, never the body.
+            if "created_by" in body.model_fields_set and not who.is_operator:
+                require_row_owner(who, created_by, what="a watch for another user")
+            created_by = who.subject
+        elif not who.is_operator:
+            # Own rows only: a non-operator's watch is ITS watch. Naming
+            # another owner explicitly is refused, not silently rewritten.
+            if "created_by" in body.model_fields_set:
+                require_row_owner(who, created_by, what="a watch for another user")
+            created_by = who.subject
         try:
             pattern = validate_pattern(body.kind, body.pattern)
         except ValueError as exc:
@@ -304,8 +326,8 @@ def build_watchlist_router(deps: RegistryAPIDeps) -> APIRouter:
             row = await conn.fetchrow(
                 """
                 INSERT INTO watchlist (kind, pattern, label, min_severity,
-                                       created_by)
-                VALUES ($1, $2::jsonb, $3, $4, $5)
+                                       created_by, written_by)
+                VALUES ($1, $2::jsonb, $3, $4, $5, legba_principal($6))
                 RETURNING id::text AS id, kind, pattern, label, min_severity,
                           created_by, active, created_at, updated_at,
                           0::bigint AS hits_7d
@@ -314,7 +336,8 @@ def build_watchlist_router(deps: RegistryAPIDeps) -> APIRouter:
                 json.dumps(pattern),
                 body.label.strip(),
                 body.min_severity,
-                body.created_by.strip(),
+                created_by,
+                handle_for_actor(principal),
             )
         logger.info(
             "watchlist.created id=%s kind=%s label=%r",
@@ -329,6 +352,7 @@ def build_watchlist_router(deps: RegistryAPIDeps) -> APIRouter:
         watch_id: str,
         body: WatchUpdate,
         principal: str = Depends(require_bearer),
+        who: Principal = Depends(current_principal),
     ) -> WatchOut:
         wid = _coerce_watch_uuid(watch_id)
         async with deps.descriptor_registry.pg.acquire() as conn:
@@ -338,8 +362,9 @@ def build_watchlist_router(deps: RegistryAPIDeps) -> APIRouter:
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"watch {watch_id} not found",
                 )
-            sets: list[str] = ["updated_at = now()"]
-            args: list[Any] = []
+            require_row_owner(who, row["created_by"], what=f"watch {watch_id}")
+            args: list[Any] = [handle_for_actor(principal)]
+            sets: list[str] = ["updated_at = now()", "written_by = legba_principal($1)"]
             if body.label is not None:
                 args.append(body.label.strip())
                 sets.append(f"label = ${len(args)}")
@@ -377,22 +402,36 @@ def build_watchlist_router(deps: RegistryAPIDeps) -> APIRouter:
     async def delete_watch(
         watch_id: str,
         principal: str = Depends(require_bearer),
+        who: Principal = Depends(current_principal),
     ) -> WatchOut:
         """SOFT delete: flips ``active=false`` (the row + its no-refire
         watermark history survive). Idempotent — deleting an already-inactive
-        watch returns it unchanged."""
+        watch returns it unchanged. A non-operator may delete only its own
+        watch (X2-B2)."""
         wid = _coerce_watch_uuid(watch_id)
         async with deps.descriptor_registry.pg.acquire() as conn:
+            if not who.is_operator:
+                owner = await conn.fetchval(
+                    "SELECT created_by FROM watchlist WHERE id = $1", wid,
+                )
+                if owner is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"watch {watch_id} not found",
+                    )
+                require_row_owner(who, owner, what=f"watch {watch_id}")
             row = await conn.fetchrow(
                 """
                 UPDATE watchlist
-                   SET active = FALSE, updated_at = now()
+                   SET active = FALSE, updated_at = now(),
+                       written_by = legba_principal($2)
                  WHERE id = $1
                 RETURNING id::text AS id, kind, pattern, label, min_severity,
                           created_by, active, created_at, updated_at,
                           0::bigint AS hits_7d
                 """,
                 wid,
+                handle_for_actor(principal),
             )
         if row is None:
             raise HTTPException(

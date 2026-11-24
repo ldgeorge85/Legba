@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.jpost.frontpage": {
+      "source": "source_jpost.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -1,0 +1,114 @@
+# worldview_panel/2 — worldview_panel/1 re-sized and re-judged (lane G-6).
+# Same shape as /1 (a blind map of worldview seats, a red team, a coverage
+# audit and a key-assumptions check, one rebuttal, a code sentence table, a
+# gate judge then three voting judges, a synthesis that keeps dissent). What
+# changed: deadlines from measurement (thinking ON p95 121 s -> 180 s; the
+# synthesis, p50 241 s with ~19.7 k reasoning tokens in dialogues_mapped/1,
+# -> 480 s); every model seat retries once, handed the refusal's reasons; the
+# judges are verdict/2 judges on their own cards, each allowed to gate only
+# with a passing calibration record.
+round:
+  id: worldview_panel
+  version: 2
+  about: several worldviews read one question blind, are challenged, rebut, and are judged
+  inputs:
+    subject: {type: subject_ref}
+    question: {type: text}
+    as_of: {type: timestamp}
+    cards: {type: id_list}
+  seats:
+    freeze:
+      kind: code
+      fn: scope_and_freeze
+      reads: [{from: input.subject}, {from: input.as_of}]
+      output: frozen_scope/1
+      deadline_s: 30
+    packet:
+      kind: code
+      fn: core_packet_and_slices
+      reads: [{from: freeze}, {from: input.cards}]
+      output: seat_slices/1
+      deadline_s: 30
+    worldview:      # one instance per card
+      kind: model
+      card: {from_item: card}
+      plane: llm.primary.openai_compat
+      thinking: on
+      reads: [{from: input.question}, {from: packet}]
+      output: position/1
+      gates: [handed_rows, quote_in_source]
+      deadline_s: 180
+      retries: 1
+      repair: reasons
+    red_team:
+      kind: model
+      card: cards/red_team.md
+      plane: llm.primary.openai_compat
+      thinking: on
+      reads: [{from: views.sealed, view: sentence_table}, {from: packet}]
+      output: position/1
+      gates: [handed_rows]
+      deadline_s: 180
+      retries: 1
+      repair: reasons
+    coverage:       # typed absence and source-health rows only
+      kind: code
+      fn: coverage_audit
+      reads: [{from: freeze}, {from: views.sealed, view: rows}]
+      output: blind_spots/1
+      deadline_s: 30
+    assumptions:
+      kind: model
+      card: cards/key_assumptions_check.md
+      plane: llm.primary.openai_compat
+      thinking: on
+      reads: [{from: views.sealed, view: sentence_table}]
+      output: assumption_set/1
+      deadline_s: 180
+      retries: 1
+      repair: reasons
+    table:
+      kind: code
+      fn: sentence_table
+      reads: [{from: rebut.sealed, view: rows}, {from: red_team, view: rows}]
+      output: sentence_table/1
+      deadline_s: 30
+    j_support:
+      kind: judge
+      card: cards/judges/support.md
+      plane: llm.verify.innoai_gemma.openai_compat
+      family_rule: {differs_from: [worldview, red_team]}
+      reads: [{from: table, view: sentence_table}]
+      output: verdict/2
+      deadline_s: 120
+      retries: 1
+      repair: reasons
+    j_logic: {seat_ref: j_support, card: cards/judges/logic.md}
+    j_diagnostic: {seat_ref: j_support, card: cards/judges/diagnosticity.md}
+    j_use: {seat_ref: j_support, card: cards/judges/decision_use.md}
+    synthesis:
+      kind: model
+      card: cards/synthesis_keep_dissent.md
+      plane: llm.primary.openai_compat
+      thinking: on
+      reads: [{from: judge.tally}, {from: table, view: sentence_table}, {from: coverage}, {from: assumptions}]
+      output: synthesis/1
+      gates: [every_sentence_maps_to_rows, probabilities_copied_not_averaged]
+      deadline_s: 480
+      retries: 1
+      repair: reasons
+  flow:
+    seq:
+      - {seat: freeze}
+      - {seat: packet}
+      # a map whose items are blind to each other
+      - {map: {over: input.cards, as: card, body: {seat: worldview}, max_items: 8, concurrency: 4}, id: views, deadline_s: 900, blind: true}
+      - {par: [{seat: red_team}, {seat: coverage}, {seat: assumptions}], id: challenge, join: all, deadline_s: 420}
+      # each worldview answers the others and the red team
+      - {rebuttal: {of: views, passes: 1, also: [{from: red_team, view: sentence_table}]}, id: rebut, deadline_s: 600}
+      - {seat: table}
+      - {panel: {judges: [j_logic, j_diagnostic, j_use], on: table, gates_first: [j_support], tally: {quorum: {k: 2, of: 3, threshold: 0.6}}}, id: judge, deadline_s: 480}
+      - {seat: synthesis}
+    id: main
+  budgets: {wall_s: 4800, model_calls: 70, max_parallel: 4}
+  publishes: shadow

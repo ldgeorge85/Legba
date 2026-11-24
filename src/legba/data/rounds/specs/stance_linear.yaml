@@ -1,0 +1,135 @@
+# stance_linear/1 — the linear stance round (plan P4 §2.6 (i); the operator's "A").
+# P2's seats: context builder, lead, collectors, numbers panel, contrarian,
+# adjudicator, verifier, editor. Not purely linear: three collectors work blind
+# beside the numbers panel, and the contrarian is sealed before the adjudicator
+# reads it. Seat timings and retries are this lane's choices, sized so the
+# worst case fits the design's budgets (wall 1800 s, 14 model calls).
+round:
+  id: stance_linear
+  version: 1
+  about: one subject and one question at one as-of time, read through falsifiable questions
+  inputs:
+    subject: {type: subject_ref}
+    question: {type: text, optional: true}
+    as_of: {type: timestamp}
+  seats:
+    freeze:
+      kind: code
+      fn: scope_and_freeze
+      reads: [{from: input.subject}, {from: input.as_of}]
+      output: frozen_scope/1
+      deadline_s: 30
+    context:
+      kind: model
+      card: cards/context_builder.md
+      plane: llm.primary.openai_compat
+      thinking: on
+      reads: [{from: freeze}]
+      tools: [substrate_read]
+      output: context_pack/1
+      gates: [handed_rows, must_include_set]
+      deadline_s: 120
+      retries: 1
+      on_failure: stop_round
+    lead:
+      kind: model
+      card: cards/lead.md
+      plane: llm.primary.openai_compat
+      thinking: on
+      reads: [{from: input.question}, {from: context}]
+      output: question_set/1
+      deadline_s: 120
+      retries: 1
+      on_failure: stop_round
+    collector_a:
+      kind: model
+      card: cards/collector.md
+      plane: llm.primary.openai_compat
+      thinking: off
+      reads: [{from: lead, view: rows}, {from: context}]
+      withheld: [lead.working_reading]
+      tools: [substrate_read]
+      output: disposition_set/1
+      gates: [handed_rows, quote_in_source, numbers_in_evidence]
+      deadline_s: 300
+    collector_b: {seat_ref: collector_a}
+    collector_c: {seat_ref: collector_a}
+    numbers:
+      kind: code
+      fn: series_panel
+      reads: [{from: freeze}]
+      output: series_panel/1
+      deadline_s: 30
+    merge:
+      kind: code
+      fn: merge_and_count_origins
+      reads: [{from: collect.sealed, view: rows}, {from: numbers}, {from: context}]
+      output: evidence_table/1
+      deadline_s: 30
+    contrarian:
+      kind: model
+      card: cards/contrarian.md
+      plane: llm.primary.openai_compat
+      thinking: on
+      reads: [{from: lead, view: rows}, {from: merge}]
+      withheld: [lead.working_reading]
+      output: position/1
+      gates: [handed_rows]
+      deadline_s: 210
+    adjudicator:
+      kind: model
+      card: cards/adjudicator.md
+      plane: llm.primary.openai_compat
+      thinking: on
+      reads: [{from: lead}, {from: merge}, {from: challenge.sealed, view: sentence_table}]
+      output: ruling/1
+      gates: [handed_rows]
+      deadline_s: 120
+      retries: 1
+      on_failure: stop_round
+    verifier:
+      kind: judge
+      card: cards/verifier.md
+      plane: llm.verify.innoai_gemma.openai_compat
+      family_rule: {differs_from: [adjudicator, collector_a]}
+      reads: [{from: adjudicator, view: sentence_table}]
+      output: verdict/1
+      deadline_s: 90
+      retries: 1
+    gate_shadow:
+      kind: code
+      fn: statement_gate_shadow
+      reads: [{from: adjudicator}, {from: verify.tally}]
+      output: statement_proposals/1
+      deadline_s: 30
+    editor:
+      kind: model
+      card: cards/editor.md
+      plane: llm.primary.openai_compat
+      thinking: off
+      reads: [{from: adjudicator}, {from: verify.tally}]
+      output: read/1
+      gates: [every_sentence_maps_to_rows]
+      deadline_s: 120
+      retries: 1
+  flow:
+    seq:
+      - {seat: freeze}
+      - {seat: context}
+      - {seat: lead}
+      - par:
+          - {blind: [{seat: collector_a}, {seat: collector_b}, {seat: collector_c}], id: collect, deadline_s: 300, min_present: 2}
+          - {seat: numbers}
+        id: gather
+        join: all
+        deadline_s: 360
+      - {seat: merge}
+      # blind to the working reading and to nothing else: one seat, sealed before the adjudicator reads
+      - {blind: [{seat: contrarian}], id: challenge, deadline_s: 240, min_present: 0}
+      - {seat: adjudicator}
+      - {panel: {judges: [verifier], on: adjudicator, tally: majority}, id: verify, deadline_s: 240}
+      - {seat: gate_shadow}
+      - {seat: editor}
+    id: main
+  budgets: {wall_s: 1800, model_calls: 14, max_parallel: 4}
+  publishes: shadow

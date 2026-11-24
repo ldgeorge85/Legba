@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:journal_consolidator": {
+      "source": "analyst_journal_consolidator.yaml",
+      "state": "active"
+    }
+  }
+}

@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ...case_columns import topic_key_sql
+
 #: This producer's open events with their member/entity aggregates.
 #:
 #: P1g (2026-09-24) made this set-based. It was two correlated LATERALs — one
@@ -53,9 +55,15 @@ from typing import Any
 #: ``tower_backfill``, 40 ms / 15,927 for ``event_clustering`` (186 rows, was
 #: 241 ms / 25,148); both producers' full result sets are byte-identical to the
 #: LATERAL form's (md5 over 1,040 and 186 rows, taken in one snapshot).
-OPEN_EVENTS_SQL = """
+#:
+#: ``category`` is the TOPIC KEY (TAX-4, ``case_columns.topic_key_sql``): the
+#: matcher's prefilter and its category feature compare the producer's value,
+#: which the case-column binding keeps in ``data.category_raw`` once the
+#: column holds a registered class — byte for byte the value it read before.
+OPEN_EVENTS_SQL = f"""
     WITH picked AS MATERIALIZED (
-        SELECT e.id, e.event_signature, e.title, e.category, e.geo,
+        SELECT e.id, e.event_signature, e.title,
+               {topic_key_sql("e")} AS category, e.geo,
                e.time_start, e.time_end, e.updated_at
           FROM events e
          WHERE e.analyst_id = $1
@@ -111,6 +119,16 @@ OPEN_EVENTS_SQL = """
 """
 
 
+#: One freshly minted event in :data:`OPEN_EVENTS_SQL`'s scalar projection (the
+#: handler appends its own aggregates) — the same TOPIC KEY as ``category``.
+MINTED_EVENT_SQL = f"""
+    SELECT e.id, e.event_signature, e.title, {topic_key_sql("e")} AS category,
+           e.geo, e.time_start, e.time_end, e.updated_at
+      FROM events e
+     WHERE e.id = $1
+"""
+
+
 async def fetch_open_events(
     conn: Any, *, analyst_id: str, limit: int
 ) -> list[dict[str, Any]]:
@@ -121,4 +139,4 @@ async def fetch_open_events(
     ]
 
 
-__all__ = ["OPEN_EVENTS_SQL", "fetch_open_events"]
+__all__ = ["MINTED_EVENT_SQL", "OPEN_EVENTS_SQL", "fetch_open_events"]

@@ -1,0 +1,78 @@
+# verify_backfill — the standing sweep over findings whose verify leg never ran (W11-F84).
+#
+# Every rolling deploy recreates the runtime actor host. An analyst run in flight
+# at that moment has already WRITTEN its finding, but the faithfulness verify leg
+# that writes its critique ('Faithfulness verify (score …)', derived_from =
+# [finding id]) never runs — the finding stands published with no critique,
+# unverified forever. Every time this analyst fires it takes the next
+# backfill_batch (default 50) cited findings of the last 7 days that are older
+# than min_age_minutes (default 30) and have NO faithfulness critique — of an
+# analyst the critic covers, not a deterministic rollup, not superseded — oldest
+# first, runs the SAME verify pass the critic runs over the stored finding against
+# the analyzed analyst's CURRENT judge chain, and writes the critique the critic
+# would have written, stamped verification.judge_trigger = 'verify_backfill' and
+# verification.backfill_of_run = <the finding's run_id>. A judge that does not
+# answer writes nothing (never a floor); the finding is retried next tick. The
+# selection and the write are legba.runtime.rejudge_floor's — the same code
+# `scripts/rejudge_floor_critiques.py --missing --apply` runs by hand.
+#
+# Target-agnostic + META, like reenrich_pending: no `targets` selector, so the
+# cadence heartbeat is ONE global sweep per tick; the handler reads
+# analyst_outputs directly via deps.pg_pool.
+#
+# STANDING, not one-time: the pool is empty in steady state (examined=0 per tick)
+# and refills only when a deploy (or a crash) lands mid-run.
+
+identity:
+  id: verify_backfill
+  name: Verify backfill sweep
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: verify_backfill
+
+subscription:
+  # No `targets` block → META analyst: one global sweep per cadence tick over
+  # analyst_outputs, directly via deps.pg_pool.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: verify_backfill
+  # Deterministic kind, NO LLM block of its own: the judge calls are each
+  # ANALYZED analyst's own judge chain (method.llm verify/judge + judge_chain),
+  # resolved from its typed descriptor the way dapr_host wires the critic. The
+  # runtime deps-builder threads the registry client onto deps.extras whenever
+  # the bound sub_handler is verify_backfill (analyst_deps_reenrich.py); the
+  # secrets resolver is deps.secrets_resolve. With LEGBA_VERIFY_LLM_JUDGE off, or
+  # no registry client, the sweep no-ops that tick (skipped_no_judge).
+  options:
+    backfill_batch: 50      # declared in option_catalog/handler_options_enrichment.py
+    min_age_minutes: 30     # ditto; floored at 10 so the live critic is never raced
+
+cadence:
+  # ── deterministic kind → token-budget-EXEMPT ──
+  #
+  # fallback_schedule = "12-59/30 * * * *" — every 30 min (fires :12/:42), on a
+  # minute pair no other every-hour schedule uses (:13/:43 carry
+  # signal_summarizer "13-59/15" and alert_trigger_scan "3-59/10").
+  fallback_schedule: "12-59/30 * * * *"
+  # Idempotent forward-progressing sweep — a re-fire floor under the cadence.
+  cooldown_seconds: 1200
+
+# No extra output sinks: the per-run summary finding (examined / verified /
+# failed / still_missing) is suppressed to the trace via the TRACE_ONLY map; the
+# critiques land directly in analyst_outputs.
+outputs: []

@@ -293,7 +293,10 @@ def denominator_caveat_counters(*, body: str, indicators: Any) -> dict[str, int]
         triggered = sum(
             1
             for e in indicators
-            if isinstance(e, Mapping) and e.get("status") == "triggered"
+            # X4 LEVEL: a level observation lands as the same scaffold row
+            # ("level indicator observed at level: …"), so it counts here too.
+            if isinstance(e, Mapping)
+            and e.get("status") in ("triggered", "observed_at_level")
         )
     if triggered:
         out[DENOMINATOR_TRIGGERED_INDICATOR] = triggered
@@ -315,6 +318,24 @@ def denominator_caveat_counters(*, body: str, indicators: Any) -> dict[str, int]
 SCORE_STATE_SCORED = "scored"
 #: The report carries NO measurement. Not 1.0, not 0.0 — a non-score.
 SCORE_STATE_UNASSESSABLE = "unassessable"
+#: SW-9 (2026-10-03/1) — a unit finding whose every resolved citation is its
+#: OWN MEMORY (the PRIOR READ / WINDOW LEDGER blocks) was graded against
+#: nothing but what this desk already said. The judge DOES see those blocks
+#: (QW1-B folds them into the evidence map), so it can only answer "is the
+#: carry consistent with the prior read" — and a consistent carry of an
+#: invented anchor passes forever (the France desk, 1.0 for weeks). That is
+#: not a faithfulness measurement about this cycle's evidence, so it is not
+#: published as one: NULL ``faithfulness_score``, a capped gate number, its own
+#: title/tag/body line, and out of every faithfulness mean. See
+#: ``grounding_backstops.memory_only_citations``.
+SCORE_STATE_CARRIED_UNGRADED = "carried_ungraded"
+#: Its one reason: every resolved citation is a memory block.
+CARRIED_UNGRADED_REASON = "memory_only_citations"
+#: The score states that publish NO faithfulness number. Readers that average
+#: faithfulness or count "graded" rows exclude exactly these.
+NON_SCORE_STATES: frozenset[str] = frozenset(
+    {SCORE_STATE_UNASSESSABLE, SCORE_STATE_CARRIED_UNGRADED}
+)
 
 #: A body at or above this many characters is SUBSTANTIVE — long enough that
 #: extracting nothing (or almost nothing) from it is evidence about the extractor,
@@ -332,6 +353,14 @@ MIN_ASSESSABLE_CLAIMS = 2
 #: lands the finding exactly ON the floor — visible, uncertified, not buried.
 UNASSESSABLE_GATE_SCORE = 0.5
 
+#: The gate score a CARRIED_UNGRADED report may publish at most. The same
+#: reasoning and the same number as the unassessable floor: the carry was not
+#: checked against this cycle's evidence, so it lands ON the verify floor —
+#: still admissible as a prior read / ledger line (``>= 0.50``), never certified,
+#: and never the 1.0 the consistency check would otherwise have published. A
+#: carry the judge FAILED keeps its lower number (the cap only ever lowers).
+CARRIED_UNGRADED_GATE_SCORE = UNASSESSABLE_GATE_SCORE
+
 #: The ceiling a PROVISIONAL (non-``llm``) verdict may publish. The deterministic
 #: floor can detect a missing citation; it structurally cannot confirm that a
 #: cited claim is faithful to what it cites — that is the judge's entire job. So
@@ -342,7 +371,7 @@ PROVISIONAL_SCORE_CEILING = 0.85
 
 
 def resolve_score_state(
-    *, checkable_claims: int, body: str
+    *, checkable_claims: int, body: str, memory_only: bool = False
 ) -> tuple[str, str | None]:
     """``(score_state, reason)`` for a completed tally.
 
@@ -358,6 +387,11 @@ def resolve_score_state(
     borrowing the top of the scale. Nothing here decides a NUMBER; the caller
     keeps its arithmetic and asks this what the arithmetic is allowed to be
     called.
+
+    ``memory_only`` (SW-9) — the caller's verdict that every resolved citation
+    is a memory block. UNASSESSABLE wins over it (nothing was extracted at all
+    is the more basic statement); otherwise it turns a tally into
+    :data:`SCORE_STATE_CARRIED_UNGRADED`. Default ``False``: byte-identical.
     """
     if checkable_claims <= 0:
         return SCORE_STATE_UNASSESSABLE, "no_checkable_claims"
@@ -366,6 +400,8 @@ def resolve_score_state(
         and len(body or "") >= SUBSTANTIVE_BODY_CHARS
     ):
         return SCORE_STATE_UNASSESSABLE, "thin_claims_on_substantive_body"
+    if memory_only:
+        return SCORE_STATE_CARRIED_UNGRADED, CARRIED_UNGRADED_REASON
     return SCORE_STATE_SCORED, None
 
 
@@ -387,6 +423,8 @@ def gate_score(
     out = score if ceiling is None else min(score, ceiling)
     if score_state == SCORE_STATE_UNASSESSABLE:
         out = min(out, UNASSESSABLE_GATE_SCORE)
+    elif score_state == SCORE_STATE_CARRIED_UNGRADED:
+        out = min(out, CARRIED_UNGRADED_GATE_SCORE)
     if provisional:
         out = min(out, PROVISIONAL_SCORE_CEILING)
     return out
@@ -657,9 +695,17 @@ def build_faithfulness_critique_payload(
         provisional=report.provisional,
     )
     unassessable = report.score_state == SCORE_STATE_UNASSESSABLE
+    carried = report.score_state == SCORE_STATE_CARRIED_UNGRADED
+    # Either way there is no faithfulness NUMBER to publish (SW-9 widens the
+    # Q-1 rule from one non-score state to both).
+    no_score = report.score_state in NON_SCORE_STATES
     # The published headline. An unassessable report has no score to headline, so
     # it says that instead of borrowing a number.
-    score_label = "unassessable" if unassessable else f"{score:.2f}"
+    score_label = (
+        "unassessable"
+        if unassessable
+        else "carried_ungraded" if carried else f"{score:.2f}"
+    )
     # (#3) Advisory spans (double_counted / hedge_laundering) are structural
     # observations, NOT unsupported claims — exclude them so the tally reconciles
     # (supported + unsupported ≈ checkable) instead of over-counting.
@@ -686,6 +732,14 @@ def build_faithfulness_critique_payload(
             f"no gradeable claim from the finding, so it has NOT been checked. "
             f"The gate score is capped at {overall:.2f}; it is not a verdict on "
             f"the finding's quality, it is the absence of one."
+        )
+    if carried:
+        body_lines.append(
+            f"  CARRIED, UNGRADED ({report.score_state_reason}) — every citation "
+            f"in this finding is the desk's own PRIOR READ or WINDOW LEDGER, so "
+            f"the judge could only check the carry against what the desk already "
+            f"said, not against this cycle's evidence. No faithfulness score is "
+            f"published; the gate score is capped at {overall:.2f}."
         )
     if report.provisional:
         body_lines.append(
@@ -724,6 +778,8 @@ def build_faithfulness_critique_payload(
         "title": (
             "Faithfulness verify (unassessable)"
             if unassessable
+            else "Faithfulness verify (carried, ungraded)"
+            if carried
             else f"Faithfulness verify (score {overall:.2f})"
         ),
         "body": "\n".join(body_lines)[:65536],
@@ -734,6 +790,7 @@ def build_faithfulness_critique_payload(
         "tags": (
             ["verify", "faithfulness", judge_label]
             + (["unassessable"] if unassessable else [])
+            + (["carried_ungraded"] if carried else [])
             + (["provisional"] if report.provisional else [])
         ),
         "analyzed_output_id": analyzed_output_id,
@@ -746,11 +803,12 @@ def build_faithfulness_critique_payload(
         "judge_llm_ref": judge_llm_ref[:256],
         # W-3d: the judge-route CLASS (configured|fallback_verify|
         # fallback_primary) — the badge's configured-vs-fell-back signal.
-        "judge_route": judge_route[:32],
+        # JUDGE-2: ``chain:<component_id>`` needs the ref's width (256).
+        "judge_route": judge_route[:256],
         # ``CritiquePayload.scores`` is typed ``dict[str, float]`` — an
         # unassessable report OMITS the key rather than carrying a null it
         # cannot: an absent score is the same statement.
-        "scores": {} if unassessable else {"faithfulness": score},
+        "scores": {} if no_score else {"faithfulness": score},
         # The gate reads data->>'overall_score' off the analyst_outputs row; the
         # whole CritiquePayload is model_dumped into the data JSONB, so this
         # top-level field lands at data->>'overall_score' (the JOIN key).
@@ -759,9 +817,10 @@ def build_faithfulness_critique_payload(
         # data->'data'->'verification').
         "data": {
             "verification": {
-                # NULL when unassessable (rec #8, second half — see the
+                # NULL when unassessable or carried_ungraded (rec #8, second
+                # half; SW-9 — see the
                 # ``overall`` comment above); the raw tally otherwise.
-                "faithfulness_score": None if unassessable else round(score, 4),
+                "faithfulness_score": None if no_score else round(score, 4),
                 "confidence_ceiling": (
                     round(ceiling, 4) if ceiling is not None else None
                 ),
@@ -787,7 +846,7 @@ def build_faithfulness_critique_payload(
                 "judge_llm_ref": judge_llm_ref[:256] or None,
                 # W-3d: the route CLASS behind the ref — the UI reads this
                 # block wholesale, so the badge gets it with no route change.
-                "judge_route": judge_route[:32] or None,
+                "judge_route": judge_route[:256] or None,
                 "claim_verdicts": claim_verdicts,
                 "claim_verdicts_truncated": claim_verdicts_truncated,
                 # 2026-07-31 structural-fix RECEIPTS: the sparse counter map
@@ -857,6 +916,10 @@ __all__ = [
     "JudgeSamplingPolicy",
     "MIN_ASSESSABLE_CLAIMS",
     "build_faithfulness_critique_payload",
+    "CARRIED_UNGRADED_GATE_SCORE",
+    "CARRIED_UNGRADED_REASON",
+    "NON_SCORE_STATES",
+    "SCORE_STATE_CARRIED_UNGRADED",
     "denominator_caveat_counters",
     "judge_sample_unit",
     "PROVISIONAL_SCORE_CEILING",

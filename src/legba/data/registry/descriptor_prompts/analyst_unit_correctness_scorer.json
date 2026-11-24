@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:unit_correctness_scorer": {
+      "source": "analyst_unit_correctness_scorer.yaml",
+      "state": "active"
+    }
+  }
+}

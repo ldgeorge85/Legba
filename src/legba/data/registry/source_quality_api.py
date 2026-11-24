@@ -59,15 +59,18 @@ view.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
+from ...runtime import source_staleness
+from ...runtime.enrichment_timing import fetch_enrichment_last_poll
 from . import source_freshness
 from .api import RegistryAPIDeps, require_bearer
+from .route_roles import resolve_principal
 from .source_assurance_api import (
     SourceDossierOut,
     SourceEarnedOut,
@@ -137,6 +140,50 @@ class AssertedQualityOut(BaseModel):
     host_scored_at: Optional[datetime] = None
 
 
+class StalenessOut(BaseModel):
+    """The staleness tripwire's verdict for one ACTIVE source — "no new items
+    for N× the feed's expected interval" (:mod:`legba.runtime.source_staleness`,
+    the ONE place it is decided; ``get_source_health`` carries the same dict).
+
+    ``state`` is ``fresh`` / ``quiet`` (>= 3x) / ``stale`` (>= 8x) / ``dead``
+    (>= 24x), or ``unknown`` when nothing can be measured (never delivered, no
+    cadence). ``factor`` is ``null`` exactly when ``state == 'unknown'`` —
+    absence is not a 0.
+    """
+
+    state: str
+    factor: Optional[float] = None
+    reason: str = ""
+    age_s: Optional[float] = None
+    expected_interval_s: Optional[float] = None
+    weekday_only: bool = False
+    upstream_quiet: Optional[bool] = None
+    #: The newest poll was ``gated`` (migration 0226): the feed delivered and
+    #: the keyword gate dropped every entry -- a clean poll, not a new item.
+    last_poll_gated: bool = False
+    last_new_item_at: Optional[str] = None
+    last_poll_ok_at: Optional[str] = None
+
+
+class EnrichmentStageOut(BaseModel):
+    """One enrichment stage's timing over a single poll (W5 SRC-4)."""
+
+    calls: int
+    total_ms: float
+    max_ms: float
+    errors: int = 0
+
+
+class EnrichmentLastPollOut(BaseModel):
+    """Where the wall time of a source's newest ENRICHED poll went, per stage
+    kind (``ner_multilingual`` / ``geocode`` / ...), off the source's cursor
+    row (:mod:`legba.runtime.enrichment_timing`). ``polled_at`` is the figure's
+    as-of; ``null`` only for a row written before the stamp existed."""
+
+    stages: dict[str, EnrichmentStageOut]
+    polled_at: Optional[str] = None
+
+
 class ComputedQualityOut(BaseModel):
     """DERIVED from observed production — the computed leg (A7 freshness)."""
 
@@ -153,6 +200,14 @@ class ComputedQualityOut(BaseModel):
     age_seconds: Optional[int] = None
     signals_24h: int = 0
     signals_7d: int = 0
+    #: The staleness tripwire state. ``null`` = NOT MEASURED (the source is not
+    #: an active head, or the poll evidence could not be read) — distinct from
+    #: ``{state: 'unknown'}``, which is measured-and-unmeasurable.
+    staleness: Optional[StalenessOut] = None
+    #: Per-stage enrichment latency of the newest enriched poll. ``null`` = NOT
+    #: MEASURED (no enrichment chain has run on this source yet, the source is
+    #: not an active head, or the cursor row could not be read) -- never 0.
+    enrichment_last_poll: Optional[EnrichmentLastPollOut] = None
 
 
 class SourceQualityRow(BaseModel):
@@ -334,6 +389,60 @@ def _computed(row: Any) -> ComputedQualityOut:
     )
 
 
+async def _attach_staleness(pool: Any, rows: list[SourceQualityRow]) -> None:
+    """Fill ``computed.staleness`` on every ACTIVE row, in place.
+
+    One cached publishing-profile read plus one poll-evidence read for the
+    active ids. Never raises: an unreadable ledger leaves ``staleness`` null
+    ("not measured"), it does not fail the quality list.
+    """
+    active = [r for r in rows if r.registered and r.declared_state == "active"]
+    if not active:
+        return
+    try:
+        profiles = await source_staleness.fetch_source_profiles(pool)
+        evidence = await source_staleness.fetch_poll_evidence(
+            pool, [r.source_id for r in active]
+        )
+    except Exception as exc:  # pragma: no cover — degrade to "not measured"
+        logger.warning("source_quality.staleness_unavailable err=%s", exc)
+        return
+    now = datetime.now(timezone.utc)
+    for r in active:
+        ev = evidence.get(r.source_id) or {}
+        r.computed.staleness = StalenessOut(
+            **source_staleness.staleness_for(
+                last_signal_at=r.computed.last_signal_at,
+                cadence_raw=r.computed.cadence_raw,
+                profile=profiles.get(r.source_id),
+                last_poll_outcome=ev.get("last_poll_outcome"),
+                newest_entry_ts=ev.get("newest_entry_ts"),
+                last_ok_poll_at=ev.get("last_ok_poll_at"),
+                now=now,
+            )
+        )
+
+
+async def _attach_enrichment(pool: Any, rows: list[SourceQualityRow]) -> None:
+    """Fill ``computed.enrichment_last_poll`` on every ACTIVE row, in place.
+    Never raises: an unreadable cursor ledger leaves it null ("not measured")."""
+    active = [r for r in rows if r.registered and r.declared_state == "active"]
+    if not active:
+        return
+    try:
+        got = await fetch_enrichment_last_poll(pool, [r.source_id for r in active])
+    except Exception as exc:  # pragma: no cover -- degrade to "not measured"
+        logger.warning("source_quality.enrichment_unavailable err=%s", exc)
+        return
+    for r in active:
+        hit = got.get(r.source_id)
+        if hit:
+            try:
+                r.computed.enrichment_last_poll = EnrichmentLastPollOut(**hit)
+            except Exception:  # a malformed cursor value is "not measured"
+                logger.warning("source_quality.enrichment_malformed id=%s", r.source_id)
+
+
 def quality_row(row: Any) -> SourceQualityRow:
     """Project one ``source_quality`` view row onto the wire shape."""
     return SourceQualityRow(
@@ -407,6 +516,8 @@ def build_source_quality_router(deps: RegistryAPIDeps) -> APIRouter:
             ) from exc
 
         out = [quality_row(r) for r in rows]
+        await _attach_staleness(deps_.descriptor_registry.pg, out)
+        await _attach_enrichment(deps_.descriptor_registry.pg, out)
         if graded_only:
             out = [r for r in out if r.asserted.admiralty_grade is not None]
         if contested_only:
@@ -422,6 +533,7 @@ def build_source_quality_router(deps: RegistryAPIDeps) -> APIRouter:
         "/sources/{source_id}/quality", response_model=SourceQualityDetail,
     )
     async def get_source_quality(
+        request: Request,
         source_id: str,
         include_private: bool = Query(
             default=False,
@@ -440,6 +552,12 @@ def build_source_quality_router(deps: RegistryAPIDeps) -> APIRouter:
         rating, no dossier, no track record. That is the view's own row spine,
         so the gate cannot drift from what the ledger contains.
         """
+        # RA-1: private-annex content is an admin's. A signed-in caller below
+        # admin asking for it gets the public rows (default-deny), never a 403
+        # — the reader surfaces read this route.
+        who = resolve_principal(request)
+        if include_private and who.resolved and not who.is_operator:
+            include_private = False
         try:
             async with deps_.descriptor_registry.pg.acquire() as conn:
                 row = await conn.fetchrow(_GET_SQL, source_id)
@@ -473,6 +591,8 @@ def build_source_quality_router(deps: RegistryAPIDeps) -> APIRouter:
                 compiled_at=dossier_row["compiled_at"],
             )
         base = quality_row(row)
+        await _attach_staleness(deps_.descriptor_registry.pg, [base])
+        await _attach_enrichment(deps_.descriptor_registry.pg, [base])
         return SourceQualityDetail(
             **base.model_dump(),
             includes_private=include_private,
@@ -486,9 +606,12 @@ def build_source_quality_router(deps: RegistryAPIDeps) -> APIRouter:
 __all__ = [
     "AssertedQualityOut",
     "ComputedQualityOut",
+    "EnrichmentLastPollOut",
+    "EnrichmentStageOut",
     "JUNK_DESCRIPTOR_PREFIXES",
     "SourceQualityDetail",
     "SourceQualityRow",
+    "StalenessOut",
     "build_source_quality_router",
     "quality_row",
 ]

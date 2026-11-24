@@ -100,12 +100,12 @@ describe('the alias pre-pass produces a layout the real Dockview accepts', () =>
     const api = await mountDock()
     addSingleton(api, 'v4.why')
     addSingleton(api, 'system.lineage', { referencePanel: 'v4.why', direction: 'right' })
-    addSingleton(api, 'v4.flow', { referencePanel: 'system.lineage', direction: 'below' })
+    addSingleton(api, 'source.fanout', { referencePanel: 'system.lineage', direction: 'below' })
     const saved = api.toJSON()
     api.clear()
 
     const rewrite = rewriteSerializedLayout(saved)
-    expect(rewrite.collapsed).toEqual(['system.lineage', 'v4.flow'])
+    expect(rewrite.collapsed).toEqual(['system.lineage', 'source.fanout'])
     api.fromJSON(rewrite.layout)
 
     await waitFor(() => expect(api.panels.length).toBe(1))

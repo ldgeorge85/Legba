@@ -94,6 +94,9 @@ async def run_search(
             "status", "degraded", "degraded_detail", "unresponsive_engines",
             "liveness", "liveness_detail", "supports_absence_claim",
             "absence_statement", "absence_warning", "provider", "count",
+            # X1/B5: the per-engine health block (web_tools stamps it) — the
+            # grade row persists it (external_grades.search_health, mig 0235).
+            "health",
         )
         if k in output
     }

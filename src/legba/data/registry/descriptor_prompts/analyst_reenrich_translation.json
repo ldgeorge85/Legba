@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:reenrich_translation": {
+      "source": "analyst_reenrich_translation.yaml",
+      "state": "active"
+    }
+  }
+}

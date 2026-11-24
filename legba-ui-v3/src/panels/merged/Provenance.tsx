@@ -1,61 +1,47 @@
 /**
- * Provenance (`system.provenance`) — U-3 merge set 2, extended by GLASS-2.
+ * Provenance (`system.provenance`) — UI-D1 Table A "Evidence: Why · Lineage ·
+ * Fan-out" (U-3 merge set 2, re-cut by UI-B1/merges).
  *
- * Folds the surfaces that all answer "where did this come from / how did it get
- * here" into one sidebar row with tabs:
- *   - Why        → the selection-driven lineage/ego-graph room (`v4.why`)
- *   - Lineage    → the `derived_from` DAG walker (`system.lineage`)
- *   - Flow       → the live registry canvas (`v4.flow`)
- *   - Trajectory → the situation register's frames + each frame's append-only
- *                  trajectory ledger (`system.situations`, GLASS-2)
- *   - Narratives → reified contested-claim families + the source-echo graph
- *                  (`system.narratives`, GLASS-2)
+ * The surfaces that answer "where did this come from / how did it get here":
+ *   - Why      → the selection-driven lineage/ego-graph room (`v4.why`)
+ *   - Lineage  → the `derived_from` DAG walker (`system.lineage`)
+ *   - Fan-out  → source → signal → finding (`source.fanout`, UI-B1/merges)
  *
- * The last two joined here rather than taking sidebar rows of their own: the
- * U-3 ≤23-visible-row budget (panel-registry/navGroups.test.ts) is spent to the
- * last row, and that test's stated options for the next surface are "earn it,
- * fold into a tab, or hide". They fold — and the fold is honest rather than
- * merely convenient, because both are provenance reads: a trajectory row is the
- * provenance of a situation's STATE (which findings moved it, dated by their
- * evidence), and a narrative is the provenance of a contested CLAIM's carriage
- * (who published it first, who followed).
+ * What LEFT in UI-B1/merges (Table A: "loses Flow, Trajectory and
+ * Narratives"): the registry canvas is `system.registry`'s Canvas tab, and the
+ * situation register and narratives are `system.register`'s two tabs. Their
+ * retired ids (`v4.flow`, `system.situations`, `system.narratives`) were
+ * re-pointed in `panel-registry/aliases.ts`; a saved tab param naming one of
+ * the old tabs falls back to Why (`initialTab`), never to an empty surface.
  *
- * All five children render UNMODIFIED — this wrapper only adds the tab strip
- * above them, mounting them inside `PanelEmbedProvider` so a child's own
- * (otherwise-standalone) `PanelChrome` header/border stays suppressed and this
- * wrapper's header is the ONLY chrome that renders (the "double chrome" fix;
- * `WhyPanel` / `FlowPanel` don't use `PanelChrome` so are unaffected either
- * way). Every folded kind stays registered (hidden from the sidebar) pointing
- * at its original component — see panel-registry/registry.ts HIDDEN_KINDS — so
- * a saved layout or ⌘K deep-link referencing any of the ids keeps resolving.
+ * All children render UNMODIFIED — this wrapper only adds the tab strip above
+ * them, mounting them inside `PanelEmbedProvider` so a child's own
+ * `PanelChrome` header stays suppressed and this wrapper's header is the ONLY
+ * chrome (`WhyPanel` does not use `PanelChrome`).
  */
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import type { PanelProps } from '@/types'
-import { initialTab, PanelTabStrip, type PanelTabDef } from '@/components/PanelTabs'
+import { PanelTabStrip, type PanelTabDef } from '@/components/PanelTabs'
 import { PanelEmbedProvider } from '@/components/PanelEmbedContext'
 import WhyPanel from '@/panels/v4/WhyPanel'
 import LineagePanel from '@/panels/system/Lineage'
-import FlowPanel from '@/panels/v4/FlowPanel'
-import SituationTrajectoryPanel from '@/panels/system/SituationTrajectory'
-import NarrativesPanel from '@/panels/system/Narratives'
+import FanoutExplorerPanel from '@/panels/source/FanoutExplorer'
 import { emitRead } from '@/lib/readTelemetry'
+import { useMergedTab } from './useMergedTab'
 
-type Tab = 'why' | 'lineage' | 'flow' | 'trajectory' | 'narratives'
+type Tab = 'why' | 'lineage' | 'fanout'
 
-const TABS: readonly PanelTabDef[] = [
+export const PROVENANCE_TABS: readonly PanelTabDef[] = [
   { id: 'why', label: 'Why' },
   { id: 'lineage', label: 'Lineage' },
-  { id: 'flow', label: 'Flow' },
-  { id: 'trajectory', label: 'Trajectory' },
-  { id: 'narratives', label: 'Narratives' },
+  { id: 'fanout', label: 'Fan-out' },
 ]
 
 export default function ProvenanceMerged(props: PanelProps) {
-  // `initialTab` lands a deep-link on the right tab: the retired kinds
-  // (v4.why / system.lineage / v4.flow / system.situations /
-  // system.narratives) resolve here through panel-registry/aliases.ts, each
-  // naming the tab that IS its surface. An unknown value falls back to Why.
-  const [tab, setTab] = useState<Tab>(() => initialTab(props.initialTab, TABS, 'why') as Tab)
+  // The retired kinds (v4.why / system.lineage / source.fanout) resolve here
+  // through panel-registry/aliases.ts, each naming the tab that IS its
+  // surface; an open tile follows a later alias open (useMergedTab).
+  const [tab, setTab] = useMergedTab<Tab>('system.provenance', props.initialTab, PROVENANCE_TABS, 'why')
 
   // READ TELEMETRY (D2e) — the lineage walk itself.
   //
@@ -64,13 +50,13 @@ export default function ProvenanceMerged(props: PanelProps) {
   // That claim rested on Caddy logs, which cannot see a tab change inside a
   // mounted panel. This can.
   //
-  // Only the three WALK surfaces count: Why (the derivation graph), Lineage
-  // (the derived_from tracer) and Flow (the production path). Trajectory and
-  // Narratives live in the same wrapper for layout reasons but answer a
-  // different question, and folding them in would inflate the one number
-  // §2.2 is graded on.
+  // Only the WALK surfaces count: Why (the derivation graph) and Lineage (the
+  // derived_from tracer) here, and the production-path canvas from its new
+  // home (`system.registry`'s Canvas tab). Fan-out joined this wrapper in
+  // UI-B1/merges and is NOT counted: widening the event's definition would
+  // move the one number §2.2 is graded on without a decision to do so.
   useEffect(() => {
-    if (tab === 'why' || tab === 'lineage' || tab === 'flow') {
+    if (tab === 'why' || tab === 'lineage') {
       emitRead('lineage_walk', { subjectKind: 'provenance_tab', subjectId: tab })
     }
   }, [tab])
@@ -80,7 +66,7 @@ export default function ProvenanceMerged(props: PanelProps) {
       <div className="flex items-center gap-2 border-b border-line bg-surf-3 px-density py-1.5">
         <span className="text-label uppercase tracking-wider text-ink-3">Provenance</span>
         <PanelTabStrip
-          tabs={TABS}
+          tabs={PROVENANCE_TABS}
           active={tab}
           onChange={(id) => setTab(id as Tab)}
           ariaLabel="Provenance surface"
@@ -91,9 +77,7 @@ export default function ProvenanceMerged(props: PanelProps) {
         <PanelEmbedProvider>
           {tab === 'why' && <WhyPanel />}
           {tab === 'lineage' && <LineagePanel {...props} />}
-          {tab === 'flow' && <FlowPanel />}
-          {tab === 'trajectory' && <SituationTrajectoryPanel {...props} />}
-          {tab === 'narratives' && <NarrativesPanel {...props} />}
+          {tab === 'fanout' && <FanoutExplorerPanel {...props} />}
         </PanelEmbedProvider>
       </div>
     </div>

@@ -16,7 +16,8 @@ Where this overview and a detailed flow disagree, the detailed flow wins.
 [10 A grounded read](#10-a-grounded-read) · [11 A journal entry](#11-a-journal-entry-or-a-lens-read) ·
 [12 A consult](#12-a-consult-and-a-deep-consult) · [13 The optimizer](#13-the-optimizer-workflow) ·
 [14 Correctness and the audit](#14-correctness-and-the-external-audit) ·
-[15 The coherence loop](#15-the-coherence-loop) · [Entry points](#entry-points)
+[15 The coherence loop](#15-the-coherence-loop) · [16 An on-request fetch](#16-an-on-request-fetch) ·
+[17 A forecast question](#17-a-forecast-question) · [Entry points](#entry-points)
 
 ---
 
@@ -47,7 +48,7 @@ deterministic and runs synchronously before fan-out. Flow 1; `ACQUISITION.md` §
 **Signal to predicate fan-out.** The written signal is published immediately to a coarse subject. Each
 desk has one aggregated durable pull consumer bound to the union of its subscription subjects; delivery
 is then narrowed exactly by an indexed SQL `WHERE` and a Starlark residual. The coarse subject narrows
-*delivery*; SQL and Starlark decide the *match*. Flow 1 steps 6–8.
+*delivery*; SQL and Starlark decide the *match*. Flow 1 steps 7–9.
 
 **Fan-out to the fire.** A matched signal marks an `(analyst, target)` pair dirty, and the analyst fires
 on a gate rather than per signal — see the two doors below.
@@ -87,36 +88,41 @@ opened, and LLM-bearing analysts are floored to a minimum batch, never per signa
 ## 1. A signal
 
 One sentence: a source actor pulls raw entries on a cadence, runs the baseline once over each, writes
-the single canonical signal, and publishes it where per-desk durable consumers fan it out.
+the single canonical signal, and publishes it where per-desk durable consumers fan it out. ("Desk" here
+is the example instance's word for a target.)
 
 1. **The poll fires.** The reminder wakes `SourceCore.pull_once`, which reads the persisted cursor from
    `actor_filter_state` and passes it as `since`. *(table: `actor_filter_state`)*
-2. **Entries are walked** under a count and wall-time budget resolved from the descriptor, then the
+2. **The response is kept.** The bytes the fetch received are stored content-addressed as a version
+   of the canonical address (an identical re-fetch stores nothing new), and every record parsed from
+   them is later linked to that version, so a record's proof chain ends in the bytes the platform
+   received. *(tables: `fetch_versions`, `fetch_version_records`)*
+3. **Entries are walked** under a count and wall-time budget resolved from the descriptor, then the
    handler's own advertisement, then a generic default, each clamped to a ceiling — so the poll always
    finishes inside the drain window and a handler that knows its own shape is not truncated.
-3. **The baseline runs once, at the source.** Tier 1 fills the typed indexed columns; tier 2 handles
+4. **The baseline runs once, at the source.** Tier 1 fills the typed indexed columns; tier 2 handles
    media by reference or eagerly; tier 3 runs the descriptor-ordered enrichment chain, which may drop
    the signal by returning nothing. The chain mutates the signal in place **and** returns it — the
    in-place mutation keeps the handler-yielded object authoritative, and the return lets a filter
    replace or drop it. *(tables: `signals` columns, `facts`, `entity_profiles`, `signal_entity_links`)*
-4. **The canonical write.** A surviving signal is written through `write_canonical_signal`, which pins
+5. **The canonical write.** A surviving signal is written through `write_canonical_signal`, which pins
    the owning tenant and stamps the enrichment columns into the one row — there is no separate
    enrichment table. An intra-source exact-hash re-serve inside the lookback window instead advances the
    existing row's last-seen stamp and skips the insert. *(table: `signals`)*
-5. **Ingest dedup runs in the same connection**, after the insert, because the alias link needs the row
+6. **Ingest dedup runs in the same connection**, after the insert, because the alias link needs the row
    to exist. A hit writes an alias row and sets the duplicate's canonical pointer. *(tables:
    `signal_aliases`, `signals.canonical_signal_id`)*
-6. **The publish is immediate**, as the row is written rather than batched at the end, so fan-out
+7. **The publish is immediate**, as the row is written rather than batched at the end, so fan-out
    survives a later cap, error or drain. *(stream: `legba.signals.<tenant>.<source>.<modality>.<class>`)*
-7. **The cursor advances** in a `finally`, on the three-branch policy: a hard error keeps the window; one
+8. **The cursor advances** in a `finally`, on the three-branch policy: a hard error keeps the window; one
    or more consumed entries advance to the last consumed logical timestamp, not to now; zero entries
    leave the cursor alone. One poll-outcome row lands either way. *(tables: `actor_filter_state`,
    `source_poll_outcomes`)*
-8. **Fan-out to desks.** The shared stream captures by subject filter; each desk has one aggregated
+9. **Fan-out to desks.** The shared stream captures by subject filter; each desk has one aggregated
    durable pull consumer bound to the union of its coarse filters. Matching is two-stage — an indexed
    SQL `WHERE` over the structured columns, then the Starlark residual on the narrowed set under a
    wall-clock budget, failing closed. *(stream: `legba_signals`)*
-9. **Arrival.** The signal is in the desk's pull window. From here the cadence cycle reads it.
+10. **Arrival.** The signal is in the desk's pull window. From here the cadence cycle reads it.
 
 ---
 
@@ -196,7 +202,11 @@ faithfulness pass and has its confidence folded at read time.
 3. **Assemble, ground, synthesize.** The run reads its recent signal slice, prepends the dated grounding
    preamble (Flow 10), and makes one completion call on the core plane. The payload carries the citation
    bridge — markers mapped to signal ids — that both the drill-down and the verify pass depend on, plus
-   the pre-registered indicator block and any open questions. *(table: `analyst_outputs`)*
+   the pre-registered indicator block and any open questions. In the same transaction the writer
+   also keeps the citations as rows: one per sentence, one per supporting record with the stored
+   version it was read from, and one per marker that names nothing. *(tables: `analyst_outputs`,
+   `finding_sentences`, `citation_support`, `citation_unresolved`, `run_handed`,
+   `finding_citation_receipts`)*
 4. **The mandatory verify pass** runs after the finding lands, in two layers: the always-on deterministic
    citation floor, and the optional model judge resolved through the opt-in judge route. Flag off or
    judge unreachable degrades to the floor, labelled and published provisionally under a ceiling, never
@@ -361,7 +371,7 @@ evidence-by-hypothesis matrix with diagnosticity weighting, and side-writes one 
    columns, the supporting and refuting id sets, the balance, the status, and the full matrix in the
    diagnostic-evidence column. *(table: `hypotheses`)*
 7. **Resolution.** The **exogenous** resolver runs first, grading each open hypothesis against facts
-   produced *after* it and abstaining on undirected theses; an operator label outranks it; a terminal
+   produced *after* it and abstaining on undirected theses; a person's label outranks it; a terminal
    status with no exogenous resolution falls back to the self-consistency stamp. Calibration then reads
    the resolved outcome and **segregates** the two so one can never masquerade as the other.
 
@@ -467,7 +477,7 @@ provenance chain, never a member of it.
 
 ## 12. A consult, and a deep consult
 
-**A consult** (blocking): an operator question invokes the consult actor, which runs a bounded reasoning
+**A consult** (blocking): a person's question invokes the consult actor, which runs a bounded reasoning
 loop over read-only substrate tools and either returns the typed response in the envelope with no row
 written, or persists a finding the endpoint reads back.
 
@@ -518,7 +528,9 @@ returns a task id in under a second rather than blocking.
 
 One sentence: the optimizer schedules a durable workflow from inside its actor run, which validates the
 training set and then compiles a candidate prompt carrying a real before-and-after faithfulness delta;
-promotion is operator-gated and the measurement gate binds even then.
+promotion is human-gated and the measurement gate binds even then. The optimizer is mothballed: its
+descriptors are paused and its entry point refuses for them, while the workflow worker that also hosts
+deep consult stays.
 
 1. **The cadence run** is a single global run; the read slice fetches trace and critique rows joined by
    trace id, which is why the critic must run first to produce graded rows. *(tables: `analyst_traces`,
@@ -538,7 +550,7 @@ promotion is operator-gated and the measurement gate binds even then.
    platform's own provider handler, scoped on a background loop to avoid nested event-loop errors.
 7. **Write the candidate** as a prompt-module candidate row carrying the paired delta, with the
    measurement gate stamping whether it is promotable at write time. *(table: `analyst_outputs`)*
-8. **Promotion is operator-gated.** An operator flips the candidate's gate, and the live inference path
+8. **Promotion is human-gated.** A person flips the candidate's gate, and the live inference path
    admits the evolved prompt **only** when the measured delta is promotable — so a hand-flipped gate on a
    degenerate candidate resolves to the baseline.
 
@@ -619,6 +631,49 @@ that bears on what was left open — without ever letting a machine rewrite a se
 
 ---
 
+## 16. An on-request fetch
+
+One sentence: a request to fetch an address, re-poll a source window or re-check a stored page enters
+one intake queue, and the drain runs it through the same acquisition code and sinks a poll uses.
+
+1. **Submit.** An analyst tool, a source's follow policy, the evidence archiver or the drift check submits a request
+   naming what to fetch, the source descriptor whose pipeline and sink the result lands under, why (a
+   closed reason list) and who asked. A request satisfied by a stored copy is done at once; a refused
+   one is recorded with its reason. *(table: `ingestion_requests`)*
+2. **Claim and run.** The drain (`runtime/intake_drain.py`) claims queued requests and runs each through
+   the named pipeline: fetch receipt, baseline, sink. *(tables: `fetch_versions`, `signals` or
+   `observations`)*
+3. **Record.** The records the run wrote are linked to the request, and its state moves to `done` or
+   `failed` (with retries until its attempt limit). *(table: `ingestion_request_records`)*
+
+[operations/on-request-fetching.md](operations/on-request-fetching.md) has the procedure and the page
+pipeline.
+
+---
+
+## 17. A forecast question
+
+One sentence: a question is written with what resolves it and when, sealed with every issuer's number,
+proposed an outcome by a deterministic resolver at its due date, and closed by a person's confirmation
+or by rule.
+
+1. **Write and seal.** A question names its resolver kind and spec, window, due date and void rules;
+   each issuer's probability (or a recorded absence) is stated; sealing fixes both. *(tables:
+   `forecast_questions`, `forecast_numbers`)*
+2. **Propose.** The `forecast_resolver` analyst reads sealed questions at or past their due date, runs
+   each question's resolver over the record (rules over canonical signals, or the live series for a
+   series-threshold question; no model) and writes a proposal with its evidence, clauses and searched
+   scope, or says it cannot decide. *(table: `forecast_resolution_records`)*
+3. **Decide.** A series-threshold question settles by rule; any other closes when a contributor confirms
+   the proposal (or rejects it, closing nothing), and an admin may correct a decided outcome. Each act
+   is a new record row. *(tables: `forecast_resolution_records`, `forecast_resolutions`, `override_log`;
+   routes: `POST /api/v1/v3/ledger/resolutions/{record}/confirm` and siblings)*
+4. **Score and anchor.** The scorecard reads resolved questions (`GET /api/v1/v3/ledger/scorecard`), and
+   the daily receipt anchor folds every seal into its timestamped Merkle tree. [LEDGER.md](LEDGER.md)
+   has the detail.
+
+---
+
 ## Entry points
 
 | Concern | Module |
@@ -653,3 +708,8 @@ that bears on what was left open — without ever letting a machine rewrite a se
 | Agency: resolution, governor, entry point | `data/analysts/agency/` |
 | Seed driver and adapters | `data/seed/` |
 | Registry routes | `data/registry/` |
+| Fetch receipts | `runtime/fetch_receipts.py` |
+| Citations as rows | `data/citation_rows_store.py` |
+| On-request intake | `data/intake_store.py`, `runtime/intake_drain.py` |
+| Forecast ledger and resolver | `data/forecast_ledger.py`, `data/forecast_resolution.py`, `data/forecast_resolvers.py` |
+| The one alert path | `data/alerts/raise_alert.py` |

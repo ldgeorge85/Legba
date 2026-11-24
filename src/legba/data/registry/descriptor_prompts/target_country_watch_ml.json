@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:country_watch_ml": {
+      "source": "target_country_watch_ml.yaml",
+      "state": "active"
+    }
+  }
+}

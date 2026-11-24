@@ -1,0 +1,15 @@
+{
+  "prompts": {
+    "escalation": {
+      "chars": 21988,
+      "sha256": "9cd8be681fe128d4fdb5fefa0f6cdd979edba1264f3f898f25650837b81fca11",
+      "source": "analyst_escalation.yaml"
+    }
+  },
+  "states": {
+    "analyst:escalation": {
+      "source": "analyst_escalation.yaml",
+      "state": "active"
+    }
+  }
+}

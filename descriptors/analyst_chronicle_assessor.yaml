@@ -60,6 +60,7 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
     narrate:
+      thinking: "on"   # T-2: the VOICE thinks; GATHER and PROPOSE stay on the plain alias
       factory_kind: stack_ref
       raw: llm.primary.openai_compat  # core plane — the chronicler VOICE
       expected_family: llm_provider
@@ -72,7 +73,7 @@ method:
       strategy: pause_until_next_window
 
 cadence:
-  fallback_schedule: "0 6 * * 1"      # weekly — Mondays 06:00 UTC, off the burst
+  fallback_schedule: "15 6 * * 1"   # T-2 stagger: off disruption_status's 06:00 burst (was 0 6 * * 1)
   cooldown_seconds: 518400            # 6d — below the 7d interval (the §11 trap)
 
 grounding:

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.rsshub.rfa.korea": {
+      "source": "source_rsshub_rfa_korea.yaml",
+      "state": "draft"
+    }
+  }
+}

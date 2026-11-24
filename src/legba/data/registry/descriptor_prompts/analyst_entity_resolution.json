@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:entity_resolution": {
+      "source": "analyst_entity_resolution.yaml",
+      "state": "active"
+    }
+  }
+}

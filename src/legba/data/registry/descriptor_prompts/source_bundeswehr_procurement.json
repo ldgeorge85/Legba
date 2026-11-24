@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.bundeswehr.procurement": {
+      "source": "source_bundeswehr_procurement.yaml",
+      "state": "retired"
+    }
+  }
+}

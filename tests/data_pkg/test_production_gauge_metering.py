@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from legba.data.analysts.handler_options import HANDLER_OPTIONS
+from legba.data.option_catalog.handler_options import HANDLER_OPTIONS
 from legba.data.registry.production_gauge import (
     LOOP_CLASSES,
     LOOP_LLM_DAILY_BURN,

@@ -111,6 +111,13 @@ from .absence_slice import (
     _is_absence_claim,
 )
 
+from .tension_pairing import (
+    is_cross_unit,
+    pair_scope_blocker,
+    shared_indicator_ids,
+    tension_subject_terms,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -574,7 +581,15 @@ def absence_scope_laundered(
 
 
 def direction_conflict(
-    content: str, verdict_text: str, *, target_id: str | None = None
+    content: str,
+    verdict_text: str,
+    *,
+    target_id: str | None = None,
+    other_target_id: str | None = None,
+    desk_a: str | None = None,
+    desk_b: str | None = None,
+    indicators_a: Any = None,
+    indicators_b: Any = None,
 ) -> str | None:
     """H2-b1 — the GB mechanism: the desk is cited FOR its own negation.
 
@@ -594,6 +609,17 @@ def direction_conflict(
       direction words in one paragraph are not a contradiction unless they point
       at one subject, and this is the only hard class in the brick.
 
+    CROSS-UNIT PAIRS (the world tier's declared tensions, 2026-11-07). The two
+    spans may belong to DIFFERENT units; the caller then passes ``other_target_id``
+    and the two blocks' ``desk_a``/``desk_b`` (and ``indicators_a``/``indicators_b``
+    when it holds them). The pair must then be one VARIABLE, not a shared word:
+    same desk, no disjoint indicator ids, and either a shared indicator id or a
+    shared content term that survives :data:`tension_pairing.TENSION_STOPWORDS`.
+    The rules and the measurement behind them live in :mod:`.tension_pairing`.
+    With none of those arguments the behaviour is the shipped one, plus the
+    generic stopword screen (dates, "remain", "continue"...), which no subject
+    gate should have counted.
+
     Returns the detail naming BOTH verbatim poles, which is how the hard class is
     earned (the V-D rule: a hard verdict must point at the thing it convicts on).
     """
@@ -601,12 +627,22 @@ def direction_conflict(
     desk = direction_poles(verdict_text)
     if not comp or not desk:
         return None
-    subject = {
-        t for t in (_content_terms(content, target_id=target_id)
-                    & _content_terms(verdict_text, target_id=target_id))
-        if len(t) >= _BINDING_TERM_CHARS
-    }
-    if not subject:
+    if pair_scope_blocker(
+        target_a=target_id, target_b=other_target_id, desk_a=desk_a, desk_b=desk_b,
+        indicators_a=indicators_a, indicators_b=indicators_b,
+    ):
+        return None
+    shared_ind = sorted(shared_indicator_ids(indicators_a, indicators_b))
+    subject = tension_subject_terms(
+        _content_terms(content, target_id=target_id)
+        & _content_terms(verdict_text, target_id=target_id),
+        cross_unit=is_cross_unit(target_id, other_target_id),
+    )
+    if shared_ind and is_cross_unit(target_id, other_target_id):
+        subject_label = "one indicator: " + ", ".join(shared_ind)
+    elif subject:
+        subject_label = "one subject: " + ", ".join(sorted(subject))
+    else:
         return None
     for c_family, c_span in comp.items():
         if c_family in desk:
@@ -618,7 +654,7 @@ def direction_conflict(
                 f"the composition attributes {c_family.upper()} "
                 f"({c_span!r}) to a desk whose own verdict is "
                 f"{d_family.upper()} ({d_span!r}); "
-                f"one subject: {', '.join(sorted(subject))}"
+                f"{subject_label}"
             )
     return None
 

@@ -14,8 +14,10 @@ Verified is only as good as the verifier: correctness needs a labelled reference
 verify pass measures groundedness and calls it truth.
 
 So this job grades a bounded unit's published read against an independent reference — an account of what happened to
-one country over one window, assembled from the open web and blind to our substrate by the
-[reference builder](REFERENCE_BUILDER.md) — and writes two shares, the per-claim ledger under them, and a receipt.
+one subject over one window, assembled from the open web and blind to our substrate by the
+[reference builder](REFERENCE_BUILDER.md), or cut from a machine-readable list by its
+[keyed sibling](REFERENCE_BUILDER.md#the-keyed-reference) — and writes two shares, the per-claim ledger under them,
+and a receipt. The subjects are the profile's, not only countries: see [the roster](#the-roster).
 It reads references and can never write one: a grader that could build its own reference could close the loop on
 itself. The surrounding measurement layer is [ANALYSIS](ANALYSIS.md) §10.
 
@@ -62,7 +64,7 @@ empty one) are read out of the rubric text, never hardcoded: a constant would ke
 | F3 | `mistralai/mistral-medium-3.1` | `llm.judge.openrouter_mistral_large.openai_compat` | paid |
 
 All three resolve through stack components, so the key, the endpoint, the timeout and the price table are the
-operator's configuration rather than this module's constants. A component id is stable across a repoint; the model
+owner's configuration rather than this module's constants. A component id is stable across a repoint; the model
 id behind it is not, and the model id is what the calibration lookup matches on — so repointing a component at a new
 model fires the interlock below on purpose, rather than silently making a three-family number a two-family one.
 
@@ -130,13 +132,18 @@ Per `(target, as_of)`:
 
 1. **Resolve the reference** — the `unit_references` row current at the stamp (see
    [reference currency](#reference-currency)); none means `no_reference` or `reference_stale`, nothing graded.
-2. **Freeze the heads** — the eight dimension desks and the composition, under `created_at <= as_of AND
-   (superseded_at IS NULL OR superseded_at > as_of)`; a registered unit with no head is recorded missing.
+2. **Freeze the heads** — the subject's dimension desks and, on a scored subject, its composition, under
+   `created_at <= as_of AND (superseded_at IS NULL OR superseded_at > as_of)`; a unit the subject's own tags fire
+   (see [the roster](#the-roster)) with no head is recorded missing. A lane is not missing seven country units, and a
+   G20 desk with no `nuclear_watch` tag is not missing `proliferation_watch`.
 3. **Segment** — the shipped segmenter (`verify._segment_claims` and `._is_judgeable_claim`), then the
    [exclusions](#the-exclusions).
 4. **Build one packet** — byte-identical across families, the reference reduced to a five-field whitelist
    (`item_id`, `summary`, `decisive_span`, `outlet`, `publish_date`) plus the band table, then leak-scanned; a leak
    refuses the whole packet, because an external family must never see our telemetry about the read it grades.
+   The packet's kind and any item id it has to mint (`RD-<CODE>-<lane>-<n>`) carry the target's subject code from
+   the subject ladder (`legba.data.subject`, [PROFILES.md](PROFILES.md) "The subject ladder") — the same code the
+   reference builder stamped, read off the live head descriptor, never sliced off the target id.
 5. **Check the gate** — the calibration interlock above.
 6. **Grade** — one call per claim per family, the label set read out of the rubric, one corrective retry. A span not
    verbatim from a development triggers that retry naming the failure; failing twice, the label stands with
@@ -147,6 +154,57 @@ Per `(target, as_of)`:
 `(analyst_id, target_id, head_id, reference_id, rubric_sha)` is unique — the same head against the same reference
 under one rubric is the same measurement — and the handler reads that table first, so a re-run does not burn paid
 calls the index would then discard.
+
+## The roster
+
+The grader grades whatever subject carries a current reference, and the builder decides which subjects get one. Both
+read ONE roster, the profile's (`_reference_roster`):
+
+* **the subjects** — every target whose live head is `active` and carries one of the profile's scored roster tags
+  (`rosters.scored_subject_tags`; the exemplar's `g20`, `watch`) or one of its `constants.reference_subject_tags`
+  (the exemplar's `supply_chain` — [PROFILES](PROFILES.md#constants)), over the units it actually produced in the
+  roster window. A target with no head descriptor at all keeps the pin's behaviour and stays on;
+* **the units** — the scored subjects' units plus every unit scoped to a reference leg (`reference_units`: the
+  exemplar's eight country units and `disruption_status`);
+* **what a subject is expected to carry** — its head's tags through the roster's own fan-out rule
+  (`units_for_tags`): an unscoped unit on a scored subject, a leg-scoped unit on that leg's subjects, a unit narrowed
+  within the scored legs on the scored subjects that carry its tag. The floor-1 composition is expected only on a
+  scored subject.
+
+On the exemplar that is the 32 country desks and the six active supply-chain lanes and flows — **the lanes and flows are
+graded desks**. What that costs: six more references per cadence for the builder (≈ one more core-plane build a day at
+the shipped 7-day cadence — 38 targets where 32 were), and one desk unit per lane for the grader at $0 (the F0 core
+plane; no composition on a lane). The rotation cycles 38 targets where it cycled 32. Every number on the lane rows is
+the same instrument as the country rows' — same rubric, same families, same shares — so they appear on the
+`/v3/eval/grader_roster` page beside the countries, with their denominators, and pool with nothing they should not.
+
+The subject a number is ABOUT rides each target's outcome on the receipt (`per_target[].subject`: id, code, name,
+kind), and the code is the subject ladder's (`legba.data.subject`). The packet the families see is unchanged: its
+bytes are the instrument's identity.
+
+## The keyed path
+
+A reference built by `reference_deterministic` is a machine-readable LIST cut to one subject and one window, every
+development carrying the KEY the list is indexed by (a CVE id, an entity id); its `ref_json` says so in a `keyed`
+block (the key pattern, whether the list declares itself complete, the matcher). Against such a reference the grader
+calls no model. It grades each claim EXACTLY (`_correctness_keyed`):
+
+| the claim names | it negates | the key is on the list | label |
+|---|---|---|---|
+| no key of this kind | — | — | `silent` |
+| a key | no | yes | `contains` |
+| a key | yes | yes | `contradicts` |
+| a key | no | no, list complete | `contradicts` |
+| a key | yes | no, list complete | `contains` |
+| a key | either | no, list not complete | `silent` |
+
+"Negates" is a closed token set, written down and crude on purpose: a claim it misreads is visible in the ledger
+(every row carries the key, the rule that fired and the matched item) rather than hidden inside a model. An absence
+from a list that does not declare itself complete is never evidence — KEV lists the exploited, it does not certify
+the rest unexploited. The rows are written under family `D0`, model `deterministic:key_match/1`, cost 0, flagged
+single-family (one instrument stood behind each label) and marked `families.keyed`, so a keyed share is the same
+measurement as a model-graded one and is never mistaken for one. The calibration interlock still opens the sweep
+([SEAMS](SEAMS.md) #70).
 
 ## The exclusions
 
@@ -209,7 +267,7 @@ head, because the database's default for an ascending sort is nulls last and lea
 again, more quietly. `target_id` breaks ties, so the order is total and a sweep is reproducible. The recency is the
 newest `created_at` over all of a target's rows, not per analyst and not filtered by rubric: the question the
 rotation asks is when this instrument last spent a tick on this country. Any cap therefore cycles the roster, and
-when a cap bites the receipt says so, so an operator can tell rotation from starvation at a glance.
+when a cap bites the receipt says so, so an admin can tell rotation from starvation at a glance.
 
 ## Reference currency
 
@@ -226,7 +284,7 @@ stamp the newest `window_end` wins, `built_at` only breaking the tie.
   the receipt: "88% correct" and "88% correct against a reference six days closed" are different statements, and
   only the second is true.
 * Past the grace the target is `reference_stale`, distinct from `no_reference`: one says the builder has not reached
-  this target, the other says it did and then stopped. Different operator actions, so different statuses — and no
+  this target, the other says it did and then stopped. Different actions, so different statuses — and no
   model call is made in either case. The population sweep uses the same grace predicate as the lookup, because a
   population looser than the lookup would grade nothing and say nothing about why.
 
@@ -267,7 +325,7 @@ carrying each block above.
 | `grader_calibrations` | one calibration run and whether it passed |
 
 It reads `unit_references` and can never write to it; that table belongs to the
-[reference builder](REFERENCE_BUILDER.md). `unit_correctness.reference_age_days` is nullable, and null is not zero:
+[reference builder](REFERENCE_BUILDER.md) and its keyed sibling. `unit_correctness.reference_age_days` is nullable, and null is not zero:
 a row written before the column existed measured against a reference whose window contained the stamp, but the
 distance was never recorded, and backfilling a zero would assert a freshness nobody measured.
 
@@ -373,7 +431,7 @@ verbatim, so the roster and the per-unit surface cannot print a null share diffe
 is echoed on the response: `country_composition` / `country_assessment` are graded against the same references as the
 desks they compose over, so pooling the grains would count those claims twice. It is select-only and needs no index —
 a 232-desk roster over 1,521 rows plans as a sequential scan, measured live at 16.3 ms / 652 buffers at `nights=7` and
-22.0 ms at `nights=30`. It is NOT the operator gold-set axis `GET /v3/eval/correctness` serves: that one is a human's
+22.0 ms at `nights=30`. It is NOT the human gold-set axis `GET /v3/eval/correctness` serves: that one is a human's
 read over `correctness_labels`, this one is the machine grader's against an independent reference, and the two are
 never pooled.
 
@@ -389,7 +447,7 @@ load-bearing basis, not consuming the input cap, not driving salience, rendered 
 excerpt the composition may refer to but never rests on — a desk that silently vanished would make a composition
 over three units look identical to one over eight. Both bars bind together, because a correctness share alone is
 trivially gamed by silence. The strict default on single-family means a deployment at a zero ceiling composes over
-nothing until the operator funds a second family or says one family is enough: it fails toward not asserting.
+nothing until the owner funds a second family or says one family is enough: it fails toward not asserting.
 
 Every gated run stamps `finding.data["correctness_gate"]` with the bars in force, the basis count, and a verdict per
 unit — `composed`, `quoted` or `no_number`, each with its reason and its numbers. The last two have the same effect
@@ -399,7 +457,7 @@ withholding rather than an absence of reads, and the quarantine header names whi
 because a read withheld on correctness may have scored well on faithfulness. The gate and the faithfulness floor are
 and-ed, never or-ed: a read the verify pass already withheld must not walk back into the basis because an
 independent reference happened to agree with it. The thresholds are environment, not descriptor options — a bar
-deciding what the platform will assert is a policy the operator owns — and an unparseable value falls back to the
+deciding what the platform will assert is a policy the owner owns — and an unparseable value falls back to the
 shipped default, never to "no bar". With the flag off the composition is byte-identical to a tree without the gate,
 down to the query set and the prompt bytes, and two tests enforce that.
 

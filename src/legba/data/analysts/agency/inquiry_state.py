@@ -16,7 +16,12 @@ for an analyst — three tools, every one scoped to the CALLING descriptor:
     sealed-ledger discipline: a test frozen at write, never softened later) —
     enforced BOTH here (a friendly ``failed`` ToolResult) AND by the DB CHECK
     ``inquiry_ledger_hypothesis_needs_test``, so the discipline holds even
-    against a caller that bypasses this handler.
+    against a caller that bypasses this handler. A ``hypothesis`` with no
+    ``resolves_by`` horizon (absent, unreadable, or already past) is refused
+    too, by name — :data:`HYPOTHESIS_NO_HORIZON_REFUSAL` — because a row with
+    no horizon can never be scored and the weekly yield reads it as open
+    forever (2026-09-29: all 58 open rows carried ``resolves_by`` NULL). That
+    refusal is this handler's alone; there is no DB CHECK behind it yet.
   * ``ledger_close(id, status, reason, cited_refs)`` — close ONE of the
     calling descriptor's own rows: stamps the terminal status + ``closed_at``,
     appends ``reason`` to the row's own ``text`` (the ledger carries no
@@ -68,10 +73,11 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
+from ...principals import seat_handle
 from ...schemas.action_pack import ActionPack
 from .tools import ToolCall, ToolContext, ToolResult, WritebackContext
 
@@ -103,6 +109,11 @@ STATUS_VOCAB: tuple[str, ...] = (
 #: ever reaches that CHECK.
 _CLOSED_STATUSES: tuple[str, ...] = tuple(s for s in STATUS_VOCAB if s != "open")
 
+#: The named refusal a hypothesis minted with no usable ``resolves_by`` gets —
+#: the leading token of the ``failed`` ToolResult's error, so a run receipt
+#: (``analyst_traces.intermediate_steps``) and a log grep both find it by name.
+HYPOTHESIS_NO_HORIZON_REFUSAL = "hypothesis_refused_no_resolves_by"
+
 _MAX_TEXT_CHARS = 8192
 _MAX_REASON_CHARS = 4096
 #: A read is bounded so a runaway inquiry can never pull an unbounded ledger
@@ -130,6 +141,11 @@ def _calling_descriptor_id(wb: WritebackContext) -> str:
     return wb.analyst_ctx.analyst_id
 
 
+def _seat(wb: WritebackContext) -> str | None:
+    """The running seat's principal handle (lane 9): descriptor id + version."""
+    return seat_handle(wb.analyst_ctx.analyst_id, wb.analyst_ctx.analyst_version)
+
+
 def _coerce_cited_refs(raw: Any) -> tuple[list[str] | None, str | None]:
     """Parse the OPTIONAL ``cited_refs`` arg (``ledger_close`` only) into a
     JSON-safe list of strings. Accepts a list or a JSON-string-encoded list;
@@ -155,16 +171,22 @@ def _coerce_cited_refs(raw: Any) -> tuple[list[str] | None, str | None]:
 
 
 def _coerce_resolves_by(raw: Any) -> tuple[datetime | None, str | None]:
-    """Parse the OPTIONAL ``resolves_by`` arg into a timestamp. Absent/``None``
-    → no deadline."""
-    if raw is None:
+    """Parse the ``resolves_by`` arg into an aware UTC timestamp (required for
+    a hypothesis, optional otherwise). Absent/blank/``None`` → no deadline. A
+    bare date or a naive timestamp is read as UTC, so the stored horizon never
+    moves with the host's clock zone."""
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
         return None, None
     if isinstance(raw, datetime):
-        return raw, None
-    try:
-        return datetime.fromisoformat(str(raw).replace("Z", "+00:00")), None
-    except ValueError as exc:
-        return None, f"resolves_by is not a valid ISO-8601 timestamp: {exc}"
+        parsed = raw
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(raw).strip().replace("Z", "+00:00"))
+        except ValueError as exc:
+            return None, f"resolves_by is not a valid ISO-8601 timestamp: {exc}"
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc), None
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
@@ -286,7 +308,10 @@ async def ledger_write_tool(
         at write, the H13 sealed-ledger discipline: a hypothesis with no test
         is refused, here AND by the DB CHECK
         ``inquiry_ledger_hypothesis_needs_test``.
-      * ``resolves_by`` (optional) — an ISO-8601 timestamp.
+      * ``resolves_by`` (required IFF ``kind == 'hypothesis'``) — an ISO-8601
+        date or timestamp strictly in the future; a hypothesis without one is
+        refused as :data:`HYPOTHESIS_NO_HORIZON_REFUSAL`. Optional for every
+        other kind.
       * ``dispatched_to`` (optional) — an open_question id / contention id /
         desk analyst_id this row was raised through (§3). Dispatch itself is
         NOT this tool's job — it rides the EXISTING journal_propose /
@@ -334,6 +359,30 @@ async def ledger_write_tool(
         )
 
     resolves_by, rb_err = _coerce_resolves_by(args.get("resolves_by"))
+    if kind == "hypothesis":
+        # THE HORIZON RULE — named, so the run's receipt carries the refusal.
+        reason = None
+        if rb_err is not None:
+            reason = rb_err
+        elif resolves_by is None:
+            reason = "a hypothesis needs a 'resolves_by' horizon at write"
+        elif resolves_by <= datetime.now(timezone.utc):
+            reason = (
+                f"resolves_by {resolves_by.isoformat()} is not in the future"
+            )
+        if reason is not None:
+            logger.warning(
+                "inquiry_state.ledger_write.%s descriptor=%s detail=%s",
+                HYPOTHESIS_NO_HORIZON_REFUSAL, descriptor_id, reason,
+            )
+            return ToolResult(
+                status="failed",
+                error=(
+                    f"{HYPOTHESIS_NO_HORIZON_REFUSAL}: {reason} — a hypothesis "
+                    "with no horizon can never be scored, so it is refused, "
+                    "not stored open forever"
+                ),
+            )
     if rb_err is not None:
         return ToolResult(status="failed", error=rb_err)
 
@@ -350,12 +399,12 @@ async def ledger_write_tool(
                 """
                 INSERT INTO inquiry_ledger
                     (descriptor_id, kind, text, status, resolution_test,
-                     resolves_by, dispatched_to, cited_refs)
-                VALUES ($1, $2, $3, 'open', $4, $5, $6, $7::jsonb)
+                     resolves_by, dispatched_to, cited_refs, written_by)
+                VALUES ($1, $2, $3, 'open', $4, $5, $6, $7::jsonb, legba_principal($8))
                 RETURNING id
                 """,
                 descriptor_id, kind, text, resolution_test, resolves_by,
-                dispatched_to, json.dumps(cited_refs or []),
+                dispatched_to, json.dumps(cited_refs or []), _seat(wb),
             )
     except Exception as exc:  # noqa: BLE001 — a DB-side CHECK / insert failure folds into the loop
         logger.warning(
@@ -452,11 +501,13 @@ async def ledger_close_tool(
                     cited_refs = $4::jsonb,
                     text = text || $5,
                     closed_at = now(),
-                    updated_at = now()
+                    updated_at = now(),
+                    written_by = legba_principal($6)
                 WHERE id = $1 AND descriptor_id = $2 AND status = 'open'
                 RETURNING id
                 """,
                 entry_id, descriptor_id, status, json.dumps(cited_refs), close_note,
+                _seat(wb),
             )
     except Exception as exc:  # noqa: BLE001 — a DB-side failure folds into the loop
         logger.warning(
@@ -498,6 +549,7 @@ def register_inquiry_state_tools(registry: Any) -> None:
 
 
 __all__ = [
+    "HYPOTHESIS_NO_HORIZON_REFUSAL",
     "INQUIRY_STATE_PACK_ID",
     "INQUIRY_STATE_TOOLS",
     "KIND_VOCAB",

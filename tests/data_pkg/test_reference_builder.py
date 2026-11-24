@@ -1077,12 +1077,20 @@ async def _clear_desk_findings(conn) -> None:
     one. The container runner shuffles module order, so which module runs
     before this file is a coin toss. Clear the whole dimension set, not a few
     named targets."""
-    from legba.data.analysts.deterministic_handlers import scorecard_banding as _banding
-    from legba.data.analysts.deterministic_handlers.correctness_grader import PROLIFERATION as _prolif
+    from legba.data import rosters as _rosters
     await conn.execute(
         "DELETE FROM analyst_outputs WHERE kind = 'finding' AND analyst_id = ANY($1::text[])",
-        list(_banding.DIMENSIONS) + [_prolif],
+        list(_rosters.scored_subject_units()),
     )
+
+
+async def _clear_target_heads(conn, targets: list[str]) -> None:
+    """The reference roster admits a target with NO head or an ACTIVE one; a
+    leftover DRAFT head (``test_research_web_evidence_e2e`` registers a
+    ``country_watch_il`` one) drops it off the roster. These tests assume no
+    head, so they own that precondition (X4 NIGHTLY, W11-F50)."""
+    await conn.execute(
+        "DELETE FROM target_descriptors WHERE descriptor_id = ANY($1::text[])", targets)
 
 
 @pytest_asyncio.fixture
@@ -1095,6 +1103,7 @@ async def clean_slate(pg_pool):
         await conn.execute(
             "DELETE FROM analyst_outputs WHERE target_id = $1", _TARGET
         )
+        await _clear_target_heads(conn, [_TARGET])
 
     async with pg_pool.acquire() as conn:
         original = await conn.fetchval(
@@ -1814,7 +1823,12 @@ async def test_a_model_that_never_commits_yields_no_commit_within_the_cap(
         extras={RB.LLM_DEPS_EXTRA_KEY: llm,
                 RB.WEB_BINDING_DEPS_EXTRA_KEY: binding},
         as_of=_T0.isoformat(), reference_targets=[_TARGET],
-        min_developments=1, build_max_seconds=1,
+        # 3 s, not 1 s (roll 80): the wall-clock commit fires at 70 % of the
+        # cap, and at 1 s a single round in flight across the 0.3 s window
+        # under a loaded test host ran past the deadline first, so the build
+        # stopped on the hard cap with no commit trigger (a timing flake, not
+        # a behaviour change). 3 s widens the window to 0.9 s.
+        min_developments=1, build_max_seconds=3,
     )
     data = result.finding.data
     target = data["per_target"][0]
@@ -1824,8 +1838,8 @@ async def test_a_model_that_never_commits_yields_no_commit_within_the_cap(
     assert data["n_all_rejected"] == 0
     assert data["n_references_written"] == 0
     # INSIDE the cap — the whole point of it
-    assert target["loop"]["wall_seconds"] <= 4.0, target["loop"]
-    assert target["loop"]["build_max_seconds"] == 1
+    assert target["loop"]["wall_seconds"] <= 6.0, target["loop"]
+    assert target["loop"]["build_max_seconds"] == 3
     assert target["commit_trigger"] == "wall_clock"
     assert data["n_forced_commit"] == 1
     # the receipt READS no_commit, and says what stopped the build
@@ -2393,6 +2407,7 @@ async def roster_slate(pg_pool):
             ROSTER.RECEIPT_ANALYST_ID,
         )
         await _clear_desk_findings(conn)
+        await _clear_target_heads(conn, targets)
 
     async with pg_pool.acquire() as conn:
         await _wipe(conn)
@@ -2767,3 +2782,19 @@ async def test_the_flag_is_standing_state_and_the_warning_is_an_event(
     assert queue[_TARGET_B]["unbuildable_by_lane"] is True
     # ...and NOT the paragraph, because nothing was attempted against it here
     assert not [w for w in data["warnings"] if _TARGET_B in w and "NOT dropped" in w]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_a_leftover_draft_head_does_not_drop_the_target_off_the_roster(pg_pool, clean_slate):
+    """X4 NIGHTLY (W11-F50): another file's draft ``country_watch_il`` head (owner
+    ``test``) must not change this file's roster -- the slate removes it."""
+    async with pg_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO target_descriptors (descriptor_id, version, is_head, schema_uri, owner, name, body) "
+            "VALUES ($1, $2, TRUE, 'legba/target/1.0.0', 'test', 'IL', $3::jsonb)",
+            _TARGET, "c" * 16, json.dumps({"scope": {"geo": ["IL"], "tags": ["news"]}}),
+        )
+        await _clear_target_heads(conn, [_TARGET])
+        assert await conn.fetchval(
+            "SELECT count(*) FROM target_descriptors WHERE descriptor_id = $1", _TARGET) == 0

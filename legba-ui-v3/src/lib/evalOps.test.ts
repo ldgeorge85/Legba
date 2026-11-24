@@ -55,7 +55,7 @@ function cal(over: Partial<CalibrationScoreboard> = {}): CalibrationScoreboard {
     brier: 0.2,
     brier_exogenous: 0.18,
     exogenous_sample_size: 12,
-    sample_size: 40,
+    pooled_sample_size: 40,
     insufficient_exogenous: false,
     self_consistency_only: false,
     brier_forecast_acute: 0.11,
@@ -163,6 +163,49 @@ describe('buildScorecards', () => {
   it('handles analysts with no ground-truth accuracy', () => {
     const coup = buildScorecards(SC).find((c) => c.analyst_id === 'coup.analyst')!
     expect(coup.latest_accuracy).toBeNull()
+    expect(coup.carried_ungraded_n).toBe(0)
+  })
+
+  // SW-9 — a memory-only verdict's overall_score is a capped gate number (0.5),
+  // not a grade: counted beside the card's numbers, never inside them.
+  it('counts carried, ungraded verdicts and keeps them out of every number', () => {
+    const carried: ScorecardRow = {
+      id: 's9',
+      analyst_id: 'cred.analyst',
+      analyst_version: 'v1',
+      scores: {},
+      overall_score: 0.5,
+      produced_at: '2026-06-04T00:00:00Z',
+      score_state: 'carried_ungraded',
+    }
+    const cred = buildScorecards([...SC, carried]).find(
+      (c) => c.analyst_id === 'cred.analyst',
+    )!
+    expect(cred.carried_ungraded_n).toBe(1)
+    expect(cred.rows.map((r) => r.id)).toEqual(['s2', 's1'])
+    expect(cred.latest_overall).toBe(0.8) // the newest GRADED row, not the 0.5
+    expect(cred.mean_overall).toBeCloseTo(0.65)
+    expect(cred.trend_delta).toBeCloseTo(0.3)
+  })
+
+  it('an analyst with only carried verdicts has no number and sorts last', () => {
+    const only: ScorecardRow = {
+      id: 'c1',
+      analyst_id: 'quiet.analyst',
+      analyst_version: 'v1',
+      scores: {},
+      overall_score: 0.5,
+      produced_at: '2026-06-04T00:00:00Z',
+      score_state: 'carried_ungraded',
+    }
+    const cards = buildScorecards([...SC, only])
+    const quiet = cards[cards.length - 1]
+    expect(quiet.analyst_id).toBe('quiet.analyst')
+    expect(quiet.latest_overall).toBeNull()
+    expect(quiet.mean_overall).toBeNull()
+    expect(quiet.trend_delta).toBeNull()
+    expect(quiet.rows).toEqual([])
+    expect(quiet.carried_ungraded_n).toBe(1)
   })
 })
 
@@ -185,6 +228,15 @@ describe('scoreBand', () => {
 // calibration / skill scoreboard — the honest-top reducer (P4-T4)
 // --------------------------------------------------------------------------
 describe('calibrationBanner', () => {
+  it('carries the untrusted/legacy label and a stale note (lane E)', () => {
+    const b = calibrationBanner(
+      cal({ stale: true, newest_member_at: '2026-07-01T00:00:00+00:00' }),
+    )
+    expect(b.legacyLabel).toBe('untrusted — legacy, under diagnosis')
+    expect(b.staleNote).toContain('2026-07-01')
+    expect(calibrationBanner(cal({ stale: false })).staleNote).toBeNull()
+    expect(calibrationBanner(null).legacyLabel).toContain('untrusted')
+  })
   it('absent (null / unavailable) reads "no calibration finding yet", not insufficient', () => {
     for (const c of [null, undefined, cal({ available: false })]) {
       const b = calibrationBanner(c)
@@ -198,7 +250,7 @@ describe('calibrationBanner', () => {
 
   it('insufficient exogenous sample -> the VERBATIM message, no number', () => {
     const b = calibrationBanner(
-      cal({ insufficient_exogenous: true, exogenous_sample_size: 3, sample_size: 40 }),
+      cal({ insufficient_exogenous: true, exogenous_sample_size: 3, pooled_sample_size: 40 }),
     )
     expect(b.exogenous.insufficient).toBe(true)
     expect(b.exogenous.value).toBeNull()

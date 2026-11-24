@@ -34,7 +34,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 from gen_descriptor_prompt_manifest import prompt_hash  # noqa: E402
 
-from legba.data.analysts.handler_options import HANDLER_OPTIONS
+from legba.data.option_catalog.handler_options import HANDLER_OPTIONS
 from legba.data.registry.production_gauge import (
     LOOP_CLASSES,
     LOOP_DESCRIPTOR_PROMPT_DRIFT,
@@ -450,9 +450,11 @@ def test_manifest_ships_inside_the_package():
     """``descriptors/`` is in neither container image. If the manifest is not
     under ``src/legba`` the gauge is dead in production and green in CI, which is
     the worst possible arrangement."""
-    assert MANIFEST_PATH.exists()
+    assert MANIFEST_PATH.is_dir()
     assert MANIFEST_PATH.is_relative_to(REPO_ROOT / "src" / "legba")
-    json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    for part in MANIFEST_PATH.glob("*.json"):  # R-1: one file per descriptor
+        json.loads(part.read_text(encoding="utf-8"))
+    assert load_prompt_manifest() and load_state_manifest()
 
 
 def test_every_integrity_loop_is_registered_in_the_enumeration():

@@ -386,7 +386,7 @@ class LaneJudge:
         return system
 
     async def chat_complete(
-        self, messages, *, max_tokens=16384, temperature=0.0, system=None, **kw
+        self, messages, *, max_tokens=16384, temperature=1.0, system=None, **kw
     ):
         user = messages[0]["content"] if messages else ""
         partition = [norm(c) for c in claims_in_prompt(user)]

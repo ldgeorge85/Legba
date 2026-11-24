@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.malijet.news": {
+      "source": "source_malijet.yaml",
+      "state": "draft"
+    }
+  }
+}

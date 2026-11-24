@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:escalation_dyad": {
+      "source": "analyst_escalation_dyad.yaml",
+      "state": "active"
+    }
+  }
+}

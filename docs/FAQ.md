@@ -3,28 +3,36 @@
 # FAQ
 
 Short answers, linked to the page that owns the long one. Terms are defined in the
-[Glossary](GLOSSARY.md); counts are generated into [RELEASE_STATE.md](RELEASE_STATE.md); per-feature
-state is in [STATUS.md](STATUS.md).
+[Glossary](GLOSSARY.md); per-feature state is in [STATUS.md](STATUS.md). Where an answer uses the
+geopolitics example instance, it says so.
 
 ## What it is
 
-**In one sentence?** An intelligence service you define in YAML, and that measures its own
-correctness. It turns sources into cited, verified, drillable reads over whatever domain you
-configure, and grades those reads on three axes it publishes.
+**In one sentence?** A measured data-analysis platform: you define what to watch and what questions to
+ask in YAML; it writes cited reads and grades its own correctness, and publishes the grade with its
+coverage. It turns sources into cited, verified, drillable reads over whatever subjects you configure,
+and grades those reads on three axes it publishes.
 
 **What does "source-first" mean?** Acquisition belongs to sources, not to the things that consume
 data. A source ingests an observation once, enriches it once, and publishes one canonical,
-target-agnostic signal; the fan-out plane routes that one signal to every desk whose predicate wants
-it. One feed serves every desk without refetching. It is unrelated to the licence.
+target-agnostic signal; the fan-out plane routes that one signal to every subject whose predicate wants
+it. One feed serves every subject without refetching. It is unrelated to the licence.
 
-**Is this an intelligence tool?** The geopolitics desks are the shipped exemplar, not the system's
-identity. The same pipeline applies to any domain you can point a source at. It performs cited
-situation assessment over text and structured data; it claims no sensor-fusion rigour and does not
-claim to establish truth.
+**What is the platform, and what is the example instance?** *The platform* is the software: sources
+that emit one canonical observation, a temporal substrate, bounded reasoning units, composition by
+quotation, and the checking layer (faithfulness judge, correctness grader, external audit, contrary
+pass, typed absence), all configured by descriptors. It performs cited assessment over text and
+structured data; it does not claim to establish truth. *The example instance* is geopolitical
+open-source analysis: its country desks, region rollups, world record and political-lean lenses are
+that instance's descriptor set, not the platform's shape, and any number from it is that instance's.
+An *instance* is the platform plus a profile ([PROFILES.md](PROFILES.md)); a sanctions and
+export-control skeleton profile ships as a second shape. The root [README](../README.md) has the
+longer frame and [DIRECTION.md](DIRECTION.md) where it is going.
 
-**Does it forecast?** Not as a claim. Forecasting exists only as a pre-registered scoreboard of precise
-questions with resolution windows, scored by Brier, never surfaced as a finding, and it reports no
-proven skill today. Retired forecast-as-claim analysts are listed in [SEAMS.md](SEAMS.md).
+**Does it forecast?** Not as a claim. Forecasts live in a sealed ledger of precise questions, each with
+a resolution rule and a date; a resolver proposes each outcome, a person decides it, and the scorecard
+withholds every score until enough questions have resolved ([LEDGER.md](LEDGER.md)). Forecasts are
+never surfaced as findings. Retired forecast-as-claim analysts are listed in [SEAMS.md](SEAMS.md).
 
 **How is it different from a scraper, a SIEM, or an LLM agent?** A scraper fetches; Legba fetches
 once and fuses into a temporal, deduplicated, provenance-tracked substrate. A SIEM correlates
@@ -35,25 +43,24 @@ substrate rather than the model's memory as the source of truth.
 
 ## How it works
 
-**What does the analysis produce?** A stack built bottom-up. Nine bounded units, one narrow question
-each, over cited signal slices plus grounding from the substrate. A country record per desk that
-quotes its verified unit claims byte for byte, with a country voice fenced to that record. A
-deterministic regional rollup and a world record that carries the country records, with a world
-voice that reads the country voices. A banded scorecard from verified claims that says "insufficient"
-where they support nothing. A journal, a chronicle and a set of interpretive lenses off the product
-chain. [Analysis](ANALYSIS.md) has each mechanism.
+**What does the analysis produce?** A stack built bottom-up. Bounded units, each answering one narrow
+question over a cited slice of signals plus grounding from the substrate. Compositions that quote the
+verified unit claims byte for byte, each with an interpretive voice fenced to its own record. A banded
+scorecard from verified claims that says "insufficient" where they support nothing. A journal, a
+chronicle and interpretive lenses off the product chain. An instance declares its own units and its
+own top floor; in the example instance the floors are a country record per desk, a deterministic
+regional rollup and a world record. [Analysis](ANALYSIS.md) has each mechanism.
 
 **What is the faithfulness pass?** Every cited read is scored by a judge model plus a deterministic
 citation floor for whether each claim follows from the evidence it cites. The score folds into
 `effective_confidence = min(confidence, faithfulness)` at read time and gates a visible low tier; it
-never deletes. The judge runs cross-family on a hosted route, repointable by one env line; when the
-route is down the pass degrades to the floor and says so. Every critique stamps the judge model and
+never deletes. The judge route is repointable by one configuration line; when the route is down the
+pass degrades to the floor and says so. Every critique stamps the judge model and
 pipeline revision, so populations never pool.
 
 **Does it measure truth?** The faithfulness pass measures groundedness, not truth: a well-cited claim
 from a wrong source can score faithful. Two other graders exist to reach the world. The correctness
-grader scores the desks against references the platform built independently, with three model
-families. The external audit samples top-layer claims and checks them against live web search,
+grader scores the subjects against references built independently of the platform's own substrate. The external audit samples top-layer claims and checks them against live web search,
 including claims that something did not happen. The three are never pooled.
 
 **Descriptor, analyst, target, source?** A descriptor is the declarative record you register. A target
@@ -61,15 +68,17 @@ is a declared subject frame, a desk, not a surveilled entity. An analyst reads a
 and writes typed outputs about targets. A source acquires data. You declare descriptors; the runtime
 stands up actors from them.
 
-**Do I write code per source or per country?** No. The desks are materialised from descriptors and one
-tag predicate; the units fan out by predicate; adding a country is registering a target. A desk need
-not be a country: the thematic supply-chain desks run the same primitive with no new code.
+**Do I write code per source or per subject?** No. Subjects are materialised from descriptors and one
+tag predicate; the units fan out by predicate; adding a subject is registering a target. In the example
+instance a desk need not be a country: the supply-chain desks and the cyber desk run the same primitive
+with no new code.
 
 **What is the substrate?** Postgres for the relational and temporal store, Qdrant for vectors, Redis
 for hot state, OpenSearch for full text, NATS for the event bus. Facts, relations, situations and
 events carry validity windows, so it is a temporal knowledge graph that grows continuously. Events,
-as-of readers and a typed cross-layer graph are the v3 data model:
-[DATA_MODEL_V3.md](DATA_MODEL_V3.md).
+as-of readers and a typed graph projected into ordinary tables (there is no separate graph database)
+are in [DATA_MODEL.md](DATA_MODEL.md#events-temporal-and-graph). Citations are stored as rows beside
+each finding, and every row that records a judgement names its writer.
 
 **Why does a signal carry no target?** Because it is a neutral observation; the same signal routes to
 many targets. That target-agnosticism is the keystone of the source-first model.
@@ -95,9 +104,9 @@ and fires when a gate trips or its cadence does.
 ## Scope and honesty
 
 **What is proven and what is experimental?** The full spine runs end to end from a cold start and is
-graded three ways. The experimental legs return only as measured experiments with a human gate: the
-prompt self-optimiser promotes nothing until its measured delta is positive; forecasting reports no
-skill; calibration is honest-null where unmeasured. Retired analysts stay retired and unread. The
+graded three ways. The experimental parts return only as measured experiments with a human gate: the
+prompt self-optimiser promotes nothing until its measured delta is positive; the forecast scorecard
+withholds scores until enough questions resolve; calibration is honest-null where unmeasured. Retired analysts stay retired and unread. The
 truth-in-labeling table is [STATUS.md](STATUS.md).
 
 **Why does a desk read "insufficient"?** Because its evidence did not clear the bar. The scorecard
@@ -120,18 +129,35 @@ authoritative data or the control plane.
 
 ## Running it
 
+**Who can see and change what?** Out of the box, one perimeter password at the edge, and everyone who
+passes it is the same admin. With sign-in turned on (`LEGBA_AUTH_SIGNIN=1`), people sign in with local
+accounts and hold one of three roles: a **reader** reads every reader surface, keeps their own Consult
+sessions, watch list and exports, and changes nothing shared; a **contributor** also grades, decides
+journal proposals and forecast outcomes, and acknowledges or snoozes alerts; an **admin** does
+everything else, including sources, descriptors, users and the engine's own surfaces. The owner is an admin who cannot be demoted. Groups, single
+sign-on and per-source permissions are not built. [Operating your instance §9](OPERATING_YOUR_INSTANCE.md#9-turning-on-sign-in);
+every route's minimum role is in [API_ROLES.md](API_ROLES.md).
+
+**Is there a phone app?** The reader pages work on a phone at `/m/`, and with sign-in on that shell
+installs from the browser as a web app. There is no app-store app and no web push; alerts go to ntfy.
+[UI.md](UI.md#the-phone-shell).
+
 **Can I self-host it, and under what licence?** Yes; that is the design. AGPL-3.0-or-later, whose
 network clause covers networked use. A commercial licence is available; an outside code contribution
 needs a CLA. You run it yourself and can audit every output down to the source.
 
 **What does a deployment look like?** A profile-gated compose stack brought up by one script in the
-order that matters. Fresh volumes only; there is no migration path from earlier designs. Start with
-the out-of-box catalog and activate further sources one at a time. [Setup](SETUP.md).
+order that matters, then changes shipped with the tiered rolling deploy. Fresh volumes only; there is
+no migration path from earlier designs. Start with the out-of-box catalog and activate further sources
+one at a time. [Setup](SETUP.md), then [rolling deploy](operations/rolling-deploy.md).
 
 **What does it cost to run?** Every scheduled analyst runs on the self-hosted core plane at no
 per-run cost. The hosted routes, the judge, the audit grader and rater, the grader's paid families,
 and consult, are each one config line with a cost brake, and the plane that pays for each path is in
 [TUNABLES.md](TUNABLES.md).
 
-**Is the geopolitics use case hard-coded?** No. Point a source at a different domain and declare
-different targets and analysts, and the same cite, verify and audit pipeline applies.
+**Is the geopolitics use case hard-coded?** Not by design, and not in the checking layer. Point a source
+at a different domain and declare different targets and analysts, and the same cite, verify and audit
+pipeline applies. Example-shaped assumptions still sit in some prompts and modules, and the default
+bring-up registers the geopolitics profile; a second profile is what moves them into profiles or
+descriptors, never a fork. [PROFILES.md](PROFILES.md) says what a profile carries today.

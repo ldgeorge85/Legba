@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:geo_convergence_scan": {
+      "source": "analyst_geo_convergence_scan.yaml",
+      "state": "retired"
+    }
+  }
+}

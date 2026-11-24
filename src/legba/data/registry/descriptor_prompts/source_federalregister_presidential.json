@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.federalregister.presidential": {
+      "source": "source_federalregister_presidential.yaml",
+      "state": "draft"
+    }
+  }
+}

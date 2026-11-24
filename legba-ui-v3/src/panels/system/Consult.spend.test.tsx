@@ -26,7 +26,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react'
 import ConsultPanel from './Consult'
 import { useConsultSessions, type ChatTurn } from '@/state/consultSession'
 import type { PanelRegistration } from '@/types'
@@ -110,6 +110,7 @@ function routedFetch(routes: {
   post?: () => unknown
   stop?: () => unknown
   synthesize?: () => unknown
+  session?: () => unknown
 }) {
   return vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
     const path = String(url)
@@ -119,7 +120,7 @@ function routedFetch(routes: {
       return routes.post?.() ?? ACCEPTED
     }
     if (path.includes('/consult/runs/')) return err(404, 'no run')
-    if (path.includes('/consult/sessions/')) return err(404, 'no session')
+    if (path.includes('/consult/sessions/')) return routes.session?.() ?? err(404, 'no session')
     return ok([])
   })
 }
@@ -376,7 +377,7 @@ describe('ConsultPanel — STOP', () => {
           derived_from: [],
           tool_calls: [],
           cited_refs: [],
-          model: 'opus',
+          model: 'core',
           synthesis_status: 'complete',
           resynthesizable: true,
           replay_fidelity: 'exact',
@@ -403,7 +404,7 @@ describe('ConsultPanel — STOP', () => {
     expect(first[0]).toContain(`/consult/runs/${REQUEST_ID}/stop`)
     expect(second[0]).toContain(`/consult/runs/${REQUEST_ID}/synthesize`)
     // The salvage runs on the plane the operator has selected.
-    expect(second[1]).toEqual({ model: 'opus' })
+    expect(second[1]).toEqual({ model: 'core' })
   })
 
   it('salvages anyway when the run had already finished (stop 404s)', async () => {
@@ -535,6 +536,105 @@ describe('ConsultPanel — the provenance census (7g-2)', () => {
       'model knowledge: 1 sentence',
     )
   })
+
+  // 2026-09-28 §B.3 — the 29 refs nobody ever saw.
+  it('prints unresolved, fabricated and malformed beside the classes', () => {
+    // The 2026-09-28 Opus run's own shape: 80 cited ids, 51 of them signals,
+    // the other 29 real findings/situations/hypotheses/events that the census
+    // filed as unresolved and the panel never rendered at all.
+    seedAnswer({
+      version: '2026-09/7g-2',
+      live: 51,
+      history: 0,
+      web_retrieval: 0,
+      seed: 0,
+      unresolved: 29,
+      fabricated: 2,
+      malformed: ['sit-001'],
+      by_kind: { signal: 51, finding: 15, situation: 8, hypothesis: 5, event: 1 },
+      model_knowledge: 3,
+      sentences_examined: 40,
+      basis: 'cited refs classified by their own origin_class column',
+    })
+    render(<ConsultPanel registration={reg()} scope={{}} mode="personal" />)
+    const line = screen.getByTestId('consult-provenance-census')
+    expect(line).toHaveTextContent('cited: 51 live · 0 history · 0 web · 0 seed')
+    expect(line).toHaveTextContent('29 unresolved')
+    expect(line).toHaveTextContent('2 fabricated')
+    expect(line).toHaveTextContent('1 malformed')
+    // The 29 are NAMED, not just counted — the breakdown rides the tooltip so
+    // the line stays one line.
+    expect(line.title).toContain('15 finding')
+    expect(line.title).toContain('8 situation')
+    expect(line.title).toContain('sit-001')
+  })
+
+  it('never prints an unresolved or fabricated count it did not measure', () => {
+    // `fabricated: 0` that nobody measured reads as "nothing was invented",
+    // which is a claim. Absence is not.
+    seedAnswer({ live: 6, history: 2, model_knowledge: 3 })
+    render(<ConsultPanel registration={reg()} scope={{}} mode="personal" />)
+    const line = screen.getByTestId('consult-provenance-census')
+    expect(line.textContent).not.toMatch(/unresolved/)
+    expect(line.textContent).not.toMatch(/fabricated/)
+    expect(line.textContent).not.toMatch(/malformed/)
+  })
+
+  it('does not print a measured zero as a defect count', () => {
+    seedAnswer({ live: 6, unresolved: 0, fabricated: 0, malformed: [], model_knowledge: 1 })
+    render(<ConsultPanel registration={reg()} scope={{}} mode="personal" />)
+    const line = screen.getByTestId('consult-provenance-census')
+    expect(line.textContent).not.toMatch(/0 unresolved/)
+    expect(line.textContent).not.toMatch(/0 fabricated/)
+  })
+})
+
+describe('ConsultPanel — the provenance hold (2026-09-28 §B.3)', () => {
+  function seedHeldAnswer(holdReason: string | null) {
+    useConsultSessions.setState({
+      panels: {
+        [PANEL_ID]: {
+          sessionId: 'sess-h',
+          transcript: [
+            { role: 'user', content: 'what is going on in iran' },
+            {
+              role: 'assistant',
+              content: 'Iran struck three sites on Tuesday.',
+              steps: [],
+              requestId: REQUEST_ID,
+              holdReason,
+            } as ChatTurn,
+          ],
+          pendingTurn: null,
+          pins: [],
+          draft: '',
+          scope: '',
+          maxRounds: 10,
+          error: null,
+          rev: 1,
+          updatedAt: Date.now(),
+        },
+      },
+    })
+  }
+
+  it('frames a held answer before the reader reaches a word of it', () => {
+    seedHeldAnswer('provenance_hold')
+    render(<ConsultPanel registration={reg()} scope={{}} mode="personal" />)
+    const hold = screen.getByTestId('consult-provenance-hold')
+    expect(hold).toHaveTextContent('nothing this answer cites resolved')
+    // The answer is KEPT, below the frame — a held answer is not a discarded
+    // one, and the operator paid for it.
+    expect(screen.getByTestId('consult-answer')).toHaveTextContent(
+      'Iran struck three sites',
+    )
+  })
+
+  it('renders no frame for an answer the server did not hold', () => {
+    seedHeldAnswer(null)
+    render(<ConsultPanel registration={reg()} scope={{}} mode="personal" />)
+    expect(screen.queryByTestId('consult-provenance-hold')).not.toBeInTheDocument()
+  })
 })
 
 describe('ConsultPanel — Synthesize from evidence', () => {
@@ -603,7 +703,7 @@ describe('ConsultPanel — Synthesize from evidence', () => {
 
     const [path, body] = posts(fetchMock)[0]
     expect(path).toContain(`/consult/runs/${REQUEST_ID}/synthesize`)
-    expect(body).toEqual({ model: 'opus' })
+    expect(body).toEqual({ model: 'core' })
   })
 
   it('never lets a REBUILT transcript pass for a clean re-run', async () => {
@@ -696,9 +796,81 @@ describe('ConsultPanel — Synthesize from evidence', () => {
     )
     const [path, body] = posts(fetchMock)[0]
     expect(path).toContain('/consult/runs/turn-9/synthesize')
-    expect(body).toEqual({ model: 'opus', turn_id: 'turn-9' })
+    expect(body).toEqual({ model: 'core', turn_id: 'turn-9' })
     // A rebuilt transcript still says so, however it was addressed.
     expect(screen.getByTestId('consult-replay-note')).toHaveTextContent('rebuilt')
+  })
+
+  it('carries the recovery\'s OWN census, never the cut run\'s', async () => {
+    // 2026-09-28 §B.3. The recovery writes a NEW answer over the same
+    // evidence; the panel used to keep the original turn's census beside it,
+    // so the count described prose that no longer existed.
+    vi.stubGlobal(
+      'fetch',
+      routedFetch({
+        synthesize: () =>
+          ok({
+            answer: 'the recovered answer',
+            finding_id: null,
+            derived_from: [],
+            tool_calls: [],
+            cited_refs: [],
+            synthesis_status: 'complete',
+            replay_fidelity: 'exact',
+            provenance_census: { live: 2, history: 0, model_knowledge: 1 },
+          }),
+      }),
+    )
+    seedCutTurn({
+      provenanceCensus: { live: 51, history: 4, model_knowledge: 12 },
+    })
+    render(<ConsultPanel registration={reg()} scope={{}} mode="personal" />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('consult-resynthesize'))
+    })
+
+    await waitFor(() =>
+      expect(screen.getByText('the recovered answer')).toBeInTheDocument(),
+    )
+    const line = screen.getByTestId('consult-provenance-census')
+    expect(line).toHaveTextContent('cited: 2 live · 0 history')
+    expect(line.textContent).not.toMatch(/51 live/)
+  })
+
+  it('shows no census at all when the recovery could not measure one', async () => {
+    // `?? null`, not `?? turn.provenanceCensus`: a recovery with no census
+    // borrows nothing.
+    vi.stubGlobal(
+      'fetch',
+      routedFetch({
+        synthesize: () =>
+          ok({
+            answer: 'the recovered answer',
+            finding_id: null,
+            derived_from: [],
+            tool_calls: [],
+            cited_refs: [],
+            synthesis_status: 'complete',
+            replay_fidelity: 'exact',
+          }),
+      }),
+    )
+    seedCutTurn({
+      provenanceCensus: { live: 51, history: 4, model_knowledge: 12 },
+    })
+    render(<ConsultPanel registration={reg()} scope={{}} mode="personal" />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('consult-resynthesize'))
+    })
+
+    await waitFor(() =>
+      expect(screen.getByText('the recovered answer')).toBeInTheDocument(),
+    )
+    expect(
+      screen.queryByTestId('consult-provenance-census'),
+    ).not.toBeInTheDocument()
   })
 
   it('offers nothing on a complete answer, or when the evidence has aged out', async () => {
@@ -733,5 +905,360 @@ describe('ConsultPanel — Synthesize from evidence', () => {
       ),
     )
     expect(screen.getByTestId('consult-answer')).toHaveTextContent('ran out of time budget')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Migration 0223 — a RELOADED turn renders what the live one did
+// ---------------------------------------------------------------------------
+
+describe('ConsultPanel — the response bag survives a reload (0223)', () => {
+  const CENSUS = {
+    version: '2026-09/7g-2',
+    live: 0,
+    history: 0,
+    web_retrieval: 0,
+    seed: 0,
+    unresolved: 3,
+    fabricated: 1,
+    model_knowledge: 11,
+  }
+  const FLOOR = { from: 0.3, to: 0.85, resolved: 0 }
+
+  /** The session the server holds: a pre-0223 turn and a 0223 turn. */
+  const DETAIL = {
+    id: 'sess-r',
+    mode: 'chat',
+    title: 'what is going on in iran',
+    turns: [
+      { id: 't1', role: 'user', content: 'what was it before', steps: [], tool_calls: [], cited_refs: [] },
+      {
+        id: 't2',
+        role: 'assistant',
+        content: 'the old answer',
+        steps: [],
+        tool_calls: [],
+        cited_refs: [],
+        synthesis_status: 'complete',
+        response_recorded: false,
+        uncertainty: null,
+        provenance_census: null,
+        hold_reason: null,
+        uncertainty_floor_applied: null,
+        watch_candidates: null,
+        model: null,
+      },
+      { id: 't3', role: 'user', content: 'what is going on in iran', steps: [], tool_calls: [], cited_refs: [] },
+      {
+        id: 't4',
+        role: 'assistant',
+        content: 'Iran struck three sites on Tuesday.',
+        steps: [],
+        tool_calls: [],
+        cited_refs: [],
+        synthesis_status: 'complete',
+        response_recorded: true,
+        uncertainty: 0.85,
+        provenance_census: CENSUS,
+        hold_reason: 'provenance_hold',
+        uncertainty_floor_applied: FLOOR,
+        watch_candidates: ['a second outlet names the sites'],
+        model: 'core',
+      },
+    ],
+  }
+
+  function seedReloadedSlice() {
+    // What a reload leaves: the session id, and nothing the server has not
+    // re-sent. Reconcile-on-mount re-seeds the transcript from the server.
+    useConsultSessions.setState({
+      panels: {
+        [PANEL_ID]: {
+          sessionId: 'sess-r',
+          transcript: [],
+          pendingTurn: null,
+          pins: [],
+          draft: '',
+          scope: '',
+          maxRounds: 10,
+          error: null,
+          rev: 1,
+          updatedAt: Date.now(),
+        },
+      },
+    })
+  }
+
+  it('renders the census line, the hold banner and the floor stamp on reload', async () => {
+    vi.stubGlobal('fetch', routedFetch({ session: () => ok(DETAIL) }))
+    seedReloadedSlice()
+    render(<ConsultPanel registration={reg()} scope={{}} mode="personal" />)
+
+    await waitFor(() =>
+      expect(screen.getByText('Iran struck three sites on Tuesday.')).toBeInTheDocument(),
+    )
+    const [oldTurn, newTurn] = screen.getAllByTestId('consult-turn-assistant')
+
+    // The 0223 turn: exactly the live rendering.
+    const census = within(newTurn).getByTestId('consult-provenance-census')
+    expect(census).toHaveTextContent('cited: 0 live · 0 history · 0 web · 0 seed')
+    expect(census).toHaveTextContent('3 unresolved')
+    expect(census).toHaveTextContent('1 fabricated')
+    expect(census).toHaveTextContent('model knowledge: 11 sentences')
+    expect(within(newTurn).getByTestId('consult-provenance-hold')).toHaveTextContent(
+      'nothing this answer cites resolved',
+    )
+    const floor = within(newTurn).getByTestId('consult-uncertainty-floor')
+    expect(floor).toHaveTextContent('floored from 0.30')
+    expect(floor).toHaveTextContent('0 cited refs resolved')
+    expect(newTurn).toHaveTextContent('uncertainty=0.85')
+    expect(within(newTurn).getByTestId('consult-answer-model')).toHaveTextContent('via core')
+
+    // The pre-0223 turn: "not measured", never a zero and never a frame.
+    const oldCensus = within(oldTurn).getByTestId('consult-provenance-census')
+    expect(oldCensus).toHaveTextContent('cited: not measured')
+    expect(oldCensus.textContent).not.toMatch(/0 live/)
+    expect(within(oldTurn).queryByTestId('consult-provenance-hold')).not.toBeInTheDocument()
+    expect(within(oldTurn).queryByTestId('consult-uncertainty-floor')).not.toBeInTheDocument()
+    expect(oldTurn.textContent).not.toMatch(/uncertainty=/)
+  })
+
+  it('a registry that predates the field renders as it always did', async () => {
+    const legacy = {
+      ...DETAIL,
+      turns: DETAIL.turns.map((t) => ({
+        id: t.id,
+        role: t.role,
+        content: t.content,
+        steps: [],
+        tool_calls: [],
+        cited_refs: [],
+      })),
+    }
+    vi.stubGlobal('fetch', routedFetch({ session: () => ok(legacy) }))
+    seedReloadedSlice()
+    render(<ConsultPanel registration={reg()} scope={{}} mode="personal" />)
+    await waitFor(() =>
+      expect(screen.getByText('Iran struck three sites on Tuesday.')).toBeInTheDocument(),
+    )
+    expect(screen.queryByTestId('consult-provenance-census')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('consult-uncertainty-floor')).not.toBeInTheDocument()
+  })
+
+  it('stamps the floor on a LIVE answer from the terminal frame', async () => {
+    vi.stubGlobal('fetch', routedFetch({}))
+    const es = await startTurn()
+    act(() => {
+      es.emit({
+        type: 'final',
+        final_source: 'registry',
+        status: 'complete',
+        session_id: 'sess-1',
+        response: {
+          answer: 'the live answer',
+          finding_id: null,
+          derived_from: [],
+          tool_calls: [],
+          cited_refs: [],
+          session_id: 'sess-1',
+          uncertainty: 0.6,
+          provenance_census: { live: 2, model_knowledge: 1 },
+          uncertainty_floor_applied: { from: 0.2, to: 0.6, resolved: 1 },
+          watch_candidates: ['the vote is postponed'],
+        },
+      })
+    })
+    await waitFor(() => expect(screen.getByText('the live answer')).toBeInTheDocument())
+    const floor = screen.getByTestId('consult-uncertainty-floor')
+    expect(floor).toHaveTextContent('floored from 0.20 · 1 cited ref resolved')
+    const turn = useConsultSessions.getState().panels[PANEL_ID].transcript[1]
+    expect(turn.watchCandidates).toEqual(['the vote is postponed'])
+    // A live turn is not a reloaded one — no reload marker.
+    expect(turn.responseRecorded).toBeUndefined()
+  })
+
+  // W3 / F-4 — the watch mint's outcome, one line beside the answer header.
+  const MINTED = [
+    {
+      candidate: 'a second outlet names the sites by 2026-12-01',
+      hypothesis_id: 'h-1',
+      refused: false,
+      reason: null,
+      resolves_by: '2026-12-01T00:00:00+00:00',
+      folded: false,
+    },
+    {
+      candidate: 'the strikes resume',
+      hypothesis_id: null,
+      refused: true,
+      reason: 'hypothesis_refused_no_resolves_by',
+      resolves_by: null,
+      folded: false,
+    },
+  ]
+
+  it('prints how many watches stand on reload, and nothing where no mint ran', async () => {
+    const detail = {
+      ...DETAIL,
+      turns: DETAIL.turns.map((t) => (t.id === 't4' ? { ...t, watch_minted: MINTED } : t)),
+    }
+    vi.stubGlobal('fetch', routedFetch({ session: () => ok(detail) }))
+    seedReloadedSlice()
+    render(<ConsultPanel registration={reg()} scope={{}} mode="personal" />)
+    await waitFor(() =>
+      expect(screen.getByText('Iran struck three sites on Tuesday.')).toBeInTheDocument(),
+    )
+    const [oldTurn, newTurn] = screen.getAllByTestId('consult-turn-assistant')
+    const line = within(newTurn).getByTestId('consult-watch-standing')
+    expect(line).toHaveTextContent('1 watch standing · 1 not watched')
+    expect(line.getAttribute('title')).toContain(
+      'watching: a second outlet names the sites by 2026-12-01 — until 2026-12-01',
+    )
+    expect(line.getAttribute('title')).toContain(
+      'not watched: the strikes resume — hypothesis_refused_no_resolves_by',
+    )
+    // No mint attempted on the old turn: no line at all — never "0 standing".
+    expect(within(oldTurn).queryByTestId('consult-watch-standing')).not.toBeInTheDocument()
+  })
+
+  it('prints the standing watches on a LIVE answer from the terminal frame', async () => {
+    vi.stubGlobal('fetch', routedFetch({}))
+    const es = await startTurn()
+    act(() => {
+      es.emit({
+        type: 'final',
+        final_source: 'registry',
+        status: 'complete',
+        session_id: 'sess-1',
+        response: {
+          answer: 'the live answer',
+          finding_id: null,
+          derived_from: [],
+          tool_calls: [],
+          cited_refs: [],
+          session_id: 'sess-1',
+          watch_candidates: MINTED.map((m) => m.candidate),
+          watch_minted: [{ ...MINTED[0], folded: true }],
+        },
+      })
+    })
+    await waitFor(() => expect(screen.getByText('the live answer')).toBeInTheDocument())
+    const line = screen.getByTestId('consult-watch-standing')
+    expect(line).toHaveTextContent('1 watch standing')
+    expect(line.textContent).not.toMatch(/not watched/)
+    expect(line.getAttribute('title')).toContain('(already standing)')
+    const turn = useConsultSessions.getState().panels[PANEL_ID].transcript[1]
+    expect(turn.watchMinted).toHaveLength(1)
+  })
+
+  it('W4-F1: counts the folded candidates and names what each folded onto', async () => {
+    const minted = [
+      { ...MINTED[0], hypothesis_id: 'h-new', fold_check: 'semantic', similarity: 0.43 },
+      {
+        candidate: 'detection of a major arms acquisition by 2026-12-01',
+        hypothesis_id: 'e6227510-0b12-4027-b4b4-dd55804ee044',
+        refused: false,
+        reason: null,
+        resolves_by: '2026-12-01T00:00:00+00:00',
+        folded: true,
+        folded_onto: 'e6227510-0b12-4027-b4b4-dd55804ee044',
+        fold_check: 'semantic',
+        similarity: 0.947,
+      },
+      {
+        candidate: 'a naval buildup by 2026-12-02',
+        hypothesis_id: 'h-unchecked',
+        refused: false,
+        reason: null,
+        resolves_by: '2026-12-02T00:00:00+00:00',
+        folded: false,
+        fold_check: 'unavailable',
+      },
+      MINTED[1],
+    ]
+    const detail = {
+      ...DETAIL,
+      turns: DETAIL.turns.map((t) => (t.id === 't4' ? { ...t, watch_minted: minted } : t)),
+    }
+    vi.stubGlobal('fetch', routedFetch({ session: () => ok(detail) }))
+    seedReloadedSlice()
+    render(<ConsultPanel registration={reg()} scope={{}} mode="personal" />)
+    await waitFor(() =>
+      expect(screen.getByText('Iran struck three sites on Tuesday.')).toBeInTheDocument(),
+    )
+    const [, newTurn] = screen.getAllByTestId('consult-turn-assistant')
+    const line = within(newTurn).getByTestId('consult-watch-standing')
+    expect(line).toHaveTextContent('3 watches standing · 1 not watched · 1 folded')
+    const title = line.getAttribute('title') ?? ''
+    expect(title).toContain(
+      'detection of a major arms acquisition by 2026-12-01 — until 2026-12-01 ' +
+        '(already standing — folded onto e6227510, claim-core cosine 0.95)',
+    )
+    expect(title).toContain('a naval buildup by 2026-12-02 — until 2026-12-02 (fold check unavailable)')
+    // A watch that stood on its own carries no fold note at all.
+    expect(title).toContain('watching: a second outlet names the sites by 2026-12-01 — until 2026-12-01\n')
+  })
+
+  it('a re-synthesis of a reloaded pre-0223 turn renders ITS OWN census and floor', async () => {
+    vi.stubGlobal(
+      'fetch',
+      routedFetch({
+        synthesize: () =>
+          ok({
+            answer: 'the recovered answer',
+            finding_id: null,
+            derived_from: [],
+            tool_calls: [],
+            cited_refs: [],
+            synthesis_status: 'complete',
+            replay_fidelity: 'exact',
+            uncertainty: 0.45,
+            provenance_census: { live: 9, model_knowledge: 2 },
+            uncertainty_floor_applied: { from: 0.1, to: 0.45, resolved: 9 },
+          }),
+      }),
+    )
+    useConsultSessions.setState({
+      panels: {
+        [PANEL_ID]: {
+          sessionId: 'sess-r',
+          transcript: [
+            { role: 'user', content: 'assess the slope' },
+            {
+              role: 'assistant',
+              content: '_ran out of time budget_',
+              steps: [],
+              turnId: 't-old',
+              synthesisStatus: 'partial',
+              resynthesizable: true,
+              responseRecorded: false,
+            },
+          ],
+          pendingTurn: null,
+          pins: [],
+          draft: '',
+          scope: '',
+          maxRounds: 10,
+          error: null,
+          rev: 1,
+          updatedAt: Date.now(),
+        },
+      },
+    })
+    render(<ConsultPanel registration={reg()} scope={{}} mode="personal" />)
+    expect(screen.getByTestId('consult-provenance-census')).toHaveTextContent(
+      'cited: not measured',
+    )
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('consult-resynthesize'))
+    })
+    await waitFor(() =>
+      expect(screen.getByText('the recovered answer')).toBeInTheDocument(),
+    )
+    expect(screen.getByTestId('consult-provenance-census')).toHaveTextContent('cited: 9 live')
+    expect(screen.getByTestId('consult-uncertainty-floor')).toHaveTextContent(
+      'floored from 0.10 · 9 cited refs resolved',
+    )
   })
 })

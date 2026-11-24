@@ -77,7 +77,7 @@ export default function SourceDetailPanel({ registration, scope }: PanelProps) {
     enabled,
     queryKey: ['source-signals', sourceId],
     queryFn: () =>
-      apiGet<SignalsPage>(`/signals?source_id=${encodeURIComponent(sourceId)}&limit=100`),
+      apiGet<SignalsPage>(`/signals?source_id=${encodeURIComponent(sourceId)}&limit=100&fields=full`),
     refetchInterval: 30_000,
   })
 

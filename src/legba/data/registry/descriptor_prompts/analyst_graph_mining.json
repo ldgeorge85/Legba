@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:graph_mining": {
+      "source": "analyst_graph_mining.yaml",
+      "state": "active"
+    }
+  }
+}

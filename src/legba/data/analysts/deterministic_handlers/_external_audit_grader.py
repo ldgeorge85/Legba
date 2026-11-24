@@ -58,6 +58,7 @@ graders.
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import asyncio
 import logging
@@ -96,7 +97,7 @@ RATER_AUDIT = "audit"
 #: verdict vocabulary, or the mechanical gates. Pooling across a bump is
 #: forbidden, which is ``judge_pipeline_version``'s doctrine applied to this
 #: population from its first row rather than retrofitted onto it.
-RUBRIC_VERSION = "external_world_check/2026-09-05/1"
+RUBRIC_VERSION = "external_world_check/2026-11-13/1"  # was 2026-09-05/1: the grader call moved from temperature 0.0 to 1.0 (house rule)
 
 #: The double-grade sample rate (design F-5, ruled): 10% of searched claims.
 #: ~47/day = 329/week against R3's overlap n of 51 — the one axis on which the
@@ -279,6 +280,13 @@ class EvidenceEnvelope:
     def supports_absence_claim(self) -> bool:
         return bool(self.search_status.get("supports_absence_claim"))
 
+    @property
+    def health(self) -> dict[str, Any]:
+        """X1/B5 — the web_search tool's per-engine health block (``{}`` when
+        the tool stamped none: not recorded, never healthy)."""
+        block = self.search_status.get("health")
+        return dict(block) if isinstance(block, Mapping) else {}
+
 
 # ---------------------------------------------------------------------------
 # The graded outcome
@@ -307,6 +315,8 @@ class WidthGrade:
     search_status: str = ""
     search_liveness: str = ""
     search_degraded: bool = False
+    #: X1/B5 — the search's per-engine health block (mig 0235).
+    search_health: dict[str, Any] = field(default_factory=dict)
     grader_family: str = ""
     grader_component_id: str = ""
     grader_model_name: str = ""
@@ -360,6 +370,7 @@ class WidthGrade:
             "search_status": self.search_status or None,
             "search_liveness": self.search_liveness or None,
             "search_degraded": self.search_degraded,
+            "search_health": dict(self.search_health),
             "grader_family": self.grader_family,
             "grader_component_id": self.grader_component_id,
             "grader_model_name": self.grader_model_name or None,
@@ -446,6 +457,7 @@ def absence_unverified_grade(
         search_status=str(envelope.search_status.get("status") or ""),
         search_liveness=envelope.liveness,
         search_degraded=envelope.degraded,
+        search_health=envelope.health,
         sample_fraction=sample_fraction,
         grader_family=grader_family,
         grader_component_id=grader_component_id,
@@ -484,6 +496,7 @@ async def grade_claim(
         search_status=str(envelope.search_status.get("status") or ""),
         search_liveness=envelope.liveness,
         search_degraded=envelope.degraded,
+        search_health=envelope.health,
         sample_fraction=sample_fraction,
     )
     try:
@@ -495,7 +508,7 @@ async def grade_claim(
                     query=envelope.query,
                 )}],
                 max_tokens=GRADER_MAX_TOKENS,
-                temperature=0.0,
+                temperature=HOUSE_TEMPERATURE,
                 system=GRADER_SYSTEM,
             ),
             timeout=GRADER_TIMEOUT_SECONDS,

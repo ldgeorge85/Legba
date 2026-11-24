@@ -1,0 +1,239 @@
+{
+  "_generated": "scripts/gen_profile_projection.py from profiles/*/profile.yaml and their projection views - do not edit by hand",
+  "default_plane": "geopolitics",
+  "planes": {
+    "geopolitics": {
+      "plane": "geopolitics",
+      "profile": "geopolitics",
+      "view": {
+        "derive": {
+          "crosswalk": {
+            "namespace": "geopolitics"
+          },
+          "subject_groups": {
+            "kinds": [
+              "region",
+              "thematic"
+            ]
+          },
+          "units": {
+            "cadence_from": "descriptor_head"
+          }
+        },
+        "digest": "904fd47102bd2d117dfcadf3d47148f78be28fa390a75e17c625d1a420db5776",
+        "sections": {
+          "bands": [
+            {
+              "key": "changed",
+              "value": {
+                "label": "Changed",
+                "question": "What landed since you last looked?"
+              }
+            },
+            {
+              "key": "checked",
+              "value": {
+                "label": "Checked",
+                "question": "Which claims held, and which did not?"
+              }
+            },
+            {
+              "key": "gaps",
+              "value": {
+                "label": "Gaps",
+                "question": "Where did the evidence run out?"
+              }
+            },
+            {
+              "key": "due",
+              "value": {
+                "label": "Due",
+                "question": "What does the platform owe an answer on?"
+              }
+            }
+          ],
+          "crosswalk": [],
+          "labels": [
+            {
+              "key": "subject.singular",
+              "value": "Desk"
+            },
+            {
+              "key": "subject.plural",
+              "value": "Desks"
+            },
+            {
+              "key": "unit_noun.singular",
+              "value": "unit"
+            },
+            {
+              "key": "unit_noun.plural",
+              "value": "units"
+            },
+            {
+              "key": "landing",
+              "value": "morning_read"
+            },
+            {
+              "key": "map.title",
+              "value": "World Map"
+            },
+            {
+              "key": "read_title",
+              "value": "World Assessment"
+            },
+            {
+              "key": "overview_title",
+              "value": "World at a glance"
+            },
+            {
+              "key": "unscoped_subject",
+              "value": "No desk (world / unscoped)"
+            },
+            {
+              "key": "roster.g20",
+              "value": "G20"
+            },
+            {
+              "key": "roster.watch",
+              "value": "Watch list"
+            }
+          ],
+          "scope": [
+            {
+              "key": "units",
+              "value": [
+                "leadership_transition",
+                "energy_security",
+                "escalation",
+                "narrative_coordination",
+                "internal_stability",
+                "military_posture",
+                "economic_coercion",
+                "proliferation_watch",
+                "disruption_status"
+              ]
+            },
+            {
+              "key": "banding_analyst",
+              "value": "scorecard_producer"
+            },
+            {
+              "key": "audit_analyst",
+              "value": "standing_auditor"
+            },
+            {
+              "key": "unit_grace_multiple",
+              "value": 1.5
+            }
+          ],
+          "subject_groups": [],
+          "tiers": [
+            {
+              "key": "world",
+              "value": {
+                "label": "World",
+                "parent": null,
+                "producer": "world_assessor"
+              }
+            },
+            {
+              "key": "assessment",
+              "value": {
+                "label": "Assessment",
+                "parent": null,
+                "producer": "world_assessment"
+              }
+            },
+            {
+              "key": "region",
+              "value": {
+                "label": "Region",
+                "parent": "world",
+                "producer": "region_composition"
+              }
+            },
+            {
+              "key": "country",
+              "value": {
+                "label": "Country",
+                "parent": "region",
+                "producer": "country_composition"
+              }
+            },
+            {
+              "key": "thematic",
+              "value": {
+                "label": "Thematic",
+                "parent": null,
+                "producer": "escalation_composition"
+              }
+            }
+          ],
+          "units": [
+            {
+              "key": "leadership_transition",
+              "value": {
+                "scored": true
+              }
+            },
+            {
+              "key": "energy_security",
+              "value": {
+                "scored": true
+              }
+            },
+            {
+              "key": "escalation",
+              "value": {
+                "scored": true
+              }
+            },
+            {
+              "key": "narrative_coordination",
+              "value": {
+                "scored": true
+              }
+            },
+            {
+              "key": "internal_stability",
+              "value": {
+                "scored": true
+              }
+            },
+            {
+              "key": "military_posture",
+              "value": {
+                "scored": true
+              }
+            },
+            {
+              "key": "economic_coercion",
+              "value": {
+                "scored": true
+              }
+            },
+            {
+              "key": "proliferation_watch",
+              "value": {
+                "scored": false
+              }
+            },
+            {
+              "key": "disruption_status",
+              "value": {
+                "scored": false
+              }
+            }
+          ]
+        }
+      }
+    },
+    "sanctions_export_control": {
+      "plane": "sanctions_export_control",
+      "profile": "sanctions_export_control",
+      "view": null
+    }
+  },
+  "schema": "legba/profile_projection/1"
+}

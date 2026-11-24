@@ -204,6 +204,8 @@ from typing import Any, Mapping, Optional, Sequence
 from uuid import UUID
 
 from ... import critic_fold
+from ... import rosters as _rosters
+from ... import taxon_families as _taxa
 from ...provenance.models import severity_delta_from_tags
 
 # ---------------------------------------------------------------------------
@@ -219,15 +221,11 @@ from ...provenance.models import severity_delta_from_tags
 #: country_composition.other_analysts,
 #: substrate_query_port._ASSESSMENT_PRODUCER_ANALYSTS, and
 #: unit_correctness_scorer._DEFAULT_UNITS.
-DIMENSIONS: tuple[str, ...] = (
-    "leadership_transition",
-    "energy_security",
-    "escalation",
-    "narrative_coordination",
-    "internal_stability",
-    "military_posture",
-    "economic_coercion",
-)
+#:
+#: ROSTER-1: the profile's ``rosters.scored_units`` (``rosters.scored_unit_roster()``),
+#: read once at import — every copy listed above reads the same helper, so they
+#: cannot drift; a profile change reaches this constant on a process restart.
+DIMENSIONS: tuple[str, ...] = _rosters.scored_unit_roster()
 
 #: The P3 per-country aggregate. Surfaced as its OWN node (naming its basis id),
 #: NEVER folded into a fabricated overall band.
@@ -259,7 +257,10 @@ CONF_CONFIDENT: float = 0.60
 FAITH_FLOOR: float = 0.50
 
 #: The band ladder, ascending. Demotion walks one step DOWN, clamped at "low".
-BAND_LADDER: tuple[str, ...] = ("low", "watch", "elevated", "high", "critical")
+#: The ladder and :data:`INSUFFICIENT` are the registered ``band`` vocabulary
+#: family (W7 TAXON-1); the literal is its fallback, owned by the leaf
+#: :mod:`legba.data.taxon_families`. The ORDER stays here: a family is a set.
+BAND_LADDER: tuple[str, ...] = _taxa.BAND_LADDER
 
 #: The five valid ``severity:<level>`` levels mapped to their base band. Note
 #: ``moderate`` severity maps to the ``watch`` band (there is no "moderate"
@@ -273,7 +274,7 @@ SEVERITY_TO_BAND: dict[str, str] = {
 }
 
 #: Sentinel band for a dimension with no qualifying verified claim.
-INSUFFICIENT: str = "insufficient-evidence"
+INSUFFICIENT: str = _taxa.INSUFFICIENT_BAND
 
 #: H12 — the METHOD/SCALE version this module's published numbers were computed
 #: under, stamped ``data.method_version`` on every scorecard row the producer
@@ -546,7 +547,10 @@ class DimensionVerdict:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "band": self.band,
+            # Bound at write time to the ``band`` family: a band the family
+            # does not hold persists as ``unclassified`` (unreachable today —
+            # every band the rule engine yields is a family value).
+            "band": _taxa.bind_taxon(_taxa.BAND, self.band).value,
             "basis": list(self.basis),
             "severity_tag": self.severity_tag,
             "severity_delta": self.severity_delta,

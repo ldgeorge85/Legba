@@ -62,7 +62,11 @@ from legba.runtime.source_actor import (
 )
 from legba.runtime.state import SCHEMA as STATE_SCHEMA
 
-PG = dict(host="127.0.0.1", port=5432, user="legba", password="legba", database="legba_pivot_test")
+# The database name honours LEGBA_PIVOT_PG_DB (as tests/data_pkg's pivot tests
+# and the session bootstrap already do), so a lane can run this file against
+# its own migrated copy instead of the shared ``legba_pivot_test``.
+PG = dict(host="127.0.0.1", port=5432, user="legba", password="legba",
+          database=os.environ.get("LEGBA_PIVOT_PG_DB", "legba_pivot_test"))
 NATS_URL = "nats://127.0.0.1:4222"
 
 
@@ -177,7 +181,8 @@ def _rss_descriptor(source_id: str, url: str, *, media: str = "reference") -> So
         ),
         scope=SourceScope(owner_tenant="acme", geo=["BR"], languages=["en"]),
         acquisition="poll",
-        config={"url": url},
+        # The fixture feed is dated 2025: no first-poll age cap (W11-F265).
+        config={"url": url, "first_poll_max_entry_age_days": 0},
         cadence=CadenceBlock(schedule=Cron(raw="*/5 * * * *")),
         pipeline=SourcePipeline(media=media),
     )
@@ -237,7 +242,21 @@ async def test_poll_source_pulls_writes_canonical_and_publishes(
     # ``source.<id>.signals`` envelope this test originally asserted was
     # retired). The stream's INTEREST retention drops messages no consumer
     # wants, so the subject-filtered consumer must exist BEFORE the pull.
-    from legba.data.nats import SIGNAL_STREAM_NAME, signal_subject
+    from legba.data.config import NatsConfig
+    from legba.data.nats import SIGNAL_STREAM_NAME, NatsStore, signal_subject
+    from legba.runtime.subscription.engine import SubscriptionEngine
+
+    # The test makes the shared stream itself, the way the runtime does at
+    # start (``SubscriptionEngine.ensure_signal_stream``, idempotent): on a
+    # fresh stack nothing else may have created ``legba_signals`` yet, and in
+    # a shuffled order (seed 734222642) the pull_subscribe below met "stream
+    # not found".
+    _store = NatsStore(NatsConfig.from_env())
+    await _store.connect()
+    try:
+        await SubscriptionEngine(pool, nats=_store).ensure_signal_stream()
+    finally:
+        await _store.close()
 
     expect_subject = signal_subject(
         tenant="acme", source_id=source_id, modality="text", event_class="raw",
@@ -705,7 +724,9 @@ async def test_baseline_reference_vs_eager_seam_refusal(pool):
     # S-2: the descriptor scope (BR) is the PUBLISHER origin, not the story's
     # subject. With no country named in the body it is parked, NOT stamped into
     # geo — so a world story from a BR wire no longer floods Brazil's desk.
-    assert e.geo == []
+    # Lane N-B: content naming NO country takes it as the MARKED fallback.
+    assert e.geo == ["BR"]
+    assert e.payload["geo_fallback"]["basis"] == "publisher_origin"
     assert e.payload["publisher_origin"] == ["BR"]
 
     # A story whose body corroborates the origin still carries it.

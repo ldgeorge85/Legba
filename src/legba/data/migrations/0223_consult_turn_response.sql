@@ -1,0 +1,40 @@
+-- SPDX-FileCopyrightText: 2026 Lewis George
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+--
+-- 0223_consult_turn_response.sql
+--
+-- THE CONSULT TURN KEEPS WHAT ITS ANSWER WAS MEASURED AGAINST.
+--
+-- WHY
+-- ---
+-- A consult answer arrives with a handful of facts the server measured about
+-- it: the uncertainty it ended on, the PROVENANCE CENSUS (cited refs by origin
+-- class, sentences with no citation), the HOLD token (nothing it cites
+-- resolved to live or held reporting), the EVIDENCE FLOOR stamp (the model's
+-- own uncertainty was raised because too few cited refs resolved) and the
+-- WATCH CANDIDATES (what would change the call). Every one of them lived only
+-- on the live response and the stream: `consult_turns` had no column for them,
+-- so a session reloaded from History showed the answer and none of what it was
+-- measured against. The 09-28 proof sessions read back with prose only.
+--
+-- WHAT THIS ADDS
+-- --------------
+--   * `response jsonb` (nullable) on `consult_turns` — the response bag for an
+--     ASSISTANT turn:
+--       {uncertainty, provenance_census, hold_reason,
+--        uncertainty_floor_applied, watch_candidates, model}
+--     Every key is always written (null when the run produced none), so the
+--     bag's PRESENCE is the claim "this turn's measurements were recorded".
+--     NULL means the turn predates this column, or the run produced no
+--     answer to measure (a failed/cancelled partial) — the read path renders
+--     that as "not measured", never as zeros.
+--
+-- SAFETY
+-- ------
+-- Additive, nullable, no default, no backfill (the old turns' measurements
+-- were never kept, and inventing them would be the fabrication this column
+-- exists to stop). `IF NOT EXISTS`, so re-running is a no-op. No index: the
+-- column is read only by the per-session load, which is keyed on session_id.
+
+ALTER TABLE public.consult_turns
+    ADD COLUMN IF NOT EXISTS response jsonb;

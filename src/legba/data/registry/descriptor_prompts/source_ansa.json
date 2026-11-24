@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.ansa.english": {
+      "source": "source_ansa.yaml",
+      "state": "draft"
+    }
+  }
+}

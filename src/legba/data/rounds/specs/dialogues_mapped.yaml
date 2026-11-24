@@ -1,0 +1,87 @@
+# dialogues_mapped/1 — the Dialogues protocol as the Story Arch maps it (plan P4 §2.6 (ii)).
+# Blind openings, one rebuttal per seat over the others' sealed positions, a
+# deterministic sentence table instead of a summarizer model, two gate judges
+# then three voting judges on another model family, quorum two of three, ties
+# stay ties, a synthesis that keeps majority and dissent. The three view cards
+# are DRAFTS (which views to run is the operator's question, P4 §9.1).
+round:
+  id: dialogues_mapped
+  version: 1
+  about: three views and a no-view control argue one question blind, rebut once, and are judged
+  inputs:
+    subject: {type: subject_ref}
+    question: {type: text}
+    as_of: {type: timestamp}
+  seats:
+    freeze:
+      kind: code
+      fn: scope_and_freeze
+      reads: [{from: input.subject}, {from: input.as_of}]
+      output: frozen_scope/1
+      deadline_s: 30
+    packet:
+      kind: code
+      fn: core_packet_and_slices
+      reads: [{from: freeze}]
+      output: seat_slices/1
+      deadline_s: 30
+    seat_one:
+      kind: model
+      card: cards/drafts/view_one.md
+      plane: llm.primary.openai_compat
+      thinking: on
+      reads: [{from: input.question}, {from: packet}]
+      output: position/1
+      gates: [handed_rows, quote_in_source]
+      deadline_s: 280
+      retries: 1
+    seat_two: {seat_ref: seat_one, card: cards/drafts/view_two.md}
+    seat_three: {seat_ref: seat_one, card: cards/drafts/view_three.md}
+    control: {seat_ref: seat_one, card: cards/no_view_control.md}
+    table:
+      kind: code
+      fn: sentence_table
+      reads: [{from: rebut.sealed, view: rows}]
+      output: sentence_table/1
+      deadline_s: 30
+    j_support:
+      kind: judge
+      card: cards/judge_support.md
+      plane: llm.verify.innoai_gemma.openai_compat
+      family_rule: {differs_from: [seat_one, seat_two, seat_three, control]}
+      reads: [{from: table, view: sentence_table}]
+      output: verdict/1
+      deadline_s: 120
+      retries: 1
+    j_persona: {seat_ref: j_support, card: cards/judge_persona.md}
+    j_logic: {seat_ref: j_support, card: cards/judge_logic.md}
+    j_diagnostic: {seat_ref: j_support, card: cards/judge_diagnosticity.md}
+    j_use: {seat_ref: j_support, card: cards/judge_decision_use.md}
+    j_weakest: {seat_ref: j_support, card: cards/judge_weakest_link.md, output: weakest_link/1}   # non-voting
+    synthesis:
+      kind: model
+      card: cards/synthesis_keep_dissent.md
+      plane: llm.primary.openai_compat
+      thinking: on
+      reads: [{from: judge.tally}, {from: table, view: sentence_table}, {from: j_weakest}]
+      output: synthesis/1
+      gates: [every_sentence_maps_to_rows, probabilities_copied_not_averaged]
+      deadline_s: 280
+      retries: 1
+  flow:
+    seq:
+      - {seat: freeze}
+      - {seat: packet}
+      - {blind: [{seat: seat_one}, {seat: seat_two}, {seat: seat_three}, {seat: control}], id: open, deadline_s: 600, min_present: 3}
+      - {rebuttal: {of: open, passes: 1}, id: rebut, deadline_s: 600}
+      - {seat: table}
+      - par:
+          - {panel: {judges: [j_logic, j_diagnostic, j_use], on: table, gates_first: [j_support, j_persona], tally: {quorum: {k: 2, of: 3, threshold: 0.6}}}, id: judge, deadline_s: 480}
+          - {seat: j_weakest}
+        id: judging
+        join: all
+        deadline_s: 540
+      - {seat: synthesis}
+    id: main
+  budgets: {wall_s: 2700, model_calls: 48, max_parallel: 4}
+  publishes: shadow

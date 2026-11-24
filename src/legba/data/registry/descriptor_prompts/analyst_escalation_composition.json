@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:escalation_composition": {
+      "source": "analyst_escalation_composition.yaml",
+      "state": "active"
+    }
+  }
+}

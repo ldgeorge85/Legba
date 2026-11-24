@@ -32,6 +32,7 @@ must resolve the subscription predicate to a target_id list before calling
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import json
 import logging
@@ -41,6 +42,16 @@ import asyncpg
 
 from ..nats import SIGNALS_EXCLUDE_BACKFILL_SQL
 from ..provenance.models import FindingPayload
+from ..signal_slice_scope import (
+    CANONICAL_ONLY_SQL,
+    NO_FILTER,
+    SignalTagFilter,
+    analyst_tag_filter,
+    slice_per_source_cap,
+    slice_text,
+    strict_per_source_cap,
+    target_tag_filter,
+)
 
 # Share the package-canonical result+port types with the inline_target sibling
 # so the runtime can dispatch either kind through the same actor wrapper. The
@@ -301,6 +312,8 @@ async def read_cross_target_slice(
     target_ids: Sequence[str],
     time_window_hours: int = 24,
     limit: int = 200,
+    analyst_tags: SignalTagFilter = NO_FILTER,
+    per_source_cap: int | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch a raw substrate slice across N targets.
 
@@ -319,6 +332,18 @@ async def read_cross_target_slice(
     signal falls under) so the runner's per-target grouping + the finding's
     ``contributing_target_ids`` metadata keep working unchanged.
 
+    W8 TAX-1 — the signal-tag spine. A target whose ``scope`` declares
+    ``signal_tags`` / ``exclude_signal_tags`` contributes ITS OWN clause —
+    ``((source_id = ANY(..) OR geo && ..) AND tags && .. AND NOT (tags && ..))``
+    — and the per-target clauses are OR-ed, so one target's exclude never
+    hides another target's rows. ``analyst_tags`` (the analyst's
+    ``subscription.substrate.signal_tags`` with its untagged fallback) ANDs
+    across the whole slice. Attribution checks the same tag predicate. With no
+    target declaring tags and no analyst filter the statement is the
+    pre-TAX-1 union, byte for byte. ``per_source_cap`` (the declared
+    ``slice_per_source_cap`` knob) keeps at most K rows per ``source_id``,
+    strict, over a 3x over-fetch; ``None`` = today's plain recency LIMIT.
+
     Empty ``target_ids`` returns ``[]`` immediately — refusing the query is
     safer than scanning the entire ``signals`` table when the subscription
     predicate matched no targets.
@@ -336,11 +361,13 @@ async def read_cross_target_slice(
     # target_id (preserving the requested-target order for first-match).
     per_target_sources: dict[str, list[str]] = {}
     per_target_geo: dict[str, list[str]] = {}
+    per_target_tags: dict[str, SignalTagFilter] = {}
     union_sources: list[str] = []
     union_geo: list[str] = []
     for tid in target_ids:
         srcs: list[str] = []
         geo: list[str] = []
+        ttags = NO_FILTER
         try:
             trow = await conn.fetchrow(
                 "SELECT body FROM target_descriptors "
@@ -363,8 +390,10 @@ async def read_cross_target_slice(
                         srcs.append(str(sid))
                 scope = tbody.get("scope") or {}
                 geo = [str(g) for g in (scope.get("geo") or []) if g]
+                ttags = target_tag_filter(scope)
         per_target_sources[tid] = srcs
         per_target_geo[tid] = geo
+        per_target_tags[tid] = ttags
         for s in srcs:
             if s not in union_sources:
                 union_sources.append(s)
@@ -381,23 +410,47 @@ async def read_cross_target_slice(
         # C2b: canonical-only — drop re-polled alias duplicates so the same
         # event isn't counted N times as independent cross-target corroboration.
         # Mirrors the subscription path (subscription/filter.py canonical_only)
-        # and the reads API (registry/substrate_reads_api.py).
-        "(canonical_signal_id IS NULL OR canonical_signal_id = id)",
+        # and the reads API (registry/substrate_reads_api.py). Named once in
+        # data/signal_slice_scope.py (W8 TAX-1), same text.
+        CANONICAL_ONLY_SQL,
     ]
     params: list[Any] = [int(time_window_hours)]
-    scope_clauses: list[str] = []
-    if union_sources:
-        params.append(union_sources)
-        scope_clauses.append(f"source_id = ANY(${len(params)}::TEXT[])")
-    if union_geo:
-        params.append(union_geo)
-        scope_clauses.append(f"geo && ${len(params)}::text[]")
-    if not scope_clauses:
-        # No resolvable source/geo scope across any requested target —
-        # refuse the query rather than scan the whole table.
-        return []
-    clauses.append("(" + " OR ".join(scope_clauses) + ")")
+    if any(f.active for f in per_target_tags.values()):
+        # Per-target clauses: each target's source/geo scope AND its own tags.
+        target_clauses: list[str] = []
+        for tid in target_ids:
+            parts: list[str] = []
+            if per_target_sources.get(tid):
+                params.append(per_target_sources[tid])
+                parts.append(f"source_id = ANY(${len(params)}::TEXT[])")
+            if per_target_geo.get(tid):
+                params.append(per_target_geo[tid])
+                parts.append(f"geo && ${len(params)}::text[]")
+            if not parts:
+                continue
+            tag_sql = per_target_tags.get(tid, NO_FILTER).sql(params)
+            target_clauses.append(
+                "(" + " AND ".join(["(" + " OR ".join(parts) + ")", *tag_sql]) + ")"
+            )
+        if not target_clauses:
+            return []
+        clauses.append("(" + " OR ".join(target_clauses) + ")")
+    else:
+        scope_clauses: list[str] = []
+        if union_sources:
+            params.append(union_sources)
+            scope_clauses.append(f"source_id = ANY(${len(params)}::TEXT[])")
+        if union_geo:
+            params.append(union_geo)
+            scope_clauses.append(f"geo && ${len(params)}::text[]")
+        if not scope_clauses:
+            # No resolvable source/geo scope across any requested target —
+            # refuse the query rather than scan the whole table.
+            return []
+        clauses.append("(" + " OR ".join(scope_clauses) + ")")
+    clauses.extend(analyst_tags.sql(params))
     where = "WHERE " + " AND ".join(clauses)
+    fetch_limit = int(limit) * 3 if per_source_cap is not None else int(limit)
     rows = await conn.fetch(
         f"""
         SELECT id, source_id, source_version, canonical_url,
@@ -405,10 +458,12 @@ async def read_cross_target_slice(
         FROM signals
         {where}
         ORDER BY fetched_at DESC
-        LIMIT {int(limit)}
+        LIMIT {fetch_limit}
         """,
         *params,
     )
+    if per_source_cap is not None:
+        rows = strict_per_source_cap(list(rows), per_source_cap=per_source_cap, limit=int(limit))
 
     # Back-compat shaping: the runner's renderer + finding-metadata code read
     # the historical signal-row keys (target_id/source_url/title/data/
@@ -426,7 +481,11 @@ async def read_cross_target_slice(
         sid = d.get("source_id")
         sig_geo = list(d.get("geo") or [])
         attributed: str | None = None
+        sig_tags = d.get("tags")
+        sig_text = slice_text(payload)  # K-1: the text arm's mirror
         for tid in target_ids:
+            if not per_target_tags.get(tid, NO_FILTER).admits(sig_tags, sig_text):
+                continue
             if sid and sid in per_target_sources.get(tid, []):
                 attributed = tid
                 break
@@ -470,7 +529,7 @@ class CrossTargetRawRunner:
         llm: LLMHandlerLike,
         *,
         max_tokens: int = 1536,  # slightly bigger than inline; multi-target slices
-        temperature: float = 0.2,
+        temperature: float = HOUSE_TEMPERATURE,
         system_prompt: str | None = None,
     ) -> None:
         self._llm = llm
@@ -633,6 +692,10 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
         target_ids=ids,
         time_window_hours=time_window_hours,
         limit=limit,
+        # W8 TAX-1 — the analyst's substrate signal-tag filter and its
+        # declared per-source cap (both inert when undeclared).
+        analyst_tags=analyst_tag_filter(descriptor),
+        per_source_cap=slice_per_source_cap(descriptor),
     )
 
 

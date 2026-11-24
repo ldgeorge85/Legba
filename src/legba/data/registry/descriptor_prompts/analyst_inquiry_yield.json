@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:inquiry_yield": {
+      "source": "analyst_inquiry_yield.yaml",
+      "state": "draft"
+    }
+  }
+}

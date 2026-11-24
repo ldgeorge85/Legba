@@ -1,0 +1,80 @@
+# Deterministic (keyed) reference analyst descriptor — W11 INST-1.
+#
+# A `deterministic`-kind META analyst that builds a correctness REFERENCE from a
+# MACHINE-READABLE LIST rather than from the open web: fetch the declared list
+# once per tick (the SSRF-guarded client), cut each BOUND subject's items dated
+# inside the window, and write one `unit_references` row per subject through
+# the shared writer, builder `deterministic:<feed_id>`. The correctness grader
+# grades a keyed reference EXACTLY — present or absent by key, no model
+# (src/legba/data/analysts/deterministic_handlers/_correctness_keyed.py).
+# docs/REFERENCE_BUILDER.md "The keyed reference".
+#
+# THE LIST DECLARED HERE IS CISA KEV (Review B §1.3 F2: "a deterministic
+# reference per (family, window) built from KEV"), and NOTHING IS BOUND. No
+# list in the geopolitics catalog is keyed by anything a lane's or a flow's
+# read names — a disruption read names no CVE and no designation id — so a
+# binding here would grade every claim `silent` and call that coverage. The
+# first real binding is the focused instance's (an `estate_*` subject bound to
+# its `vendorProject`): `bindings: ["estate_fortinet_fortigate=Fortinet"]`.
+#
+# state: draft; LEGBA_REFERENCE_DETERMINISTIC_ENABLED off — the handler fetches
+# nothing and writes nothing until both are flipped. No model, no paid route:
+# budget 0.
+
+identity:
+  id: reference_deterministic
+  name: Deterministic (Keyed) Reference Builder
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: inst1_keyed_reference
+
+subscription:
+  # META sweep: the handler reads target_descriptors and writes
+  # unit_references directly through deps.pg_pool; no per-target slice — a
+  # reference built from the platform's own slice would not be independent.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: reference_deterministic
+  budget_tokens_per_day: 0
+  options:
+    window_days: 14
+    feed_id: cisa_kev
+    feed_url: https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
+    items_path: vulnerabilities
+    key_field: cveID
+    key_pattern: "CVE-\\d{4}-\\d{4,7}"
+    date_field: dateAdded
+    subject_field: vendorProject
+    summary_fields: [vendorProject, product, vulnerabilityName]
+    outlet: CISA KEV
+    source_tier: 1
+    # KEV lists the exploited; it does not certify the rest unexploited.
+    list_complete: false
+    # `target_id=value|value` — nothing is bound on the exemplar (see header).
+    bindings: []
+    reference_targets: []
+    dry_run: false
+
+cadence:
+  # Daily at 05:53Z — KEV updates a few times a week; a free list once a day is
+  # plenty, and the slot is clear of the daily bands above it.
+  fallback_schedule: "53 5 * * *"
+  cooldown_seconds: 3000
+
+# The references are side-written to unit_references; the receipt is the row.
+outputs: []

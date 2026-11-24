@@ -1,0 +1,14 @@
+{
+ "arm": "D",
+ "cut": {
+  "dropped": [],
+  "sentences_in": 0,
+  "top": null,
+  "words_in": 0,
+  "words_out": 0
+ },
+ "question_id": "P02",
+ "receipts": [],
+ "schema": "legba.bakeoff.normalised/1",
+ "text": "Stated confidence: none"
+}

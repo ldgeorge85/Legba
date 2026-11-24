@@ -239,7 +239,10 @@ method:
     # answered and could not decide, at most ONE query per claim.
     serp_provider_order:
       - searxng
-      - serper   # 2026-09-20 operator: paid absence rung (search.serper.paid)
+      # 2026-09-29 operator: the paid absence rung (search.serper.paid) is OFF the
+      # order — it returned HTTP 400 on every call from 09-27 (credits exhausted)
+      # and the absence stratum falls back to SearXNG until the account is
+      # topped up. Re-append `serper` here (and PUT) to turn it back on.
   llm:
     # THE $0 CORE PLANE, and nothing else. The deterministic deps-builder's
     # shared _wire_deterministic_llm hard-refuses an Anthropic component for any
@@ -282,7 +285,7 @@ method:
     # marking its own homework.
     grader:
       factory_kind: stack_ref
-      raw: llm.judge.openrouter_mistral_large.openai_compat   # third family; Cerebras Gemma was the first pick, its key unfunded (HTTP 402) 2026-09-05
+      raw: llm.grader.innoai_lightning.openai_compat   # cutover 2026-10-23: the third family on the box (OpenRouter Mistral retired); Cerebras Gemma was the first pick, its key unfunded (HTTP 402) 2026-09-05
       expected_family: llm_provider
     # THE FOURTH FAMILY — the audit rater, for instrument validity.
     #
@@ -300,7 +303,7 @@ method:
     # Unwired ⇒ the overlap reports UNMEASURED, which is NOT agreement.
     audit_rater:
       factory_kind: stack_ref
-      raw: llm.audit.openrouter_llama33_70b.openai_compat
+      raw: llm.verify.innoai_gemma.openai_compat   # cutover 2026-10-23: the audit rater = Gemma 4 on the box (OpenRouter Llama retired)
       expected_family: llm_provider
   # Per-day CORE-plane token cap (24h bucket). Sized well above the worst case
   # (~10 bounded calls) so a legitimately long world read never truncates, and

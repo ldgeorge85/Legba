@@ -48,7 +48,7 @@ import yaml
 
 from legba.data.analysts.deterministic import run_method
 from legba.data.analysts.deterministic_handlers import evidence_archiver as ea
-from legba.data.analysts.handler_options import resolve_handler_options
+from legba.data.option_catalog.handler_options import resolve_handler_options
 from legba.data.config import PostgresConfig
 from legba.data.retrieval_origin import CURATED_SOURCE, web_search_origin
 from legba.data.schemas.analyst import AnalystDescriptor

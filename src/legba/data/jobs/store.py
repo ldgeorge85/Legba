@@ -38,6 +38,8 @@ from uuid import UUID
 
 import asyncpg
 
+from ...shared.url_redaction import redact_presigned_in
+from .._url_canon import stored_canonical_url_hash
 from ..sources._contract import Signal
 from .envelope import JobEnvelope, JobResult
 
@@ -425,7 +427,8 @@ class JobStore:
                 embedding_ref, retention_class, media_ref_expires_at, object_ref,
                 payload, canonical_url, language_hint, raw_provenance,
                 language, geo, tags, entity_classes, source_credibility,
-                content_hash, canonical_signal_id, derived_from, schema_uri
+                content_hash, canonical_signal_id, derived_from, schema_uri,
+                canonical_url_hash
             )
             VALUES (
                 $1, $2, $3, $4, $5,
@@ -433,7 +436,8 @@ class JobStore:
                 $11, $12, $13, $14,
                 $15::jsonb, $16, $17, $18::jsonb,
                 $19, $20, $21, $22, $23,
-                $24, $25, $26, $27
+                $24, $25, $26, $27,
+                $28
             )
             ON CONFLICT (id) DO NOTHING
             """,
@@ -454,7 +458,7 @@ class JobStore:
             json.dumps(signal.payload, default=_json_default),
             signal.canonical_url,
             signal.language_hint,
-            json.dumps(signal.raw_provenance, default=_json_default),
+            json.dumps(redact_presigned_in(signal.raw_provenance), default=_json_default),  # W11-F59
             signal.language,
             list(signal.geo),
             list(signal.tags),
@@ -464,6 +468,8 @@ class JobStore:
             signal.canonical_signal_id,
             list(signal.derived_from),
             signal.schema_uri,
+            # N-S (migration 0247): the stored tier-1 dedupe key.
+            stored_canonical_url_hash(signal.canonical_url),
         )
         return signal.signal_id
 

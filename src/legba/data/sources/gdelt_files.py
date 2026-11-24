@@ -56,7 +56,15 @@ Cursor: the high-water mark is the export file's embedded timestamp
 (``YYYYMMDDHHMMSS``, parsed from the URL, the same precision + form as the
 BigQuery handler's ``DATEADDED`` cursor). Persisted in
 ``ctx.state_store["gdelt_files_last_export_ts"]``; ``lastupdate.txt`` entries
-at or before that timestamp are skipped on the next poll. Bounded per poll by
+at or before that timestamp are skipped on the next poll. Each poll probes the
+15-minute slot grid from the ``lastupdate.txt`` pointer BACK towards the cursor
+(at most ``MAX_SLOT_PROBES`` slots) and takes the newest slot whose zip is up; a
+slot not up yet (404) is skipped for this poll and retried on the next, and a
+poll that finds none is an empty poll, not an error. The cursor is committed
+when a slot's zip has been fetched and parsed, BEFORE its rows are yielded:
+the source actor stops consuming after its per-poll budget and closes the
+generator, so a cursor written after the yields was never reached (it stood at
+2026-10-31T07:15Z for a week). Bounded per poll by
 ``max_files_per_pull`` (how many new export files to walk if a poll was
 missed) and ``max_rows_per_file`` (a defensive parse cap per zip).
 
@@ -114,6 +122,16 @@ DEFAULT_LOOKBACK_MINUTES = 15
 #: parse unboundedly many rows out of one zip.
 DEFAULT_MAX_FILES_PER_PULL = 2
 DEFAULT_MAX_ROWS_PER_FILE = 75_000
+
+#: The publish grid. Every export file sits on a 15-minute slot.
+SLOT_MINUTES = 15
+
+#: How many slots one poll probes, newest first, from the ``lastupdate.txt``
+#: pointer back towards the cursor. Measured 2026-11-06: ``lastupdate.txt``
+#: named a slot ~1 s after its boundary while the export zip itself was still
+#: 404 more than 30 minutes later (its mentions file was up). A 404 costs one
+#: empty response, so twelve probes (three hours) are cheap.
+MAX_SLOT_PROBES = 12
 
 #: CAMEO root-code conflict/coercion band (CAMEO Manual 1.1b3 root-code
 #: table): 14 protest, 15 exert coercion / posture, 16 reduce relations,
@@ -294,6 +312,24 @@ class GDELTFilesConfig(BaseModel):
     timeout_seconds: int = Field(default=30, ge=1, le=300)
     user_agent: str = Field(default="Legba/2.0 (gdelt_files)", max_length=256)
 
+    poll_budget_seconds: float | None = Field(
+        default=None,
+        gt=0.0,
+        le=240.0,
+        description=(
+            "W11-F169 — OPTIONAL override of the SOURCE ACTOR's wall-clock "
+            "budget for one pull of this source (source_actor."
+            "resolve_poll_bounds: descriptor config > handler > the generic "
+            "30 s). Declared here because the schema is extra='forbid' and "
+            "the actor reads the same descriptor block; this handler never "
+            "reads it. The handler commits its file cursor BEFORE the first "
+            "yield, so every row the actor's budget does not reach is dropped "
+            "for good — the budget, not the filter, decides how much of each "
+            "15-min file lands. Unset keeps the generic budget; the actor "
+            "clamps to its 240 s ceiling."
+        ),
+    )
+
     @field_validator("event_root_codes")
     @classmethod
     def _validate_root_codes(cls, v: list[str]) -> list[str]:
@@ -395,6 +431,32 @@ def extract_export_timestamp(url: str) -> datetime | None:
         return datetime.strptime(raw, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
     except ValueError:
         return None
+
+
+def slots_to_probe(
+    pointer: datetime, floor: datetime, *, max_probes: int = MAX_SLOT_PROBES,
+) -> list[datetime]:
+    """The 15-minute slots strictly newer than ``floor`` up to and including
+    the ``lastupdate.txt`` pointer, NEWEST first, at most ``max_probes`` (pure).
+
+    The grid is anchored on the pointer itself, so a pointer off the quarter
+    hour still walks its own grid.
+    """
+    step = timedelta(minutes=SLOT_MINUTES)
+    out: list[datetime] = []
+    slot = pointer
+    while slot > floor and len(out) < max_probes:
+        out.append(slot)
+        slot -= step
+    return out
+
+
+def slot_url(pointer_url: str, pointer: datetime, slot: datetime) -> str:
+    """The export URL for ``slot``: the pointer's URL with its embedded
+    ``YYYYMMDDHHMMSS`` stamp swapped (same host, scheme and suffix)."""
+    return pointer_url.replace(
+        pointer.strftime("%Y%m%d%H%M%S"), slot.strftime("%Y%m%d%H%M%S"), 1,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -746,6 +808,18 @@ class GDELTFilesSourceHandler:
     handler_version: ClassVar[str] = "0.1.0"
     config_schema: ClassVar[type[BaseModel]] = GDELTFilesConfig
     health_state_key: ClassVar[str] = _HEALTH_KEY
+    # N-L fetch receipts: a pull fetches up to max_files_per_pull zips before
+    # yielding any row, so each row names the zip it came from.
+    receipt_url_field: ClassVar[str] = "export_file_url"
+
+    @staticmethod
+    def receipt_locator(record: Any) -> dict[str, Any] | None:
+        """B-1: which row of the export zip the signal is (one version, many
+        records): the zip's one CSV member, keyed by GLOBALEVENTID."""
+        gid = (getattr(record, "raw_provenance", None) or {}).get("global_event_id")
+        if not gid:
+            return None
+        return {"format": "zip_csv", "key_column": "GLOBALEVENTID", "key_index": 0, "key": str(gid)}
 
     #: Unit-test hook — a callable returning a configured
     #: ``httpx.AsyncClient`` (backed by ``MockTransport``). Production
@@ -851,11 +925,14 @@ class GDELTFilesSourceHandler:
         """Poll ``lastupdate.txt``, fetch new events-export files, filter, emit.
 
         Cursor precedence (mirrors the other GDELT handler + UCDP): stored
-        cursor > ``since`` hint > ``now - lookback_minutes``. On each new
-        file: fetch -> unzip -> parse -> hard-filter -> map -> yield. The
-        cursor only advances past a file once ITS rows have been fully
-        walked, so a mid-file crash re-processes that file (dedupe absorbs
-        the repeat) rather than silently skipping it.
+        cursor > ``since`` hint > ``now - lookback_minutes``. Probe the slot
+        grid newest first, fetch -> unzip -> parse the newest slot(s) that are
+        up, commit the cursor to the newest, THEN hard-filter -> map -> yield.
+        The commit precedes the yields because the source actor closes this
+        generator when its per-poll budget runs out (every live GDELT poll
+        since 10-31 was capped after 2 rows, so a cursor written after the
+        rows never landed); rows a capped poll did not reach are not
+        re-walked. Older slots the probe passed over are not walked either.
         """
         cfg = self._coerce_config(ctx)
         cursor = await self._cursor(ctx)
@@ -881,17 +958,16 @@ class GDELTFilesSourceHandler:
                     )
                     return
 
-                # Only one events-export line is ever live in lastupdate.txt
-                # at a time (it's a "what's newest" pointer, not a backlog
-                # listing), so "new files to walk" is really "is the current
-                # pointer newer than our cursor" — at most 1 file per real
-                # poll. max_files_per_pull exists as a defensive cap on a
-                # hypothetical future multi-entry index, not because this
-                # loop currently iterates more than once per tick.
-                candidates = [export_entry] if export_entry["timestamp"] > floor else []
-                candidates = candidates[: cfg.max_files_per_pull]
+                # lastupdate.txt names only the NEWEST slot, and on 2026-11-06
+                # it named each slot ~1 s past its boundary while the export
+                # zip stayed 404 for 30+ minutes, so fetching only the pointer
+                # 404'd every poll. Probe the grid from the pointer back
+                # towards the cursor and take the newest slot that is up (the
+                # "previous slot" fallback); none up = an empty poll.
+                pointer = export_entry["timestamp"]
+                probes = slots_to_probe(pointer, floor)
 
-                if not candidates:
+                if not probes:
                     await self._record_health(
                         ctx, state="healthy",
                         last_success_at=ctx.utcnow(),
@@ -899,50 +975,66 @@ class GDELTFilesSourceHandler:
                     )
                     return
 
-                total_emitted = 0
-                newest_ts_processed = cursor
-                for entry in candidates:
-                    file_resp = await client.get(entry["url"])
+                fetched: list[tuple[datetime, str, bytes]] = []
+                pending: list[str] = []
+                for slot in probes:
+                    if len(fetched) >= cfg.max_files_per_pull:
+                        break
+                    url = slot_url(export_entry["url"], pointer, slot)
+                    file_resp = await client.get(url)
+                    if file_resp.status_code == 404:
+                        pending.append(slot.isoformat())
+                        continue
                     file_resp.raise_for_status()
-                    rows = parse_events_csv(
-                        file_resp.content, max_rows=cfg.max_rows_per_file
-                    )
+                    fetched.append((slot, url, file_resp.content))
 
-                    file_emitted = 0
+                if not fetched:
+                    ctx.logger.info(
+                        "gdelt_files.slot.pending pointer=%s probed=%d",
+                        pointer.isoformat(), len(probes),
+                    )
+                    await self._record_health(
+                        ctx, state="healthy",
+                        last_success_at=ctx.utcnow(),
+                        detail={
+                            "new_files": 0, "pending_slots": pending,
+                            "cursor": floor.isoformat(),
+                        },
+                    )
+                    return
+
+                parsed = [
+                    (slot, url, parse_events_csv(body, max_rows=cfg.max_rows_per_file))
+                    for slot, url, body in fetched
+                ]
+                newest = parsed[0][0]
+                # Commit BEFORE the first yield: the actor may stop consuming
+                # (its per-poll budget) and close this generator at any yield.
+                await ctx.state_store.set(_CURSOR_KEY, newest.isoformat())
+                await self._record_health(
+                    ctx, state="healthy",
+                    last_success_at=ctx.utcnow(),
+                    detail={
+                        "new_files": len(parsed),
+                        "slots": [slot.isoformat() for slot, _, _ in parsed],
+                        "pending_slots": pending,
+                        "cursor": newest.isoformat(),
+                    },
+                )
+
+                total_emitted = 0
+                for _slot, url, rows in parsed:
                     for row in rows:
                         if total_emitted >= cfg.max_signals_per_pull:
                             ctx.logger.warning(
                                 "gdelt_files.pull.max_signals cap=%d — truncating",
                                 cfg.max_signals_per_pull,
                             )
-                            break
+                            return
                         if not row_passes_filter(row, cfg):
                             continue
-                        yield row_to_signal(row, ctx=ctx, export_url=entry["url"])
-                        file_emitted += 1
+                        yield row_to_signal(row, ctx=ctx, export_url=url)
                         total_emitted += 1
-
-                    if newest_ts_processed is None or entry["timestamp"] > newest_ts_processed:
-                        newest_ts_processed = entry["timestamp"]
-                    # Persist after each file so a crash mid-loop only
-                    # re-walks files after the last one we finished.
-                    await ctx.state_store.set(
-                        _CURSOR_KEY, newest_ts_processed.isoformat()
-                    )
-
-                    if total_emitted >= cfg.max_signals_per_pull:
-                        break
-
-                await self._record_health(
-                    ctx, state="healthy",
-                    last_success_at=ctx.utcnow(),
-                    detail={
-                        "new_files": len(candidates),
-                        "rows_emitted": total_emitted,
-                        "cursor": newest_ts_processed.isoformat()
-                        if newest_ts_processed else None,
-                    },
-                )
 
         except httpx.HTTPError as exc:
             await self._record_health(
@@ -1021,10 +1113,14 @@ __all__ = [
     "GDELTFilesConfig",
     "GDELTFilesSourceHandler",
     "LASTUPDATE_URL",
+    "MAX_SLOT_PROBES",
+    "SLOT_MINUTES",
     "extract_export_timestamp",
     "parse_events_csv",
     "parse_lastupdate",
     "row_passes_filter",
     "row_to_signal",
+    "slot_url",
+    "slots_to_probe",
     "synthesize_title",
 ]

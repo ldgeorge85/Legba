@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.eu.fsf_sanctions_list": {
+      "source": "source_eu_fsf_sanctions_list.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -2,107 +2,107 @@
      SPDX-License-Identifier: AGPL-3.0-or-later -->
 # Tour — your first ten minutes
 
-You have deployed ([Setup](SETUP.md)) and the sources have been polling for a while. This is the
-product tour: the workstation, told as a walk an analyst can follow cold. If you would rather read the
-API than click, skip to the [appendix](#appendix-the-api).
+You have deployed ([Setup](SETUP.md)) and the sources have been polling for a while. This is a walk
+through the console that a first-time reader can follow cold. If you would rather read the API than
+click, skip to the [appendix](#appendix-the-api). The panels and controls are described in full in
+[UI.md](UI.md).
+
+The examples on this page come from the geopolitics example instance, where a subject is a country
+desk. On your instance a subject is whatever your profile declares, and the screens use your profile's
+words.
 
 ## What you are looking at
 
-Legba watches open feeds and turns them into short intelligence reads, one per desk, quoted upward
-into regional and world records, each with its own interpretive voice. Every claim in a read is cited
-to a source, and a second pass checks whether the claim follows from what it cites before the read is
-trusted. Nothing is deleted for failing; it is flagged and demoted where you can see it. The whole
-chain, source item to citation to verdict to composed conclusion, is preserved with a hash-chained
-trail back to the original bytes.
+Legba watches the sources you configure and turns them into short reads, one per subject, which
+higher reads quote rather than paraphrase. Every claim in a read is cited to a source, and a second
+pass checks whether the claim follows from what it cites before the read is trusted. Nothing is deleted
+for failing; it is flagged and demoted where you can see it. The chain from source item to citation to
+verdict to composed conclusion is kept, with a hash-chained trail back to the original bytes.
 
-## 1. Land on what is happening now
+## 1. Sign in and land on the Board
 
-Open the console (Caddy on `:443`, basic auth). On first load the workspace seeds a mission-control
-grid: a glance strip of top-line counts across the top; the Live Feed of findings and signals down the
-left with Timeline lanes beneath it; the World Map in the centre; and the World Assessment, the top of
-the spine, tabbed with the Inspector on the right. Click anything and its full detail loads in the
-Inspector. A sidebar tree, grouped Awareness, Investigation, Analysis, Products and Operations, then
-your desks and analysts, reaches every other panel.
+Open the console at your instance's address. Out of the box the edge asks for its perimeter password
+and every person is the same admin. If your instance has sign-in turned on, you sign in with your own
+account; your role decides what you can change ([what each role can do](OPERATING_YOUR_INSTANCE.md#9-turning-on-sign-in)).
+A reader can read everything on this tour except the operator side, and changes nothing shared.
 
-For what changed since you last looked, open The Wall from the Awareness group. Its "movers since
-last visit" quadrant diffs against a cursor of your last visit: band changes first, then reversed
-findings, then situation lifecycle edges, plus the newest high-severity verified findings and a
-system-health rollup. It reads the same per-desk verified data as the map's choropleth, so the grid
-and the map never disagree.
+You land on the **Board**: today's read on the stage in the centre, Consult under it, and panels to
+the right with the map leading. The top bar has the four reader pages (**Board**, **Subject**,
+**Ledger**, **Watch**), a subject switcher, the view catalog (`＋`), Undo, Reset and Copy link. The
+footer is the health line: how many sources are firing, the gaps on record, the judge's mean
+faithfulness with its sample size, and how much the independent grader reached. A figure that has not
+been measured prints `unmeasured`, never `0`.
 
-## 2. Pick a desk
+On a phone, the same reader pages open at `/m/` in a shell made for a small screen; a phone-width
+browser that opens the desktop is sent there.
 
-A desk is one subject frame. The shipped set is one desk per G20 member plus a high-consequence watch
-tier, 32 country desks, and a family of thematic supply-chain desks on the same primitive. Pick one by
-clicking a desk chip on the Wall, a country on the map, or its instance group in the sidebar, where
-every desk has its own Findings, Overview, Situations, Map and Timeline panels.
+## 2. Pick a subject
 
-Either path lands you on the desk's findings, the atoms of the product. Each answers one bounded
-question: leadership transition, energy security, escalation, narrative coordination, internal
-stability, military posture and economic coercion on every country desk; proliferation on the
-nuclear-relevant desks; disruption status on the thematic desks. A finding's body reads like a short
-intelligence note: a bottom line up front, the supporting claims with inline `[N]` citation markers,
-and forward-looking indicators to watch.
+Pick a subject from the switcher, the rail on the left, or the map. Its page opens on the stage: its
+latest reads, what changed, its forecasts, its place on the map. Each read answers one bounded question
+about that subject. In the example instance a country desk has units for questions such as leadership
+transition, energy security and escalation, and the thematic desks have their own. A read's body is a
+short note: a bottom line up front, the supporting claims with inline `[N]` citation markers, and
+indicators to watch.
 
-## 3. Believe it or not
+## 3. Check a claim
 
-Everything above is an assertion. This is how you check one without leaving the Inspector, and it is
-the product's differentiator: not that Legba writes reads, but that it hands you the means to distrust
-each one.
+Everything above is an assertion. This is how you check one, and it is the point of the product: not
+that it writes reads, but that it hands you the means to distrust each one.
 
-- **Citation chips.** Every `[N]` marker is a live chip. Click one and it scrolls to the matching row
-  in the Evidence panel below the read: the claim drills to the signal it came from.
-- **Hover for the verdict card.** The source, the cited passage verbatim, the citation's credibility,
-  and the per-claim verify verdict for that citation. A flagged claim shows its label (contradicted,
-  unsupported, hedge-laundering); an unflagged one says so against the pooled checkable and supported
-  counts; a floor-only row says plainly that no claim-level verdict was recorded.
-- **The badge.** Above the read, two chips: likelihood on a seven-point verbal scale, and analytic
-  confidence, derived from the faithfulness pass, the judge status and citation breadth.
-  `effective_confidence = min(confidence, faithfulness)`, so a confidently written claim the verifier
-  could not ground reads low, visibly. A deterministic finding that never enters the faithfulness pass
-  reads "unverified, structural"; one whose numbers were re-derived from its own lineage and matched
-  reads "recomputation-verified".
-- **The trail to source.** The provenance trail is built into every selected record. It walks the
-  `derived_from` chain hop by hop, finding to signals to each signal's real source URL. Every hop
-  carries a receipt hash; a matching re-hash shows "chain-consistent (single-node)", which means an
+- **Citation chips.** Every `[N]` marker is a live chip. Click it and the **Record** sheet slides in
+  over the panels: the statement as published, the row it maps to, the evidence with its source and
+  class, and the fetch receipt (when, from where, the hash, the stored version).
+- **The verdict.** The source, the cited passage verbatim, and the per-claim verify verdict. A flagged
+  claim shows its label (contradicted, unsupported, hedge-laundering); a row with only the
+  deterministic floor says that no claim-level verdict was recorded.
+- **The badge.** Likelihood on a seven-point verbal scale, and analytic confidence derived from the
+  faithfulness pass. `effective_confidence = min(confidence, faithfulness)`, so a confidently written
+  claim the verifier could not ground reads low, visibly. A deterministic finding that never enters the
+  faithfulness pass reads "unverified, structural".
+- **The trail to source.** The record walks the `derived_from` chain hop by hop to each signal's source
+  URL. Every hop carries a receipt hash; a matching re-hash shows "chain-consistent (single-node)", an
   integrity check on one node, not a distributed tamper-proof ledger.
 
-For a composition or a voice, the markers look like `[[ref:N]]` and point at verified unit claims,
-so the drill is world record to country record to unit claim to signal to source. The voice row
-beside each record is the interpretive read, fenced to that record and graded on its own.
+A composed read cites verified unit claims rather than signals, so the drill goes from the composed
+read to the unit claim to the signal to the source.
 
-## 4. Ask a question, then export
+## 4. Ask a question
 
-- **Consult**, in the Analysis group, answers a question in line with its tool trace and citations
-  over the live substrate; pin any record into its context as you go. For a longer question submit
-  the same prompt as a deep run, a detached analysis that returns a lineage-walkable finding when it
-  completes. Consult is the one billed path; it runs only when you press it.
-- **Export.** Collect findings into one persistent basket from the Inspector, a feed row or a journal
-  entry, then open Report Export in the Products group to review, title and export as Markdown or
-  JSON. Each item carries its cited body, resolved sources, its verify state, and its receipt link.
-  Markdown renders a print-ready preview.
+**Consult** sits under the stage on every page. Ask it a question and it answers with its tool trace
+and citations over the live substrate; whatever you are looking at is named above the box as what you
+are asking about, and you can pin records into it. A longer question can run as a deep consult, which
+returns a finding you can walk like any other. Consult runs only when someone asks. With **Drive the
+view** on, an answer can also present a case: a sequence of ordinary console moves that you can stop
+and undo. A signed-in person sees only their own Consult history.
 
-## 5. What runs on its own
+## 5. The other reader pages
 
-- **The units** re-assess each desk twice a day on cadence, or sooner when enough new signals
-  accumulate for that desk. The compositions and voices follow on the same rhythm, quoting only claims
-  that already passed verification.
-- **The graders.** The faithfulness judge scores every read as it lands. The correctness grader
-  scores the desks nightly against references the platform built independently, in short turns
-  across the roster. The external audit samples top-layer claims and checks them against live web
-  search. All three publish their numbers; none pools with another.
-- **Alerts** on verified state changes and watchlist hits are scanned every few minutes and delivered
-  through whatever sink you configured. The Alert and Watchlist surfaces in the Awareness group are
-  the audited record of what fired, and what was suppressed, whether or not a sink was wired.
-- **The scorecard** bands every desk across its broad dimensions from verified sub-claims, and reads
-  "insufficient" with the reason where the evidence did not clear the bar. It never invents a band.
+- **Ledger.** Every sealed forecast with its probability, its dates, its resolution rule in plain words
+  and a seal you can check; the track record, which shows no score until enough questions have
+  resolved; and published evaluation runs.
+- **Watch.** The one alert log: what paged and what was only logged, the silences, and source health.
+  A contributor or an admin can acknowledge or snooze an alert.
+
+## 6. What runs on its own
+
+- **The units** re-read each subject on cadence, or sooner when enough new signals arrive. Compositions
+  follow, quoting only claims that passed verification.
+- **The graders.** The faithfulness judge scores every read as it lands. The correctness grader scores
+  subjects nightly against references built independently of the platform's own substrate. The external
+  audit samples claims and checks them against live web search. The three publish their numbers and
+  never pool them.
+- **Alerts** on verified state changes are recorded in the Watch log whether or not a push sink is
+  wired; with one wired, what pages goes to ntfy.
+- **The scorecard** bands each subject from verified claims and reads "insufficient" with the reason
+  where the evidence did not clear the bar.
 - **The journal, the chronicle and the lenses** write on their own cadences, off the product chain.
 
 ## Where next
 
 - Every coined term: [Glossary](GLOSSARY.md).
-- The whole panel set: [UI](UI.md).
-- What is real, gated, or only designed: [Status](STATUS.md).
+- The whole console: [UI](UI.md).
+- What is live, off by default, or not built: [Status](STATUS.md).
 - How the pipeline works: [Architecture](ARCHITECTURE.md), then [Flows](FLOWS.md).
 - Day-two operations: [Runbook](RUNBOOK.md).
 
@@ -110,48 +110,49 @@ beside each record is the interpretive read, fenced to that record and graded on
 
 ## Appendix: the API
 
-Everything above has a `curl` equivalent. Commands run from the deploy directory; `$TOKEN` is your
-registry bearer from `.env`; the registry API listens on `:8090`.
+Everything above has a `curl` equivalent. These run on the host from the deploy directory against the
+registry's loopback port, with `$TOKEN` set to the registry credential from `.env`. With sign-in on, a
+browser uses its session instead, and the minimum role of every route is in [API_ROLES.md](API_ROLES.md).
+Replace `$TARGET_ID` with one of your subjects' target ids.
 
 ```bash
-# Is it alive?
-docker compose exec -T postgres psql -U legba -d legba -c \
-  "SELECT count(*) FROM signals; SELECT kind, count(*) FROM analyst_outputs GROUP BY kind ORDER BY 2 DESC;"
+REG=http://127.0.0.1:8090/api/v1
+AUTH="Authorization: Bearer $TOKEN"
 
-# Read a finding
-curl -s -H "Authorization: Bearer $TOKEN" \
-  "http://127.0.0.1:8090/api/v1/findings?target_id=country_watch_ua&limit=3" | python3 -m json.tool
+# Is it alive?
+curl -s $REG/registry/healthz
+
+# Read a subject's newest findings (summary rows; add fields=full for bodies)
+curl -s -H "$AUTH" "$REG/findings?target_id=$TARGET_ID&limit=3" | python3 -m json.tool
+
+# One finding at full weight
+curl -s -H "$AUTH" "$REG/findings/$FINDING_ID" | python3 -m json.tool
 ```
 
-Each finding carries its cited claims (each `[N]` maps to a signal id in `data.citations`; an uncited
+A full finding carries its cited claims (each `[N]` maps to a record in `data.citations`; an uncited
 claim is unsupported by definition), a self-assessed `confidence`, the verifier's `critic_score` and
 `effective_confidence`, and a `verification` block with checkable-claim counts and the unsupported
 spans quoted verbatim with a reason.
 
 ```bash
 # Drill to source: the lineage walk, every hop with a receipt hash
-curl -s -H "Authorization: Bearer $TOKEN" \
-  "http://127.0.0.1:8090/api/v1/lineage/finding/$FINDING_ID" | python3 -m json.tool
+curl -s -H "$AUTH" "$REG/lineage/finding/$FINDING_ID" | python3 -m json.tool
 
-# Up the spine: the latest country record for a desk, and the banded scorecard
-curl -s -H "Authorization: Bearer $TOKEN" \
-  "http://127.0.0.1:8090/api/v1/findings?target_id=country_g20_us&analyst_id=country_composition&limit=1" | python3 -m json.tool
-curl -s -H "Authorization: Bearer $TOKEN" \
-  "http://127.0.0.1:8090/api/v1/v3/eval/country_scorecard" | python3 -m json.tool
+# The banded scorecard
+curl -s -H "$AUTH" "$REG/v3/eval/country_scorecard?target_id=$TARGET_ID" | python3 -m json.tool
 
-# What changed since you last looked (the Wall's movers quadrant; server_now is your next cursor)
-curl -s -H "Authorization: Bearer $TOKEN" \
-  "http://127.0.0.1:8090/api/v1/v3/since?cursor=$CURSOR" | python3 -m json.tool
+# What changed since you last looked (server_now is your next cursor)
+curl -s -H "$AUTH" "$REG/v3/since?cursor=$CURSOR" | python3 -m json.tool
 
-# Ask it something (billed; the scheduled spine never is)
-curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"question":"What changed in the Iran picture in the last 48 hours, and what is it based on?"}' \
-  "http://127.0.0.1:8090/api/v1/consult" | python3 -m json.tool
+# Ask it something
+curl -s -X POST -H "$AUTH" -H "Content-Type: application/json" \
+  -d '{"question":"What changed for this subject in the last 48 hours, and what is it based on?"}' \
+  "$REG/consult" | python3 -m json.tool
 
 # The detached form: returns a task id, then poll it
-curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"question":"..."}' "http://127.0.0.1:8090/api/v1/deep_consult" | python3 -m json.tool
-curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8090/api/v1/deep_consult/$TASK_ID" | python3 -m json.tool
+curl -s -X POST -H "$AUTH" -H "Content-Type: application/json" \
+  -d '{"question":"..."}' "$REG/deep_consult" | python3 -m json.tool
+curl -s -H "$AUTH" "$REG/deep_consult/$TASK_ID" | python3 -m json.tool
 ```
 
 The route list with each route's maturity is the [release matrix](RELEASE_STATE_MATRIX.md).

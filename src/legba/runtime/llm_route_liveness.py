@@ -51,9 +51,12 @@ watchdog -> here edge never runs back.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -287,8 +290,335 @@ def ledger_extra(route: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# ===========================================================================
+# JUDGE-2 (W11b) — a HOSTED route's auth/credit failure pages AT ONCE
+# ===========================================================================
+#
+# THE INCIDENT. OpenRouter answered 402 (out of credits) from 2026-10-02 23:08Z
+# to 10-05 02:03Z. The L1 check above fired at 10-03 13:07Z — 14 h in — because
+# it is built for a different question ("is a BUSY route answering almost
+# nothing over a day?") and must wait for volume and a 24 h window before it
+# can say so without crying wolf. A 401/402/403/404 from a HOSTED provider does
+# not need volume to mean something: ONE of them says the account, the key or
+# the model id is gone, and no retry will bring it back. So this check reads the
+# receipts written SINCE THE LAST TICK and pages on the first such call.
+#
+# HOSTED vs IN-HOUSE. An in-house host's 4xx is a deploy problem the operator is
+# already looking at, not a bill. A component is IN-HOUSE when its endpoint host
+# ends with one of the suffixes in ``LEGBA_LLM_INHOUSE_HOSTS`` (comma-separated).
+# Unset, the default is DERIVED, never hardcoded: the core plane component's
+# (``llm.primary.openai_compat``) endpoint host with its first label dropped —
+# the in-house host family. A component with no readable endpoint is HOSTED
+# (fail loud: an unknown route returning 402 is worth a page).
+#
+# THE EDGE. One durable ``state='entered'`` row per component (channel
+# ``llm_route_auth_failed``, severity high, ``page_budget_exempt``), through the
+# watchdog's own transition ledger and ntfy fan-out — at most once per component
+# per :data:`AUTH_PAGE_DEDUP_HOURS` (a still-failing route re-pages after the
+# window; a flapping one does not). The exit edge is the first SUCCESS on that
+# component newer than its last auth failure.
+
+#: Durable channel + kind for the at-once page.
+ALERT_CHANNEL_LLM_ROUTE_AUTH = "llm_route_auth_failed"
+#: Comma-separated host suffixes counted IN-HOUSE (never paged on this channel).
+INHOUSE_HOSTS_ENV = "LEGBA_LLM_INHOUSE_HOSTS"
+#: The component whose host family is the in-house default when the env is unset.
+INHOUSE_ANCHOR_COMPONENT = "llm.primary.openai_compat"
+#: One page per component per this many hours (a reminder if it persists).
+AUTH_PAGE_DEDUP_ENV = "LEGBA_LLM_AUTH_PAGE_DEDUP_HOURS"
+DEFAULT_AUTH_PAGE_DEDUP_HOURS = 6.0
+#: Receipts land when a RUN ends, not when the call is made, so "since the last
+#: tick" reads calls made up to this many seconds before it (re-reading is
+#: harmless — the ledger de-duplicates). Matches the longest analyst timeout.
+AUTH_RECEIPT_LAG_ENV = "LEGBA_LLM_AUTH_RECEIPT_LAG_S"
+DEFAULT_AUTH_RECEIPT_LAG_S = 3600.0
+
+#: Per component, over calls made after ``$1``: the newest success, the newest
+#: route-gone failure (http 401/402/403/404 on a non-success receipt), and the
+#: FIRST route-gone failure after the newest success (the episode's start).
+#: ``run_started_at`` bounds the unindexed lateral (a run that made a call after
+#: ``$1`` started at most an hour of runtime before it).
+AUTH_FAILED_SQL = """
+WITH win AS (
+    SELECT c->>'component_id'                         AS component_id,
+           c->>'model'                                AS model,
+           c->>'status'                               AS status,
+           c->>'http_status'                          AS http_status,
+           (c->>'at')::timestamptz                    AS at
+      FROM public.analyst_traces t
+      CROSS JOIN LATERAL jsonb_array_elements(
+             coalesce(t.llm_calls, '[]'::jsonb)) AS c
+     WHERE t.run_started_at > $1::timestamptz - interval '1 hour'
+       AND coalesce(c->>'component_id', '') <> ''
+       AND c->>'at' IS NOT NULL
+       AND (c->>'at')::timestamptz > $1::timestamptz
+),
+gone AS (
+    SELECT *, (status IS DISTINCT FROM 'success'
+               AND http_status IN ('401', '402', '403', '404')) AS is_gone
+      FROM win
+),
+ok AS (
+    SELECT component_id, max(at) FILTER (WHERE status = 'success') AS last_success_at
+      FROM gone GROUP BY 1
+)
+SELECT g.component_id,
+       ok.last_success_at,
+       max(g.model) FILTER (WHERE g.is_gone)              AS model,
+       max(g.at) FILTER (WHERE g.is_gone)                 AS last_failure_at,
+       min(g.at) FILTER (WHERE g.is_gone AND (ok.last_success_at IS NULL
+                                 OR g.at > ok.last_success_at)) AS first_failure_at,
+       count(*) FILTER (WHERE g.is_gone AND (ok.last_success_at IS NULL
+                                 OR g.at > ok.last_success_at))::int AS failures,
+       max(g.http_status) FILTER (WHERE g.is_gone)        AS http_status
+  FROM gone g JOIN ok USING (component_id)
+ GROUP BY g.component_id, ok.last_success_at
+"""
+
+#: The endpoint config of the components in play (heads only).
+COMPONENT_ENDPOINTS_SQL = """
+    SELECT component_id, body->'config' AS config
+      FROM public.stack_components
+     WHERE is_head AND component_id = ANY($1::text[])
+"""
+
+#: The newest 'entered' page per component inside the de-dup window — the
+#: restart-safe half of "once per component per 6 h".
+RECENT_AUTH_PAGES_SQL = """
+    SELECT sink_target, max(attempted_at) AS entered_at
+      FROM public.alert_sink_deliveries
+     WHERE sink_kind = 'liveness_watchdog'
+       AND channel_name = $1
+       AND payload_summary->>'state' = 'entered'
+       AND attempted_at > $2::timestamptz
+     GROUP BY 1
+"""
+
+
+def endpoint_host(config: Any) -> str | None:
+    """The lower-cased host of a component's ``api_endpoint`` / ``base_url``."""
+    if isinstance(config, str):
+        try:
+            config = json.loads(config)
+        except ValueError:
+            return None
+    if not isinstance(config, dict):
+        return None
+    for key in ("api_endpoint", "base_url", "endpoint"):
+        value = config.get(key)
+        if isinstance(value, dict):
+            value = value.get("raw")
+        if isinstance(value, str) and value.strip():
+            host = urlparse(value.strip()).hostname
+            if host:
+                return host.lower()
+    return None
+
+
+def inhouse_suffixes(anchor_host: str | None) -> tuple[str, ...]:
+    """The in-house host suffixes: the env list, else the anchor's host family
+    (its host with the first label dropped; a bare two-label host stays whole)."""
+    raw = os.getenv(INHOUSE_HOSTS_ENV)
+    if raw is not None:
+        return tuple(s.strip().lower().lstrip(".") for s in raw.split(",") if s.strip())
+    if not anchor_host:
+        return ()
+    labels = anchor_host.split(".")
+    return (".".join(labels[1:]) if len(labels) > 2 else anchor_host,)
+
+
+def is_hosted(host: str | None, suffixes: tuple[str, ...]) -> bool:
+    """False iff ``host`` is (or is under) an in-house suffix. Unknown → hosted."""
+    if not host:
+        return True
+    return not any(host == s or host.endswith("." + s) for s in suffixes)
+
+
+def evaluate_auth_failures(
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], set[str]]:
+    """Pure: ``(failing, cleared)``. FAILING = the newest route-gone failure is
+    newer than the newest success; CLEARED = a success is the newest word."""
+    failing: list[dict[str, Any]] = []
+    cleared: set[str] = set()
+    for row in rows:
+        component = str(row.get("component_id") or "").strip()
+        if not component:
+            continue
+        ok_at = row.get("last_success_at")
+        bad_at = row.get("last_failure_at")
+        if bad_at is not None and (ok_at is None or bad_at > ok_at):
+            out = dict(row)
+            out["component_id"] = component
+            failing.append(out)
+        elif ok_at is not None:
+            cleared.add(component)
+    failing.sort(key=lambda r: r["component_id"])
+    return failing, cleared
+
+
+def auth_alert_text(row: dict[str, Any], *, reminder: bool = False) -> tuple[str, str]:
+    """``(title, body)`` naming the component, the model, the status and the
+    first failing call's time — and what an operator does about each status."""
+    component = row["component_id"]
+    model = row.get("model") or "(model unrecorded)"
+    http = str(row.get("http_status") or "?")
+    first = row.get("first_failure_at") or row.get("last_failure_at")
+    first_s = first.isoformat() if hasattr(first, "isoformat") else str(first)
+    n = int(row.get("failures") or 0)
+    meaning = {
+        "401": "the API key was refused (revoked, rotated or missing)",
+        "402": "the account is OUT OF CREDIT",
+        "403": "the provider refused the request (policy, region or key scope)",
+        "404": "the model id is no longer served (retired or renamed upstream)",
+    }.get(http, "the route refused the call")
+    title = (
+        f"LLM route {'STILL ' if reminder else ''}refusing: {component} "
+        f"http {http} ({model})"
+    )
+    body = (
+        f"Stack component '{component}' (model '{model}', a HOSTED route) "
+        f"answered HTTP {http} — {meaning}. First failing call in this "
+        f"episode: {first_s}; {n} refused call(s) seen since the last success.\n\n"
+        "This is paged at ONCE because no retry fixes it: a 402 needs a top-up, "
+        "a 401/403 a key, a 404 a repoint of config.model_name. While it lasts, "
+        "every check routed here falls down its judge fallback chain (if one is "
+        "declared) or to the deterministic floor — critiques written in the "
+        "meantime carry data.verification.unverified_reason and are NOT "
+        "re-judged automatically (scripts/rejudge_floor_critiques.py --dry-run "
+        "lists them; --apply --limit N re-judges them once a rung answers)."
+        "\n\nThe episode clears on the first successful call on this component."
+    )
+    return title, body
+
+
+def _iso(value: Any) -> Any:
+    return value.isoformat() if hasattr(value, "isoformat") else value
+
+
+async def _endpoints(pg: Any, components: list[str]) -> dict[str, str | None]:
+    ids = sorted(set(components) | {INHOUSE_ANCHOR_COMPONENT})
+    async with pg.acquire() as conn:
+        rows = await conn.fetch(COMPONENT_ENDPOINTS_SQL, ids)
+    return {str(r["component_id"]): endpoint_host(r["config"]) for r in rows}
+
+
+async def _recent_pages(wd: Any, now: Any, dedup_s: float) -> dict[str, Any]:
+    """In-memory map of component → newest 'entered' page time, seeded once per
+    process from the ledger (restart-safe de-dup)."""
+    seen =getattr(wd, "_llm_auth_paged_at", None)
+    if seen is not None:
+        return seen
+    seen = {}
+    try:
+        async with wd._pg.acquire() as conn:
+            rows = await conn.fetch(
+                RECENT_AUTH_PAGES_SQL, ALERT_CHANNEL_LLM_ROUTE_AUTH,
+                now - timedelta(seconds=dedup_s),
+            )
+        seen = {str(r["sink_target"]): r["entered_at"] for r in rows}
+    except Exception as exc:  # noqa: BLE001 — a seed failure may re-page once
+        logger.warning("llm_route_liveness.auth_seed_failed err=%s", exc)
+    wd._llm_auth_paged_at = seen
+    return seen
+
+
+async def check_auth_failed_once(wd: Any, *, now: Any = None) -> list[str]:
+    """One pass of the at-once page. Returns the components paged this pass.
+
+    Leader-gated like its siblings; NO boot grace (one refused call is a
+    verdict, and a restart mid-outage is held by the ledger). Fail-safe: a read
+    failure is no verdict this pass, never a crash.
+    """
+    if wd._pg is None:
+        return []
+    if wd._is_leader is not None and not wd._is_leader():
+        return []
+    now = now or datetime.now(timezone.utc)
+    lag = _env_number(AUTH_RECEIPT_LAG_ENV, DEFAULT_AUTH_RECEIPT_LAG_S)
+    dedup_s = _env_number(AUTH_PAGE_DEDUP_ENV, DEFAULT_AUTH_PAGE_DEDUP_HOURS) * 3600.0
+    last_tick = getattr(wd, "_llm_auth_checked_at", None) or now
+    since = last_tick - timedelta(seconds=lag)
+    try:
+        async with wd._pg.acquire() as conn:
+            rows = [dict(r) for r in await conn.fetch(AUTH_FAILED_SQL, since)]
+        failing, cleared = evaluate_auth_failures(rows)
+        hosts = await _endpoints(wd._pg, [r["component_id"] for r in failing]) if failing else {}
+    except Exception as exc:  # noqa: BLE001 — never kill the watchdog loop
+        logger.warning(
+            "llm_route_liveness.auth_lookup_failed err=%s — no auth verdict this pass", exc,
+        )
+        return []
+    wd._llm_auth_checked_at = now
+    suffixes = inhouse_suffixes(hosts.get(INHOUSE_ANCHOR_COMPONENT))
+    states = await wd._get_alert_states(ALERT_CHANNEL_LLM_ROUTE_AUTH)
+    paged_at = await _recent_pages(wd, now, dedup_s)
+    paged: list[str] = []
+    for row in failing:
+        component = row["component_id"]
+        if not is_hosted(hosts.get(component), suffixes):
+            continue
+        last = paged_at.get(component)
+        if last is not None and (now - last).total_seconds() < dedup_s:
+            continue
+        reminder = states.get(component) == "entered"
+        title, body = auth_alert_text(row, reminder=reminder)
+        logger.error(
+            "liveness_watchdog.llm_route_auth_failed component=%s model=%s "
+            "http_status=%s first_failure_at=%s — paging at once",
+            component, row.get("model") or "?", row.get("http_status"),
+            _iso(row.get("first_failure_at")),
+        )
+        await wd._record_transition(
+            channel=ALERT_CHANNEL_LLM_ROUTE_AUTH, entity_id=component,
+            state="entered", severity="high", kind="llm_route_auth_failed",
+            title=title, body=body,
+            extra={
+                "component_id": component,
+                "model": row.get("model") or "",
+                "http_status": str(row.get("http_status") or ""),
+                "first_failure_at": _iso(row.get("first_failure_at")),
+                "failures": int(row.get("failures") or 0),
+                "reminder": reminder,
+                "page_budget_exempt": True,
+            },
+        )
+        paged_at[component] = now
+        paged.append(component)
+    for component in sorted(cleared):
+        if states.get(component) != "entered":
+            continue
+        await wd._record_transition(
+            channel=ALERT_CHANNEL_LLM_ROUTE_AUTH, entity_id=component,
+            state="recovered", severity="info", kind="llm_route_auth_recovered",
+            title=f"LLM route answering again: {component}",
+            body=(
+                f"Stack component '{component}' answered a call successfully after "
+                "its auth/credit failure — the episode is closed. Critiques written "
+                "during it keep their unverified_reason."
+            ),
+        )
+    return paged
+
+
 __all__ = [
     "ALERT_CHANNEL_LLM_ROUTE",
+    "ALERT_CHANNEL_LLM_ROUTE_AUTH",
+    "AUTH_FAILED_SQL",
+    "AUTH_PAGE_DEDUP_ENV",
+    "AUTH_RECEIPT_LAG_ENV",
+    "COMPONENT_ENDPOINTS_SQL",
+    "DEFAULT_AUTH_PAGE_DEDUP_HOURS",
+    "DEFAULT_AUTH_RECEIPT_LAG_S",
+    "INHOUSE_ANCHOR_COMPONENT",
+    "INHOUSE_HOSTS_ENV",
+    "RECENT_AUTH_PAGES_SQL",
+    "auth_alert_text",
+    "check_auth_failed_once",
+    "endpoint_host",
+    "evaluate_auth_failures",
+    "inhouse_suffixes",
+    "is_hosted",
     "DEFAULT_MIN_CALLS",
     "DEFAULT_SUCCESS_FLOOR",
     "MIN_CALLS_ENV",

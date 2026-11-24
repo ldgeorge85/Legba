@@ -7,8 +7,15 @@
  * its FULL, UNMODIFIED original panel components (no internals rewritten —
  * see `src/panels/merged/*`) behind one small strip like this one, so there is
  * exactly one tab-bar implementation instead of five bespoke button rows.
+ *
+ * Since UI-B1/tokens the strip renders the `Tabs` primitive (`src/ui/tabs.tsx`,
+ * Radix underneath): the API and the test ids are unchanged, and the strip
+ * becomes a real roving-focus `tablist` — ONE Tab stop, ←/→ (and Home/End)
+ * move between tabs and activate them. The panel body stays the caller's
+ * (each merge renders its own tab's original component), so the triggers
+ * carry no `aria-controls` pointing at a tabpanel that is not there.
  */
-import { cn } from '@/lib/cn'
+import { Tabs, TabsList, TabsTrigger } from '@/ui/tabs'
 
 /**
  * Pick a tabbed panel's opening tab.
@@ -51,30 +58,24 @@ export function PanelTabStrip({
   testIdPrefix: string
 }) {
   return (
-    <div role="tablist" aria-label={ariaLabel} className="flex items-center gap-1">
-      {tabs.map((t) => (
-        <button
-          key={t.id}
-          type="button"
-          role="tab"
-          aria-selected={active === t.id}
-          data-testid={`${testIdPrefix}-${t.id}`}
-          onClick={() => onChange(t.id)}
-          className={cn(
-            'flex items-center gap-1 rounded border px-2 py-0.5 text-label font-medium',
-            active === t.id
-              ? 'border-line-strong bg-surf-3 text-ink-1'
-              : 'border-line text-ink-3 hover:bg-surf-2 hover:text-ink-1',
-          )}
-        >
-          <span>{t.label}</span>
-          {t.badge && (
-            <span className="rounded-sm bg-amber-500/20 px-1 text-[9px] uppercase tracking-wide text-amber-400">
-              {t.badge}
-            </span>
-          )}
-        </button>
-      ))}
-    </div>
+    <Tabs value={active} onValueChange={onChange} activationMode="automatic">
+      <TabsList aria-label={ariaLabel}>
+        {tabs.map((t) => (
+          <TabsTrigger
+            key={t.id}
+            value={t.id}
+            aria-controls={undefined}
+            data-testid={`${testIdPrefix}-${t.id}`}
+          >
+            <span>{t.label}</span>
+            {t.badge && (
+              <span className="rounded-sm bg-amber-500/20 px-1 text-label uppercase tracking-wide text-amber-400">
+                {t.badge}
+              </span>
+            )}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+    </Tabs>
   )
 }

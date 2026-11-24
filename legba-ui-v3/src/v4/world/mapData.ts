@@ -11,9 +11,17 @@
  *   GET /findings?limit                       → { data: Row[], next_cursor }
  *   GET /situations                           → Situation[]
  */
+import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { apiGet } from '@/lib/api'
+import { WORLD_EVENTS_KEY, WORLD_EVENTS_PATH, WORLD_SITUATIONS_KEY } from '@/lib/queryKeys'
 import { resolveCountry } from '@/lib/countryGeo'
+import {
+  cameraFor,
+  geometryFor,
+  useSubjectGeometryIndex,
+  type SubjectGeometryIndex,
+} from '@/lib/subjectGeometry'
 import type {
   EventLifecycle,
   Severity,
@@ -37,6 +45,8 @@ interface SignalGeo {
 
 interface SignalData {
   geo?: SignalGeo | null
+  /** The publisher's own instant — the signal's VALID time. */
+  published_at?: string | null
   title?: string | null
   summary?: string | null
   [k: string]: unknown
@@ -78,11 +88,20 @@ interface FindingRow {
   geo?: string[] | null
 }
 
+/**
+ * The `/situations` row as the route serves it (a `{data, next_cursor}` page):
+ * `name` and `status`, not `title` and `state`. `last_event_at` is the
+ * situation's VALID time (its newest member event); `created_at` its record
+ * time. No country list is served today, so a situation places only through
+ * its subject's declared geometry, where it has a subject.
+ */
 interface SituationRow {
   id: string
-  title: string
-  state: SituationLifecycle | string
+  name?: string | null
+  status?: string | null
+  target_id?: string | null
   countries?: string[] | null
+  last_event_at?: string | null
   produced_at?: string | null
   updated_at?: string | null
   created_at?: string | null
@@ -115,8 +134,11 @@ interface Page<R> {
 // Helpers.
 // ---------------------------------------------------------------------------
 
+// U-4/U-5 fetch diet: ONE page. The flat map used to walk seven sequential
+// 500-row pages (~17.8 MB live) at the end of every landing; it now reads the
+// newest 500 and says so (the window filter is applied client-side).
 const SIGNAL_PAGE_LIMIT = 500
-const SIGNAL_MAX_ROWS = 3000
+const SIGNAL_MAX_ROWS = 500
 const FINDING_LIMIT = 500
 
 const SEVERITIES: ReadonlySet<string> = new Set<Severity>([
@@ -139,6 +161,8 @@ const SITUATION_STATES: ReadonlySet<string> = new Set<SituationLifecycle>([
 ])
 
 function asLifecycle(v: unknown): SituationLifecycle {
+  // The route's `status` says `closed` where the map's encoding says resolved.
+  if (v === 'closed') return 'resolved'
   return typeof v === 'string' && SITUATION_STATES.has(v)
     ? (v as SituationLifecycle)
     : 'active'
@@ -170,6 +194,18 @@ function parseTs(iso: string | null | undefined): number {
   return Number.isNaN(t) ? Date.now() : t
 }
 
+/**
+ * A VALID-time instant, or NaN when the row carries none. Never borrowed from
+ * the record clock (`created_at` / `event_timestamp` / `produced_at` on
+ * `/signals` all carry the fetch time): a NaN never falls inside a window, so a
+ * row with no valid time is not drawn on the window rather than drawn at the
+ * moment we fetched it. (Mirrors the UI-B4/time lane's `signalRow` field
+ * choice: valid = `data.published_at`, record = `created_at`.)
+ */
+function validTs(iso: string | null | undefined): number {
+  return iso ? Date.parse(iso) : Number.NaN
+}
+
 /** First country in the list that the gazetteer can place, as [lat, lon]. */
 function centroidOf(countries: string[]): { lat: number; lon: number } | null {
   for (const iso of countries) {
@@ -177,12 +213,6 @@ function centroidOf(countries: string[]): { lat: number; lon: number } | null {
     if (fix) return { lat: fix.lat, lon: fix.lon }
   }
   return null
-}
-
-/** Country targets encode their ISO2 in the id (country_g20_us → US). */
-function targetCountry(targetId: string | null): string | null {
-  const m = targetId?.match(/country_(?:g20|watch)_([a-z]{2})/i) // 2026-09-21: watch desks (IL, UA, SD, IR, KP …) were never placed — the regex knew only g20
-  return m ? m[1].toUpperCase() : null
 }
 
 // ---------------------------------------------------------------------------
@@ -196,7 +226,10 @@ async function fetchWorldSignals(): Promise<WorldSignal[]> {
   // Cursor-paginate up to the cap. The window filter is applied client-side by
   // the map (it owns the scrubber), so we fetch the most recent N globally.
   for (let guard = 0; guard < 12 && out.length < SIGNAL_MAX_ROWS; guard++) {
-    const params = new URLSearchParams({ limit: String(SIGNAL_PAGE_LIMIT) })
+    // The light weight by name (roll 86): it keeps `data.geo` cut to the point
+    // (lat/lon) and `data.published_at` — all this layer reads. The full
+    // payload is ~4.5 KB a row (2.2 MB per 500-row page, up to six pages).
+    const params = new URLSearchParams({ limit: String(SIGNAL_PAGE_LIMIT), fields: 'summary' })
     if (cursor) params.set('cursor', cursor)
     const page: Page<SignalRow> = await apiGet<Page<SignalRow>>(
       `/signals?${params.toString()}`,
@@ -223,7 +256,8 @@ async function fetchWorldSignals(): Promise<WorldSignal[]> {
         countries,
         severity: asSeverity(row.severity),
         sourceId: row.source_id,
-        ts: parseTs(row.event_timestamp ?? row.produced_at ?? row.created_at),
+        // VALID time — the publisher's instant, not the fetch time.
+        ts: validTs(row.data?.published_at),
         title: row.title ?? row.data?.title ?? '(untitled)',
         language: row.language ?? null,
       })
@@ -240,6 +274,8 @@ async function fetchWorldSignals(): Promise<WorldSignal[]> {
 export interface UseWorldSignalsResult {
   signals: WorldSignal[]
   isLoading: boolean
+  /** True once the read has answered (an empty answer is a measured zero). */
+  read: boolean
 }
 
 export function useWorldSignals(): UseWorldSignalsResult {
@@ -249,7 +285,7 @@ export function useWorldSignals(): UseWorldSignalsResult {
     refetchInterval: 60_000,
     staleTime: 30_000,
   })
-  return { signals: q.data ?? [], isLoading: q.isLoading }
+  return { signals: q.data ?? [], isLoading: q.isLoading, read: q.data !== undefined }
 }
 
 // ---------------------------------------------------------------------------
@@ -257,14 +293,17 @@ export function useWorldSignals(): UseWorldSignalsResult {
 // ---------------------------------------------------------------------------
 
 async function fetchWorldFindings(): Promise<WorldFinding[]> {
+  // U-4/U-5 fetch diet: the summary weight (`fields=summary`, a few hundred
+  // bytes a row) — the default weight was ~29 MB live for 500 rows, read only
+  // for `geo`. The summary carries no geo, so a finding places through its
+  // subject's declared single place (`placeFinding`, below) — never at a
+  // guessed centroid.
   const page: Page<FindingRow> = await apiGet<Page<FindingRow>>(
-    `/findings?limit=${FINDING_LIMIT}`,
+    `/findings?limit=${FINDING_LIMIT}&fields=summary`,
   )
 
   return page.data.map((row): WorldFinding => {
-    // Findings rarely carry geo; fall back to the country target's centroid.
-    const tc = targetCountry(row.target_id)
-    const countries = row.geo ?? (tc ? [tc] : [])
+    const countries = row.geo ?? []
     const g = row.data?.geo
     let lat = typeof g?.lat === 'number' ? g.lat : null
     let lon = typeof g?.lon === 'number' ? g.lon : null
@@ -288,9 +327,29 @@ async function fetchWorldFindings(): Promise<WorldFinding[]> {
   })
 }
 
+/**
+ * Place a finding that carries no geo of its own through its SUBJECT'S
+ * DECLARED GEOMETRY (`lib/subjectGeometry.ts`) — never through an ISO code
+ * parsed out of the subject's id. Only a geometry that names ONE place lends
+ * a position (a point, or a single declared code): a multi-country or polygon
+ * subject is a region, and pinning its finding to the middle of it would claim
+ * a precision nobody asserted, so that finding stays unplaced.
+ */
+export function placeFinding(f: WorldFinding, index: SubjectGeometryIndex | null): WorldFinding {
+  if (f.lat != null && f.lon != null) return f
+  if (!f.targetId) return f
+  const geometry = geometryFor({ kind: 'target', id: f.targetId }, index)
+  const camera = cameraFor(geometry)
+  const countries = f.countries.length > 0 ? f.countries : geometry.kind === 'iso2' ? geometry.codes : []
+  if (camera?.kind !== 'center') return countries === f.countries ? f : { ...f, countries }
+  return { ...f, countries, lat: camera.lat, lon: camera.lon }
+}
+
 export interface UseWorldFindingsResult {
   findings: WorldFinding[]
   isLoading: boolean
+  /** True once the read has answered (an empty answer is a measured zero). */
+  read: boolean
 }
 
 export function useWorldFindings(): UseWorldFindingsResult {
@@ -300,25 +359,30 @@ export function useWorldFindings(): UseWorldFindingsResult {
     refetchInterval: 60_000,
     staleTime: 30_000,
   })
-  return { findings: q.data ?? [], isLoading: q.isLoading }
+  const index = useSubjectGeometryIndex()
+  const findings = useMemo(() => (q.data ?? []).map((f) => placeFinding(f, index)), [q.data, index])
+  return { findings, isLoading: q.isLoading, read: q.data !== undefined }
 }
 
 // ---------------------------------------------------------------------------
 // Situations — bare array; centroid resolved from the country list.
 // ---------------------------------------------------------------------------
 
-async function fetchWorldSituations(): Promise<WorldSituation[]> {
-  const rows: SituationRow[] = await apiGet<SituationRow[]>('/situations')
-  return rows.map((row): WorldSituation => {
-    const countries = row.countries ?? []
-    return {
-      id: row.id,
-      title: row.title,
-      lifecycle: asLifecycle(row.state),
-      countries,
-      ts: parseTs(row.produced_at ?? row.updated_at ?? row.created_at),
-    }
-  })
+/** A situation as read, with the subject it is about (placement only). */
+type SituationRead = WorldSituation & { targetId: string | null }
+
+async function fetchWorldSituations(): Promise<SituationRead[]> {
+  // The route serves a `{data, next_cursor}` page (not a bare array).
+  const page: Page<SituationRow> = await apiGet<Page<SituationRow>>('/situations?limit=500')
+  return (page.data ?? []).map((row): SituationRead => ({
+    id: row.id,
+    title: row.name ?? '(untitled)',
+    lifecycle: asLifecycle(row.status),
+    countries: row.countries ?? [],
+    // VALID time — the newest member event; no fallback to the record clock.
+    ts: validTs(row.last_event_at),
+    targetId: row.target_id ?? null,
+  }))
 }
 
 export interface SituationPlacement extends WorldSituation {
@@ -329,33 +393,47 @@ export interface SituationPlacement extends WorldSituation {
 export interface UseWorldSituationsResult {
   situations: SituationPlacement[]
   isLoading: boolean
+  /** True once the read has answered (an empty answer is a measured zero). */
+  read: boolean
 }
 
-export function useWorldSituations(): UseWorldSituationsResult {
-  const q = useQuery<WorldSituation[]>({
-    queryKey: ['world-situations'],
+export function useWorldSituations(opts: { enabled?: boolean } = {}): UseWorldSituationsResult {
+  const index = useSubjectGeometryIndex()
+  const q = useQuery<SituationRead[]>({
+    queryKey: WORLD_SITUATIONS_KEY,
     queryFn: fetchWorldSituations,
     refetchInterval: 60_000,
     staleTime: 30_000,
+    // U-4: a hidden map region, or a layer that is off, fetches nothing.
+    enabled: opts.enabled ?? true,
   })
-  // Attach a placement centroid (gazetteer) so the map can plot each situation.
-  const situations: SituationPlacement[] = (q.data ?? []).map((s) => {
-    const fix = centroidOf(s.countries)
-    return { ...s, lat: fix ? fix.lat : null, lon: fix ? fix.lon : null }
-  })
-  return { situations, isLoading: q.isLoading }
+  // Attach a placement: the gazetteer centroid of its countries, else its
+  // subject's declared geometry when that names ONE place (`placeFinding`'s
+  // rule) — never a position the row does not support.
+  const situations: SituationPlacement[] = useMemo(
+    () =>
+      (q.data ?? []).map(({ targetId, ...s }) => {
+        const fix = centroidOf(s.countries)
+        if (fix) return { ...s, lat: fix.lat, lon: fix.lon }
+        const placed = placeFinding(
+          { id: s.id, lat: null, lon: null, countries: s.countries, severity: 'info', targetId, analystId: null, ts: s.ts, title: s.title },
+          index,
+        )
+        return { ...s, countries: placed.countries, lat: placed.lat, lon: placed.lon }
+      }),
+    [q.data, index],
+  )
+  return { situations, isLoading: q.isLoading, read: q.data !== undefined }
 }
 
 // ---------------------------------------------------------------------------
 // Events (V3/P6) — bounded occurrences, geo from events.geo_lat/geo_lon ONLY.
 // ---------------------------------------------------------------------------
 
-const EVENT_LIMIT = 500
-
 async function fetchWorldEvents(): Promise<WorldEvent[]> {
-  const page: Page<EventRow> = await apiGet<Page<EventRow>>(
-    `/v3/events?limit=${EVENT_LIMIT}`,
-  )
+  // The newest 500 at the light weight, the same read as the time band's
+  // events lane (queryKeys.WORLD_EVENTS_PATH; every field below survives it).
+  const page: Page<EventRow> = await apiGet<Page<EventRow>>(WORLD_EVENTS_PATH)
   const out: WorldEvent[] = []
   for (const row of page.data) {
     // NO centroid fallback (spec §6.3 — deliberate): an event's placement is
@@ -387,14 +465,18 @@ async function fetchWorldEvents(): Promise<WorldEvent[]> {
 export interface UseWorldEventsResult {
   events: WorldEvent[]
   isLoading: boolean
+  /** True once the read has answered (an empty answer is a measured zero). */
+  read: boolean
 }
 
-export function useWorldEvents(): UseWorldEventsResult {
+export function useWorldEvents(opts: { enabled?: boolean } = {}): UseWorldEventsResult {
   const q = useQuery<WorldEvent[]>({
-    queryKey: ['world-events'],
+    queryKey: WORLD_EVENTS_KEY,
     queryFn: fetchWorldEvents,
     refetchInterval: 60_000,
     staleTime: 30_000,
+    // U-4: a hidden map region, or a layer that is off, fetches nothing.
+    enabled: opts.enabled ?? true,
   })
-  return { events: q.data ?? [], isLoading: q.isLoading }
+  return { events: q.data ?? [], isLoading: q.isLoading, read: q.data !== undefined }
 }

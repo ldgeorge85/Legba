@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.gdelt.doc_api": {
+      "source": "source_gdelt_doc_api.yaml",
+      "state": "retired"
+    }
+  }
+}

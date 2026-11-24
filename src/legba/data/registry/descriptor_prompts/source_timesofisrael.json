@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.timesofisrael.news": {
+      "source": "source_timesofisrael.yaml",
+      "state": "draft"
+    }
+  }
+}

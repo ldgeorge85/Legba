@@ -32,8 +32,8 @@ from __future__ import annotations
 import hashlib
 import json
 
-from legba.data.analysts import handler_options, handler_options_catalog
-from legba.data.analysts.handler_options import ANALYST_KIND_OPTIONS, HANDLER_OPTIONS
+from legba.data.option_catalog import handler_options, handler_options_catalog
+from legba.data.option_catalog.handler_options import ANALYST_KIND_OPTIONS, HANDLER_OPTIONS
 
 #: SHA-256 of the canonical JSON below, computed from ``handler_options.py``
 #: at pin 79fd1fd9 (portfolio-ingestion-v2) — the pre-split module, before
@@ -65,6 +65,18 @@ POST_PIN_ADDITIONS: tuple[tuple[str, str, str], ...] = (
     # wave I / p2_offer — the V3/P2 OPEN EVENTS desk-grounding block: the
     # per-analyst GRANT and its bound. Read by the slice reader; proven in
     # tests/data_pkg/test_unit_grounding.py.
+    # lane K-2 — a desk's declared FEED ROSTER (feed_roster_block.py): per
+    # feed, its kind, its collected rows in the window and its slice ordinals.
+    # Proven in tests/data_pkg/test_cyber_reader_k2.py.
+    # lane P-7 — the graph projector's cost knobs: the arc diet (two groups,
+    # default off), the unlogged build, skip-when-unchanged and its age
+    # ceiling. Proven in tests/data_pkg/test_graph_projector.py.
+    ("HANDLER_OPTIONS", "graph_projector", "include_contention_arcs"),
+    ("HANDLER_OPTIONS", "graph_projector", "include_lineage_copies"),
+    ("HANDLER_OPTIONS", "graph_projector", "unlogged"),
+    ("HANDLER_OPTIONS", "graph_projector", "skip_when_unchanged"),
+    ("HANDLER_OPTIONS", "graph_projector", "max_skip_seconds"),
+    ("ANALYST_KIND_OPTIONS", "inline_target", "feed_roster"),
     ("ANALYST_KIND_OPTIONS", "inline_target", "offer_events"),
     ("ANALYST_KIND_OPTIONS", "inline_target", "open_events_limit"),
     # wave M / 7g-2 — the HISTORICAL SERIES desk-grounding block: the second
@@ -73,6 +85,78 @@ POST_PIN_ADDITIONS: tuple[tuple[str, str, str], ...] = (
     # tests/data_pkg/test_history_grounding.py.
     ("ANALYST_KIND_OPTIONS", "inline_target", "offer_history"),
     ("ANALYST_KIND_OPTIONS", "inline_target", "history_series_limit"),
+    # wave W4 / F-3 — the world read's subject-group floor: the stale bar for a
+    # block the floor kept (decision D4, default 72 h). Labels only. Proven in
+    # tests/data_pkg/test_assembly_floor.py.
+    ("ANALYST_KIND_OPTIONS", "meta_findings_synthesizer", "world_floor_stale_hours"),
+    # wave W8 / TAX-1 — the per-source diversity cap on a scoped slice, read by
+    # both slice readers through data/signal_slice_scope.py. Proven in
+    # tests/data_pkg/test_signal_tag_slice.py (the cross_target_raw key below
+    # carries the same spec).
+    ("ANALYST_KIND_OPTIONS", "inline_target", "slice_per_source_cap"),
+    # wave X3 / W11-F55 — the indicator_tracker flip debounce: the run count
+    # and the span at which a status holds. Proven in
+    # tests/data_pkg/test_analyst_indicator_tracker.py.
+    ("HANDLER_OPTIONS", "indicator_tracker", "hysteresis_runs"),
+    ("HANDLER_OPTIONS", "indicator_tracker", "hysteresis_hours"),
+    # wave X4 / LEVEL (W11-F36) — which of a unit's canonical indicators
+    # measure a LEVEL, and against what reference. Read by inline_target's
+    # run_method through data/indicator_shape.py. Proven in
+    # tests/data_pkg/test_level_indicators.py.
+    ("ANALYST_KIND_OPTIONS", "inline_target", "level_indicators"),
+    # W11-F108 — the claim_watch bearing gate's decision-model SHADOW: the
+    # component it asks and its per-run call cap. Off in code; moves no
+    # decision. Proven in tests/runtime/test_bearing_shadow.py.
+    ("HANDLER_OPTIONS", "claim_watch", "bearing_shadow_ref"),
+    ("HANDLER_OPTIONS", "claim_watch", "bearing_shadow_cap"),
+    # W11-F91 — the multi-round GATHER evidence cap on an inline_target unit
+    # (derived from the input budget when absent; 0 = off). Proven in
+    # tests/data_pkg/test_gather_context_budget.py.
+    ("ANALYST_KIND_OPTIONS", "inline_target", "evidence_char_cap"),
+    # 2026-11-09 clusterer-watermark — the signal slice's adaptive page floor
+    # and its one-time catch-up floor. Proven in
+    # tests/data_pkg/test_event_clustering_slice_progress.py.
+    ("HANDLER_OPTIONS", "event_clustering", "min_signals_per_run"),
+    ("HANDLER_OPTIONS", "event_clustering", "catch_up_floor_hours"),
+    # N-Z (2026-11-14) — the catch-up split, multi-page passes; proven in
+    # tests/data_pkg/test_event_clustering_backlog_n_z.py.
+    ("HANDLER_OPTIONS", "event_clustering", "catch_up_lag_minutes"),
+    ("HANDLER_OPTIONS", "event_clustering", "catch_up_head_minutes"),
+    ("HANDLER_OPTIONS", "event_clustering", "max_pages_per_pass"),
+    # lane N-B — the desk slice's WATERMARK window and its two floors. Read by
+    # the slice reader through data/slice_coverage.py. Proven in
+    # tests/data_pkg/test_slice_coverage.py.
+    ("ANALYST_KIND_OPTIONS", "inline_target", "slice_since_watermark"),
+    ("ANALYST_KIND_OPTIONS", "inline_target", "slice_watermark_min_hours"),
+    ("ANALYST_KIND_OPTIONS", "inline_target", "slice_watermark_first_run_hours"),
+    # lane N-L — the evidence archiver archives the bytes the POLL kept (its
+    # fetch receipt) instead of re-fetching, default on. Proven in
+    # tests/data_pkg/test_evidence_archiver*.py (the default path) and
+    # tests/data_pkg/test_ingestion_series_acceptance.py.
+    ("HANDLER_OPTIONS", "evidence_archiver", "prefer_ingest_copy"),
+    # lane I-1 — the archiver's re-fetch routed through the ingestion intake
+    # (default off), the page pipeline it runs under, and the wait before the
+    # archiver falls back to its own fetch. Proven in
+    # tests/data_pkg/test_ingestion_intake.py.
+    ("HANDLER_OPTIONS", "evidence_archiver", "fetch_via_intake"),
+    ("HANDLER_OPTIONS", "evidence_archiver", "intake_pipeline"),
+    ("HANDLER_OPTIONS", "evidence_archiver", "intake_wait_minutes"),
+)
+
+#: Knobs REMOVED after the pin, as ``(catalog name, catalog key, index, name,
+#: doc)``: the spec as it stood at the pin (a bool ``_flag``), re-inserted at its
+#: original index before hashing, so the frozen digest keeps meaning "every
+#: pre-existing spec, field for field, in order" while each removal stays a named
+#: line in a diff. :func:`test_declared_post_pin_removals_are_really_gone` fails
+#: on an entry whose knob is still in the catalog.
+POST_PIN_REMOVALS: tuple[tuple[str, str, int, str, str], ...] = (
+    # 2026-11-15 DM-G - the Apache AGE graph held no row and was dropped; its two
+    # readers (graph_mining, structural_balance) and their `augment_from_age`
+    # knob went with it. No live descriptor carried the option.
+    ("HANDLER_OPTIONS", "graph_mining", 1, "augment_from_age",
+     "Augment the mined graph from Apache AGE."),
+    ("HANDLER_OPTIONS", "structural_balance", 1, "augment_from_age",
+     "Augment the signed graph from Apache AGE."),
 )
 
 #: Whole catalog KEYS added after the pin — a new sub-handler or analyst kind,
@@ -86,13 +170,97 @@ POST_PIN_ADDITIONS: tuple[tuple[str, str, str], ...] = (
 #: no longer strips anything, so a removed sub-handler cannot quietly restore
 #: the pin while the catalog has in fact moved twice.
 POST_PIN_KEYS: tuple[tuple[str, str], ...] = (
+    # lane N-L — the series_change detector declares its rule knobs
+    # (`current_days`, `baseline_days`, `n_sigma`, `min_current`,
+    # `min_baseline_points`, `source_ids`). Proven in
+    # tests/runtime/test_ingestion_sinks.py and
+    # tests/data_pkg/test_ingestion_series_acceptance.py.
+    ("HANDLER_OPTIONS", "series_change"),
+    # lane K-2 — the KEV digest declares its three knobs (`source_ids`,
+    # `initial_lookback_hours`, `max_entries`). Proven in
+    # tests/data_pkg/test_cyber_reader_k2.py.
+    ("HANDLER_OPTIONS", "kev_digest"),
+    # lane E-1 — the due-and-absent detector's seven knobs (which types,
+    # each date's tolerance, the calendar's look-back and key-hit floor, the
+    # per-type read cap). Proven in tests/data_pkg/test_due_and_absent.py.
+    ("HANDLER_OPTIONS", "due_and_absent"),
     # wave M / 7a — the CONTRARY-EVIDENCE pass. Seven knobs, six of which bound
     # a cost or a record's shelf life; `paid_rung` is the only one that can
     # cause a charge and it ships OFF, fenced twice (the descriptor's value and
     # a code-side truncation of the ladder to rung 0). Proven in
     # tests/data_pkg/test_contrary_evidence_pass.py.
     ("HANDLER_OPTIONS", "contrary_evidence_pass"),
+    # wave Q / the consult review (2026-09-28) — the competing_hypotheses kind
+    # declares its one knob, `enable_status_transition_resolution`: the
+    # self-consistency resolution sweep's documented opt-out, which had never
+    # been declared and so could neither validate nor reach the handler.
+    # Proven in tests/data_pkg/test_meta_hypothesis_descriptors.py (the
+    # descriptor carrying it validates) and test_competing_hypotheses.py.
+    ("ANALYST_KIND_OPTIONS", "competing_hypotheses"),
+    # wave W1 / SW-12 — the evidence archive's expiry sweep declares its three
+    # knobs (`retention_days`, `batch_limit`, `dry_run`). The sweep itself ships
+    # OFF behind LEGBA_ARCHIVE_RETENTION. Proven in
+    # tests/data_pkg/test_archive_retention.py.
+    ("HANDLER_OPTIONS", "archive_retention"),
+    # wave W5 / WATCH-CLOSE — the consult-watch horizon sweep declares its two
+    # knobs (`batch_limit`, `dry_run`). Proven in
+    # tests/data_pkg/test_watch_horizon_sweep.py.
+    ("HANDLER_OPTIONS", "watch_horizon_sweep"),
+    # wave W2 / F-6 — the consult kind declares `context_ceiling_tokens`, the
+    # input ceiling its calls (the final synthesis above all) honour. Proven in
+    # tests/data_pkg/test_consult_context_ceiling.py. Wave W3 / F-4 adds
+    # `mint_watch_candidates` under the same key (the whole key is post-pin,
+    # so this one line strips both); proven in
+    # tests/data_pkg/test_consult_watch_mint.py.
+    ("ANALYST_KIND_OPTIONS", "consult_on_demand"),
+    # wave W8 / TAX-1 — the cross_target_raw kind declares its one knob,
+    # `slice_per_source_cap` (the same spec inline_target carries). Proven in
+    # tests/data_pkg/test_signal_tag_slice.py.
+    ("ANALYST_KIND_OPTIONS", "cross_target_raw"),
+    # wave W9 / VIEW-1 — the profile projector declares its one knob,
+    # `dry_run` (build every plane's rows, write nothing). Proven in
+    # tests/data_pkg/test_profile_projection.py.
+    ("HANDLER_OPTIONS", "profile_projector"),
+    # wave W11 / INST-1 — the keyed (deterministic) reference kind declares
+    # its list shape and bindings (`feed_*`, `key_*`, `date_field`,
+    # `subject_field`, `list_complete`, `bindings`, …). Proven in
+    # tests/data_pkg/test_inst1_non_country_correctness.py.
+    ("HANDLER_OPTIONS", "reference_deterministic"),
+    # W11-F118 — the pending-enrichment sweep declares its one knob,
+    # `pending_batch` (rows re-enriched per run). Declared in
+    # handler_options_enrichment.py. Proven in
+    # tests/data_pkg/test_analyst_reenrich_pending.py.
+    ("HANDLER_OPTIONS", "reenrich_pending"),
+    # W11-F84 — the verify-backfill sweep declares `backfill_batch` and
+    # `min_age_minutes`. Declared in handler_options_enrichment.py. Proven in
+    # tests/data_pkg/test_analyst_verify_backfill.py.
+    ("HANDLER_OPTIONS", "verify_backfill"),
+    # W11-F138 — the challenge-block re-fetch sweep declares
+    # `refetch_max_per_tick` and `refetch_window_days`. Declared in
+    # handler_options_enrichment.py. Proven in
+    # tests/data_pkg/test_fetch_policy.py.
+    ("HANDLER_OPTIONS", "evidence_refetch"),
+    # ST1-A — the forecast resolver declares NO knob (explicit empty tuple in
+    # handler_options_inquiry.py). Proven in
+    # tests/data_pkg/test_forecast_resolution.py.
+    ("HANDLER_OPTIONS", "forecast_resolver"),
+    # R-1 (type registry): from here on a NEW deterministic handler declares
+    # its knobs in its own declaration module (``input_schema=``) and they are
+    # spliced into HANDLER_OPTIONS by handler_options_declared.py. Those keys
+    # are stripped automatically (see _registry_declared_keys) — no line here.
 )
+
+
+def _registry_declared_keys() -> tuple[tuple[str, str], ...]:
+    """Keys whose knobs live in a type-registry declaration, not the catalogue.
+
+    Derived, not listed: adding a handler that declares its own options never
+    edits this file. The frozen digest still covers every pre-existing key."""
+    from legba.data.option_catalog.handler_options_declared import (
+        declared_handler_option_ids,
+    )
+
+    return tuple(("HANDLER_OPTIONS", k) for k in declared_handler_option_ids())
 
 
 def _strip_post_pin_additions(
@@ -113,7 +281,16 @@ def _strip_post_pin_additions(
             f"POST_PIN_ADDITIONS names {catalog}[{key}].{name}, which is not "
             "in the catalog — delete the line if the knob was removed"
         )
-    for catalog, key in POST_PIN_KEYS:
+    from legba.data.option_catalog.handler_options_base import OptionSpec
+
+    for catalog, key, index, name, doc in POST_PIN_REMOVALS:
+        specs = stripped[catalog][key]
+        assert name not in {sp.name for sp in specs}, (
+            f"POST_PIN_REMOVALS names {catalog}[{key}].{name}, which is still "
+            "in the catalog - delete the line if the knob came back"
+        )
+        specs.insert(index, OptionSpec(name, "bool", doc))
+    for catalog, key in POST_PIN_KEYS + _registry_declared_keys():
         assert stripped[catalog].pop(key, None) is not None, (
             f"POST_PIN_KEYS names {catalog}[{key}], which is not in the "
             "catalog — delete the line if the sub-handler was removed"
@@ -196,7 +373,7 @@ def test_catalog_key_counts_match_the_pin():
     a new sub-handler shows up here as a named line rather than as a bumped
     number nobody can date."""
     post_pin = {c: 0 for c in ("HANDLER_OPTIONS", "ANALYST_KIND_OPTIONS")}
-    for catalog_name, _key in POST_PIN_KEYS:
+    for catalog_name, _key in POST_PIN_KEYS + _registry_declared_keys():
         post_pin[catalog_name] += 1
     assert len(HANDLER_OPTIONS) == (
         FROZEN_HANDLER_OPTIONS_KEY_COUNT + post_pin["HANDLER_OPTIONS"]
@@ -230,3 +407,12 @@ def test_known_option_names_spot_checks_survive_the_move():
         "qualification_bar"
         in handler_options.known_kind_option_names("relationship_reifier")
     )
+
+
+def test_declared_post_pin_removals_are_really_gone():
+    for catalog_name, key, _index, name, _doc in POST_PIN_REMOVALS:
+        catalog = {
+            "HANDLER_OPTIONS": HANDLER_OPTIONS,
+            "ANALYST_KIND_OPTIONS": ANALYST_KIND_OPTIONS,
+        }[catalog_name]
+        assert name not in {sp.name for sp in catalog[key]}

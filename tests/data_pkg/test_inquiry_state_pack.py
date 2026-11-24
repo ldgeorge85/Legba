@@ -48,6 +48,10 @@ pytestmark = pytest.mark.asyncio
 
 _TAG = "inqpack"
 
+#: A future horizon every fixture hypothesis carries (SW-10: a hypothesis with
+#: no horizon is refused at write).
+_HORIZON = "2099-12-31"
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -167,6 +171,27 @@ async def test_ledger_write_then_read_round_trip_through_the_real_binding(pg_poo
     assert (INQUIRY_STATE_PACK_ID, "ledger_read", "completed") in invocations
 
 
+async def test_the_kinds_plan_read_carries_yesterdays_rows(pg_pool):
+    """N-T (2026-11-13) — ``inquiry.read_ledger`` (the PLAN read every cycle
+    opens on) through the REAL binding: a row written last cycle comes back.
+    It read the key ``rows`` from a tool that answers ``entries``, so every
+    cycle since 2026-09-24 opened on an empty ledger."""
+    from legba.data.analysts.inquiry import read_ledger, render_state_block
+
+    analyst_id = f"{_TAG}_carry"
+    binding = _binding(pg_pool, analyst_id=analyst_id)
+    write = await binding.run_tool(
+        "ledger_write",
+        {"kind": "observation", "text": "yesterday's open observation"},
+    )
+    assert write.tool_result.status == "completed", write.tool_result.error
+    rows, failure = await read_ledger({"ledger_read": binding})
+    assert failure == ""
+    assert [r["text"] for r in rows] == ["yesterday's open observation"]
+    block = render_state_block(rows)
+    assert "yesterday's open observation" in block
+
+
 async def test_ledger_write_lands_the_opening_cited_refs(pg_pool):
     """Merge fix (2026-09-24): the inquiry kind sends the refs its entry already
     cites at WRITE time (the yield instrument's "anticipated" test needs them);
@@ -191,12 +216,14 @@ async def test_ledger_read_status_filter(pg_pool):
     binding = _binding(pg_pool, analyst_id=analyst_id)
     opened = await binding.run_tool(
         "ledger_write",
-        {"kind": "hypothesis", "text": "h1", "resolution_test": "t1"},
+        {"kind": "hypothesis", "text": "h1", "resolution_test": "t1",
+         "resolves_by": _HORIZON},
     )
     entry_id = opened.tool_result.output["id"]
     closed = await binding.run_tool(
         "ledger_write",
-        {"kind": "hypothesis", "text": "h2", "resolution_test": "t2"},
+        {"kind": "hypothesis", "text": "h2", "resolution_test": "t2",
+         "resolves_by": _HORIZON},
     )
     closed_id = closed.tool_result.output["id"]
     close_outcome = await binding.run_tool(
@@ -232,7 +259,8 @@ async def test_hypothesis_without_resolution_test_is_refused_by_the_handler(pg_p
     marker = await _invocation_marker(pg_pool)
 
     outcome = await binding.run_tool(
-        "ledger_write", {"kind": "hypothesis", "text": "no test attached"},
+        "ledger_write",
+        {"kind": "hypothesis", "text": "no test attached", "resolves_by": _HORIZON},
     )
     assert outcome.admitted is True
     assert outcome.tool_result.status == "failed"
@@ -249,6 +277,73 @@ async def test_hypothesis_without_resolution_test_is_refused_by_the_handler(pg_p
     # the governor never saw.
     invocations = await _invocations_since(pg_pool, marker)
     assert (INQUIRY_STATE_PACK_ID, "ledger_write", "failed") in invocations
+
+
+# ---------------------------------------------------------------------------
+# THE HORIZON RULE (SW-10) — a hypothesis that can never resolve is un-mintable
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "resolves_by",
+    [None, "", "end of Q4", "2001-01-01"],
+    ids=["absent", "blank", "unreadable", "past"],
+)
+async def test_hypothesis_without_a_horizon_is_refused_by_name(pg_pool, resolves_by):
+    analyst_id = f"{_TAG}_nohorizon"
+    binding = _binding(pg_pool, analyst_id=analyst_id)
+    marker = await _invocation_marker(pg_pool)
+
+    args = {"kind": "hypothesis", "text": "no horizon", "resolution_test": "t"}
+    if resolves_by is not None:
+        args["resolves_by"] = resolves_by
+    outcome = await binding.run_tool("ledger_write", args)
+    assert outcome.admitted is True
+    assert outcome.tool_result.status == "failed"
+    assert outcome.tool_result.error.startswith("hypothesis_refused_no_resolves_by:")
+
+    async with pg_pool.acquire() as conn:
+        n = await conn.fetchval(
+            "SELECT count(*) FROM inquiry_ledger WHERE descriptor_id = $1",
+            analyst_id,
+        )
+    assert n == 0, "a hypothesis with no horizon must write NOTHING"
+    invocations = await _invocations_since(pg_pool, marker)
+    assert (INQUIRY_STATE_PACK_ID, "ledger_write", "failed") in invocations
+
+
+async def test_hypothesis_with_test_and_horizon_lands_and_reads_back(pg_pool):
+    """The persisted row, read back on the real driver: a bare date lands as
+    UTC midnight in the timestamptz column, the test frozen beside it."""
+    from datetime import datetime, timezone
+
+    analyst_id = f"{_TAG}_horizon"
+    binding = _binding(pg_pool, analyst_id=analyst_id)
+    outcome = await binding.run_tool(
+        "ledger_write",
+        {"kind": "hypothesis", "text": "lands", "resolution_test": "t",
+         "resolves_by": "2099-12-31"},
+    )
+    assert outcome.tool_result.status == "completed", outcome.tool_result.error
+    async with pg_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT kind, status, resolution_test, resolves_by "
+            "FROM inquiry_ledger WHERE id = $1::uuid",
+            outcome.tool_result.output["id"],
+        )
+    assert row["kind"] == "hypothesis"
+    assert row["status"] == "open"
+    assert row["resolution_test"] == "t"
+    assert row["resolves_by"] == datetime(2099, 12, 31, tzinfo=timezone.utc)
+
+
+async def test_the_horizon_rule_binds_hypotheses_only(pg_pool):
+    binding = _binding(pg_pool, analyst_id=f"{_TAG}_horizon_kinds")
+    for kind in ("question", "observation", "expectation"):
+        outcome = await binding.run_tool(
+            "ledger_write", {"kind": kind, "text": f"a {kind} with no horizon"},
+        )
+        assert outcome.tool_result.status == "completed", outcome.tool_result.error
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +378,8 @@ async def test_scope_fence_close_never_crosses_descriptors(pg_pool):
 
     written = await binding_a.run_tool(
         "ledger_write",
-        {"kind": "hypothesis", "text": "A's hypothesis", "resolution_test": "t"},
+        {"kind": "hypothesis", "text": "A's hypothesis", "resolution_test": "t",
+         "resolves_by": _HORIZON},
     )
     a_entry_id = written.tool_result.output["id"]
 

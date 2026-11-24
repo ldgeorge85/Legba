@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:fact_decay": {
+      "source": "analyst_fact_decay.yaml",
+      "state": "retired"
+    }
+  }
+}

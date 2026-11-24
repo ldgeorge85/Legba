@@ -80,8 +80,8 @@ HELPER_CASES: dict[str, tuple[str, bool | None]] = {
     "mentions_any":      ('mentions_any(["generator", "nope"])', True),
     "geo_match":         ('geo_match(["BR"])', True),
     "geo_in":            ('geo_in(["BR", "AR"])', True),
-    "has_tag":           ('has_tag("energy")', True),
-    "has_any_tag":       ('has_any_tag(["energy", "nope"])', True),
+    "has_tag":           ('has_tag("src:energy")', True),
+    "has_any_tag":       ('has_any_tag(["src:energy", "nope"])', True),
     "severity_at_least": ('severity_at_least("high")', True),
     "recent":            ("recent(7)", True),
     "signal_age_hours":  ("signal_age_hours() < 1.0", True),
@@ -348,7 +348,7 @@ def test_seeded_g20_subscription_predicates_compile():
 
 
 def test_known_production_predicates_compile_on_their_surfaces():
-    # target_country_g20.yaml subscription residual
+    # target_country_g20_br.yaml subscription residual
     compile_predicate('geo_match(["BR"])', PredicateSurface.TARGET_SCOPE)
     # analyst_country_assessor.yaml subscription.targets selector
     compile_predicate('has_tag("g20")', PredicateSurface.ANALYST_SUBSCRIPTION)

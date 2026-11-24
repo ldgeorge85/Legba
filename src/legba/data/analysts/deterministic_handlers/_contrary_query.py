@@ -49,6 +49,7 @@ survive that far.
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import asyncio
 import logging
@@ -402,7 +403,7 @@ def validate_model_query(claim: str, content: str) -> CounterQuery:
 
 async def propose_counter_query(
     llm: Any, claim: str, *, desk_key: str = "", as_of: str = "",
-    temperature: float = 1.0,
+    temperature: float = HOUSE_TEMPERATURE,
 ) -> CounterQuery:
     """ONE bounded core-plane call. Degrades to a reasoned refusal, never raises.
 

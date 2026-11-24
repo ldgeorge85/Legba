@@ -78,6 +78,7 @@ __all__ = [
     "read_series_history",
     "series_compare",
     "series_history",
+    "series_holdings",
 ]
 
 
@@ -182,6 +183,51 @@ async def desk_subjects(conn, *, desk: str) -> list[dict[str, Any]]:  # type: ig
     ]
 
 
+#: WHAT IS HELD AT ALL — one line per series across every LOADED holding. The
+#: approval gate (``is_head`` + ``state='loaded'``) is in the SQL, not in the
+#: caller, for the same reason it is in ``_LOADED_COLLECTIONS_SQL``: an
+#: unapproved collection is not readable, and a reader must not be able to
+#: forget that. The aggregate runs in the DATABASE so this returns one row per
+#: series (eleven today) rather than the holding itself — it is a catalogue
+#: read, and it must stay one whatever the holdings grow to.
+_SERIES_HOLDINGS_SQL = """
+    SELECT o.series_id,
+           array_agg(DISTINCT o.subject) AS subjects,
+           count(*)                      AS rows_held
+      FROM observations o
+      JOIN collection_descriptors cd
+        ON cd.descriptor_id = o.collection_id
+     WHERE cd.is_head IS TRUE
+       AND cd.state = 'loaded'
+     GROUP BY o.series_id
+     ORDER BY o.series_id
+     LIMIT $1
+"""
+
+
+async def series_holdings(  # type: ignore[no-untyped-def]
+    conn, *, limit: int = 200
+) -> list[dict[str, Any]]:
+    """The CATALOGUE of curated history — one row per series, with its subjects.
+
+    ``[]`` is a real answer and means exactly one thing: no collection is
+    loaded, so no curated history exists to read. It is never widened into
+    "unknown", and a caller that cannot tell the two apart must not call this
+    — the absence of a holding and a failed read are different facts and the
+    callers say which one they have.
+    """
+    rows = await conn.fetch(_SERIES_HOLDINGS_SQL, _clamp(limit, 1000))
+    return [
+        {
+            "series_id": str(r["series_id"]),
+            "subjects": sorted(str(s) for s in (r["subjects"] or []) if s),
+            "rows_held": int(r["rows_held"] or 0),
+        }
+        for r in rows
+        if r["series_id"]
+    ]
+
+
 # ---------------------------------------------------------------------------
 # The three reads
 # ---------------------------------------------------------------------------
@@ -224,6 +270,16 @@ _SERIES_COMPARE_SQL = f"""
      LIMIT $7
 """
 
+
+def _cut_sql(sql: str) -> str:
+    """E2 — ``sql`` with the record-entry cut ``o.loaded_at < $8`` before its
+    ORDER BY (only under ``known_at``; the plain statements are untouched)."""
+    # Imported here, not at module top: this leaf stays slim.
+    from .substrate_known_at import recorded_before_sql
+
+    head, tail = sql.split("     ORDER BY", 1)
+    return f"{head}       AND {recorded_before_sql('o.loaded_at', 8)}\n     ORDER BY{tail}"
+
 _LATEST_PER_SERIES_SQL = f"""
     SELECT DISTINCT ON (o.series_id)
 {_COLUMNS}
@@ -248,6 +304,7 @@ async def series_history(  # type: ignore[no-untyped-def]
     valid_to: date,
     as_of: datetime | None = None,
     limit: int = MAX_SERIES_ROWS,
+    known_at: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """One series for one subject over a valid-time window, latest revision first.
 
@@ -257,11 +314,13 @@ async def series_history(  # type: ignore[no-untyped-def]
 
     ``[]`` when the holding has no row for the window — absence is absence, and
     the caller renders it as such rather than as a zero.
+
+    ``known_at`` (E2): only rows loaded before K (the caller clamps ``as_of``).
     """
     if not collection_ids or not series_id or not subject:
         return []
     rows = await conn.fetch(
-        _SERIES_HISTORY_SQL,
+        _SERIES_HISTORY_SQL if known_at is None else _cut_sql(_SERIES_HISTORY_SQL),
         [str(c) for c in collection_ids],
         str(series_id),
         str(subject),
@@ -269,6 +328,7 @@ async def series_history(  # type: ignore[no-untyped-def]
         valid_to,
         as_of,
         _clamp(limit, MAX_SERIES_ROWS),
+        *(() if known_at is None else (known_at,)),
     )
     return [_row(r) for r in rows]
 
@@ -283,6 +343,7 @@ async def series_compare(  # type: ignore[no-untyped-def]
     valid_to: date,
     as_of: datetime | None = None,
     limit: int = MAX_SERIES_ROWS,
+    known_at: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """One series across several subjects over the same window.
 
@@ -299,7 +360,7 @@ async def series_compare(  # type: ignore[no-untyped-def]
     if not collection_ids or not series_id or not wanted:
         return []
     rows = await conn.fetch(
-        _SERIES_COMPARE_SQL,
+        _SERIES_COMPARE_SQL if known_at is None else _cut_sql(_SERIES_COMPARE_SQL),
         [str(c) for c in collection_ids],
         str(series_id),
         wanted,
@@ -307,6 +368,7 @@ async def series_compare(  # type: ignore[no-untyped-def]
         valid_to,
         as_of,
         _clamp(limit, MAX_SERIES_ROWS),
+        *(() if known_at is None else (known_at,)),
     )
     return [_row(r) for r in rows]
 
@@ -361,6 +423,7 @@ async def read_series_history(  # type: ignore[no-untyped-def]
     as_of: Any = None,
     collection_id: Any = None,
     limit: int = MAX_SERIES_ROWS,
+    known_at: datetime | None = None,
 ) -> dict[str, Any]:
     """``series_history`` — one series, one subject, a bounded valid window."""
     return await _read(
@@ -373,6 +436,7 @@ async def read_series_history(  # type: ignore[no-untyped-def]
         as_of=as_of,
         collection_id=collection_id,
         limit=limit,
+        known_at=known_at,
     )
 
 
@@ -386,6 +450,7 @@ async def read_series_compare(  # type: ignore[no-untyped-def]
     as_of: Any = None,
     collection_id: Any = None,
     limit: int = MAX_SERIES_ROWS,
+    known_at: datetime | None = None,
 ) -> dict[str, Any]:
     """``series_compare`` — one series across several subjects, same window."""
     return await _read(
@@ -398,6 +463,7 @@ async def read_series_compare(  # type: ignore[no-untyped-def]
         as_of=as_of,
         collection_id=collection_id,
         limit=limit,
+        known_at=known_at,
     )
 
 
@@ -412,6 +478,7 @@ async def _read(  # type: ignore[no-untyped-def]
     as_of: Any,
     collection_id: Any,
     limit: int,
+    known_at: datetime | None = None,
 ) -> dict[str, Any]:
     """The shared body of both tools — one connection, one statement.
 
@@ -432,6 +499,8 @@ async def _read(  # type: ignore[no-untyped-def]
         as_of_at = _as_datetime(as_of) if as_of not in (None, "") else None
     except ValueError as exc:
         return _refusal(kind, str(exc))
+    if known_at is not None and (as_of_at is None or as_of_at > known_at):
+        as_of_at = known_at  # E2: the record time is clamped to the cut
     if window_from > window_to:
         return _refusal(
             kind, f"from {window_from.isoformat()} is after to {window_to.isoformat()}"
@@ -465,6 +534,7 @@ async def _read(  # type: ignore[no-untyped-def]
                 valid_to=window_to,
                 as_of=as_of_at,
                 limit=limit,
+                known_at=known_at,
             )
         else:
             rows = await series_compare(
@@ -476,9 +546,10 @@ async def _read(  # type: ignore[no-untyped-def]
                 valid_to=window_to,
                 as_of=as_of_at,
                 limit=limit,
+                known_at=known_at,
             )
 
-    return {
+    out = {
         "rows": rows,
         # The substrate ids the consult loop cites. An observations id is a
         # real row id, so it belongs here exactly as a signal id does.
@@ -505,6 +576,12 @@ async def _read(  # type: ignore[no-untyped-def]
             "with both."
         ),
     }
+    if known_at is None:
+        return out
+    from .substrate_known_at import cut_stamp
+
+    return {**out, "known_at_cut": cut_stamp(
+        known_at, dropped=0, how="observations.loaded_at < K; record_time <= K")}
 
 
 def _refusal(kind: str, why: str) -> dict[str, Any]:

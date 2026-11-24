@@ -159,6 +159,14 @@ ANALYST_FILES = [
     # the T7 cross-desk correlation guard de-dupes shared underlying signals.
     "analyst_escalation_composition.yaml",   # NEW — S2-T4 (thematic escalation composition over all desks)
     "analyst_escalation_dyad.yaml",          # NEW — S2-T5 (IR-IL thematic escalation dyad; thematic_desks=[ir,il], guard fires on shared signals)
+    # W5 (2026-11-07) — a THEME-filtered thematic (thematic_theme.py): several
+    # units' heads across every desk, admitted when the quoted lead carries a
+    # declared term. Ships `state: draft` (no actor, no reminder); activation is
+    # its descriptors/LIFECYCLE.md row plus the world_assessor other_analysts line.
+    "analyst_hybrid_threat_composition.yaml",  # NEW — W5 (cross-border hybrid activity; assembly-only, SEAMS #75)
+    # ST1-A (2026-11-13) — the forecast ledger's resolution job: rule proposals
+    # (no model) into forecast_resolution_records (0244). Ships `state: draft`.
+    "analyst_forecast_resolver.yaml",          # NEW — ST1-A (6-hourly META, deterministic, $0)
     # D-6 — THE ASSESSMENT CHANNEL. Registered so it EXISTS in the registry and
     # can be promoted through the lifecycle route without a deploy; it ships
     # `state: draft`, which creates no live actor and registers no cadence

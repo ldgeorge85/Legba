@@ -28,9 +28,25 @@
 # pages. Anything ON it that stops failing is reported in the summary as a
 # stale entry to retire — the list is meant to shrink.
 #
-# ALERT-ONLY. It never restarts, redeploys, or mutates the stack; the tests run
-# in a throwaway container against `legba_pivot_test`, never the live `legba`
-# DB (see scripts/run_tests_in_container.sh, which owns that pinning).
+# ALERT-ONLY. It never restarts, redeploys, or mutates the stack. Since X1-A4
+# (2026-10-08) the tests run on the ISOLATED test substrate
+# (deploy/compose.test.yml: its own Postgres, NATS, Redis, Qdrant and journal
+# AGE fixture, in one network namespace the test container joins), never the
+# production services; the stack is torn down and recreated FRESH at the start
+# of each night so pollution can only live as long as one run.
+#
+# THE VERDICT (X1-A4):
+#   * posts to its OWN ntfy topic, `nightly` (PASS and FAIL alike — the
+#     channel is the suite's, so a quiet night is visible as a quiet night),
+#     never the shared `legba-alerts` topic;
+#   * appends ONE ledger line to /var/log/legba_nightly_suite.log:
+#       NIGHTLY_VERDICT <utc> sha=<full sha> verdict=PASS|FAIL
+#         phases=lint,ordered,shuffled dirty=0|1 run=<run id>
+#         ordered=<passed>p/<failed>f/<errors>e shuffled=... unexpected=<n>
+#     scripts/rolling_deploy.sh's NIGHTLY GATE reads these lines: it refuses
+#     to roll a SHA whose newest record (on that SHA or an ancestor, full
+#     suite, clean tree) is FAIL. A record from a dirty tree or a run without
+#     the `ordered` phase is written but never vouches for a SHA.
 #
 # INSTALL: deploy/cron.d/legba-nightly-suite (operator copies it into
 # /etc/cron.d/). Docs: docs/RUNBOOK.md §24.4.
@@ -52,7 +68,13 @@ LOG_ROOT="${LEGBA_NIGHTLY_LOG_DIR:-/var/log/legba/nightly}"
 # Rotation is this script's own job. P6 §6 item 11 is "no logrotate for any
 # /var/log/legba*.log", and the log collector answers that the same way.
 KEEP_RUNS="${LEGBA_NIGHTLY_KEEP_RUNS:-14}"
-NTFY_URL="${NTFY_URL:-http://127.0.0.1:8093/legba-alerts}"
+# The suite's OWN topic (X1-A4). Deliberately not $NTFY_URL: an inherited
+# shared-alerts URL must not reroute the nightly back onto legba-alerts.
+NTFY_URL="${LEGBA_NIGHTLY_NTFY_URL:-http://127.0.0.1:8093/nightly}"
+# The host-wide test lock every lane and the nightly share: the isolated test
+# stack is ONE stack, and two runs on it corrupt each other's fixtures exactly
+# as two runs on the old shared `legba_pivot_test` did.
+TEST_LOCK_FILE="${LEGBA_TEST_LOCK_FILE:-/tmp/legba-container-tests.lock}"
 LOCK_FILE="${LEGBA_NIGHTLY_LOCK_FILE:-/var/lock/legba-nightly-suite.lock}"
 # The cron-level log (see deploy/cron.d/legba-nightly-suite). It only ever
 # holds a duplicate of the per-run summary plus anything that goes wrong
@@ -68,6 +90,12 @@ SELF_LOG_MAX_BYTES="${LEGBA_NIGHTLY_SELF_LOG_MAX:-5242880}"   # 5 MiB
 PHASE_TIMEOUT="${LEGBA_NIGHTLY_PHASE_TIMEOUT:-7200}"
 # Which phases to run, space- or comma-separated. Full set by default.
 PHASES="${PHASES:-lint ordered shuffled}"
+# The read-only hygiene reports (roll 85): list-route weights against their
+# budgets, schema objects no migration declares, indexes nobody reads. They
+# never touch the verdict; 0 skips them.
+HYGIENE="${LEGBA_NIGHTLY_HYGIENE:-1}"
+HYGIENE_TIMEOUT="${LEGBA_NIGHTLY_HYGIENE_TIMEOUT:-300}"
+REGISTRY_BASE="${LEGBA_NIGHTLY_REGISTRY_BASE:-http://127.0.0.1:8090}"
 # Shuffle seed. Generated per run and printed everywhere it could be needed;
 # pin it to replay a specific night.
 SEED="${LEGBA_NIGHTLY_SEED:-$(( (RANDOM << 15) | RANDOM ))}"
@@ -141,22 +169,23 @@ KNOWN_FAILURES=(
   # only drops the deploy/schedule surface. See SEAMS #53 "Guard rail".)
 
   # --- 2. LEGBA_TEST_STRICT infra escalations ------------------------------
-  # Strict mode escalates INFRA-GATED skips to FAILURES on purpose, so a
-  # degraded rig cannot silently shrink coverage. On a host where the LIVE
-  # stack already owns the ports and NATS subjects these tests want, that
-  # escalation is the rig talking, not the code — each one logs its own
-  # "[LEGBA_TEST_STRICT] infra-gated skip escalated to FAILURE" line with the
-  # reason. Documented in RUNBOOK §24.1 and PROJECT_STATE ("the 9 errors are
-  # port-6090/NATS contention"). They would pass on a host with the stack
-  # down, which is the definition of environmental.
-  'tests/data_pkg/agency/test_agency_hard_gate\.py::test_process_media_pack_enqueues_real_job'
-  'tests/data_pkg/test_output_webhook\.py::test_emit_4xx_does_not_dlq'
-  'tests/data_pkg/test_output_webhook\.py::test_emit_retry_exhausted_routes_to_dlq'
-  'tests/runtime/test_critic_descriptor_e2e\.py::test_critic_actor_activates_and_writes_critique_through_daprd'
-  'tests/runtime/test_critic_descriptor_e2e\.py::test_critic_heterogeneity_guard_rejects_self_correlated'
-  'tests/runtime/test_critic_descriptor_e2e\.py::test_critic_missing_rubric_rejection'
-  'tests/runtime/test_webhook_alert_e2e\.py::test_webhook_4xx_no_retry_no_dlq'
-  'tests/runtime/test_webhook_alert_e2e\.py::test_webhook_5xx_retries_then_dlqs'
+  # RETIRED 2026-11-06 (all eight). Strict mode escalates INFRA-GATED skips
+  # to failures, and on the old rig (the LIVE stack owning port 6090 and the
+  # live NATS subjects) eight tests failed that way every night:
+  # agency_hard_gate::test_process_media_pack_enqueues_real_job, the two
+  # test_output_webhook emit tests, the three test_critic_descriptor_e2e
+  # daprd tests and the two test_webhook_alert_e2e tests. ROOT CAUSE REMOVED
+  # 2026-10-08 (X1-A4): the suite runs in the isolated test namespace
+  # (deploy/compose.test.yml), the five isolated-NATS tests run and pass
+  # (LEGBA_TEST_ISOLATED_NATS=1) and the three critic e2e tests are a
+  # declared opt-in (LEGBA_TEST_DAPR_APP_CHANNEL=1). Evidence for the
+  # retirement: none of the eight appears as FAILED/ERROR in any of the 14
+  # kept nightly runs (20261024 .. 20261106, ordered and shuffled), and each
+  # printed "allowlist entry matched nothing" on every one of those nights.
+  # This is a rooted cause, not a quiet streak. The classifier test
+  # (tests/data_pkg/test_host_nightly_suite_classifier.py) now injects its own
+  # synthetic entries into a copy of this script instead of borrowing a live
+  # one, so this array may stay empty.
   # (2026-09-09: the a2a-mount entry joined 09-01 retired — the nightly's stale-entry report matched nothing on
   # 09-09, i.e. the probe xfails normally in the rig again; per this list's rule.)
 )
@@ -373,7 +402,15 @@ say() { echo "$(now_iso) [nightly] $*" | tee -a "$SUMMARY"; }
 # host_llm_heartbeat.sh / host_stall_watchdog.sh. ntfy is consumed through the
 # WEB UI (${LEGBA_ALERT_WEB_URL:?configure your ntfy web UI URL}), never a
 # phone app.
+# L-1 (single alert path): raise through scripts/lib/legba_alert.sh first; the
+# direct push below is the fallback (and the only path unless LEGBA_ALERT_RAISE=1).
+_legba_alert_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/legba_alert.sh"
+if [ -r "$_legba_alert_lib" ]; then . "$_legba_alert_lib"; else legba_raise() { return 1; }; fi
+
 page() {
+  # One episode per run and message (each run's verdict is its own event).
+  legba_raise nightly_suite "$(legba_severity_for_priority "$1")" nightly "$2" "$4" \
+    --dedupe-key "nightly_suite:${RUN_ID:-$(date -u +%FT%T)}:$(legba_slug "$2" | cut -c1-40)" && return 0
   curl -s -m 10 -H "X-Title: $2" -H "X-Priority: $1" -H "X-Tags: $3" \
     -d "$4" "$NTFY_URL" >/dev/null 2>&1 \
     || say "WARN ntfy send failed ($2)"
@@ -435,6 +472,31 @@ say "shuffle seed=${SEED}"
 FAILED_PHASES=()
 UNEXPECTED=()
 SEEN_KNOWN=()
+PHASE_COUNTS=()
+FRESH_STACK_PENDING=1
+HEAD_FULL_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+# A record from a tree with uncommitted TRACKED changes did not test the SHA it
+# names; it is written (the operator can still read it) but never vouches.
+if git -C "$REPO_ROOT" diff --quiet HEAD -- 2>/dev/null; then TREE_DIRTY=0; else TREE_DIRTY=1; fi
+
+# counts_of "<pytest tail line>" -> "<passed>p/<failed>f/<errors>e" ("-" when
+# the phase printed no counts line at all: absence, never a zero).
+counts_of() {
+  local line="$1" p f e
+  [ -z "$line" ] && { echo "-"; return; }
+  p="$(grep -oE '[0-9]+ passed' <<<"$line" | grep -oE '^[0-9]+' || true)"
+  f="$(grep -oE '[0-9]+ failed' <<<"$line" | grep -oE '^[0-9]+' || true)"
+  e="$(grep -oE '[0-9]+ errors?' <<<"$line" | grep -oE '^[0-9]+' || true)"
+  echo "${p:-0}p/${f:-0}f/${e:-0}e"
+}
+
+# record_verdict PASS|FAIL — the one ledger line the roll gate reads.
+record_verdict() {
+  local line
+  line="NIGHTLY_VERDICT $(now_iso) sha=${HEAD_FULL_SHA} verdict=$1 phases=$(tr ' ' ',' <<<"$(echo ${PHASES//,/ })") dirty=${TREE_DIRTY} run=${RUN_ID} ${PHASE_COUNTS[*]-} unexpected=${#UNEXPECTED[@]} advisory=${ADVISORY_N:-0} gate_phases=${GATE_PHASES:-ordered}"
+  echo "$line" >> "$SELF_LOG" 2>/dev/null || say "WARN could not append the verdict line to ${SELF_LOG}"
+  echo "$line" >> "$SUMMARY"
+}
 
 wants_phase() {
   case " ${PHASES//,/ } " in *" $1 "*) return 0;; *) return 1;; esac
@@ -450,9 +512,17 @@ run_pytest_phase() {
   # for a dry run; in cron it is the main checkout, which is also the only
   # checkout with the gitignored seed data (seeds/) present. A worktree run
   # will show seed-dependent failures that the real nightly never sees.
-  LEGBA_REPO_ROOT="$REPO_ROOT" timeout "$PHASE_TIMEOUT" \
-    bash "$RUNNER" tests/ -rfE "$@" >"$log" 2>&1
+  # The FIRST pytest phase of the night starts from a FRESH test stack
+  # (LEGBA_TEST_FRESH=1 tears deploy/compose.test.yml down and back up); the
+  # second reuses it, as one suite session would.
+  local fresh=0
+  if [ "$FRESH_STACK_PENDING" -eq 1 ]; then fresh=1; FRESH_STACK_PENDING=0; fi
+  local t0=$SECONDS
+  flock -w "$PHASE_TIMEOUT" "$TEST_LOCK_FILE" \
+    env LEGBA_REPO_ROOT="$REPO_ROOT" LEGBA_TEST_FRESH="$fresh" LEGBA_TEST_SHUFFLE_SEED="$SEED" \
+    timeout "$PHASE_TIMEOUT" bash "$RUNNER" tests/ -rfE "$@" >"$log" 2>&1
   rc=$?
+  say "phase=${name} wall=$((SECONDS - t0))s fresh_stack=${fresh}"
   if [ "$rc" -eq 124 ]; then
     say "phase=${name} TIMEOUT after ${PHASE_TIMEOUT}s"
     FAILED_PHASES+=("${name}:timeout")
@@ -479,6 +549,7 @@ run_pytest_phase() {
   # pytest -q ends with a bare counts line: "31 failed, 10337 passed, ... in 936.03s".
   tail_line="$(grep -E '(^|[[:space:]])[0-9]+ (passed|failed|error)' "$log" | tail -1)"
   say "phase=${name} rc=${rc} :: ${tail_line}"
+  PHASE_COUNTS+=("${name}=$(counts_of "$tail_line")")
 
   if [ "${#phase_unexpected[@]}" -gt 0 ]; then
     UNEXPECTED+=("${phase_unexpected[@]}")
@@ -532,6 +603,31 @@ wants_phase ordered && run_pytest_phase ordered -p no:randomly
 # --- phase 3: shuffled ------------------------------------------------------
 wants_phase shuffled && run_pytest_phase shuffled "--randomly-seed=${SEED}"
 
+# --- hygiene reports (read-only; never gate, never page) ---------------------
+# The three P-8 scripts were written "nightly-runnable" and had no schedule.
+# Each runs read-only (GETs; a read-only transaction with a 60 s statement
+# timeout), its output goes to the run dir, and one line per report goes to
+# the summary. Their exit codes (1 = something to look at, 2 = could not
+# connect) are LOGGED only: nothing here is added to the verdict.
+run_hygiene_report() {
+  local name="$1"; shift
+  local log="${RUN_DIR}/hygiene_${name}.log" rc
+  ( cd "$REPO_ROOT" && timeout "$HYGIENE_TIMEOUT" python3 "scripts/${name}.py" "$@" ) >"$log" 2>&1
+  rc=$?
+  case "$rc" in
+    0) say "hygiene ${name}: clean" ;;
+    1) say "hygiene ${name}: findings (rc=1) — ${log}" ;;
+    124) say "hygiene ${name}: timed out after ${HYGIENE_TIMEOUT}s — ${log}" ;;
+    *) say "hygiene ${name}: did not run cleanly (rc=${rc}) — ${log}" ;;
+  esac
+  return 0
+}
+if [ "$HYGIENE" != "0" ]; then
+  run_hygiene_report report_list_weights --base "$REGISTRY_BASE"
+  run_hygiene_report report_schema_drift
+  run_hygiene_report report_unused_indexes
+fi
+
 # --- stale allowlist entries ------------------------------------------------
 # An entry that matched nothing all night is either fixed or misspelled. Both
 # are worth knowing; neither is worth a page.
@@ -549,17 +645,60 @@ if wants_phase ordered || wants_phase shuffled; then
 fi
 
 # --- verdict ----------------------------------------------------------------
-REPLAY="LEGBA_REPO_ROOT=${REPO_ROOT} bash ${RUNNER} tests/ --randomly-seed=${SEED}"
+REPLAY="LEGBA_REPO_ROOT=${REPO_ROOT} LEGBA_TEST_SHUFFLE_SEED=${SEED} bash ${RUNNER} tests/"
 say "known-failure hits: ${#SEEN_KNOWN[@]}"
 
-if [ "${#UNEXPECTED[@]}" -gt 0 ]; then
-  say "VERDICT FAIL phases=[${FAILED_PHASES[*]}] unexpected=${#UNEXPECTED[@]}"
+# --- which phases GATE (X4 NIGHTLY, W11-F81; the operator's grant 10-16) ------
+# LEGBA_NIGHTLY_GATE_PHASES names the pytest phases whose unexpected failures
+# turn the verdict to FAIL (the roll gate refuses on that). Default `ordered`:
+# the ordered run is the reproducible one; a shuffled failure is the code plus
+# ONE permutation against a session-shared database, and six nights of FAIL
+# with ordered green taught the "refuse the roll" reflex. Lint always gates,
+# and `ordered` must be listed (the roll gate only trusts records that ran it)
+# — a value without it is refused with a WARN and the default applies. Failures
+# in a non-gating phase are ADVISORY: paged on the nightly topic with the seed,
+# written to the verdict line as advisory=<n>, never a FAIL.
+GATE_PHASES="${LEGBA_NIGHTLY_GATE_PHASES:-ordered}"
+case " ${GATE_PHASES//,/ } " in *" ordered "*) : ;; *)
+  say "WARN: LEGBA_NIGHTLY_GATE_PHASES='${GATE_PHASES}' does not list 'ordered' — using the default 'ordered'"
+  GATE_PHASES="ordered" ;;
+esac
+GATING=(); ADVISORY=(); GATING_PHASES=(); ADVISORY_PHASES=()
+for entry in ${UNEXPECTED[@]+"${UNEXPECTED[@]}"}; do
+  ph="${entry%%:*}"
+  case " lint ${GATE_PHASES//,/ } " in
+    *" ${ph} "*) GATING+=("$entry") ;;
+    *) ADVISORY+=("$entry") ;;
+  esac
+done
+for fp in ${FAILED_PHASES[@]+"${FAILED_PHASES[@]}"}; do
+  base="${fp%%:*}"
+  case " lint ${GATE_PHASES//,/ } " in
+    *" ${base} "*) GATING_PHASES+=("$fp") ;;
+    *) ADVISORY_PHASES+=("$fp") ;;
+  esac
+done
+if [ "${#GATING[@]}" -gt 0 ] || [ "${#GATING_PHASES[@]}" -gt 0 ]; then
+  say "VERDICT FAIL phases=[${GATING_PHASES[*]}] unexpected=${#GATING[@]} advisory=${#ADVISORY[@]} gate_phases=${GATE_PHASES}"
   printf '%s\n' "${UNEXPECTED[@]}" | tee -a "$SUMMARY"
   body="$(printf 'Nightly suite FAILED on %s (%s).\n\n%s\n\nReplay the shuffled pass with the SAME order:\n  %s\n\nFull logs: %s\n' \
     "$HEAD_BRANCH" "$HEAD_SHA" "$(printf '%s\n' "${UNEXPECTED[@]}" | head -25)" "$REPLAY" "$RUN_DIR")"
   page 4 "Legba: nightly suite FAILED" "warning,test_tube" "$body"
+  record_verdict FAIL
+elif [ "${#ADVISORY[@]}" -gt 0 ] || [ "${#ADVISORY_PHASES[@]}" -gt 0 ]; then
+  say "VERDICT PASS (advisory) phases=[${PHASES}] seed=${SEED} advisory=${#ADVISORY[@]} advisory_phases=[${ADVISORY_PHASES[*]}] gate_phases=${GATE_PHASES}"
+  printf '%s\n' ${ADVISORY[@]+"${ADVISORY[@]}"} | tee -a "$SUMMARY"
+  body="$(printf 'Nightly suite PASSED its gating phases on %s (%s); %s advisory failure(s) in a non-gating phase.\n\n%s\n\nReplay with the SAME order:\n  %s\n\nFull logs: %s\n' \
+    "$HEAD_BRANCH" "$HEAD_SHA" "${#ADVISORY[@]}" "$(printf '%s\n' ${ADVISORY[@]+"${ADVISORY[@]}"} | head -25)" "$REPLAY" "$RUN_DIR")"
+  page 3 "Legba: nightly advisory (${#ADVISORY[@]} in a non-gating phase)" "test_tube" "$body"
+  ADVISORY_N="${#ADVISORY[@]}"
+  record_verdict PASS
 else
   say "VERDICT PASS phases=[${PHASES}] seed=${SEED}"
+  page 2 "Legba: nightly suite PASS" "white_check_mark,test_tube" \
+    "$(printf 'Nightly suite PASS on %s (%s).\n%s\nseed=%s\nFull logs: %s\n' \
+        "$HEAD_BRANCH" "$HEAD_SHA" "${PHASE_COUNTS[*]-}" "$SEED" "$RUN_DIR")"
+  record_verdict PASS
 fi
 
 # --- rotation ---------------------------------------------------------------

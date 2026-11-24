@@ -1,0 +1,230 @@
+# C-2 — the labelled set for the claim_as_fact attribution check.
+# EVERY sentence, group, victim and tracker below is INVENTED (no real claim,
+# no real leak, no real organisation). Columns: split|category|label|claimant|sentence
+#   split     dev (the rule was tuned on these) | holdout (written after tuning, not tuned on)
+#   label     fair = presents the claim AS a claim (must pass the floor)
+#             fact = states / presents the claimed event as fact, through a
+#                    factive verb, or through a party other than the claimant
+#                    (must fail the floor as claim_as_fact)
+#   claimant  G = {"claimant": "Nightjar", "aliases": ["Nightjar Team", "NJ Team"]}
+#             T = {"claimant": "Example Tracker (leak-site tracker)"}
+dev|attributed|fair|G|Nightjar posted Acme Widgets as a victim on 12 November [1].
+dev|attributed|fair|G|Nightjar claimed an attack on Acme Widgets [1].
+dev|attributed|fair|G|Nightjar claimed responsibility for an intrusion at Acme Widgets [1].
+dev|attributed|fair|G|Nightjar listed Acme Widgets on its leak site on 12 November [1].
+dev|attributed|fair|G|According to Nightjar, Acme Widgets was breached in early November [1].
+dev|attributed|fair|G|Acme Widgets was breached in early November, according to Nightjar [1].
+dev|attributed|fair|G|Acme Widgets was breached in early November, Nightjar claimed [1].
+dev|attributed|fair|G|Acme Widgets appears on Nightjar's leak site as of 12 November [1].
+dev|attributed|fair|G|Acme Widgets was listed on Nightjar's leak site on 12 November [1].
+dev|attributed|fair|G|Acme Widgets was listed by Nightjar on 12 November [1].
+dev|attributed|fair|G|Acme Widgets was named as a victim by Nightjar [1].
+dev|attributed|fair|G|Nightjar's leak site lists Acme Widgets as a victim [1].
+dev|attributed|fair|G|Nightjar's leak site now lists Acme Widgets with a seven-day deadline [1].
+dev|attributed|fair|G|Nightjar says it encrypted Acme Widgets' file servers [1].
+dev|attributed|fair|G|Nightjar said it stole 400 GB from Acme Widgets [1].
+dev|attributed|fair|G|Nightjar alleges that it exfiltrated payroll records from Acme Widgets [1].
+dev|attributed|fair|G|Nightjar has threatened to publish data it says it took from Acme Widgets [1].
+dev|attributed|fair|G|Nightjar, a ransomware group active since 2025, claimed an attack on Bolt Logistics [1].
+dev|attributed|fair|G|In a post on 12 November, Nightjar claimed it had compromised Bolt Logistics [1].
+dev|attributed|fair|G|Nightjar's claim that it breached Bolt Logistics has not been independently verified [1].
+dev|attributed|fair|G|A post by Nightjar names Bolt Logistics as a victim [1].
+dev|attributed|fair|G|Nightjar announced on its site that Cedar Health had been breached [1].
+dev|attributed|fair|G|Nightjar published a countdown for Cedar Health on its leak site [1].
+dev|attributed|fair|G|Cedar Health was added to Nightjar's victim list on 11 November [1].
+dev|attributed|fair|G|Cedar Health surfaced on Nightjar's leak site on 11 November [1].
+dev|attributed|fair|G|Nightjar boasted that it had shut down Cedar Health's scheduling system [1].
+dev|attributed|fair|G|Nightjar wrote that Cedar Health refused to pay [1].
+dev|attributed|fair|G|Per Nightjar, the attack on Cedar Health began on 9 November [1].
+dev|attributed|fair|G|As claimed by Nightjar, Cedar Health's network was encrypted [1].
+dev|attributed|fair|G|Cedar Health's network was encrypted, Nightjar asserted [1].
+dev|attributed|fair|G|Nightjar asserted that Cedar Health's network was encrypted [1].
+dev|attributed|fair|G|Nightjar's post says the data of Delta Freight will be released on Friday [1].
+dev|attributed|fair|G|Nightjar is claiming that it holds 2 TB of Delta Freight data [1].
+dev|attributed|fair|G|Nightjar reportedly claimed the Delta Freight intrusion in a post [1].
+dev|attributed|fair|G|Nightjar also listed Delta Freight and Echo Mills on 13 November [1].
+dev|attributed|fair|G|Nightjar took responsibility for the disruption at Delta Freight [1].
+dev|attributed|fair|G|Delta Freight was claimed by Nightjar on 13 November [1].
+dev|attributed|fair|G|Nightjar's announcement claims that Echo Mills paid nothing [1].
+dev|attributed|fair|G|The Nightjar post lists Echo Mills with 120 GB of data [1].
+dev|attributed|fair|G|Echo Mills is listed on Nightjar's site with a deadline of 20 November [1].
+dev|attributed|fair|G|Nightjar listed Echo Mills, which it says it breached in October [1].
+dev|attributed|fair|G|Echo Mills, which Nightjar listed on 13 November, has not commented [1].
+dev|attributed|fair|G|Nightjar claimed the Echo Mills attack and said it would leak the files on Monday [1].
+dev|attributed|fair|G|Nightjar told reporters through its site that Echo Mills was hacked [1].
+dev|attributed|fair|G|Nightjar threatened to leak Echo Mills' data unless paid [1].
+dev|attributed|fair|G|Nightjar's listing of Foxglove Bank appeared on 14 November [1].
+dev|attributed|fair|G|Foxglove Bank appears in Nightjar's listing dated 14 November [1].
+dev|attributed|fair|G|Echo Mills was attacked by Nightjar, the group claimed [1].
+dev|attributed|fair|G|Garnet Foods paid the ransom, Nightjar said [1].
+dev|attributed|fair|G|Nightjar posted files it says were stolen from Delta Freight [1].
+dev|role|fair|G|The group's leak site lists Bolt Logistics [1].
+dev|role|fair|G|According to the group's leak site, Bolt Logistics was attacked on 10 November [1].
+dev|role|fair|G|The group claimed it encrypted Bolt Logistics' systems [1].
+dev|role|fair|G|The gang posted Cedar Health's name with a countdown [1].
+dev|role|fair|G|The operators claim they encrypted Cedar Health's servers [1].
+dev|role|fair|G|The threat actor listed Delta Freight on 13 November [1].
+dev|tracker|fair|T|Example Tracker listed Foxglove Bank as a Nightjar victim on 14 November [2].
+dev|tracker|fair|T|The tracker lists Foxglove Bank under Nightjar [2].
+dev|tracker|fair|T|According to the tracker, Nightjar posted Foxglove Bank on 14 November [2].
+dev|tracker|fair|T|Example Tracker shows Foxglove Bank among Nightjar's victims [2].
+dev|tracker|fair|T|Example Tracker records that Nightjar named Foxglove Bank [2].
+dev|tracker|fair|T|Foxglove Bank was listed by Example Tracker as a Nightjar victim [2].
+dev|tracker|fair|T|Example Tracker's feed lists Foxglove Bank [2].
+dev|tracker|fair|T|Per Example Tracker, Foxglove Bank was posted by Nightjar [2].
+dev|tracker|fair|T|Example Tracker added Garnet Foods to its Nightjar page on 15 November [2].
+dev|tracker|fair|T|Garnet Foods appears on the tracker's Nightjar page [2].
+dev|tracker|fair|T|Foxglove Bank was breached by Nightjar, Example Tracker reports [2].
+dev|alias|fair|G|Nightjar Team posted Garnet Foods as a victim [1].
+dev|alias|fair|G|NJ Team claimed the Garnet Foods attack [1].
+dev|alias|fair|G|According to NJ Team, Garnet Foods' backups were deleted [1].
+dev|alias|fair|G|Garnet Foods was listed by Nightjar Team on 15 November [1].
+dev|alias|fair|G|NJ Team's leak site names Garnet Foods [1].
+dev|hedged|fair|G|Nightjar claims, without evidence so far, that Garnet Foods was breached [1].
+dev|hedged|fair|G|Nightjar's unverified claim suggests Garnet Foods may have been breached [1].
+dev|hedged|fair|G|Garnet Foods may have been breached, Nightjar claimed [1].
+dev|hedged|fair|G|If Nightjar's claim is accurate, Garnet Foods lost customer records [1].
+dev|hedged|fair|G|Nightjar's claim could not be verified, and Garnet Foods has not commented [1].
+dev|hedged|fair|G|Nightjar claims to have hit Hazel Energy, a claim that remains unconfirmed [1].
+dev|hedged|fair|G|Nightjar alleged, in a post that could not be verified, that Hazel Energy was compromised [1].
+dev|hedged|fair|G|It is not known whether Hazel Energy was breached; Nightjar listed it on 16 November [1].
+dev|hedged|fair|G|Nightjar listed Hazel Energy on 16 November; the company has not confirmed any incident [1].
+dev|hedged|fair|G|Hazel Energy is named on Nightjar's site, though the claim is unverified [1].
+dev|quoted|fair|G|Nightjar wrote: "We have encrypted every server at Hazel Energy" [1].
+dev|quoted|fair|G|"Hazel Energy ignored us," Nightjar posted [1].
+dev|quoted|fair|G|"We hacked Iris Telecom," Nightjar said on its site [1].
+dev|quoted|fair|G|Nightjar's post reads: "Iris Telecom data will be published" [1].
+dev|quoted|fair|G|Iris Telecom was described as "fully compromised" by Nightjar [1].
+dev|negated|fair|G|Nightjar did not claim the attack on Iris Telecom [1].
+dev|negated|fair|G|Nightjar has not posted any data from Iris Telecom [1].
+dev|negated|fair|G|Nightjar never named Iris Telecom as a victim [1].
+dev|negated|fair|G|Nightjar removed Iris Telecom from its leak site on 17 November [1].
+dev|foreign|fair|G|Selon Nightjar, Iris Telecom a été piraté le 10 novembre [1].
+dev|foreign|fair|G|Nightjar revendique l'attaque contre Iris Telecom [1].
+dev|foreign|fair|G|Según Nightjar, Juniper Seguros fue atacada [1].
+dev|foreign|fair|G|Nightjar reivindicó el ataque contra Juniper Seguros [1].
+dev|foreign|fair|G|Laut Nightjar wurde Juniper Versicherung angegriffen [1].
+dev|foreign|fair|G|Nightjar behauptet, Juniper Versicherung gehackt zu haben [1].
+dev|foreign|fair|G|Nightjar zufolge wurden Daten von Juniper Versicherung gestohlen [1].
+dev|foreign|fair|G|Segundo Nightjar, a Juniper Seguros foi atacada [1].
+dev|foreign|fair|G|Secondo Nightjar, Juniper Assicurazioni è stata attaccata [1].
+dev|foreign|fair|G|Juniper Seguros fue listada por Nightjar el 18 de noviembre [1].
+dev|mixed|fact|G|Nightjar claimed the attack, and Acme Widgets' plant was shut down for a week [1].
+dev|mixed|fact|G|Nightjar listed Acme Widgets, which suffered a ransomware attack in October [1].
+dev|mixed|fact|G|Nightjar posted Acme Widgets after the company was breached in October [1].
+dev|mixed|fact|G|After the attack on Acme Widgets, Nightjar posted its data [1].
+dev|mixed|fact|G|Nightjar claimed responsibility for the attack on Bolt Logistics, which disrupted deliveries across the region [1].
+dev|mixed|fact|G|Nightjar said it encrypted Bolt Logistics' servers; the company paid a ransom on Tuesday [1].
+dev|mixed|fact|G|Bolt Logistics was hit by ransomware and Nightjar later listed it [1].
+dev|mixed|fact|G|Following the breach of Cedar Health, Nightjar claimed responsibility [1].
+dev|mixed|fact|G|Nightjar listed Cedar Health, but the hospital's systems were already offline after the intrusion [1].
+dev|mixed|fact|G|Cedar Health lost patient records, Nightjar claimed, and the clinic closed for two days [1].
+dev|mixed|fact|G|Nightjar posted Delta Freight's data, which confirms that the company was breached [1].
+dev|mixed|fact|G|Nightjar claimed the intrusion at Delta Freight, an attack that crippled its billing system [1].
+dev|mixed|fact|G|Delta Freight's servers were encrypted on 12 November; Nightjar later claimed the attack [1].
+dev|mixed|fact|G|Nightjar claimed it hacked Echo Mills, which has confirmed the breach [1].
+dev|mixed|fact|G|Echo Mills confirmed the breach that Nightjar claimed [1].
+dev|mixed|fact|G|Nightjar, which breached Foxglove Bank last month, has now listed Garnet Foods [1].
+dev|mixed|fact|G|Nightjar listed Garnet Foods because the company had refused to pay after the breach [1].
+dev|mixed|fact|G|Nightjar said Garnet Foods paid the ransom, and the payment was confirmed by the insurer [1].
+dev|mixed|fact|G|Garnet Foods suffered an outage on 15 November and Nightjar posted it the next day [1].
+dev|mixed|fact|G|The breach at Hazel Energy, which Nightjar claimed, exposed 4,000 customer records [1].
+dev|mixed|fact|G|Hazel Energy's data was stolen and Nightjar has published it [1].
+dev|mixed|fact|G|Nightjar posted Iris Telecom; Iris Telecom's customers were exposed in the leak [1].
+dev|mixed|fact|G|Nightjar claimed Juniper Seguros and the insurer's portal went offline [1].
+dev|mixed|fact|G|Nightjar's site lists Juniper Seguros, whose systems were encrypted on 18 November [1].
+dev|mixed|fact|G|Nightjar posted the stolen Delta Freight files [1].
+dev|mixed|fact|G|Nightjar listed the breached company, Echo Mills, on 13 November [1].
+dev|fact|fact|G|Acme Widgets was breached by Nightjar [1].
+dev|fact|fact|G|Nightjar breached Acme Widgets [1].
+dev|fact|fact|G|Nightjar attacked Bolt Logistics on 10 November [1].
+dev|fact|fact|G|Bolt Logistics suffered a ransomware attack [1].
+dev|fact|fact|G|Nightjar encrypted Cedar Health's servers [1].
+dev|fact|fact|G|Nightjar stole 400 GB of data from Cedar Health [1].
+dev|fact|fact|G|Cedar Health was hit by Nightjar ransomware [1].
+dev|fact|fact|G|Delta Freight paid Nightjar a ransom [1].
+dev|fact|fact|G|Nightjar's attack on Delta Freight disrupted its billing [1].
+dev|fact|fact|G|The Nightjar intrusion at Echo Mills exposed payroll data [1].
+dev|fact|fact|G|Echo Mills is the latest Nightjar victim [1].
+dev|fact|fact|G|Nightjar's ransomware crippled Foxglove Bank's branches [1].
+dev|fact|fact|G|Foxglove Bank lost access to its core banking system after the Nightjar attack [1].
+dev|fact|fact|G|Garnet Foods' backups were deleted in the Nightjar breach [1].
+dev|fact|fact|G|Nightjar compromised Garnet Foods through a VPN flaw [1].
+dev|fact|fact|G|Hazel Energy was among Nightjar's victims this week [1].
+dev|fact|fact|G|Nightjar exfiltrated 2 TB from Iris Telecom [1].
+dev|fact|fact|G|Iris Telecom's network was taken offline by Nightjar [1].
+dev|fact|fact|G|Nightjar targeted Juniper Seguros with ransomware [1].
+dev|fact|fact|G|Juniper Seguros fell victim to Nightjar [1].
+dev|fact|fact|G|Nightjar a piraté Acme Widgets [1].
+dev|fact|fact|G|Nightjar atacó a Bolt Logistics [1].
+dev|fact|fact|G|Nightjar hat Cedar Health angegriffen [1].
+dev|fact|fact|G|Acme Widgets foi atacada pelo Nightjar [1].
+dev|fact|fact|G|Acme Widgets was breached by ransomware [1].
+dev|fact|fact|G|Bolt Logistics was hit by a cyberattack on 10 November [1].
+dev|fact|fact|G|Cedar Health's systems were encrypted [1].
+dev|factive|fact|T|Example Tracker confirmed that Nightjar breached Foxglove Bank [2].
+dev|factive|fact|T|Nightjar breached Foxglove Bank, as the tracker shows [2].
+dev|factive|fact|G|Nightjar confirmed it breached Garnet Foods [1].
+dev|factive|fact|G|Nightjar revealed that it had stolen Garnet Foods' payroll [1].
+dev|factive|fact|G|Nightjar admitted to the attack on Hazel Energy [1].
+dev|factive|fact|G|Nightjar's post proves that Hazel Energy was hacked [1].
+dev|factive|fact|G|Nightjar's leak site shows that Iris Telecom was breached [1].
+dev|wrong_claimant|fact|G|Corvid claimed an attack on Acme Widgets [1].
+dev|wrong_claimant|fact|G|Police said Acme Widgets was breached [1].
+dev|wrong_claimant|fact|G|Acme Widgets said it was breached by Nightjar [1].
+dev|wrong_claimant|fact|G|Investigators say Nightjar breached Bolt Logistics [1].
+dev|wrong_claimant|fact|G|A security firm told reporters that Nightjar was behind the Bolt Logistics breach [1].
+holdout|attributed|fair|G|Nightjar posted a sample of what it called Kestrel Shipping contracts [1].
+holdout|attributed|fair|G|Kestrel Shipping is the newest name on Nightjar's leak site [1].
+holdout|attributed|fair|G|On 20 November Nightjar claimed to hold Kestrel Shipping's customs files [1].
+holdout|attributed|fair|G|Nightjar's leak site gave Kestrel Shipping until 27 November to pay [1].
+holdout|attributed|fair|G|Larch University was listed by Nightjar alongside two other schools [1].
+holdout|attributed|fair|G|Nightjar says Larch University's student portal was encrypted [1].
+holdout|attributed|fair|G|Nightjar has claimed Larch University as a victim, according to its site [1].
+holdout|attributed|fair|G|A Nightjar post dated 21 November names Maple Dental [1].
+holdout|attributed|fair|G|Maple Dental was named on Nightjar's site, which claimed 60 GB of records [1].
+holdout|attributed|fair|G|Nightjar stated that Maple Dental's backups were destroyed [1].
+holdout|attributed|fair|G|According to a post on Nightjar's site, Nimbus Cloud was hit [1].
+holdout|attributed|fair|G|Nightjar announced it would auction Nimbus Cloud data [1].
+holdout|attributed|fair|G|Nimbus Cloud data is offered for sale, Nightjar's post says [1].
+holdout|role|fair|G|The gang claims it encrypted Oriole Bakery's tills [1].
+holdout|role|fair|G|According to the group, Oriole Bakery refused to negotiate [1].
+holdout|tracker|fair|T|Example Tracker lists Oriole Bakery among Nightjar's posts for 22 November [2].
+holdout|tracker|fair|T|Per the tracker, Pike Motors was posted by Nightjar on 22 November [2].
+holdout|tracker|fair|T|Pike Motors appears in Example Tracker's Nightjar feed [2].
+holdout|alias|fair|G|NJ Team posted Pike Motors with a five-day deadline [1].
+holdout|hedged|fair|G|Nightjar claims to have breached Pike Motors, but provided no proof [1].
+holdout|hedged|fair|G|Nightjar's claim about Pike Motors could not be checked [1].
+holdout|quoted|fair|G|Nightjar posted: "Kestrel Shipping chose not to pay" [1].
+holdout|quoted|fair|G|"All Larch University servers are locked," the group wrote [1].
+holdout|negated|fair|G|Nightjar has not yet published any Maple Dental files [1].
+holdout|foreign|fair|G|D'après Nightjar, Nimbus Cloud a été attaqué [1].
+holdout|foreign|fair|G|Nightjar afirma que robó datos de Oriole Bakery [1].
+holdout|foreign|fair|G|Nightjar behauptete, Pike Motors angegriffen zu haben [1].
+holdout|mixed|fact|G|Nightjar claimed the Kestrel Shipping attack, which delayed cargo at three ports [1].
+holdout|mixed|fact|G|Kestrel Shipping's systems went offline on 19 November and Nightjar listed the firm a day later [1].
+holdout|mixed|fact|G|Nightjar posted Larch University; the university has since restored its portal after the attack [1].
+holdout|mixed|fact|G|Nightjar listed Larch University, whose exams were cancelled after the breach [1].
+holdout|mixed|fact|G|After Maple Dental was hacked, Nightjar posted the clinic on its leak site [1].
+holdout|mixed|fact|G|Nightjar claimed Maple Dental, and patient data was leaked online [1].
+holdout|mixed|fact|G|Nightjar said it took Nimbus Cloud offline, and Nimbus Cloud confirmed an outage [1].
+holdout|mixed|fact|G|Nightjar posted the exfiltrated Nimbus Cloud data on 21 November [1].
+holdout|mixed|fact|G|Nightjar, which hacked Oriole Bakery in September, claimed Pike Motors [1].
+holdout|mixed|fact|G|Despite the attack on Pike Motors, Nightjar has not posted its data [1].
+holdout|mixed|fact|G|Nightjar listed Pike Motors as a victim after the carmaker paid a ransom [1].
+holdout|fact|fact|G|Nightjar hacked Kestrel Shipping [1].
+holdout|fact|fact|G|Kestrel Shipping was attacked by Nightjar on 19 November [1].
+holdout|fact|fact|G|Larch University's portal was encrypted by Nightjar [1].
+holdout|fact|fact|G|Nightjar exfiltrated student records from Larch University [1].
+holdout|fact|fact|G|Maple Dental lost 60 GB of patient data to Nightjar [1].
+holdout|fact|fact|G|Nimbus Cloud suffered a Nightjar intrusion [1].
+holdout|fact|fact|G|Nightjar's breach of Oriole Bakery halted deliveries [1].
+holdout|fact|fact|G|Oriole Bakery was compromised in November [1].
+holdout|fact|fact|G|Pike Motors fue hackeada por Nightjar [1].
+holdout|fact|fact|G|Nightjar hat Pike Motors gehackt [1].
+holdout|factive|fact|G|Nightjar acknowledged it had attacked Kestrel Shipping [1].
+holdout|factive|fact|G|Nightjar's leak site proves Larch University was hacked [1].
+holdout|factive|fact|T|Example Tracker revealed that Nightjar compromised Maple Dental [2].
+holdout|wrong_claimant|fact|G|Maple Dental said Nightjar stole its records [1].
+holdout|wrong_claimant|fact|G|Researchers believe Nightjar breached Nimbus Cloud [1].
+holdout|wrong_claimant|fact|G|Analysts said the Nightjar group compromised Oriole Bakery [1].

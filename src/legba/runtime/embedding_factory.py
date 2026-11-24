@@ -102,10 +102,10 @@ class HostedEmbeddingClient:
          "model": "<model_name>",
          "usage": {"prompt_tokens": N, "total_tokens": N}}
 
-    Multi-input requests are supported by the upstream endpoint but
-    the dedupe-tier-3 transform only embeds one string at a time, so
-    we keep the single-input path simple and let any caller that
-    needs batching wrap us later.
+    Multi-input requests are supported by the upstream endpoint; the
+    dedupe-tier-3 transform embeds one string at a time through
+    :meth:`embed`, and a caller that needs a batch uses
+    :meth:`embed_many` (one request, vectors in input order).
     """
 
     def __init__(
@@ -148,9 +148,27 @@ class HostedEmbeddingClient:
         observability — any non-EmbeddingFactoryError surface would
         also be caught by the filter's try/except.
         """
+        body = await self._post(self._build_request_payload(text))
+        return _extract_single_embedding(body)
+
+    async def embed_many(self, texts: list[str]) -> list[list[float]]:
+        """Embed several texts in ONE ``/v1/embeddings`` request (the
+        endpoint's multi-input form); vectors are returned in INPUT order,
+        re-ordered by each item's ``index``. Same failure contract as
+        :meth:`embed`: transport / auth / shape failures raise
+        :class:`EmbeddingFactoryError`, and so does a response whose item
+        count does not match the input. W4-F1: the consult watch fold's one
+        bounded batch call (candidates x standing watches)."""
+        items = [str(t) for t in texts]
+        if not items:
+            return []
+        body = await self._post({"model": self._model_name, "input": items})
+        return _extract_embeddings(body, expected=len(items))
+
+    async def _post(self, payload: dict[str, Any]) -> Any:
+        """POST one embeddings request; return the decoded JSON body."""
         client = await self._ensure_client()
         path = self._embeddings_path()
-        payload = self._build_request_payload(text)
         try:
             resp = await client.post(
                 path,
@@ -175,14 +193,12 @@ class HostedEmbeddingClient:
             )
 
         try:
-            body = resp.json()
+            return resp.json()
         except ValueError as exc:
             raise EmbeddingFactoryError(
                 f"embedding endpoint returned non-JSON body at {path}: "
                 f"{exc}"
             ) from exc
-
-        return _extract_single_embedding(body)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -341,6 +357,32 @@ async def build_embedding_service_from_stack_component(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _extract_embeddings(body: Any, *, expected: int) -> list[list[float]]:
+    """Every vector of a multi-input response, in input (``index``) order.
+
+    Each item goes through :func:`_extract_single_embedding`'s own checks; a
+    count that is not ``expected`` or an index set that is not
+    ``0..expected-1`` is a hard error — a partial batch is never returned as
+    if it were whole."""
+    data = body.get("data") if isinstance(body, Mapping) else None
+    if not isinstance(data, list) or len(data) != expected:
+        raise EmbeddingFactoryError(
+            f"embedding batch response carries "
+            f"{len(data) if isinstance(data, list) else 'no'} items for "
+            f"{expected} inputs"
+        )
+    by_index: dict[int, list[float]] = {}
+    for pos, item in enumerate(data):
+        idx = item.get("index", pos) if isinstance(item, Mapping) else pos
+        by_index[int(idx)] = _extract_single_embedding({"data": [item]})
+    if sorted(by_index) != list(range(expected)):
+        raise EmbeddingFactoryError(
+            f"embedding batch response indexes {sorted(by_index)} do not "
+            f"cover 0..{expected - 1}"
+        )
+    return [by_index[i] for i in range(expected)]
 
 
 def _extract_single_embedding(body: Any) -> list[float]:

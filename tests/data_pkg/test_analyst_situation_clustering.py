@@ -172,6 +172,66 @@ def test_situation_name_rejects_dated_snapshot_and_json_titles():
     assert sc._situation_name(ok, "sig:x") == "Russia – Energy-weapon coercion"
 
 
+# ---------------------------------------------------------------------------
+# CONSULT_REVIEW_2026-09-28 §B.6 — the frozen "single-sourced" suffix
+# ---------------------------------------------------------------------------
+
+
+def test_strip_single_sourced_suffix_matches_either_dash_and_is_a_noop_otherwise():
+    """The helper itself: em dash, en dash, a trailing period, case-insensitive,
+    and never emptied down to nothing."""
+    assert sc._strip_single_sourced_suffix("Casualty figure N — single-sourced") == (
+        "Casualty figure N"
+    )
+    assert sc._strip_single_sourced_suffix("Report X – single-sourced.") == "Report X"
+    assert sc._strip_single_sourced_suffix("Report X — Single-Sourced") == "Report X"
+    assert sc._strip_single_sourced_suffix("Russia – Energy-weapon coercion") == (
+        "Russia – Energy-weapon coercion"
+    )
+    # the suffix alone, with nothing to name the frame — never stripped to "".
+    assert sc._strip_single_sourced_suffix("— single-sourced") == "— single-sourced"
+
+
+def test_situation_name_strips_the_suffix_once_the_frame_has_more_than_one_member():
+    """Greenland 3b60b8e2's shape: a ``cross_doc_corroborator`` title froze
+    "— single-sourced" into the frame's name at first cluster, and later
+    members corroborating the same claim never got to update it. A frame with
+    more than one member finding has the suffix stripped off its derived name,
+    whichever dash the model used."""
+    em_dash = [
+        _row("a", "sig:x", "Casualty figure N — single-sourced", 5),
+        _row("b", "sig:x", "Casualty figure N — single-sourced", 6),
+    ]
+    assert sc._situation_name(em_dash, "sig:x") == "Casualty figure N"
+    en_dash = [
+        _row("a", "sig:y", "Report X – single-sourced", 5),
+        _row("b", "sig:y", "Report X – single-sourced", 6),
+    ]
+    assert sc._situation_name(en_dash, "sig:y") == "Report X"
+
+
+def test_situation_name_strips_the_suffix_on_a_positive_corroboration_count():
+    """The OTHER half of the OR: a single-member frame whose trajectory ledger
+    has nonetheless logged corroboration (``corroboration_count > 0``) also
+    loses the suffix — the ledger, not the member count alone, is the fact
+    that decides whether "single-sourced" is still true."""
+    rows = [_row("a", "sig:x", "Casualty figure N — single-sourced", 5)]
+    assert sc._situation_name(rows, "sig:x", corroboration_count=2) == (
+        "Casualty figure N"
+    )
+
+
+def test_situation_name_keeps_the_suffix_when_still_genuinely_single_sourced():
+    """A frame with exactly one member and no logged corroboration is left
+    exactly as its member wrote it — the repair must not lie in the other
+    direction."""
+    rows = [_row("a", "sig:x", "Casualty figure N — single-sourced", 5)]
+    assert sc._situation_name(rows, "sig:x") == "Casualty figure N — single-sourced"
+    assert sc._situation_name(rows, "sig:x", corroboration_count=0) == (
+        "Casualty figure N — single-sourced"
+    )
+
+
 def test_situation_fields_marks_steady_state():
     """A non-event / status-quo frame is authoritatively tagged steady_state at
     materialization (the same shared predicate the grounding read uses); a real
@@ -547,7 +607,10 @@ async def test_one_desk_materializes_one_frame_per_dimension(desk):
         assert frame["event_count"] == 3
         # `target_id` is resolved from the topic BEFORE the marker: a split frame
         # that lost it would vanish from its own desk's grounding read.
-        assert frame["category"] == target
+        # W9 TAX-4: the column holds a registered class (`unclassified` here);
+        # the topic rides in data.category_raw, byte for byte.
+        assert frame["category"] == "unclassified"
+        assert json.loads(frame["data"])["category_raw"] == target
         assert frame["target_id"] == target
         assert json.loads(frame["data"])["dimension"] == sig.split("#dim:")[1]
 

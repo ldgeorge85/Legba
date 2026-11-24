@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:source_track_record": {
+      "source": "analyst_source_track_record.yaml",
+      "state": "draft"
+    }
+  }
+}

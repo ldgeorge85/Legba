@@ -679,6 +679,8 @@ async def emit(
     # "0 deliveries, 0 attempts" hid the alert pipeline being dead (K-1).
     pg_pool = getattr(deps, "pg_pool", None)
     audit_enabled = pg_pool is not None and out_ctx.alert_row_id is not None
+    if pg_pool is not None:
+        await _raise_on_alert_log(pg_pool, payload, out_ctx)
 
     try:
         overrides = _parse_surfaces(descriptor)
@@ -777,6 +779,28 @@ async def emit(
         [r.outcome for r in results],
     )
     return results
+
+
+async def _raise_on_alert_log(pg_pool: Any, payload: AlertPayload, ctx: OutputContext) -> None:
+    """L-1: this first-generation output kind is one more producer of the ONE
+    alert path — recorded on the alert log (kind ``analyst_alert_output``);
+    the page rule decides any push. Its own legacy surfaces below are
+    unchanged (dormant since 2026-07-01; retiring them is the owner's call)."""
+    try:
+        from ..alerts.raise_alert import raise_alert
+
+        await raise_alert(
+            pg_pool, kind="analyst_alert_output", severity=payload.severity,
+            summary=payload.title, detail=payload.body,
+            subject_id=str(ctx.target_id or ""),
+            dedupe_key=(
+                f"analyst_alert_output:{ctx.alert_row_id}" if ctx.alert_row_id else None
+            ),
+            evidence_refs=[ctx.alert_row_id] if ctx.alert_row_id else [],
+            raised_by=f"output:alert:{ctx.analyst_id or '-'}",
+        )
+    except Exception as exc:  # noqa: BLE001 — never fails the emit
+        ctx.logger.warning("alert.emit.alert_log_raise_failed err=%s", exc)
 
 
 # ---------------------------------------------------------------------------

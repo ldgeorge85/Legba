@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.gdelt.bigquery": {
+      "source": "source_gdelt_bigquery.yaml",
+      "state": "draft"
+    }
+  }
+}

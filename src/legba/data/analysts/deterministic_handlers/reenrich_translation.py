@@ -61,6 +61,7 @@ import json
 import logging
 from typing import Any, Mapping
 
+from ... import profile_constants as _profile_constants
 from ...provenance.models import FindingPayload
 from ....runtime.analyst_method import AnalystMethodResult
 
@@ -89,16 +90,15 @@ TRANSLATE_TIMEOUT_SECONDS = 60.0
 #: NLLB model's input bound; over-long input is truncated, never rejected).
 _MAX_TRANSLATE_CHARS = 4000
 
-#: The non-Latin source-language set routed through translate, kept IN SYNC with
-#: ``ner.py::_DEFAULT_TRANSLATE_LANGS`` / ``reenrich_ner`` (a literal here so this
-#: backfill module stays self-contained and the SELECT never imports the
-#: httpx-bearing ner module at query time). ``und`` is intentionally EXCLUDED —
-#: language-detect emits ``und`` when it cannot decide a source lang, and NLLB
-#: needs a concrete source code; those rows are handled by the forward NER lane's
-#: script-inference fallback, not this language-keyed backfill.
-_DEFAULT_TRANSLATE_LANGS: tuple[str, ...] = (
-    "ar", "fa", "he", "ru", "uk", "zh", "ja", "ko", "hi", "th", "ur",
-)
+#: The non-Latin source-language set routed through translate: the instance
+#: profile's ``constants.translation_languages`` (SPLIT-3, read through the leaf
+#: ``profile_constants``, so the SELECT never imports the httpx-bearing ner
+#: module at query time; ``ner.py`` / ``reenrich_ner`` read the same value).
+#: ``und`` is never in it — language-detect emits ``und`` when it cannot
+#: decide a source lang, and NLLB needs a concrete source code; those rows are
+#: handled by the forward NER lane's script-inference fallback, not this
+#: language-keyed backfill.
+_DEFAULT_TRANSLATE_LANGS: tuple[str, ...] = _profile_constants.translation_languages()
 
 #: The payload text fields concatenated into the body translate input (title FIRST,
 #: mirroring ``NERMultilingualConfig.text_fields`` so the body_en matches what NER

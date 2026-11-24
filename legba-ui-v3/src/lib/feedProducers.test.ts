@@ -15,11 +15,33 @@ import {
   classifyProducer,
   exactProducerIds,
 } from './feedProducers'
-import { UNITS } from '@/v4/why/CountryUnitsAssessment'
+import { UNITS, noReadReason } from '@/v4/why/CountryUnitsAssessment'
 
 describe('the unit roster stays in lockstep with the country desk', () => {
-  it('mirrors v4/why/CountryUnitsAssessment.UNITS exactly (add a unit in BOTH places)', () => {
+  it('mirrors v4/why/CountryUnitsAssessment.UNITS exactly (both read subjectUnits())', () => {
     expect([...FEED_UNIT_IDS].sort()).toEqual(UNITS.map((u) => u.id).sort())
+  })
+
+  it('is today’s eight, labels byte for byte, read from the profile (ROSTER-2)', () => {
+    expect(UNITS.map((u) => [u.id, u.label])).toEqual([
+      ['leadership_transition', 'Leadership transition'],
+      ['energy_security', 'Energy security'],
+      ['escalation', 'Escalation'],
+      ['narrative_coordination', 'Narrative / coordination'],
+      ['internal_stability', 'Internal stability'],
+      ['military_posture', 'Military posture'],
+      ['economic_coercion', 'Economic coercion'],
+      ['proliferation_watch', 'Proliferation watch'],
+    ])
+    expect([...FEED_UNIT_IDS]).toEqual(UNITS.map((u) => u.id))
+  })
+
+  it('a scoped unit says why it has no read; the rest name the cadence (today’s strings)', () => {
+    const byId = new Map(UNITS.map((u) => [u.id, u]))
+    expect(noReadReason(byId.get('proliferation_watch')!)).toBe(
+      'no read yet — narrower scope: only nuclear-relevant desks run this unit',
+    )
+    expect(noReadReason(byId.get('escalation')!)).toBe('no read yet — this unit runs on a 12h cadence')
   })
 })
 

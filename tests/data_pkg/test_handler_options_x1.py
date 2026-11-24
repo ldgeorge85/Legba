@@ -37,7 +37,7 @@ from legba.data import _geo_routing
 from legba.data.analysts.deterministic import SUB_HANDLERS
 from legba.data.analysts.deterministic_handlers import _coverage_floor_scan
 from legba.data.analysts.deterministic_handlers import _production_deficit_scan
-from legba.data.analysts.handler_options import (
+from legba.data.option_catalog.handler_options import (
     HANDLER_OPTIONS,
     RESERVED_OPTION_KEYS,
     known_option_names,
@@ -79,6 +79,14 @@ _DELEGATES: dict[str, tuple[str, ...]] = {
     # under LEGBA_EXTERNAL_GRADING_WIDTH the auditor's handle() hands its
     # ``options`` verbatim to the width tick, which owns every W-2/W-9 knob
     "standing_auditor": ("_external_audit_width",),
+    # 2026-11-09 clusterer-watermark — the signal slice's progress contract
+    # reads min_signals_per_run / catch_up_floor_hours in its sibling's
+    # knobs(), which event_clustering.handle() calls with its ``options``
+    "event_clustering": ("_event_slice_progress", "_event_clustering_front"),
+    # N-Z (2026-11-14) — the catch-up split and the paging loop moved into
+    # ``_event_clustering_front``; handle() hands its ``options`` to
+    # ``catch_up_knobs`` there (max_pages_per_pass, catch_up_lag_minutes,
+    # catch_up_head_minutes)
 }
 
 

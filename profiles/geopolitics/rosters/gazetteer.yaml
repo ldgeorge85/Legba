@@ -1,0 +1,680 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# THE GAZETTEER of the geopolitics exemplar (W10 CANON-1) — the tables of names
+# and codes the platform's guards, matchers and canonicalisers used to carry as
+# code literals in five modules (absence_slice, world_knowledge_guards +
+# writes_supersession, _polity_match + _geo_routing, _entity_canon, grounding).
+# Declared by the manifest's `rosters.gazetteer` key; read through ONE loader,
+# src/legba/data/gazetteer.py (closed: an unknown section is refused). The
+# images carry src/ only, so the packaged copy src/legba/data/profile_gazetteer.json
+# is what the runtime reads (scripts/gen_profile_gazetteer.py writes it; a
+# drift test refuses a stale one).
+#
+# BYTE-IDENTITY. Every table below reproduces the literal it replaced at the
+# pin fcbafb2e — same entries, same ORDER where order matters (the officeholder
+# groups feed a regex alternation; the alias groups' first spelling is the
+# probe key) — pinned per table by sha256 in tests/data_pkg/test_gazetteer.py.
+#
+# A SECTION LEFT OUT IS ABSENT, BY NAME. A guard whose section a profile does
+# not declare answers a typed `not_applicable` (counted, logged once per
+# process, bumped on the verify report's receipts counters) — never an empty
+# table that silently passes. docs/PROFILES.md "The gazetteer"; SEAMS #67.
+
+schema: legba/gazetteer/1
+
+# ---------------------------------------------------------------------------
+# Desk ids — the id convention that carries a subject's code
+# ---------------------------------------------------------------------------
+# A target id containing `marker` names a per-subject desk whose trailing
+# `_<token>` is its ISO-2 code (country_g20_us -> us). The absence-slice and
+# cross-target guards, the off-target guard and the grounding fast path read
+# the code from the id through this convention; a profile that declares none
+# has no id-coded desks, and those paths read the target's declared scope or
+# answer not_applicable.
+desk_ids:
+  marker: country
+
+# ---------------------------------------------------------------------------
+# absence_slice — the V-B claim-scope resolver and the M15 guard vocabulary
+# ---------------------------------------------------------------------------
+# desk_countries: THE V-B claim-scope gazetteer (was _SLICE_DESK_COUNTRIES):
+# the 32 desk slugs the platform runs -> the surface forms a slice row uses.
+desk_countries:
+  "ar": ["argentina"]
+  "au": ["australia"]
+  "br": ["brazil"]
+  "bf": ["burkina faso"]
+  "ca": ["canada"]
+  "cd": ["democratic republic of the congo", "drc", "congo"]
+  "cn": ["china"]
+  "de": ["germany"]
+  "fr": ["france"]
+  "gb": ["united kingdom", "britain", "uk"]
+  "ht": ["haiti"]
+  "id": ["indonesia"]
+  "il": ["israel"]
+  "in": ["india"]
+  "ir": ["iran"]
+  "it": ["italy"]
+  "jp": ["japan"]
+  "kp": ["north korea", "dprk"]
+  "kr": ["south korea"]
+  "ml": ["mali"]
+  "mm": ["myanmar", "burma"]
+  "mx": ["mexico"]
+  "ne": ["niger"]
+  "pk": ["pakistan"]
+  "ru": ["russia"]
+  "sa": ["saudi arabia"]
+  "sd": ["sudan"]
+  "tr": ["turkey", "turkiye"]
+  "tw": ["taiwan"]
+  "ua": ["ukraine"]
+  "us": ["united states", "america", "u.s.", "usa"]
+  "za": ["south africa"]
+
+# slice_geo_countries: the countries a slice row can be ABOUT, beyond the desk
+# names above (was the literal half of _SLICE_GEO_COUNTRIES; the loader unions
+# it with desk_countries' names). Plain names only — a wrong entry would
+# exclude real violators, a missing one fails OPEN. A set: order carries no
+# meaning.
+slice_geo_countries: [
+  "afghanistan", "albania", "algeria", "angola", "armenia", "austria", "azerbaijan",
+  "bahrain", "bangladesh", "belarus", "belgium", "benin", "bolivia", "bosnia",
+  "botswana", "bulgaria", "burundi", "cambodia", "cameroon", "chad", "chile",
+  "colombia", "costa rica", "croatia", "cuba", "cyprus", "czechia", "denmark",
+  "djibouti", "dominican republic", "ecuador", "egypt", "el salvador", "eritrea",
+  "estonia", "ethiopia", "finland", "gabon", "gambia", "georgia", "ghana", "greece",
+  "guatemala", "guinea", "guyana", "honduras", "hungary", "iceland", "iraq",
+  "ireland", "ivory coast", "jamaica", "jordan", "kazakhstan", "kenya", "kosovo",
+  "kuwait", "kyrgyzstan", "laos", "latvia", "lebanon", "liberia", "libya",
+  "lithuania", "madagascar", "malawi", "malaysia", "mauritania", "moldova",
+  "mongolia", "montenegro", "morocco", "mozambique", "namibia", "nepal",
+  "netherlands", "new zealand", "nicaragua", "nigeria", "north macedonia", "norway",
+  "oman", "panama", "papua new guinea", "paraguay", "peru", "philippines", "poland",
+  "portugal", "qatar", "romania", "rwanda", "senegal", "serbia", "sierra leone",
+  "singapore", "slovakia", "slovenia", "somalia", "south sudan", "spain",
+  "sri lanka", "sweden", "switzerland", "syria", "tajikistan", "tanzania",
+  "thailand", "togo", "tunisia", "turkmenistan", "uganda", "united arab emirates",
+  "uruguay", "uzbekistan", "venezuela", "vietnam", "yemen", "zambia", "zimbabwe",
+]
+
+# slug_to_country: desk slug -> country names (was _TARGET_SLUG_TO_COUNTRY;
+# the M15 own-country arm and the stage-1 desk-token strip).
+slug_to_country:
+  "us": ["united states", "america", "u.s.", "usa"]
+  "cn": ["china"]
+  "ru": ["russia"]
+  "ir": ["iran"]
+  "il": ["israel"]
+  "in": ["india"]
+  "id": ["indonesia"]
+  "br": ["brazil"]
+  "ar": ["argentina"]
+  "mx": ["mexico"]
+  "ca": ["canada"]
+  "fr": ["france"]
+  "de": ["germany"]
+  "it": ["italy"]
+  "gb": ["united kingdom", "britain", "uk"]
+  "uk": ["united kingdom", "britain"]
+  "jp": ["japan"]
+  "kr": ["south korea", "korea"]
+  "sa": ["saudi arabia"]
+  "tr": ["turkey", "turkiye"]
+  "au": ["australia"]
+  "za": ["south africa"]
+  "eu": ["european union"]
+  "kp": ["north korea", "dprk"]
+  "tw": ["taiwan"]
+  "ua": ["ukraine"]
+  "pk": ["pakistan"]
+
+# country_tokens: the M15 "names some OTHER country" set (was _COUNTRY_TOKENS).
+# A set.
+country_tokens: [
+  "afghanistan", "america", "argentina", "australia", "brazil", "britain",
+  "bulgaria", "canada", "china", "croatia", "egypt", "france", "germany", "greece",
+  "hungary", "india", "indonesia", "iran", "iraq", "israel", "italy", "japan",
+  "korea", "lebanon", "mexico", "nigeria", "north korea", "pakistan", "philippines",
+  "poland", "romania", "russia", "saudi arabia", "serbia", "south africa",
+  "south korea", "spain", "syria", "taiwan", "thailand", "turkey", "turkiye", "u.s.",
+  "ukraine", "united kingdom", "united states", "usa", "venezuela", "vietnam",
+  "yemen",
+]
+
+# slug_to_abbrev: the CASE-SENSITIVE short forms a casefolded table cannot carry
+# ("US" is a country, "us" a pronoun) (was _TARGET_SLUG_TO_ABBREV, V-I2).
+slug_to_abbrev:
+  "us": ["US", "U.S.", "U.S", "USA", "U.S.A."]
+  "gb": ["UK", "U.K.", "U.K", "GB"]
+  "uk": ["UK", "U.K.", "U.K", "GB"]
+  "eu": ["EU", "E.U."]
+  "cn": ["PRC"]
+  "kr": ["ROK"]
+  "kp": ["DPRK"]
+  "za": ["RSA"]
+  "ae": ["UAE"]
+
+# irregular_demonyms: the demonyms the suffix rule cannot derive (was
+# _IRREGULAR_DEMONYMS; spain -> spanish, france -> french).
+irregular_demonyms:
+  "belgium": ["belgian"]
+  "britain": ["british"]
+  "china": ["chinese"]
+  "czechia": ["czech"]
+  "denmark": ["danish", "danes"]
+  "democratic republic of the congo": ["congolese"]
+  "congo": ["congolese"]
+  "egypt": ["egyptian"]
+  "finland": ["finnish"]
+  "france": ["french"]
+  "germany": ["german"]
+  "greece": ["greek"]
+  "iceland": ["icelandic"]
+  "ireland": ["irish"]
+  "italy": ["italian"]
+  "mexico": ["mexican"]
+  "myanmar": ["burmese"]
+  "netherlands": ["dutch"]
+  "norway": ["norwegian"]
+  "philippines": ["filipino", "philippine"]
+  "poland": ["polish", "poles"]
+  "portugal": ["portuguese"]
+  "serbia": ["serbian"]
+  "slovakia": ["slovak"]
+  "spain": ["spanish"]
+  "sweden": ["swedish", "swedes"]
+  "switzerland": ["swiss"]
+  "thailand": ["thai"]
+  "turkey": ["turkish"]
+  "turkiye": ["turkish"]
+  "united kingdom": ["british"]
+  "venezuela": ["venezuelan"]
+  "vietnam": ["vietnamese"]
+
+# screen_stopwords: the geopolitics nouns of the stage-1 title screen's
+# stoplist (the platform half — function words, the absence vocabulary, the
+# reporting verbs — stays in absence_slice._ABSENCE_SCREEN_STOPWORDS, which is
+# that half united with this one). A set.
+screen_stopwords: ["country", "countries", "state", "states", "government", "governmental", "national", "international"]
+
+# classifier_patterns: declared title classifiers. machine_structured_title is
+# the GDELT/CAMEO event-coding SHAPE (was _CAMEO_TITLE_RE, W1(c)): an ALL-CAPS
+# actor (optionally two, joined by <->), a colon, then a LOWERCASE action verb.
+# Compiled with no flags.
+classifier_patterns:
+  machine_structured_title: |-
+    ^\s*[A-Z][A-Z0-9 .,'’()&/\-]{1,}(?:<->\s*[A-Z0-9 .,'’()&/\-]+)?:\s+[a-z]
+
+# ---------------------------------------------------------------------------
+# world_knowledge_guards — the E-1 facts-reconciled officeholder guard
+# ---------------------------------------------------------------------------
+# officeholder_country_groups: one alias group per country, in ORDER (was
+# _OFFICEHOLDER_COUNTRY_GROUPS): every surface the extractor recognizes and
+# every facts.subject spelling it probes; the first spelling keys the group.
+officeholder_country_groups:
+  - ["united states", "united states of america", "america", "usa"]
+  - ["united kingdom", "great britain", "britain"]
+  - ["russia", "russian federation"]
+  - ["china", "people's republic of china"]
+  - ["india"]
+  - ["france"]
+  - ["germany"]
+  - ["italy"]
+  - ["japan"]
+  - ["canada"]
+  - ["mexico"]
+  - ["brazil"]
+  - ["argentina"]
+  - ["australia"]
+  - ["turkey", "turkiye"]
+  - ["iran"]
+  - ["israel"]
+  - ["ukraine"]
+  - ["saudi arabia"]
+  - ["south korea"]
+  - ["north korea"]
+  - ["south africa"]
+  - ["indonesia"]
+  - ["pakistan"]
+  - ["venezuela"]
+  - ["slovenia"]
+  - ["somalia"]
+  - ["sudan"]
+  - ["egypt"]
+  - ["nigeria"]
+  - ["poland"]
+  - ["spain"]
+  - ["netherlands"]
+  - ["democratic republic of the congo", "dr congo", "drc", "congo-kinshasa"]
+
+# officeholder_acronyms: uppercase-only surfaces (NEVER matched
+# case-insensitively) -> the first spelling of their group (was
+# _OFFICEHOLDER_ACRONYMS). Order is the regex alternation's.
+officeholder_acronyms:
+  "US": "united states"
+  "U.S.": "united states"
+  "USA": "united states"
+  "UK": "united kingdom"
+  "DRC": "democratic republic of the congo"
+
+# polity_offices: the three polity offices the officeholder guard reconciles
+# (was _OFFICEHOLDER_ROLE_PREDICATES / _OFFICEHOLDER_FAMILY_PREDICATES /
+# _LEADER_OF_PREDICATE; canonical predicates, vocabulary.PREDICATE_CANONICAL).
+polity_offices:
+  role_predicates:
+    "president": ["head of state", "head of government"]
+    "prime minister": ["head of government"]
+    "chancellor": ["head of government"]
+    "premier": ["head of government"]
+  family_predicates: ["head of state", "head of government"]
+  leader_of: "leader of"
+
+# ---------------------------------------------------------------------------
+# writes_supersession — office-keyed fact supersession (FU3 / P5)
+# ---------------------------------------------------------------------------
+# functional_role_country_side: which column names the COUNTRY for each
+# functional-role predicate (was _FUNCTIONAL_ROLE_COUNTRY_SIDE).
+functional_role_country_side:
+  "leader of": "value"
+  "head of state": "subject"
+  "head of government": "subject"
+
+# ---------------------------------------------------------------------------
+# _polity_match / _geo_routing — the polity canon
+# ---------------------------------------------------------------------------
+# iso2_home_aliases: extra home spellings for the ISO2s whose gazetteer name is
+# not the form a newsroom writes (was _ISO2_HOME_ALIASES); the FIRST spelling
+# is home_country_name()'s answer.
+iso2_home_aliases:
+  "CD": ["Democratic Republic of the Congo", "DR Congo", "DRC", "Congo"]
+  "GB": ["Britain", "Great Britain", "England"]
+  "IR": ["Iran", "Islamic Republic of Iran", "Persia"]
+  "KP": ["North Korea", "DPRK"]
+  "KR": ["South Korea", "ROK"]
+  "RU": ["Russia", "Russian Federation"]
+  "TR": ["Turkey", "Turkiye", "Türkiye"]
+  "TW": ["Taiwan", "Republic of China"]
+  "US": ["United States", "America", "USA"]
+
+# polities: the polity UNIVERSE is DERIVED, never copied — `universe: pycountry`
+# reads every ISO-3166-1 record's name / common_name / official_name (249 rows;
+# the registry's slim image, which has no pycountry, reads `curated` alone).
+# `curated` are the forms pycountry stores under another head or not at all
+# (was the inline set in _entity_canon._country_name_set). The CANON polities
+# (_polity_match._SURFACES / _geo_routing.CANON_POLITIES) are derived too: the
+# canonical names alias_map and demonym_map resolve to. A set.
+polities:
+  universe: pycountry
+  curated: ["russia", "south korea", "north korea", "united states", "united kingdom", "united arab emirates", "democratic republic of the congo", "czechia", "iran", "syria", "vietnam", "laos", "moldova", "tanzania", "bolivia", "venezuela", "turkey", "turkiye", "kosovo", "palestine"]
+
+# ---------------------------------------------------------------------------
+# _entity_canon — entity canonicalisation's maps
+# ---------------------------------------------------------------------------
+# alias_map: surface form (lower-case, stripped) -> canonical name (was
+# _ALIAS_MAP).
+alias_map:
+  # United States, United Kingdom, the other high-frequency collisions, and the
+  # supranational bodies kept as legitimate short orgs (UN — not junk-dropped
+  # by the length<=2 predicate)
+  "us": "United States"
+  "u.s.": "United States"
+  "u.s": "United States"
+  "usa": "United States"
+  "u.s.a.": "United States"
+  "u.s.a": "United States"
+  "united states": "United States"
+  "united states of america": "United States"
+  "america": "United States"
+  "the united states": "United States"
+  "uk": "United Kingdom"
+  "u.k.": "United Kingdom"
+  "u.k": "United Kingdom"
+  "britain": "United Kingdom"
+  "great britain": "United Kingdom"
+  "united kingdom": "United Kingdom"
+  "uae": "United Arab Emirates"
+  "u.a.e.": "United Arab Emirates"
+  "united arab emirates": "United Arab Emirates"
+  "eu": "European Union"
+  "european union": "European Union"
+  "drc": "Democratic Republic of the Congo"
+  "south korea": "South Korea"
+  "north korea": "North Korea"
+  "russia": "Russia"
+  "un": "United Nations"
+  "u.n.": "United Nations"
+  "united nations": "United Nations"
+
+# alias_org: aliases that resolve to a supranational BODY, not a country — they
+# type `organization` (was _ALIAS_ORG). A set.
+alias_org: ["European Union", "United Nations"]
+
+# demonym_map: national demonym -> canonical country (was _DEMONYM_MAP, DQ-H4).
+# Curated, never a suffix rule: surnames and multi-country adjectives are
+# deliberately absent.
+demonym_map:
+  # the original curated core (DQ-H4)
+  "american": "United States"
+  "british": "United Kingdom"
+  "french": "France"
+  "german": "Germany"
+  "italian": "Italy"
+  "spanish": "Spain"
+  "russian": "Russia"
+  "ukrainian": "Ukraine"
+  "chinese": "China"
+  "japanese": "Japan"
+  "indian": "India"
+  "pakistani": "Pakistan"
+  "iranian": "Iran"
+  "iraqi": "Iraq"
+  "israeli": "Israel"
+  "palestinian": "Palestine"
+  "syrian": "Syria"
+  "lebanese": "Lebanon"
+  "yemeni": "Yemen"
+  "saudi": "Saudi Arabia"
+  "egyptian": "Egypt"
+  "turkish": "Turkey"
+  "qatari": "Qatar"
+  "afghan": "Afghanistan"
+  "polish": "Poland"
+  "canadian": "Canada"
+  "mexican": "Mexico"
+  "brazilian": "Brazil"
+  "argentine": "Argentina"
+  "argentinian": "Argentina"
+  "australian": "Australia"
+  "indonesian": "Indonesia"
+  "nigerian": "Nigeria"
+  "venezuelan": "Venezuela"
+  "sudanese": "Sudan"
+  "south korean": "South Korea"
+  "north korean": "North Korea"
+  # the comprehensive expansion (live-review misses + wide ISO-3166 coverage):
+  # Europe, Middle East / Central & South Asia, East / Southeast Asia &
+  # Pacific, Africa, the Americas — in that order
+  "albanian": "Albania"
+  "austrian": "Austria"
+  "belgian": "Belgium"
+  "bosnian": "Bosnia and Herzegovina"
+  "bulgarian": "Bulgaria"
+  "croatian": "Croatia"
+  "cypriot": "Cyprus"
+  "czech": "Czechia"
+  "danish": "Denmark"
+  "dutch": "Netherlands"
+  "estonian": "Estonia"
+  "finnish": "Finland"
+  "greek": "Greece"
+  "hungarian": "Hungary"
+  "icelandic": "Iceland"
+  "irish": "Ireland"
+  "latvian": "Latvia"
+  "lithuanian": "Lithuania"
+  "luxembourgish": "Luxembourg"
+  "macedonian": "North Macedonia"
+  "maltese": "Malta"
+  "moldovan": "Moldova"
+  "montenegrin": "Montenegro"
+  "norwegian": "Norway"
+  "portuguese": "Portugal"
+  "romanian": "Romania"
+  "serbian": "Serbia"
+  "slovak": "Slovakia"
+  "slovenian": "Slovenia"
+  "swedish": "Sweden"
+  "swiss": "Switzerland"
+  "belarusian": "Belarus"
+  "georgian": "Georgia"
+  "armenian": "Armenia"
+  "azerbaijani": "Azerbaijan"
+  "kosovar": "Kosovo"
+  "jordanian": "Jordan"
+  "kuwaiti": "Kuwait"
+  "omani": "Oman"
+  "bahraini": "Bahrain"
+  "emirati": "United Arab Emirates"
+  "kazakh": "Kazakhstan"
+  "uzbek": "Uzbekistan"
+  "turkmen": "Turkmenistan"
+  "tajik": "Tajikistan"
+  "kyrgyz": "Kyrgyzstan"
+  "bangladeshi": "Bangladesh"
+  "sri lankan": "Sri Lanka"
+  "nepalese": "Nepal"
+  "nepali": "Nepal"
+  "bhutanese": "Bhutan"
+  "maldivian": "Maldives"
+  "burmese": "Myanmar"
+  "myanmarese": "Myanmar"
+  "thai": "Thailand"
+  "vietnamese": "Vietnam"
+  "cambodian": "Cambodia"
+  "laotian": "Laos"
+  "malaysian": "Malaysia"
+  "singaporean": "Singapore"
+  "filipino": "Philippines"
+  "philippine": "Philippines"
+  "mongolian": "Mongolia"
+  "taiwanese": "Taiwan, Province of China"
+  "bruneian": "Brunei Darussalam"
+  "fijian": "Fiji"
+  "papua new guinean": "Papua New Guinea"
+  "new zealander": "New Zealand"
+  "kenyan": "Kenya"
+  "liberian": "Liberia"
+  "ethiopian": "Ethiopia"
+  "ghanaian": "Ghana"
+  "senegalese": "Senegal"
+  "ivorian": "Côte d'Ivoire"
+  "malian": "Mali"
+  "nigerien": "Niger"
+  "chadian": "Chad"
+  "cameroonian": "Cameroon"
+  "congolese": "Congo"
+  "angolan": "Angola"
+  "mozambican": "Mozambique"
+  "zambian": "Zambia"
+  "zimbabwean": "Zimbabwe"
+  "malawian": "Malawi"
+  "tanzanian": "Tanzania"
+  "ugandan": "Uganda"
+  "rwandan": "Rwanda"
+  "burundian": "Burundi"
+  "somali": "Somalia"
+  "eritrean": "Eritrea"
+  "djiboutian": "Djibouti"
+  "south african": "South Africa"
+  "namibian": "Namibia"
+  "botswanan": "Botswana"
+  "moroccan": "Morocco"
+  "algerian": "Algeria"
+  "tunisian": "Tunisia"
+  "libyan": "Libya"
+  "mauritanian": "Mauritania"
+  "gabonese": "Gabon"
+  "togolese": "Togo"
+  "beninese": "Benin"
+  "guinean": "Guinea"
+  "gambian": "Gambia"
+  "sierra leonean": "Sierra Leone"
+  "madagascan": "Madagascar"
+  "malagasy": "Madagascar"
+  "colombian": "Colombia"
+  "peruvian": "Peru"
+  "chilean": "Chile"
+  "bolivian": "Bolivia"
+  "ecuadorian": "Ecuador"
+  "paraguayan": "Paraguay"
+  "uruguayan": "Uruguay"
+  "guatemalan": "Guatemala"
+  "honduran": "Honduras"
+  "salvadoran": "El Salvador"
+  "nicaraguan": "Nicaragua"
+  "costa rican": "Costa Rica"
+  "panamanian": "Panama"
+  "cuban": "Cuba"
+  "dominican": "Dominican Republic"
+  "haitian": "Haiti"
+  "jamaican": "Jamaica"
+  "trinidadian": "Trinidad and Tobago"
+
+# region_adjective_map: continental adjectives -> the continent, a LOCATION
+# (was _REGION_ADJECTIVE_MAP, DQ P4).
+region_adjective_map:
+  "african": "Africa"
+  "european": "Europe"
+  "europe": "Europe"
+  "asian": "Asia"
+  "north american": "North America"
+  "south american": "South America"
+  "oceanian": "Oceania"
+  "antarctic": "Antarctica"
+
+# known_regions: named sub/supra-national REGIONS that type `location` (was
+# _KNOWN_REGIONS; is_region_surface). Article-stripped whole-surface match. A
+# set.
+known_regions: [
+  "abkhazia", "aceh", "amhara", "anatolia", "arabian peninsula", "asia-pacific",
+  "balochistan", "bavaria", "belgorod region", "catalonia", "central africa",
+  "crimea", "darfur", "donbas", "donbass", "east africa", "east china sea",
+  "east coast", "gaza", "gaza strip", "gilgit-baltistan", "golan", "golan heights",
+  "great lakes region", "gulf coast", "horn of africa", "iberian peninsula",
+  "indo-pacific", "kachin", "kerala", "korean peninsula", "kurdistan", "levant",
+  "maghreb", "mesopotamia", "middle east", "nagorno-karabakh", "north africa",
+  "north kivu", "odisha", "oromia", "pacific rim", "papua", "punjab", "rakhine",
+  "rostov region", "sahel", "sea of azov", "sinai", "sinai peninsula", "sindh",
+  "south china sea", "south kivu", "south ossetia", "southern africa",
+  "strait of hormuz", "sub-saharan africa", "sverdlovsk region", "the balkans",
+  "the levant", "tigray", "transnistria", "west africa", "west bank", "west coast",
+  "xinjiang",
+]
+
+# ---------------------------------------------------------------------------
+# grounding — the off-target publish guard and the RAG country name
+# ---------------------------------------------------------------------------
+# target_slug_names: desk slug -> casefolded country names (was
+# grounding._TARGET_SLUG_TO_NAMES); the FIRST name, title-cased, is the RAG
+# query's country (target_country_name).
+target_slug_names:
+  "us": ["united states", "america", "u.s.", "usa"]
+  "cn": ["china"]
+  "ru": ["russia"]
+  "ir": ["iran"]
+  "il": ["israel"]
+  "in": ["india"]
+  "id": ["indonesia"]
+  "br": ["brazil"]
+  "ar": ["argentina"]
+  "mx": ["mexico"]
+  "ca": ["canada"]
+  "fr": ["france"]
+  "de": ["germany"]
+  "it": ["italy"]
+  "gb": ["united kingdom", "britain", "uk"]
+  "uk": ["united kingdom", "britain"]
+  "jp": ["japan"]
+  "kr": ["south korea", "korea"]
+  "sa": ["saudi arabia"]
+  "tr": ["turkey", "turkiye"]
+  "au": ["australia"]
+  "za": ["south africa"]
+  "eu": ["european union"]
+  # Watch tier (non-G20 high-consequence desks). kp/tw/ua were once MISSING and
+  # their desks self-suppressed to TRACE_ONLY (the P4 pre-push review C1).
+  # North Korea findings say "North Korea" / "DPRK".
+  "kp": ["north korea", "dprk"]
+  "tw": ["taiwan"]
+  "ua": ["ukraine"]
+  # Pakistan (S1-T2): without it the guard runs BLIND for the pk desk — it fails
+  # OPEN but cannot tell Pakistan from India.
+  "pk": ["pakistan"]
+  # A3 / DEC-C (2026-07-16): the escalation-risk watch desks. Aliases cover the
+  # shapes wire copy uses ("Burma", "DRC", "Burkina"); a miss fails OPEN.
+  "sd": ["sudan"]
+  "ml": ["mali"]
+  "bf": ["burkina faso", "burkina"]
+  "ne": ["niger"]
+  "cd": ["dr congo", "drc", "democratic republic of the congo", "congo"]
+  "mm": ["myanmar", "burma"]
+  "ht": ["haiti"]
+
+# known_country_tokens: the off-target guard's "names some OTHER country" set
+# (was grounding._KNOWN_COUNTRY_TOKENS). A set.
+known_country_tokens: [
+  "afghanistan", "america", "argentina", "australia", "brazil", "britain", "canada",
+  "china", "egypt", "france", "germany", "india", "indonesia", "iran", "iraq",
+  "israel", "italy", "japan", "korea", "lebanon", "mexico", "nigeria", "north korea",
+  "pakistan", "philippines", "russia", "saudi arabia", "south africa", "south korea",
+  "spain", "syria", "taiwan", "thailand", "turkey", "turkiye", "u.s.", "uk",
+  "ukraine", "united kingdom", "united states", "us", "usa", "venezuela", "vietnam",
+  "yemen",
+]
+
+# ---------------------------------------------------------------------------
+# subject_homonyms — the homonym class (B6, W11-F13)
+# ---------------------------------------------------------------------------
+# Per subject code: the surface forms that LOOK like the subject but name
+# something else (`exclude`), what they actually name (`reads_as`), and forms
+# that name the subject beyond the names above (`subject` — a capital, a
+# leader). A signal on the desk's code whose text names an excluded form and,
+# with those forms cut out, no longer names the subject never enters the desk's
+# slice; a finding claim of that shape is flagged `off_subject` by the critic
+# and excluded from the correctness grader by name. A form with no lowercase
+# letter matches CASE-SENSITIVELY ("SA" is not "sa"). Read by
+# src/legba/data/subject_homonyms.py. Every entry below is backed by live
+# signals on the code (the 30-day audit in the B6 report); a code with no
+# observed collision is NOT listed — a wrong entry would drop real coverage.
+subject_homonyms:
+  "kp":
+    reads_as: ["Khyber Pakhtunkhwa, a province of Pakistan (KP / KPK / K-P in the Pakistani press)"]
+    exclude: ["KP", "KPK", "K-P", "Khyber Pakhtunkhwa", "Khyber-Pakhtunkhwa", "Pakhtunkhwa", "Khyber"]
+    subject: ["Pyongyang", "Kim Jong Un", "Kim Yo Jong", "KCNA", "Korea", "Korean"]
+  "sa":
+    reads_as: ["South Africa (SA in the South African press)", "South Australia", "a company's S.A. / SA suffix"]
+    exclude: ["SA", "S.A.", "South Australia"]
+    subject: ["Saudi", "Riyadh", "Jeddah", "KSA", "Aramco"]
+  "gb":
+    reads_as: ["Gilgit-Baltistan, a region of Pakistan (GB in the Pakistani press)", "gigabytes / chip names (512GB, GB300)"]
+    exclude: ["GB", "Gilgit-Baltistan", "Gilgit Baltistan", "Gilgit", "Baltistan"]
+    subject: ["British", "London", "Scotland", "Wales", "Starmer"]
+  "ca":
+    reads_as: ["California's postal code (NWS alert titles: 'by NWS San Diego CA')"]
+    exclude: ["CA"]
+    subject: ["Canadian", "Ottawa"]
+  "ne":
+    reads_as: ["Nebraska's postal code (NWS alert titles)", "Niger State and the Niger Delta (Nigeria)"]
+    exclude: ["NE", "Nebraska", "Niger State", "Niger Delta"]
+    subject: ["Niamey", "Nigerien"]
+  "mx":
+    reads_as: ["New Mexico, a US state"]
+    exclude: ["New Mexico"]
+    subject: ["Mexico City", "Sheinbaum"]
+  "ua":
+    reads_as: ["the African Union in French copy (l'UA, Union africaine)", "United Airlines"]
+    exclude: ["UA", "Union africaine"]
+    subject: ["Ukrainian", "Kyiv", "Kiev", "Zelensky", "Zelenskyy"]
+  "ge":
+    reads_as: ["General Electric / GE Vernova / GE Aerospace", "a general election (GE16 in the Malaysian press)", "the US state of Georgia"]
+    exclude: ["GE", "GE Vernova", "GE Aerospace", "GE HealthCare", "Atlanta", "Georgia, US", "Georgia, U.S."]
+    subject: ["Georgia", "Georgian", "Tbilisi"]
+  "mn":
+    reads_as: ["Minnesota's postal code (NWS alert titles)"]
+    exclude: ["MN", "Minnesota"]
+    subject: ["Mongolia", "Mongolian", "Ulaanbaatar"]
+  "pa":
+    reads_as: ["Pennsylvania's postal code (NWS alert titles)", "Panama City, Florida"]
+    exclude: ["PA", "Pennsylvania", "Panama City, Florida", "Panama City Beach"]
+    subject: ["Panama", "Panamanian"]
+  "iq":
+    reads_as: ["IQ, the intelligence quotient"]
+    exclude: ["IQ"]
+    subject: ["Iraq", "Iraqi", "Baghdad", "Kurdistan"]
+  "dj":
+    reads_as: ["DJ (a disc jockey; the DJ Basin in Colorado)"]
+    exclude: ["DJ"]
+    subject: ["Djibouti", "Djiboutian"]

@@ -63,6 +63,8 @@ LOOP_DESCRIPTOR_STATE_DRIFT = "descriptor_state_drift"
 # ``production_gauge_projection``; the class id is mirrored into the tuple
 # below (imported, never re-spelled).
 from .production_gauge_projection import LOOP_GRAPH_PROJECTION
+from .descriptor_prompt_manifest import MANIFEST_DIR as _MANIFEST_DIR
+from .descriptor_prompt_manifest import load_manifest as _load_manifest
 
 INTEGRITY_LOOP_CLASSES: tuple[str, ...] = (
     LOOP_JUDGE_AVAILABILITY,
@@ -88,8 +90,18 @@ QUIET_NOTHING_COPRESENT = "no_copresent_descriptors"
 
 #: The manifest the R4 comparison is made against — the compiled tree side. See
 #: scripts/gen_descriptor_prompt_manifest.py for why the tree itself cannot be
-#: read at runtime.
-MANIFEST_PATH = Path(__file__).with_name("descriptor_prompts.json")
+#: read at runtime. R-1: a DIRECTORY of one JSON per descriptor file, assembled
+#: by :func:`descriptor_prompt_manifest.load_manifest` into the dict the single
+#: ``descriptor_prompts.json`` used to hold (a ``path`` argument naming a single
+#: JSON file is still read as one).
+MANIFEST_PATH = _MANIFEST_DIR
+
+
+def _read_manifest(path: Path | None) -> dict[str, Any]:
+    p = path or MANIFEST_PATH
+    if p.is_dir():
+        return _load_manifest(p)
+    return json.loads(p.read_text(encoding="utf-8"))
 
 #: Defensive bound on one drift read.
 _MAX_DESCRIPTORS = 500
@@ -296,9 +308,8 @@ def load_prompt_manifest(path: Path | None = None) -> dict[str, Any]:
     """The compiled tree side. ``{}`` when unavailable — the gauge then reports
     ``ungauged``/``prompt_manifest_unavailable`` rather than pretending zero
     drift, because a missing manifest and a matching one are not the same fact."""
-    p = path or MANIFEST_PATH
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data = _read_manifest(path)
     except (OSError, ValueError) as exc:
         logger.warning("production_gauge.prompt_manifest_unreadable err=%s", exc)
         return {}
@@ -492,9 +503,8 @@ _STATE_SQL = """
 
 def load_state_manifest(path: Path | None = None) -> dict[str, Any]:
     """The tree's declared state per ``<family>:<id>``. ``{}`` when unavailable."""
-    p = path or MANIFEST_PATH
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data = _read_manifest(path)
     except (OSError, ValueError) as exc:
         logger.warning("production_gauge.state_manifest_unreadable err=%s", exc)
         return {}

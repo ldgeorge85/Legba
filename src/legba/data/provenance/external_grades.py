@@ -341,7 +341,7 @@ INSERT INTO external_grades (
     grader_family, grader_component_id, grader_model_name, grader_served_by,
     grader_pipeline_version, rubric_version, rater_role,
     retrieval_origin_mix, read_evidence_window, sample_fraction,
-    graded_at, derived_from
+    graded_at, derived_from, search_health
 ) VALUES (
     $1, $2, $3::uuid, $4::uuid, $5,
     $6, $7, $8, $9,
@@ -353,7 +353,7 @@ INSERT INTO external_grades (
     $29, $30, $31, $32,
     $33, $34, $35,
     $36::jsonb, $37::jsonb, $38,
-    $39::timestamptz, $40::uuid[]
+    $39::timestamptz, $40::uuid[], $41::jsonb
 )
 ON CONFLICT (claim_key, grader_pipeline_version, grader_family) DO NOTHING
 """
@@ -502,6 +502,8 @@ async def _execute_write(
             float(row.get("sample_fraction") or 1.0),
             graded_at,
             [_uuid_or_none(d) for d in derived_from if _uuid_or_none(d)],
+            # X1/B5 (mig 0235): the search's per-engine health block.
+            json.dumps(dict(row.get("search_health") or {})),
         )
     except Exception as exc:
         logger.warning(

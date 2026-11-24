@@ -75,6 +75,7 @@ the host and the image give the same answer to it.
 """
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import logging
 import os
@@ -84,6 +85,9 @@ from functools import lru_cache
 from typing import Any, Callable
 
 import httpx
+
+from ._http_version import current_posture
+from .fetch_capture import tee_response
 
 logger = logging.getLogger(__name__)
 
@@ -202,16 +206,56 @@ def assert_public_host(host: str, port: int) -> None:
             )
 
 
+async def dispatch_request(
+    request: httpx.Request, *, primary: Any, h1: Any, h2_offered: bool,
+) -> httpx.Response:
+    """After the guard: the protocol posture (N-L ``fetch.http_version``, only
+    inside a source poll — otherwise ``primary`` exactly as before), then the
+    fetch-receipt tee (identity unless a poll opened a capture scope)."""
+    posture = current_posture()
+    if posture is None:
+        response = await primary(request)
+    else:
+        response = await posture.send(
+            request, h2=primary, h1=lambda r: h1().handle_async_request(r), h2_offered=h2_offered,
+        )
+    return tee_response(request, response)
+
+
 class SsrfGuardedTransport(httpx.AsyncHTTPTransport):
     """``httpx`` transport that validates the target is public before connecting."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._init_kwargs = dict(kwargs)
+        self._h1: httpx.AsyncHTTPTransport | None = None
+
+    def _h1_transport(self) -> httpx.AsyncHTTPTransport:
+        """The SAME transport arguments with HTTP/2 off (N-L ``fetch.http_version``)."""
+        if self._h1 is None:
+            self._h1 = httpx.AsyncHTTPTransport(**{**self._init_kwargs, "http2": False})
+        return self._h1
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         url = request.url
         if url.scheme not in ("http", "https"):
             raise EgressBlockedError(f"egress blocked: unsupported scheme {url.scheme!r}")
         port = url.port or (443 if url.scheme == "https" else 80)
-        assert_public_host(url.host, port)
-        return await super().handle_async_request(request)
+        # N-W: the guard's ``getaddrinfo`` is a BLOCKING DNS lookup; on the
+        # loop it held the runtime 2-3.6 s per slow resolve (loop-lag
+        # monitor, 2026-11-13). Same check, same errors, in a worker thread.
+        await asyncio.to_thread(assert_public_host, url.host, port)
+        # N-L: a source poll's declared HTTP version (legba.data.sources.
+        # _http_version); outside a poll there is no posture — unchanged.
+        return await dispatch_request(
+            request, primary=super().handle_async_request, h1=self._h1_transport,
+            h2_offered=bool(self._init_kwargs.get("http2", False)),
+        )
+
+    async def aclose(self) -> None:
+        await super().aclose()
+        if self._h1 is not None:
+            await self._h1.aclose()
 
 
 def fetch_tls_ciphers() -> str:

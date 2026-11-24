@@ -1,0 +1,112 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# A SKELETON focused-instance profile: sanctions and export-control
+# determination (DEC-11; Review B §1.2 F1). It carries only what the manifest
+# can carry today — a regime roster, a source set, the five questions as
+# data, the labels — and is NOT registered anywhere. INST-2 turns it into an
+# instance (unit descriptors with prompts and rubrics, a top floor, the
+# taxonomy families). docs/PROFILES.md explains each key.
+#
+# What a compliance user reads here is a RECORD of what was checked, when,
+# against which published instrument — never a legal determination.
+
+id: sanctions_export_control
+
+# Ten regime subjects (one per authority-and-programme pair) and the source
+# set. Counterparties are the user's own trading partners: an operator adds
+# counterparty_<slug> targets tagged `counterparty`; none ship with the
+# skeleton (no invented companies).
+descriptors_dir: descriptors
+# No live-state overlay yet: every descriptor registers at its shipped state.
+lifecycle: null
+
+# No knowledge-seed adapter fits this case yet.
+seeds: []
+
+rosters:
+  subject_tags: [regime, counterparty]
+  # No per-subject scorecard (Review B §1.2: declare none).
+  units:
+    - id: designation_change
+      question: >-
+        What changed in this regime's published designations in the cited
+        window, and in which direction — tightening, holding, or easing?
+    - id: counterparty_exposure
+      question: >-
+        Is this counterparty, or any entity our record links to it, named or
+        implicated by a published determination in the cited window?
+    - id: licence_deadline
+      question: >-
+        Which licence, general authorisation or wind-down deadline bearing on
+        this regime falls due next, and on what published date?
+    - id: instrument_scope
+      question: >-
+        Which published instrument last changed this regime's scope, and does
+        anything in the window supersede it?
+    - id: enforcement_practice
+      question: >-
+        Is any enforcement action in the window signalling how this regime is
+        being read in practice, and against what conduct?
+  # The gazetteer declares only the polity universe and the four designating
+  # authorities' spellings; every guard that needs a country-desk table answers
+  # not_applicable by name (W10 CANON-1, SEAMS #67).
+  gazetteer: rosters/gazetteer.yaml
+
+# No profile-owned prose yet.
+prompts: null
+
+top_floor: none
+
+# SPLIT-3: what the skeleton can say today (docs/PROFILES.md "Constants").
+# No frame has a producer yet, so there is no drain rank and no external-truth
+# stratum; the reader of each refuses by name.
+constants:
+  # The per-subject tier is the regime (its targets are regime_<slug>).
+  subject_frame: regime
+  # Review B §1.2: the subjects are regimes and counterparties, so the anchor
+  # a frame needs is an ORGANIZATION, and the frame anchor's design (§3.2)
+  # refuses an ORG anchor without a home-entity exclusion and an ORG fold the
+  # platform does not have. Declared none until it does: the anchor bar and
+  # the coverage floor's fold refuse by name.
+  anchor_class: none
+  # A compliance record merges no entity without the adjudicator: every
+  # curated alias pair stays gray.
+  auto_merge_class: none
+  # Every skeleton source publishes in English (languages: [en]).
+  translation_languages: []
+
+ui:
+  subject:
+    singular: Regime
+    plural: Regimes
+    kinds:
+      - {id: regime, singular: Regime, plural: Regimes}
+      - {id: counterparty, singular: Counterparty, plural: Counterparties}
+  unit_noun:
+    singular: question
+    plural: questions
+  # Two frame families (Review B §1.2 taxonomy): jurisdiction → regime →
+  # programme, and corporate group → legal entity → vessel or asset.
+  frames:
+    - {id: jurisdiction, label: Jurisdiction}
+    - {id: regime, label: Regime, parent: jurisdiction}
+    - {id: programme, label: Programme, parent: regime}
+    - {id: corporate_group, label: Corporate group}
+    - {id: legal_entity, label: Legal entity, parent: corporate_group}
+    - {id: vessel_or_asset, label: Vessel or asset, parent: legal_entity}
+  landing: morning_read
+  stances:
+    - id: desk
+      label: Regime
+      question: Everything about the one regime or counterparty I have selected.
+  missions:
+    - {id: desk_watch, label: Counterparty watch}
+  map:
+    geometry: none
+  labels:
+    overview_title: Roster at a glance
+    unscoped_subject: No regime or counterparty (unscoped)
+    roster:
+      regime: Regimes
+      counterparty: Counterparties

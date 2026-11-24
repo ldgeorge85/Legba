@@ -60,12 +60,8 @@
 # 2022, which sharpens rather than weakens the case for treating the state
 # agency's output as framing.
 #
-# LICENCE/ROBOTS POSTURE: no `robots.txt` found at aib.media or www.aib.media
-# (the request 302-redirects straight to the homepage HTML) — no restriction
-# observed. No machine-readable licence declaration found on-site.
-# `scope.license_class` left UNSET (honest absence, not "unknown" — the
-# LIC-2 default), which lands ingested signals at teaser depth until an
-# operator reviews it.
+# ROBOTS: no `robots.txt` found at aib.media or www.aib.media
+# (the request 302-redirects straight to the homepage HTML).
 #
 # state: draft — bulk registration creates NO live actor; activation
 # (draft -> configured -> active) is the operator's after the route is

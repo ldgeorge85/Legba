@@ -220,10 +220,10 @@ async def test_the_route_publishes_the_closed_kind_vocabulary(client):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["version"] == ABSENCE_ROUTE_VERSION
-    # Eight kinds, each with its one-line meaning, on the wire (7g-2 added
-    # `history_gap` — the only one about the PAST).
+    # Nine kinds, each with its one-line meaning, on the wire (7g-2 added
+    # `history_gap`, W11-F14 `carried_unsupported`).
     assert set(body["kinds"]) == set(ABSENCE_KINDS)
-    assert len(body["kinds"]) == 8
+    assert len(body["kinds"]) == 9
     assert all(v.strip() for v in body["kinds"].values())
 
 
@@ -321,6 +321,84 @@ async def test_a_unit_past_its_cadence_is_source_stale_and_reads_stale(
     assert stale["proof"]["ref"] == stale_id
 
 
+#: W11-F14 — a fixture unit of this module's own (the roster is swapped for
+#: it), so no real unit's descriptor head can collide with the seeded cooldown.
+_CARRY_UNIT = "k5_e1_carry_unit"
+
+
+async def _insert_unit_read(conn, *, age_h: float, statuses: list[str], now: datetime) -> str:
+    row_id = uuid4()
+    await conn.execute(
+        "INSERT INTO public.analyst_outputs "
+        "  (id, kind, title, body, confidence, severity, data, target_id, "
+        "   analyst_id, produced_at, schema_uri) "
+        "VALUES ($1, 'finding', 'flow stays degraded', 'carried', 0.65, "
+        "        'moderate', $2::jsonb, $3, $4, $5, "
+        "        'iglu:legba/finding/jsonschema/1-0-0')",
+        row_id,
+        json.dumps({
+            "tags": ["severity:moderate"],
+            "data": {"indicators": [{"id": f"i{n}", "status": st} for n, st in enumerate(statuses)]},
+        }),
+        DESK,
+        _CARRY_UNIT,
+        now - timedelta(hours=age_h),
+    )
+    return str(row_id)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_a_status_nobody_re_evidenced_is_carried_unsupported(client, api_app, monkeypatch):
+    """W11-F14 — the unit HAS a current read, but its status was last evidenced
+    two weeks ago: ``carried_unsupported``, its proof the last evidencing read
+    (a ``finding`` ref) and its age, its clock the unit's latest read."""
+    import legba.data.registry.absence_api as api
+    from legba.data.profile_projection import ScopeTable
+
+    monkeypatch.setattr(
+        api,
+        "_SCOPE_CONSTANTS",
+        ScopeTable(
+            units=(_CARRY_UNIT,),
+            banding_analyst=BANDING_ANALYST_ID,
+            audit_analyst=AUDIT_ANALYST_ID,
+            unit_grace_multiple=UNIT_GRACE_MULTIPLE,
+        ),
+    )
+    _, pg_store = api_app
+    now = datetime.now(timezone.utc)
+    async with pg_store.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO public.analyst_descriptors "
+            "  (descriptor_id, version, schema_uri, is_head, kind, state, owner, "
+            "   name, body) "
+            "VALUES ($1, 'k5v1', 'legba/analyst/2.0.0', TRUE, 'inline_target', "
+            "        'active', $2, $1, $3::jsonb) ON CONFLICT DO NOTHING",
+            _CARRY_UNIT,
+            _OWNER,
+            json.dumps({"cadence": {"cooldown_seconds": 39600, "fallback_schedule": "0 6,18 * * *"}}),
+        )
+        evidencing = await _insert_unit_read(conn, age_h=336, statuses=["triggered"], now=now)
+        for age in (48, 24, 2):
+            await _insert_unit_read(conn, age_h=age, statuses=["not_observed"] * 6, now=now)
+
+    r = await client.get(_ROUTE, params={"scope": DESK})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "carried_unsupported" in body["kinds"]
+    items = _by_kind(body, "carried_unsupported")
+    assert [i["subject"] for i in items] == [_CARRY_UNIT]
+    item = items[0]
+    _assert_stamped(item)
+    assert item["proof"]["ref"] == evidencing
+    assert item["proof"]["ref_kind"] == "finding"
+    assert "336 h old" in item["reason"]
+    assert item["since"] is not None
+    assert item["as_of_basis"] == "this unit's latest read for this desk"
+    assert not any("carried_unsupported" in n for n in body["not_measured"])
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_layer_declared_absent_has_no_clock_and_a_review(client, api_app):
@@ -356,9 +434,23 @@ async def test_layer_declared_absent_has_no_clock_and_a_review(client, api_app):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_below_floor_reads_the_live_card_and_skips_no_finding(client, api_app):
+async def test_below_floor_reads_the_live_card_and_skips_no_finding(
+    client, api_app, monkeypatch
+):
     _, pg_store = api_app
-    now = datetime.now(timezone.utc)
+    # W5-F9 — the banding cadence is "40 4 * * *", so "a two-hour-old card has
+    # not come due" is only true when no 04:40Z slot falls in the two hours
+    # before the read: against the real clock this failed daily 04:40-06:40Z.
+    # Freeze the ROUTE's clock at 12:00Z today and age the card from it.
+    import legba.data.registry.absence_api as api
+
+    now = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+    real_read = api.read_absences
+
+    async def _frozen_read(conn, **kw):
+        return await real_read(conn, **{**kw, "now": now})
+
+    monkeypatch.setattr(api, "read_absences", _frozen_read)
     card_at = now - timedelta(hours=2)
     async with pg_store.acquire() as conn:
         await _insert_analyst_head(conn, BANDING_ANALYST_ID, "40 4 * * *")
@@ -658,10 +750,10 @@ def test_absence_route_imports_without_the_runtime_stack() -> None:
         assert not leaked, "analyst/runtime package reachable: %r" % leaked
         assert api.build_absence_router is not None
         assert api.ABSENCE_ROUTE_VERSION == "2026-09/k5"
-        # 7g-2 added `history_gap` as the eighth. The count is pinned so
-        # a kind cannot be added to the vocabulary without a reader
-        # surface being updated in the same commit.
-        assert len(api.ABSENCE_KINDS) == 8
+        # 7g-2 added `history_gap` as the eighth, W11-F14 `carried_unsupported`
+        # as the ninth. The count is pinned so a kind cannot be added to the
+        # vocabulary without a reader surface being updated in the same commit.
+        assert len(api.ABSENCE_KINDS) == 9
         print("OK")
         """
     )
@@ -682,18 +774,20 @@ _ABSENCE_TS = _REPO_ROOT / "legba-ui-v3" / "src" / "lib" / "absenceModel.ts"
 
 
 def _ts_units() -> list[tuple[str, int]]:
-    """The `(id, cadenceHours)` pairs the gap strip's TypeScript declares."""
+    """The `(id, cadenceHours)` pairs the gap strip renders. ROSTER-2: the
+    strip spells no unit — `GAP_STRIP_UNITS` is `profileUnits()` (the units of
+    the generated `profile_ui.json`, roster order) at `UNIT_CADENCE_HOURS`."""
     text = _GAP_STRIP_TS.read_text(encoding="utf-8")
-    block = re.search(
-        r"export const GAP_STRIP_UNITS: GapUnit\[\] = \[(.*?)\n\]", text, re.S
+    assert re.search(
+        r"export const GAP_STRIP_UNITS: GapUnit\[\] = profileUnits\(\)\.map\(", text
+    ), "GAP_STRIP_UNITS is no longer built from profileUnits()"
+    assert "cadenceHours: UNIT_CADENCE_HOURS" in text
+    m = re.search(r"export const UNIT_CADENCE_HOURS = (\d+)", text)
+    assert m, "UNIT_CADENCE_HOURS not found in gapStripModel.ts"
+    ui = json.loads(
+        (_REPO_ROOT / "legba-ui-v3" / "src" / "lib" / "profile_ui.json").read_text(encoding="utf-8")
     )
-    assert block, "GAP_STRIP_UNITS not found in gapStripModel.ts"
-    return [
-        (m.group(1), int(m.group(2)))
-        for m in re.finditer(
-            r"\{\s*id:\s*'([a-z_]+)'.*?cadenceHours:\s*(\d+)\s*\}", block.group(1)
-        )
-    ]
+    return [(u["id"], int(m.group(1))) for u in ui["rosters"]["units"]]
 
 
 def test_bounded_units_match_the_gap_strips_typescript() -> None:

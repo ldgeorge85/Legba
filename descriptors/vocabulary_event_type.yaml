@@ -1,0 +1,31 @@
+# The `event_type` vocabulary family — `events.event_type` (W9 TAX-4).
+#
+# A PLATFORM family (src/legba/data/schemas/vocabulary.py PLATFORM_FAMILIES):
+# what kind of occurrence an event is, independent of the instance's case.
+# Seeded by the descriptor walker (scripts/bringup_register_descriptors.py,
+# "vocabulary seeds"): every row is upserted into `vocabulary_entries`, the
+# tree's notes winning on a re-run. Read by src/legba/data/case_columns.py,
+# whose EVENT_TYPES literal is the fallback when the family is not loaded.
+#
+# The column is ALSO a CHECK (`events_event_type_check`, migration 0230 =
+# these four + `unclassified`), so the family can narrow the set the writer
+# admits but never widen it: a value registered here and missing from the
+# CHECK binds `unclassified` until a migration widens the CHECK.
+# tests/data_pkg/test_retrofit_case_columns.py pins these entries equal to the
+# literal.
+#
+# Seeded 2026-10-04 from the live set (incident 1,303 / development 521) plus
+# the two the producer can emit (`_event_candidates._EVENT_TYPES`).
+identity:
+  id: event_type
+  schema_uri: legba/vocabulary/1.0.0
+family: event_type
+entries:
+  - value: incident
+    notes: A discrete occurrence evidenced by signals (the clustering default)
+  - value: development
+    notes: A movement on a tracked situation (the tower's situation-event leg)
+  - value: shift
+    notes: A change of state in an ongoing occurrence
+  - value: threshold
+    notes: A declared threshold crossed

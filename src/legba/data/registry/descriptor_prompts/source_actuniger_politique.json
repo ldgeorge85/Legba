@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.actuniger.politique": {
+      "source": "source_actuniger_politique.yaml",
+      "state": "draft"
+    }
+  }
+}

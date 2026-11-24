@@ -464,6 +464,10 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.registry
+      # W9 SPLIT-2: the profile whose prompts/ package the image carries
+      # (a directory relative to the repo root; docs/PROFILES.md).
+      args:
+        LEGBA_PROFILE: ${LEGBA_PROFILE:-profiles/geopolitics}
     profiles: ["runtime"]
     env_file: .env
     # Infra tuning: container backstop.
@@ -479,6 +483,17 @@ services:
       LEGBA_DATA_NATS_URL: nats://nats:4222
       LEGBA_REGISTRY_API_HOST: 0.0.0.0
       LEGBA_REGISTRY_API_PORT: "8090"
+      # W11-F85: uvicorn workers (default 1 = the single-process launch). Each
+      # worker is a full process with its share of LEGBA_DATA_PG_POOL_MAX; the
+      # consult run plane stays per worker (SEAMS #74). docs/RUNBOOK.md
+      # "Registry workers" before raising it — and the mem_limit below.
+      LEGBA_REGISTRY_WORKERS: "${LEGBA_REGISTRY_WORKERS:-1}"
+      LEGBA_BACKUP_STATE_DIR: /var/lib/legba/backup-state
+    volumes:
+      # X1-A2: the host backup/drill status files (last_backup.json,
+      # last_drill.json) behind GET /v3/system/backup-status. Read-only; a
+      # missing directory reads as "never recorded".
+      - ${LEGBA_BACKUP_STATE_DIR:-/var/lib/legba/backup-state}:/var/lib/legba/backup-state:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -502,6 +517,10 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.runtime
+      # W9 SPLIT-2: the profile whose prompts/ package the image carries
+      # (a directory relative to the repo root; docs/PROFILES.md).
+      args:
+        LEGBA_PROFILE: ${LEGBA_PROFILE:-profiles/geopolitics}
     profiles: ["runtime"]
     env_file: .env
     # Infra tuning: container backstop (actor host — analyst inference fan-out).

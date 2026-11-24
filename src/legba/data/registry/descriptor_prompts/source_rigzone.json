@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.rigzone.news": {
+      "source": "source_rigzone.yaml",
+      "state": "draft"
+    }
+  }
+}

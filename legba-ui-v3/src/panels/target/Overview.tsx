@@ -32,9 +32,12 @@
  * the paper and the file can never disagree. Disabled until a brief exists.
  */
 
+import { drive } from '@/lib/applyAction'
+import { bridgeActions } from '@/lib/commands'
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { BookOpen, Newspaper, Printer } from 'lucide-react'
+import { useBelowAdmin } from '@/auth/roles'
 import { PanelChrome } from '@/components/PanelChrome'
 import {
   apiGet,
@@ -107,11 +110,18 @@ function openLineage(rowKind: string, rowId: string, title?: string) {
   selectRow(rowKind, rowId, title, { origin: 'target-overview' })
 }
 
+export const RUNTIME_NEEDS_ADMIN =
+  'How this subject runs (its descriptor, its units and their errors) is read by an admin. Its recent signals and findings are below.'
+
 export default function TargetOverviewPanel({ registration, scope }: PanelProps) {
   const target_id = scope.target_id ?? registration.descriptor_id
 
+  // RA-1: the runtime (actors, their errors, source cursors) is the engine's
+  // own state — an admin's read. Below admin it is not asked for; the tab
+  // says so and still shows the subject's recent signals and findings.
+  const belowAdmin = useBelowAdmin()
   const runtimeQ = useQuery<TargetRuntimeResponse | null>({
-    enabled: !!target_id,
+    enabled: !!target_id && !belowAdmin,
     queryKey: ['target-runtime', target_id],
     queryFn: async () => {
       try {
@@ -138,7 +148,7 @@ export default function TargetOverviewPanel({ registration, scope }: PanelProps)
     enabled: !!target_id,
     queryKey: ['target-findings', target_id],
     queryFn: () =>
-      apiGet<{ data: FindingRow[] }>(`/findings?target_id=${encodeURIComponent(target_id)}&limit=20`),
+      apiGet<{ data: FindingRow[] }>(`/findings?target_id=${encodeURIComponent(target_id)}&limit=20&fields=full`),
     refetchInterval: 30_000,
   })
 
@@ -197,16 +207,13 @@ export default function TargetOverviewPanel({ registration, scope }: PanelProps)
     }
   }
 
-  // P-A — the brief READ rather than downloaded. The page is a Dockview panel
-  // on the existing bound-panel machinery, so opening it is a DOM event the
-  // shell bridges (`legba:open-desk-brief`) exactly as the optimizer diff does
-  // — a panel cannot mount a sibling panel, and the shell must not have to
-  // know that this one exists.
+  // P-A — the brief READ rather than downloaded. The page is a bound Dockview
+  // panel, so opening it is an `open_panel` drive action on this desk, run
+  // through the ONE executor (UI-B1/shell retired the `legba:open-desk-brief`
+  // DOM bridge) — a panel still never mounts a sibling itself.
   function openDeskBriefPage() {
     if (!target_id) return
-    window.dispatchEvent(
-      new CustomEvent('legba:open-desk-brief', { detail: { targetId: target_id } }),
-    )
+    drive(bridgeActions.deskBrief(target_id))
   }
 
   const deskBriefAction = (
@@ -268,9 +275,15 @@ export default function TargetOverviewPanel({ registration, scope }: PanelProps)
       }}
     >
       <div className="flex-1 overflow-auto space-y-3 text-xs">
+        {belowAdmin && (
+          <p className="text-ink-2" data-testid="subject-runtime-reader">
+            {RUNTIME_NEEDS_ADMIN}
+          </p>
+        )}
         {/* Descriptor block */}
+        {!belowAdmin && (<>
         <section>
-          <div className="text-slate-500 text-[10px] uppercase tracking-wide mb-1">descriptor</div>
+          <div className="text-slate-500 text-label uppercase tracking-wide mb-1">descriptor</div>
           {desc ? (
             <div className="bg-surface-100 border border-slate-800 rounded p-2 grid grid-cols-2 gap-x-3 gap-y-1">
               <span className="text-slate-500">name</span>
@@ -288,7 +301,7 @@ export default function TargetOverviewPanel({ registration, scope }: PanelProps)
               <span className="text-slate-500">sources</span>
               <span>{desc.source_count}</span>
               <span className="text-slate-500">version</span>
-              <span className="font-mono text-[10px] text-slate-400 truncate">
+              <span className="font-mono text-label text-slate-400 truncate">
                 {desc.version.slice(0, 16)}
               </span>
             </div>
@@ -299,7 +312,7 @@ export default function TargetOverviewPanel({ registration, scope }: PanelProps)
 
         {/* Actor + source cursor block */}
         <section>
-          <div className="text-slate-500 text-[10px] uppercase tracking-wide mb-1">
+          <div className="text-slate-500 text-label uppercase tracking-wide mb-1">
             actors ({actors.length})
           </div>
           {actors.map((a) => (
@@ -309,7 +322,7 @@ export default function TargetOverviewPanel({ registration, scope }: PanelProps)
             >
               <div className="flex items-baseline gap-3 mb-1">
                 <span
-                  className={`shrink-0 rounded px-1 text-[10px] ${
+                  className={`shrink-0 rounded px-1 text-label ${
                     a.lifecycle === 'active'
                       ? 'bg-emerald-900 text-emerald-200'
                       : 'bg-slate-700 text-slate-200'
@@ -317,7 +330,7 @@ export default function TargetOverviewPanel({ registration, scope }: PanelProps)
                 >
                   {a.lifecycle}
                 </span>
-                <span className="font-mono text-[10px] text-slate-400 truncate flex-1">
+                <span className="font-mono text-label text-slate-400 truncate flex-1">
                   {a.actor_id}
                 </span>
                 {a.error_count > 0 && (
@@ -354,10 +367,11 @@ export default function TargetOverviewPanel({ registration, scope }: PanelProps)
             <div className="text-slate-500">no active actors</div>
           )}
         </section>
+        </>)}
 
         {/* Recent signals */}
         <section>
-          <div className="text-slate-500 text-[10px] uppercase tracking-wide mb-1">
+          <div className="text-slate-500 text-label uppercase tracking-wide mb-1">
             recent signals ({signals.length})
           </div>
           <div className="space-y-1">
@@ -372,7 +386,7 @@ export default function TargetOverviewPanel({ registration, scope }: PanelProps)
                   <span className="text-slate-200 truncate flex-1">{s.title}</span>
                   <span className="text-slate-600 shrink-0">{s.language}</span>
                 </div>
-                <div className="text-slate-600 text-[10px] mt-0.5">
+                <div className="text-slate-600 text-label mt-0.5">
                   {new Date(s.produced_at).toLocaleString()}
                 </div>
               </button>
@@ -385,7 +399,7 @@ export default function TargetOverviewPanel({ registration, scope }: PanelProps)
 
         {/* Recent findings */}
         <section>
-          <div className="text-slate-500 text-[10px] uppercase tracking-wide mb-1">
+          <div className="text-slate-500 text-label uppercase tracking-wide mb-1">
             recent findings ({findings.length})
           </div>
           <div className="space-y-1">

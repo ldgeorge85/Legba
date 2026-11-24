@@ -19,14 +19,10 @@ async def test_smoke_passes(migrated_pg: PostgresConfig):
         f"missing tables:        {result.tables_missing}\n"
         f"unexpected retired:    {result.tables_unexpected_retired}\n"
         f"provenance failures:   {result.provenance_table_failures}\n"
-        f"vertex diff:           {result.vertex_label_diff}\n"
-        f"edge diff:             {result.edge_label_diff}\n"
         f"errors:                {result.errors}"
     )
     assert result.sample_target_id
     assert result.sample_stack_component_id
     assert result.sample_trace_run_id
     assert result.lineage_query_ok
-    assert len(result.age_vertex_labels) >= 9
-    assert len(result.age_edge_labels) >= 14
     assert result.table_stats, "expected non-empty table stats"

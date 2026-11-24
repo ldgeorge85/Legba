@@ -34,8 +34,8 @@ from legba.data.stack.postgres import PostgresClusterHandler, handler
 async def pg_handler(migrated_pg: PostgresConfig):
     """Build a handler against the migrated session test DB and bring it up.
 
-    `migrated_pg` has migration 0004 applied, so AGE is loaded + the
-    `legba_graph` and the 9-vertex / 14-edge label set already exist.
+    `migrated_pg` has every migration applied; the AGE extension is still
+    installed but the (empty) `legba_graph` was dropped.
     """
     h = PostgresClusterHandler(
         migrated_pg,
@@ -133,26 +133,9 @@ async def test_lifecycle_and_health(migrated_pg: PostgresConfig):
     assert h2_health.state == "unhealthy"
 
 
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_on_configure_fails_without_age(tmp_path):
-    """On configure, a database without AGE must raise.
-
-    We exercise this by pointing at the admin Postgres `postgres` database
-    on the substrate container — that database doesn't have AGE installed
-    via our migrations.
-    """
-    cfg = PostgresConfig(
-        host="127.0.0.1", port=5432,
-        user="legba", password="legba",
-        database="postgres",  # no AGE here
-        pool_min=1, pool_max=2,
-    )
-    h = PostgresClusterHandler(cfg, component_id="pg.noage.test")
-    with pytest.raises(RuntimeError, match=r"AGE"):
-        await h.on_configure()
-    # The handler should have torn down on failure — state stays at draft.
-    assert h.state == "draft"
+# (The old "configure refuses a database without the AGE graph" test was
+# removed with the graph: PostgresStore.connect installs the extension itself,
+# so the only thing that ever made configure refuse was the graph probe.)
 
 
 # ---------------------------------------------------------------------------
@@ -257,125 +240,22 @@ async def test_schema_identifier_validation(
 
 
 # ---------------------------------------------------------------------------
-# Cypher against the AGE graph — vertex round-trip with a real entity_class
+# The AGE graph is gone (2026-11-15): the handler still comes up without it,
+# and no longer carries the cypher / label helpers.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_cypher_vertex_round_trip(pg_handler: PostgresClusterHandler):
-    """Create a vertex with one of the 9 entity_classes, match it, delete it."""
-    marker = f"legba_test_{uuid4().hex[:10]}_country"
-    graph = pg_handler.graph_name
-
-    # CREATE — note `:Country` is one of the 9 retained entity_classes
-    # (L-090 §4.5). The test uses {name} substitution via params= so the
-    # template path is exercised too.
-    created = await pg_handler.cypher(
-        graph,
-        "CREATE (n:Country {{name: '{name}'}}) RETURN n",
-        params={"name": marker},
-    )
-    assert len(created) == 1
-    node = created[0]["v"]
-    assert isinstance(node, dict)
-    assert node["label"] == "Country"
-    assert node["properties"]["name"] == marker
-
-    # MATCH — the just-created vertex must be findable.
-    matched = await pg_handler.cypher(
-        graph,
-        "MATCH (n:Country {{name: '{name}'}}) RETURN n",
-        params={"name": marker},
-    )
-    assert len(matched) == 1
-    assert matched[0]["v"]["properties"]["name"] == marker
-
-    # DELETE — cleanup; subsequent match returns empty.
-    await pg_handler.cypher(
-        graph,
-        "MATCH (n:Country {{name: '{name}'}}) DELETE n",
-        params={"name": marker},
-    )
-    after = await pg_handler.cypher(
-        graph,
-        "MATCH (n:Country {{name: '{name}'}}) RETURN n",
-        params={"name": marker},
-    )
-    assert after == []
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_cypher_uses_default_cols(pg_handler: PostgresClusterHandler):
-    """Default `cols='v agtype'` matches `RETURN x AS v` shape."""
-    rows = await pg_handler.cypher(
-        pg_handler.graph_name,
-        "RETURN 42 AS v",
-    )
-    assert rows == [{"v": 42}]
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_cypher_param_template_error(pg_handler: PostgresClusterHandler):
-    with pytest.raises(ValueError, match=r"params do not satisfy template"):
-        await pg_handler.cypher(
-            pg_handler.graph_name,
-            "RETURN '{missing}' AS v",
-            params={"present": "x"},
-        )
-
-
-# ---------------------------------------------------------------------------
-# AGE vocabulary helpers — idempotent label creation
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_register_vertex_label_idempotent(
+async def test_configures_and_is_healthy_without_the_age_graph(
     pg_handler: PostgresClusterHandler,
 ):
-    # All 9 entity_classes are pre-created by migration 0004 — registration
-    # of `Country` should return False (already present).
-    created = await pg_handler.register_vertex_label("Country")
-    assert created is False
-
-    # A fresh, test-only label that nothing has created — first call
-    # creates, second call returns False (idempotent).
-    fresh = f"TestLabel{uuid4().hex[:8]}"
-    assert await pg_handler.register_vertex_label(fresh) is True
-    assert await pg_handler.register_vertex_label(fresh) is False
+    health = await pg_handler.health_check()
+    assert health.state == "healthy"
+    assert health.age_version  # the extension is still installed
+    assert "graph_name" not in health.detail
 
 
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_register_edge_label_normalizes_legacy(
-    pg_handler: PostgresClusterHandler,
-):
-    # Legacy `INVOLVED_IN` normalizes to `InvolvedIn` (pre-created by 0004).
-    created = await pg_handler.register_edge_label("INVOLVED_IN")
-    assert created is False  # `InvolvedIn` already present
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_register_label_validates_identifier(
-    pg_handler: PostgresClusterHandler,
-):
-    for bad in ("Bad Label", "1Country", "x; DROP TABLE x", ""):
-        with pytest.raises(ValueError):
-            await pg_handler.register_vertex_label(bad)
-        with pytest.raises(ValueError):
-            await pg_handler.register_edge_label(bad)
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_ensure_seed_vocabulary(pg_handler: PostgresClusterHandler):
-    """Migration 0004 already created the 9 vertices + 14 edges, so the
-    seed helper should report zero new creations."""
-    created = await pg_handler.ensure_seed_vocabulary()
-    # No new labels — migration 0004 baked them in.
-    assert created == {"vertex": [], "edge": []}
+def test_the_cypher_and_label_helpers_are_gone():
+    for name in ("cypher", "register_vertex_label", "register_edge_label", "ensure_seed_vocabulary"):
+        assert not hasattr(PostgresClusterHandler, name), name

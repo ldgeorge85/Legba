@@ -137,6 +137,7 @@ from uuid import UUID
 from ....runtime.analyst_method import AnalystMethodResult
 from ...provenance.models import FindingPayload
 from ...provenance.origin import origin_class_clause
+from ...signal_slice_scope import canonical_only_sql_for
 
 if TYPE_CHECKING:  # pragma: no cover — annotation-only, never imported at
     # runtime: alert_trigger_scan imports THIS module at its own top level
@@ -396,6 +397,8 @@ def _parse_jsonish(raw: Any) -> Any:
 # or the geometry-first branch's exact authoritative source point). Dedup'd
 # children (canonical_signal_id → another row) are excluded so a syndication
 # burst can't pad the volume bonus.
+_CANONICAL_ONLY = canonical_only_sql_for("s")
+
 _POINT_SIGNALS_SQL = f"""
     SELECT s.id::text                          AS id,
            s.source_id                         AS source_id,
@@ -405,7 +408,7 @@ _POINT_SIGNALS_SQL = f"""
       FROM signals s
      WHERE s.fetched_at > now() - make_interval(hours => $1)
        AND {_LIVE_SIGNALS}
-       AND (s.canonical_signal_id IS NULL OR s.canonical_signal_id = s.id)
+       AND {_CANONICAL_ONLY}
        AND s.payload->'geo'->>'lat' IS NOT NULL
        AND s.payload->'geo'->>'lon' IS NOT NULL
        AND (
@@ -426,7 +429,7 @@ _COUNTRY_SIGNALS_SQL = f"""
       CROSS JOIN LATERAL unnest(s.geo) AS g(country)
      WHERE s.fetched_at > now() - make_interval(hours => $1)
        AND {_LIVE_SIGNALS}
-       AND (s.canonical_signal_id IS NULL OR s.canonical_signal_id = s.id)
+       AND {_CANONICAL_ONLY}
        AND cardinality(s.geo) > 0
      ORDER BY s.fetched_at DESC
      LIMIT $2

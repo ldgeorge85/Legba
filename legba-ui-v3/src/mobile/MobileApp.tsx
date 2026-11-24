@@ -1,18 +1,23 @@
 /**
- * MobileApp — the whole phone surface: a navigator, a report, and a Consult.
+ * MobileApp — the September phone surface: a navigator and a report. NOT
+ * MOUNTED since the phone shell (M-2); lane M-4 deletes it. Its Consult sheet
+ * went with M-3g (Consult is the shell's Consult tab, `screens/consult/`).
  *
- * ── ONE REQUEST BUYS THE WHOLE SESSION ────────────────────────────────────
- * `/api/v1/findings` returns each row's full `data` payload, and a read's
- * payload already contains its blocks, their cited heads and those heads'
- * signals. So the single list request that paints the navigator ALSO contains
- * every report body the operator can reach from it: opening a report costs no
- * network at all, which on a train is the difference between a surface that
- * works and one that spins.
+ * ── THE LIST IS LIGHT; A READ IS FETCHED WHEN IT IS OPENED (M-0a) ─────────
+ * Until 2026-11-14 the navigator asked `/findings` for eighty rows at FULL
+ * weight — every read's blocks, quoted spans and cited signals — so that
+ * opening a report cost no network. Live, that one response was 9.2 MB on
+ * every cold open. The navigator now reads the `fields=summary` projection
+ * (scalars only: subject, producer, instant, title) and a report is fetched at
+ * full weight only when it is opened (`fullReadQuery`: one row, usually), and
+ * an Assessment's underlying world read beside it.
  *
- * The cost of that bargain is an unavoidably fat list response — `/findings`
- * has no `fields=summary` weight the way `/journal` does. That gap is named
- * precisely in the build report rather than worked around with a guessed
- * parameter.
+ * ── NOTHING OF THE RECORD IS KEPT ON THE DEVICE ───────────────────────────
+ * Offline, the phone shows what it loaded IN MEMORY this session, with the
+ * time it was loaded ("No connection. Showing what was loaded at 14:52 UTC.");
+ * a read never opened before the connection dropped says so. Earlier builds
+ * stored the list and up to eight bodies in `localStorage`; those keys are
+ * deleted on load (`mobileCache.purgeStoredReads`).
  *
  * ── TELEMETRY IS THE SAME INSTRUMENT ──────────────────────────────────────
  * The read-event vocabulary is closed (a Postgres CHECK behind migration 0189)
@@ -24,10 +29,11 @@
  * once, in one place, whichever screen they read it on.
  */
 
-import { useEffect, useMemo } from 'react'
+import { useCallback, useEffect, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { apiGet, fetchJournalEntry, fetchJournalSummary } from '@/lib/api'
-import { projectAssembly, type ReadFindingRow } from '@/lib/assemblyModel'
+import { ApiError, apiGet, fetchJournalEntry, fetchJournalSummary } from '@/lib/api'
+import { SignInScreen } from '@/auth/SignInScreen'
+import { projectAssessment, type ReadFindingRow } from '@/lib/assemblyModel'
 import {
   emitRead,
   installReadTelemetryLifecycle,
@@ -35,35 +41,34 @@ import {
 } from '@/lib/readTelemetry'
 import {
   daysPresent,
-  READ_ANALYST_CSV,
-  TIER_LABEL,
+  fullReadQuery,
+  readAnalystCsv,
   toReportRow,
-  tierOf,
   type ReportRow,
 } from './mobileModel'
-import {
-  cachedAtLabel,
-  loadReport,
-  loadReportsList,
-  saveReport,
-  saveReportsList,
-} from './mobileCache'
+import { useReadTiers } from '@/lib/profileUi'
+import { subjectName, useSubjectIndex } from '@/lib/deskNames'
+import { feedPreview } from '@/lib/proseText'
+import { loadedAtLabel, purgeStoredReads } from './mobileCache'
 import { useSelection, useSelectionActions } from './useUrlState'
 import ReportsList from './components/ReportsList'
 import ReportView from './components/ReportView'
 import JournalView from './components/JournalView'
-import ConsultSheet from './components/ConsultSheet'
-import type { PinnedEntity, PinnedReport } from './mobileConsult'
 
 /**
  * How many read rows the navigator asks for.
  *
  * A single day is roughly one world read, one assessment, five regions and up
  * to ~32 countries, so 80 covers about two days of every tier — enough for the
- * "yesterday" step without a second request, and the ceiling on how much a
- * cold open costs.
+ * "yesterday" step without a second request. At summary weight that is a few
+ * hundred bytes a row.
  */
-const LIST_LIMIT = 80
+export const LIST_LIMIT = 80
+
+/** The navigator's read: the summary projection of every read producer's newest rows. */
+export function readsListPath(csv: string): string {
+  return `/findings?analyst_id_in=${encodeURIComponent(csv)}&limit=${LIST_LIMIT}&fields=summary`
+}
 
 interface FindingsResponse {
   data: ReadFindingRow[]
@@ -72,6 +77,18 @@ interface FindingsResponse {
 /** The surface's identity in the read-event stream. See the module header. */
 const MOBILE_WORKSPACE = 'mobile'
 
+/** One read at full weight, by id (`GET /findings/{id}`, P-8). */
+function useFullRead(id: string | null, rows: readonly ReportRow[]) {
+  const path = id ? fullReadQuery(id, rows) : null
+  const q = useQuery<ReadFindingRow>({
+    queryKey: ['mobile-read', id, path],
+    enabled: id != null && path != null,
+    queryFn: () => apiGet<ReadFindingRow>(path as string),
+  })
+  const row = useMemo(() => (id && q.data && q.data.id === id ? q.data : null), [q.data, id])
+  return { path, row, query: q }
+}
+
 export default function MobileApp() {
   const selection = useSelection()
   const { openReport, openJournal, closeReport, selectEntity, setDay } = useSelectionActions()
@@ -79,16 +96,22 @@ export default function MobileApp() {
   useEffect(() => {
     setTelemetryWorkspace(MOBILE_WORKSPACE)
     emitRead('workspace_open', { workspace: MOBILE_WORKSPACE })
+    // M-0a — whatever an earlier build stored on this device goes.
+    purgeStoredReads()
     return installReadTelemetryLifecycle()
   }, [])
 
+  // The read tiers: the projection's when the plane answers, the packaged
+  // profile's otherwise (first paint never waits on the route). The subject
+  // roster names a read's subject and its roster leg.
+  const { tiers } = useReadTiers()
+  const subjects = useSubjectIndex()
+  const csv = readAnalystCsv(tiers)
+
   const reads = useQuery<FindingsResponse>({
-    queryKey: ['mobile-reads'],
+    queryKey: ['mobile-reads', csv],
     refetchInterval: 5 * 60_000,
-    queryFn: () =>
-      apiGet<FindingsResponse>(
-        `/findings?analyst_id_in=${encodeURIComponent(READ_ANALYST_CSV)}&limit=${LIST_LIMIT}`,
-      ),
+    queryFn: () => apiGet<FindingsResponse>(readsListPath(csv)),
   })
 
   const journal = useQuery({
@@ -105,43 +128,35 @@ export default function MobileApp() {
     queryFn: () => fetchJournalEntry(selection.journal as string),
   })
 
-  // ── the navigator rows, live or cached ────────────────────────────────────
-  const liveRows: ReportRow[] | null = useMemo(() => {
+  // ── the navigator rows (summary weight) ───────────────────────────────────
+  const rows: ReportRow[] = useMemo(() => {
     const data = reads.data?.data
-    if (!data) return null
+    if (!data) return []
     return data
-      .map((row) => toReportRow(row, projectAssembly(row)))
+      .map((row) => toReportRow(row, null, tiers, (id) => subjectName(id, subjects)))
       .filter((r): r is ReportRow => r !== null)
       .sort((a, b) => b.producedAt.localeCompare(a.producedAt))
-  }, [reads.data])
+  }, [reads.data, tiers, subjects])
 
-  useEffect(() => {
-    if (liveRows && liveRows.length > 0) saveReportsList(liveRows)
-  }, [liveRows])
-
-  const cachedList = useMemo(() => (liveRows ? null : loadReportsList()), [liveRows])
-  const rows = liveRows ?? cachedList?.rows ?? []
-  const listCachedAt = liveRows ? null : cachedList ? cachedAtLabel(cachedList.savedAt) : null
+  // Offline: a refetch failed and what is on screen is what loaded earlier.
+  const listOffline = reads.isError && reads.data ? loadedAtLabel(reads.dataUpdatedAt) : null
 
   const days = useMemo(() => daysPresent(rows), [rows])
   const activeDay = selection.day ?? days[0] ?? null
 
-  // ── the selected report, from the list response or the cache ──────────────
-  const liveRow = useMemo(() => {
-    if (!selection.report) return null
-    return reads.data?.data.find((r) => r.id === selection.report) ?? null
-  }, [reads.data, selection.report])
+  // ── the selected report, fetched at full weight when it is opened ────────
+  const full = useFullRead(selection.report, rows)
+  const activeRow = full.row
+  const reportOffline =
+    full.query.isError && full.query.data ? loadedAtLabel(full.query.dataUpdatedAt) : null
 
-  useEffect(() => {
-    if (liveRow) saveReport(liveRow)
-  }, [liveRow])
-
-  const cachedRow = useMemo(
-    () => (selection.report && !liveRow ? loadReport(selection.report) : null),
-    [selection.report, liveRow],
-  )
-  const activeRow = liveRow ?? cachedRow?.row ?? null
-  const reportCachedAt = liveRow ? null : cachedRow ? cachedAtLabel(cachedRow.savedAt) : null
+  // An Assessment is a voice over a spine; the spine carries the signals the
+  // Assessment's own citations lack. It is fetched beside it when it is in the
+  // loaded window.
+  const spineId = activeRow ? projectAssessment(activeRow)?.spine_id ?? null : null
+  const spine = useFullRead(spineId, rows)
+  const spineRow = spine.row
+  const nameOf = useCallback((id: string) => subjectName(id, subjects), [subjects])
 
   // `brief_read` is the wager's own metric — it must fire for a report the
   // operator actually reached, and exactly once per report (the store's dedupe
@@ -156,35 +171,29 @@ export default function MobileApp() {
     }
   }, [activeRow])
 
-  // ── the pinned context handed to the Consult ──────────────────────────────
-  const pinnedReport: PinnedReport | null = useMemo(() => {
-    if (!activeRow) return null
-    const listRow = rows.find((r) => r.id === activeRow.id)
-    const tier = tierOf(activeRow)
-    return {
-      id: activeRow.id,
-      title: activeRow.title ?? '',
-      tier: tier ? TIER_LABEL[tier] : 'Read',
-      target: listRow?.target ?? activeRow.target_id ?? 'World',
-      bluf: listRow?.leadThread ?? '',
-      producedAt: activeRow.produced_at,
-    }
-  }, [activeRow, rows])
-
-  const pinnedEntity: PinnedEntity | null = useMemo(() => {
-    if (!selection.entity || !activeRow) return null
-    const assembly = projectAssembly(activeRow)
-    const block = assembly?.blocks.find((b) => b.target_id === selection.entity)
-    return { id: selection.entity, name: block?.target_name ?? selection.entity }
-  }, [selection.entity, activeRow])
-
   const consolidation = journal.data?.consolidation
     ? {
         id: journal.data.consolidation.id,
-        title: journal.data.consolidation.title,
+        // U-1 / M-0a — a list line is plain prose: no raw `**` from the title.
+        title: feedPreview(journal.data.consolidation.title),
         producedAt: journal.data.consolidation.produced_at,
       }
     : null
+
+  // A session that ENDS while the page is open: the next read answers 401. The
+  // gate asked once at load; this is the same door, reached from inside.
+  if (reads.error instanceof ApiError && reads.error.status === 401) {
+    return <SignInScreen reason="Your session has ended. Sign in to read again." />
+  }
+
+  // Why an opened report is not on screen, in the reader's words.
+  const reportGap = (() => {
+    if (!selection.report || activeRow) return null
+    if (reads.isLoading || full.query.isLoading) return { loading: true, text: 'Opening the read…' }
+    if (reads.isError && !reads.data) return { loading: false, text: 'No connection. This read was not loaded before the connection dropped.' }
+    if (full.query.isError && !full.query.data) return { loading: false, text: 'No connection. This read was not loaded before the connection dropped.' }
+    return { loading: false, text: 'That read is not in the loaded window.' }
+  })()
 
   return (
     <div className="m-app">
@@ -207,20 +216,28 @@ export default function MobileApp() {
           entityId={selection.entity}
           onSelectEntity={selectEntity}
           onBack={closeReport}
-          cachedAt={reportCachedAt}
+          offlineNote={reportOffline}
+          spineRow={spineRow}
+          nameOf={nameOf}
         />
-      ) : selection.report && !reads.isLoading ? (
+      ) : selection.report && reportGap ? (
         <div className="m-screen">
           <button type="button" className="m-back" onClick={closeReport}>
             ‹ Reports
           </button>
-          <p className="m-empty" data-testid="report-missing">
-            That report is not in the current window and is not cached.
+          <p className="m-empty" data-testid={reportGap.loading ? 'report-loading' : 'report-missing'}>
+            {reportGap.text}
           </p>
         </div>
-      ) : reads.isLoading && rows.length === 0 ? (
+      ) : reads.isLoading ? (
         <div className="m-screen">
           <p className="m-empty">Loading reads…</p>
+        </div>
+      ) : reads.isError && !reads.data ? (
+        <div className="m-screen">
+          <p className="m-empty" data-testid="reports-offline">
+            No connection. Nothing has been loaded yet.
+          </p>
         </div>
       ) : (
         <ReportsList
@@ -233,11 +250,12 @@ export default function MobileApp() {
           onOpenConsolidation={() => {
             if (consolidation) openJournal(consolidation.id)
           }}
-          cachedAt={listCachedAt}
+          offlineNote={listOffline}
+          tiers={tiers}
+          subjects={subjects}
         />
       )}
 
-      <ConsultSheet report={pinnedReport} entity={pinnedEntity} />
     </div>
   )
 }

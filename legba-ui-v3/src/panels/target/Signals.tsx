@@ -78,7 +78,7 @@ export default function TargetSignalsPanel({ registration, scope }: PanelProps) 
     enabled: !!target_id,
     queryKey: ['target-signals', target_id, sourceId, language],
     queryFn: async () => {
-      const qs = new URLSearchParams({ target_id, limit: '200' })
+      const qs = new URLSearchParams({ target_id, limit: '200', fields: 'full' })
       if (sourceId) qs.set('source_id', sourceId)
       if (language) qs.set('language', language)
       try {
@@ -130,7 +130,7 @@ export default function TargetSignalsPanel({ registration, scope }: PanelProps) 
       <button
         onClick={() => setLive((v) => !v)}
         className={cn(
-          'text-[10px] px-2 py-0.5 rounded border shrink-0',
+          'text-label px-2 py-0.5 rounded border shrink-0',
           live
             ? connected
               ? 'border-accent-ok text-accent-ok'
@@ -260,7 +260,7 @@ function SignalRowView({
         <td className="py-1 pr-2 font-mono text-slate-400 truncate max-w-[10rem]">{s.source_id}</td>
         <td className="py-1 pr-2 font-mono text-slate-500">{s.language || '—'}</td>
         <td className="py-1 pr-2">
-          <span className="px-1.5 py-0.5 rounded bg-surface-200 text-[10px] text-slate-300">
+          <span className="px-1.5 py-0.5 rounded bg-surface-200 text-label text-slate-300">
             {countryLabel(s)}
           </span>
         </td>
@@ -277,7 +277,7 @@ function SignalRowView({
                   {s.entity_classes.map((c) => (
                     <span
                       key={`ec-${c}`}
-                      className="px-1.5 py-0.5 rounded bg-accent-info/20 text-[10px] text-accent-info"
+                      className="px-1.5 py-0.5 rounded bg-accent-info/20 text-label text-accent-info"
                       title="entity class"
                     >
                       {c}
@@ -286,7 +286,7 @@ function SignalRowView({
                   {s.tags.map((t) => (
                     <span
                       key={`tag-${t}`}
-                      className="px-1.5 py-0.5 rounded bg-surface-200 text-[10px] text-slate-300"
+                      className="px-1.5 py-0.5 rounded bg-surface-200 text-label text-slate-300"
                       title="tag"
                     >
                       {t}
@@ -301,7 +301,7 @@ function SignalRowView({
                     target="_blank"
                     rel="noreferrer noopener"
                     onClick={(e) => e.stopPropagation()}
-                    className="text-[10px] underline text-accent-info"
+                    className="text-label underline text-accent-info"
                     data-testid={`target-signal-out-${s.id}`}
                   >
                     open source ↗
@@ -312,7 +312,7 @@ function SignalRowView({
                     e.stopPropagation()
                     openLineage('signal', s.id)
                   }}
-                  className="text-[10px] underline text-accent-info"
+                  className="text-label underline text-accent-info"
                 >
                   trace this signal →
                 </button>

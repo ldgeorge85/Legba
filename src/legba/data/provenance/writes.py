@@ -23,9 +23,8 @@ and the wrapper returns ``None`` for the row + the DLQ entry.
 NATS event emission is best-effort and pluggable: pass ``publish_fn`` to
 the call site. Phase 5 runtime injects this; tests can omit it.
 
-AGE :DerivedFrom edge mirroring is deferred to L-204 (per L-107 §2); we
-leave a hook by accepting an ``age_hook`` callable but never call it in
-Phase 1.
+The AGE :DerivedFrom edge mirror (an ``age_hook``) was removed on 2026-11-15
+with the empty AGE graph; relational ``derived_from`` is the lineage record.
 """
 
 from __future__ import annotations
@@ -50,7 +49,11 @@ from ._core import (
     from_analyst,
     from_target,
 )
+from .. import case_columns as _case
+from ..claim_support import NOT_CLAIM_SIGNAL_SQL
+from ..tags import stamp_classifications, tag_vocabulary_index
 from ..vocabulary import normalize_predicate
+from ..journal_evidence import EVIDENCE_UNAVAILABLE_FLAG
 from .dlq import OutputDeadLetterEntry, route_to_output_dead_letter
 from .entity_edge_writes import write_entity_edge_for_nexus
 from .kinds import (
@@ -60,6 +63,7 @@ from .kinds import (
     spec_for_kind,
 )
 from ..events import _writes as _event_writes
+from .origin import OPERATOR_ORIGIN_CLASS
 from .models import (
     AlertPayload,
     CritiquePayload,
@@ -82,9 +86,16 @@ from .writes_supersession import (  # noqa: F401
     _DEFAULT_SOURCE_TIER_RANK,
     _FACT_CONTENTION_ENV,
     _SOURCE_TIER_RANK,
+    OPERATOR_SOURCE_TYPE,
+    ClosedFacts,
     _fact_contention_enabled,
     _source_tier_rank,
+    close_facts_by_id,
     collapse_open_triple,
+    lock_fact_pair,
+    open_set_digest,
+    read_open_fact_set,
+    reopen_facts_by_id,
     supersede_prior_facts,
     supersede_prior_functional_role_facts,
     supersede_prior_nexuses,
@@ -96,9 +107,6 @@ logger = logging.getLogger(__name__)
 
 # Pluggable NATS publish — (subject, payload_bytes) → awaitable.
 NatsPublishFn = Callable[[str, bytes], Awaitable[None]]
-
-# Pluggable AGE hook (L-204) — gets the new row id + parent row ids.
-AgeEdgeHook = Callable[[UUID, list[UUID]], Awaitable[None]]
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +126,8 @@ AgeEdgeHook = Callable[[UUID, list[UUID]], Awaitable[None]]
 _SOURCE_TIER_CREDIBILITY: dict[str, float] = {
     "seed": 0.9,
     "curated": 0.9,
+    # The operator's own word through a consult write ranks with curated (D6).
+    "operator": 0.9,
     "ingestion": 0.5,
     "agent": 0.5,
 }
@@ -152,15 +162,91 @@ async def max_signal_credibility(
     """
     if not signal_ids:
         return None
+    # C-1: a CLAIM signal (payload.claim stamped at ingest) is never a
+    # credibility input for what it backs — its host score says how reliably
+    # the tracker records claims, not that the claimed event happened.
     val = await conn.fetchval(
         """
         SELECT max(source_credibility)
           FROM signals
          WHERE id = ANY($1::uuid[])
+           AND """ + NOT_CLAIM_SIGNAL_SQL.format(alias="signals") + """
         """,
         list(signal_ids),
     )
     return None if val is None else float(val)
+
+
+#: Predicates a claim-only lineage MAY carry: the fact is ABOUT the claim
+#: ("<claimant> claimed <what>"), not the claimed event.
+CLAIM_FACT_PREDICATE_RE = re.compile(
+    r"^(claimed|claims|claim|posted|listed|claimed responsibility for|took responsibility for)\b"
+)
+
+
+class ClaimOnlyFactRefused(ValueError):
+    """A fact whose only signal lineage is claim rows, asserting the claimed
+    event rather than the claim (C-1)."""
+
+
+async def claim_lineage_counts(
+    conn: asyncpg.Connection, ids: Sequence[UUID],
+) -> tuple[int, int]:
+    """``(claim_signals, signals)`` among ``ids`` (non-signal ids count in
+    neither)."""
+    if not ids:
+        return 0, 0
+    row = await conn.fetchrow(
+        """
+        SELECT count(*) FILTER (WHERE NOT (""" + NOT_CLAIM_SIGNAL_SQL.format(alias="signals") + """))::int AS claims,
+               count(*)::int AS total
+          FROM signals
+         WHERE id = ANY($1::uuid[])
+        """,
+        list(ids),
+    )
+    return (int(row["claims"]), int(row["total"])) if row else (0, 0)
+
+
+#: C-2 — how many of the ids are FINDINGS whose own cited signals are all
+#: claim rows (one stored level: the finding's ``data.data.citations``, each
+#: claim row's entry carrying the stamp). Primary-key lookups only.
+_CLAIM_ONLY_FINDINGS_SQL = """
+SELECT count(*)::int AS n
+  FROM analyst_outputs ao
+ WHERE ao.id = ANY($1::uuid[])
+   AND jsonb_typeof(ao.data->'data'->'citations') = 'array'
+   AND EXISTS (SELECT 1 FROM jsonb_array_elements(ao.data->'data'->'citations') c
+                WHERE c ? 'signal_id')
+   AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(ao.data->'data'->'citations') c
+                    WHERE c ? 'signal_id'
+                      AND COALESCE(c->'claim'->>'source_class', '') <> 'claim')
+"""
+
+
+async def refuse_claim_only_fact(
+    conn: asyncpg.Connection, *, predicate: str, derived_from: Sequence[UUID],
+) -> None:
+    """Raise :class:`ClaimOnlyFactRefused` when every id in ``derived_from``
+    is a claim signal — or (C-2, one hop more) a finding that itself rested
+    only on claim rows — and the predicate asserts the event, not the claim.
+    A lineage with any non-claim signal returns after the one query it
+    always ran; the finding lookup runs only for ids that are not signals."""
+    ids = list(dict.fromkeys(derived_from or []))
+    if not ids or CLAIM_FACT_PREDICATE_RE.match((predicate or "").strip().lower()):
+        return
+    claims, total = await claim_lineage_counts(conn, ids)
+    if claims < total:
+        return
+    if total < len(ids):
+        claims += int(await conn.fetchval(_CLAIM_ONLY_FINDINGS_SQL, ids) or 0)
+    if claims and claims == len(ids):
+        raise ClaimOnlyFactRefused(
+            "claim_only_lineage: every signal behind this fact is a CLAIM "
+            "(source_class 'claim'), directly or through a finding that rested "
+            "only on claims; a claim supports only '<claimant> claimed "
+            f"...', never the claimed event as fact (predicate {predicate!r})"
+        )
 
 
 async def resolve_fact_source_credibility(
@@ -273,15 +359,21 @@ async def write_analyst_output(
     output_payload: BaseModel | dict[str, Any],
     derived_from: Sequence[UUID],
     publish_fn: NatsPublishFn | None = None,
-    age_hook: AgeEdgeHook | None = None,
     schema_uri: str | None = None,
     row_id: UUID | None = None,
     source_type: str | None = None,
     seed_batch_id: UUID | None = None,
     source_signal_ids: Sequence[UUID] | None = None,
     origin_class: str | None = None,
+    handed_refs: Sequence[Any] | None = None,
 ) -> tuple[OutputRow | None, OutputDeadLetterEntry | None]:
     """Generic analyst-output writer.
+
+    A FINDING also gets its citations as rows (lane DM-A,
+    ``citation_rows_store``; ``LEGBA_CITATION_ROWS``, default on): the
+    ``analyst_outputs`` INSERT and the sentence / support / unresolved /
+    handed rows commit in ONE transaction. ``handed_refs`` is the run's
+    typed render index (``citation_rows.HandedRef``), when the kind keeps one.
 
     Pipeline:
       1. Resolve kind → spec (table + model + default schema_uri + NATS).
@@ -352,8 +444,7 @@ async def write_analyst_output(
     # 3) INSERT.
     new_id = row_id or uuid4()
     produced_at = prov.produced_at
-    await _insert_for_spec(
-        conn,
+    insert_kw = dict(
         spec=spec,
         row_id=new_id,
         kind_str=spec.kind.value,
@@ -366,6 +457,22 @@ async def write_analyst_output(
         source_signal_ids=source_signal_ids,
         origin_class=origin_class,
     )
+    # Imported here: citation_rows reads provenance.citation_markers, so a
+    # module-level import would close a cycle through this package's __init__.
+    from ..citation_rows_store import citation_rows_enabled, dual_write_citation_rows
+
+    if spec.kind is OutputKind.FINDING and citation_rows_enabled():
+        # DM-A: the finding and its citation rows land together or not at all
+        # (a nested transaction is a savepoint inside a caller's own).
+        async with conn.transaction():
+            await _insert_for_spec(conn, **insert_kw)
+            await dual_write_citation_rows(
+                conn, finding_id=new_id, payload=validated, produced_at=produced_at,
+                run_id=prov.run_id, analyst_id=prov.analyst_id, target_id=prov.target_id,
+                handed=handed_refs, analyst_version=prov.analyst_version,
+            )
+    else:
+        await _insert_for_spec(conn, **insert_kw)
 
     # 4) Best-effort NATS publish.
     if publish_fn is not None and spec.nats_subject_pattern:
@@ -385,16 +492,6 @@ async def write_analyst_output(
             "derived_from": [str(u) for u in prov.derived_from],
         }
         await _safe_publish(publish_fn, subject, envelope)
-
-    # 5) AGE hook — mirror this output's lineage into the graph as
-    #    (:Output)-[:DerivedFrom]->(:Output) edges. Wired by the runtime
-    #    (dapr_actors) behind the opt-in LEGBA_AGE_DERIVED_FROM flag via
-    #    provenance.output_graph.make_conn_age_output_hook; the relational
-    #    `derived_from UUID[]` array + recursive-CTE walk remains the lineage
-    #    source of truth, so an unset hook (the default) changes nothing. The
-    #    hook is best-effort and must not fail the write.
-    if age_hook is not None:
-        await age_hook(new_id, list(prov.derived_from))
 
     return (
         OutputRow(
@@ -605,6 +702,65 @@ async def write_fact(
         derived_from=derived_from,
         **kwargs,
     )
+
+
+#: The schema URI every ``facts`` row carries (``kinds._FACT_URI``).
+OPERATOR_FACT_SCHEMA_URI = "iglu:legba/fact/jsonschema/2-0-0"
+
+
+async def insert_operator_fact(
+    conn: asyncpg.Connection,
+    *,
+    row_id: UUID,
+    subject: str,
+    predicate: str,
+    value: str,
+    confidence: float,
+    valid_from: datetime | None,
+    data: dict[str, Any],
+    derived_from: Sequence[UUID] = (),
+    families: Any | None = None,
+) -> None:
+    """THE operator's fact insert (W11 C-2b-2/facts — a consult write, D6/D7).
+
+    One open ``facts`` row through :func:`_insert_fact`: ``source_type
+    'operator'`` (tier 2, grounding like curated), ``origin_class 'live'`` (the
+    operator's hand is on the author axis — ``data.write_id`` / the audit actor
+    — never a seventh origin class), the given confidence, the predicate
+    canonicalised and its classification stamped into ``data``. It runs NONE
+    of the rule-driven closes (``supersede_priors=False``): the executor has
+    already closed exactly the rows the operator's ``supersede`` named, on this
+    connection, and recorded them. Raises ``RuntimeError`` if the row did not
+    land under ``row_id`` (an open same-triple row the caller failed to clear
+    would have absorbed it through the upsert) — never a silent merge.
+    """
+    payload = FactPayload(
+        subject=subject, predicate=predicate, value=value,
+        confidence=float(confidence), source_type=OPERATOR_SOURCE_TYPE,
+        valid_from=valid_from, data=dict(data),
+    )
+    await _insert_fact(
+        conn,
+        row_id=row_id,
+        payload=payload,
+        prov=ProvenanceFields(
+            derived_from=list(derived_from), schema_uri=OPERATOR_FACT_SCHEMA_URI,
+        ),
+        produced_at=datetime.now(tz=timezone.utc),
+        effective_schema_uri=OPERATOR_FACT_SCHEMA_URI,
+        source_type=OPERATOR_SOURCE_TYPE,
+        origin_class=OPERATOR_ORIGIN_CLASS,
+        supersede_priors=False,
+        families=families,
+    )
+    landed = await conn.fetchval(
+        "SELECT source_type FROM facts WHERE id = $1", row_id,
+    )
+    if landed != OPERATOR_SOURCE_TYPE:
+        raise RuntimeError(
+            f"operator fact {row_id} did not land as its own row "
+            "(an open same-triple row absorbed the upsert)"
+        )
 
 
 async def write_nexus(
@@ -862,6 +1018,19 @@ async def _insert_situation(
 ) -> None:
     p = payload                                          # type: ignore[assignment]
     data_payload = p.model_dump(mode="json")
+    # TAG-1: the row's case-bearing value bound against the registered
+    # vocabulary, as data.classifications (data.tags). TAX-4: the column holds
+    # a registered classification or `unclassified`; a subject id moves to
+    # data.subject_id, the producer's value rides in data.category_raw.
+    families = await tag_vocabulary_index()
+    row_data_in = data_payload.get("data", {})
+    cat = await _case.bind_category_for_write(
+        conn, p.category, families=families,  # type: ignore[attr-defined]
+        hint=_case.event_class_hint(row_data_in),
+    )
+    row_data = _case.stamp_category_data(
+        "situations", cat, row_data_in, families=families,
+    )
     sig = getattr(p, "situation_signature", None)
     valid_from = getattr(p, "valid_from", None)
     valid_until = getattr(p, "valid_until", None)
@@ -911,10 +1080,10 @@ async def _insert_situation(
                 updated_at=NOW()
             """,
             row_id,
-            json.dumps(data_payload.get("data", {}), default=_json_default),
+            json.dumps(row_data, default=_json_default),
             p.name,                                      # type: ignore[attr-defined]
             p.status,                                    # type: ignore[attr-defined]
-            p.category,                                  # type: ignore[attr-defined]
+            cat.category,
             p.last_event_at,                             # type: ignore[attr-defined]
             p.event_count,                               # type: ignore[attr-defined]
             float(p.intensity_score),                    # type: ignore[attr-defined]
@@ -948,10 +1117,10 @@ async def _insert_situation(
         )
         """,
         row_id,
-        json.dumps(data_payload.get("data", {}), default=_json_default),
+        json.dumps(row_data, default=_json_default),
         p.name,                                          # type: ignore[attr-defined]
         p.status,                                        # type: ignore[attr-defined]
-        p.category,                                      # type: ignore[attr-defined]
+        cat.category,
         p.last_event_at,                                 # type: ignore[attr-defined]
         p.event_count,                                   # type: ignore[attr-defined]
         float(p.intensity_score),                        # type: ignore[attr-defined]
@@ -1071,6 +1240,13 @@ async def _insert_event(
         await _event_writes.derive_event_geo(conn, member_signal_ids)
     )
     geo_list = list(p.geo)                                  # type: ignore[attr-defined]
+    # TAG-1 + TAX-4: category / event_type bound to their registered families
+    # (see _insert_situation); the subject lookup reads this transaction.
+    families = await tag_vocabulary_index()
+    cat = await _case.bind_category_for_write(
+        conn, p.category, families=families,  # type: ignore[attr-defined]
+        hint=_case.event_class_hint(data_payload.get("data")),
+    )
     geo_lat = p.geo_lat if p.geo_lat is not None else derived_geo_lat  # type: ignore[attr-defined]
     geo_lon = p.geo_lon if p.geo_lon is not None else derived_geo_lon  # type: ignore[attr-defined]
     row = await conn.fetchrow(
@@ -1080,8 +1256,8 @@ async def _insert_event(
         prov.analyst_id,
         p.title,                                         # type: ignore[attr-defined]
         p.summary,                                       # type: ignore[attr-defined]
-        p.category,                                      # type: ignore[attr-defined]
-        p.event_type,                                    # type: ignore[attr-defined]
+        cat.category,
+        _case.bind_event_type(p.event_type, families=families),  # type: ignore[attr-defined]
         p.severity,                                      # type: ignore[attr-defined]
         lifecycle_stamp,                                 # lifecycle_changed_at
         p.time_start,                                    # type: ignore[attr-defined]
@@ -1104,7 +1280,12 @@ async def _insert_event(
         prov.analyst_version,
         prov.run_id,
         effective_schema_uri,
-        json.dumps(data_payload.get("data", {}), default=_json_default),
+        json.dumps(
+            _case.stamp_category_data(
+                "events", cat, data_payload.get("data", {}), families=families,
+            ),
+            default=_json_default,
+        ),
         produced_at,
     )
     event_id = row["id"]
@@ -1196,8 +1377,20 @@ async def _insert_fact(
     seed_batch_id: UUID | None = None,
     origin_class: str | None = None,
     collection_id: str | None = None,
+    supersede_priors: bool = True,
+    families: Any | None = None,
 ) -> None:
     """Insert (or upsert) one ``facts`` row.
+
+    ``supersede_priors=False`` (the operator's consult write, W11
+    C-2b-2/facts) skips the three rule-driven closes below — the value-differs
+    supersession, the same-triple collapse and the functional-role close —
+    because that caller decides its close set EXPLICITLY and records it as the
+    write's pre-image; the INSERT itself (classification stamp, credibility,
+    the open-triple ``ON CONFLICT`` arbiter) is the same statement.
+    ``families`` is the vocabulary snapshot the predicate binds against
+    (``None`` = the process provider, :func:`tag_vocabulary_index`); the
+    registry process has no provider installed, so its caller passes one.
 
     ``source_type`` overrides the payload's ``source_type`` when given (the
     curated-seeding path passes ``'seed'``); ``None`` preserves the existing
@@ -1253,6 +1446,9 @@ async def _insert_fact(
     # arg wins (curated-seeding passes 'seed'); else the payload's source_type
     # (default 'agent').
     effective_source_type = source_type or getattr(p, "source_type", "agent")
+    # C-1: claim rows alone never ground the claimed event as fact (and so
+    # never reach the same-triple confidence lift below).
+    await refuse_claim_only_fact(conn, predicate=predicate, derived_from=prov.derived_from)
     # Holes-B Wave 0 — resolve this fact's source_credibility BEFORE the write.
     # The backing-signal MAX (signals.source_credibility) wins; else the tier
     # nominal for effective_source_type (seed/curated 0.9, agent/ingestion 0.5).
@@ -1263,14 +1459,15 @@ async def _insert_fact(
         source_type=effective_source_type,
         derived_from=prov.derived_from,
     )
-    await supersede_prior_facts(
-        conn,
-        subject=getattr(p, "subject"),
-        predicate=predicate,
-        value=getattr(p, "value"),
-        new_fact_id=row_id,
-        incoming_source_type=effective_source_type,
-    )
+    if supersede_priors:
+        await supersede_prior_facts(
+            conn,
+            subject=getattr(p, "subject"),
+            predicate=predicate,
+            value=getattr(p, "value"),
+            new_fact_id=row_id,
+            incoming_source_type=effective_source_type,
+        )
     # D17 — collapse a standing triple onto ONE open row regardless of
     # valid_from drift. The ON CONFLICT upsert below keys on the FULL quad
     # (including COALESCE(valid_from, '1970-01-01')), so the SAME triple
@@ -1289,7 +1486,7 @@ async def _insert_fact(
         derived_from=list(prov.derived_from),
         valid_from=getattr(p, "valid_from", None),
         source_credibility=source_credibility,
-    )
+    ) if supersede_priors else None
     # FU3 (P5 durable stale-leader fix) — office-keyed supersession for FUNCTIONAL
     # ROLES from the authoritative seed/curated tier. supersede_prior_facts keys on
     # (subject, predicate); a person-subject 'leader of <country>' fact carries the
@@ -1299,7 +1496,7 @@ async def _insert_fact(
     # incoming triple already had an open row, else the row about to be inserted) so
     # a re-seed can never leave a dangling superseded_by pointer. Scoped to
     # seed/curated so ingestion contention coexistence stays untouched.
-    if str(effective_source_type or "").lower() in ("seed", "curated"):
+    if supersede_priors and str(effective_source_type or "").lower() in ("seed", "curated"):
         await supersede_prior_functional_role_facts(
             conn,
             subject=getattr(p, "subject"),
@@ -1370,7 +1567,13 @@ async def _insert_fact(
         getattr(p, "valid_until", None),
         getattr(p, "geo_lat", None),
         getattr(p, "geo_lon", None),
-        json.dumps(data_payload, default=_json_default),
+        json.dumps(
+            stamp_classifications(
+                "facts", {"predicate": predicate}, data_payload,
+                families=families if families is not None else await tag_vocabulary_index(),
+            ),
+            default=_json_default,
+        ),
         json.dumps(evidence_set, default=_json_default),
         prov.target_id,
         prov.target_version,
@@ -1683,8 +1886,14 @@ async def _insert_journal_entry(
     # payload (pre-`data`-field) writing cleanly as an empty object.
     data = getattr(p, "data", {}) or {}
 
+    # N-G: a consolidation the evidence gate declared unavailable must not
+    # displace the open inner landscape — it lands already closed (readable by
+    # id, never the slot, never memory) and supersedes nothing.
+    declared_closed = (
+        entry_kind == "consolidation" and EVIDENCE_UNAVAILABLE_FLAG in honesty_flags
+    )
     supersedes: UUID | None = None
-    if entry_kind == "consolidation":
+    if entry_kind == "consolidation" and not declared_closed:
         supersedes = await supersede_prior_consolidation(
             conn,
             new_entry_id=row_id,
@@ -1699,14 +1908,14 @@ async def _insert_journal_entry(
             superseded_by,
             target_id, target_version, analyst_id, analyst_version,
             produced_at, derived_from, schema_uri, run_id,
-            data
+            data, valid_until
         ) VALUES (
             $1, $2, $3, $4, $5::jsonb, $6,
             $7, $8, $9,
             $10,
             $11, $12, $13, $14,
             $15, $16, $17, $18,
-            $19::jsonb
+            $19::jsonb, CASE WHEN $20::boolean THEN now() END
         )
         """,
         row_id,
@@ -1733,6 +1942,7 @@ async def _insert_journal_entry(
         # VOICES LV-1 (0090): the free-form per-row metadata. json.dumps mirrors
         # `claims`'s serialization above (the ::jsonb cast on $19 binds it).
         json.dumps(data, default=_json_default),
+        declared_closed,
     )
     _ = supersedes  # recorded via the prior row's superseded_by pointer above
 

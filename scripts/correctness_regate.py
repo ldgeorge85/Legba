@@ -271,12 +271,13 @@ async def build_handlers(component_ids: dict[str, str], store) -> dict:
 
 
 async def run(args: argparse.Namespace) -> int:
+    from legba.data import rosters
     from legba.data.provenance import verify
-    from legba.data.analysts.deterministic_handlers import scorecard_banding
 
     as_of = _iso(args.as_of) if args.as_of else datetime.now(timezone.utc)
     models = GRADE.model_ids()
-    dimensions = tuple(scorecard_banding.DIMENSIONS) + (JOB.PROLIFERATION,)
+    # the grader's own dimension set (ROSTER-2: the profile's roster)
+    dimensions = rosters.scored_subject_units()
 
     print(f"RE-GATE — {RUBRIC_NAME} sha256 {RUBRIC_SHA256}")
     if args.packet:

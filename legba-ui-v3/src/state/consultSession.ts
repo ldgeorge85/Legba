@@ -50,9 +50,24 @@
  * state, its fetched session list, and its error. Those are view chrome that
  * SHOULD reset with the panel; only the conversation is durable.
  */
+import type { ConsultWriteEntry } from '@/lib/consultWrites'
 import { create } from 'zustand'
-import type { ConsultSessionDetail, ConsultUsage } from '@/lib/api'
+import type {
+  ConsultSessionDetail,
+  ConsultUncertaintyFloor,
+  ConsultUsage,
+  ConsultWatchMint,
+} from '@/lib/api'
 import type { Selection } from '@/state/selection'
+import { parseCaseRecord, type CaseRecord } from '@/lib/caseModel'
+import { parseTurnContract, type TurnContract } from '@/lib/consultContract'
+import {
+  parseUsageReceipt,
+  parseVerification,
+  type ConsultUsageReceipt,
+  type ConsultVerification,
+} from '@/lib/consultTurnStamp'
+import type { TurnPin } from '@/lib/consultContext'
 
 // ---------------------------------------------------------------------------
 // Wire / turn shapes — owned here now that the store, not the panel, is the
@@ -122,6 +137,69 @@ export interface ChatTurn {
    * would read as "cites no live reporting", which is a claim.
    */
   provenanceCensus?: ProvenanceCensus | null
+  /**
+   * 2026-09-28 §B.3 — set when the SERVER held this answer: not one cited
+   * reference resolved to live or held reporting and the prose still asserts.
+   * The answer itself already leads with the server's banner; this is what the
+   * panel frames it with. Absent is the normal case and means nothing was
+   * held — never "not measured".
+   */
+  holdReason?: string | null
+  /**
+   * §B.4 — set only when the server's EVIDENCE FLOOR raised this answer's
+   * uncertainty (`{from, to, resolved}`). Absent means no floor moved it.
+   */
+  uncertaintyFloor?: ConsultUncertaintyFloor | null
+  /** §B.4 — the answer's "what would change my mind" items, as the server parsed them. */
+  watchCandidates?: string[] | null
+  /**
+   * W3 / F-4 — what the server did with each candidate: a standing watch
+   * (`claim_watch` matches new reporting against it) or a named refusal.
+   * Absent/null = no mint was attempted, which is not "0 standing".
+   */
+  watchMinted?: ConsultWatchMint[] | null
+  /**
+   * Migration 0223 — `false` ONLY on a turn re-seeded from the server whose
+   * row carries no response bag (written before 0223, or a run that produced
+   * no answer to measure). The panel then says the census was "not measured"
+   * rather than showing nothing, which on a reload would be indistinguishable
+   * from a turn that cited nothing. Undefined on a live turn.
+   */
+  responseRecorded?: boolean
+  /**
+   * C-1b — the CASE this turn presented (`response.case`, persisted on the
+   * 0223 bag). `null`/absent means the turn presented no case — the bag's own
+   * contract — and is what hides the Replay control.
+   */
+  caseRecord?: CaseRecord | null
+  /**
+   * UI-B6 — on a USER turn asked in this page: what the ambient pin was when
+   * it was asked (`null` = asked unpinned). The answer's census line prints
+   * it. Absent on a reloaded turn: the server does not record the pin, so it
+   * is not claimed.
+   */
+  pinnedTo?: TurnPin | null
+  /**
+   * C-2b-1 — the consult writes this turn made, staged or was refused (the
+   * bag's `writes`). Absent/`null` = the turn was not armed for changes; `[]`
+   * = armed, nothing written. The cards render from the ledger, keyed by the
+   * turn's `requestId`.
+   */
+  writes?: ConsultWriteEntry[] | null
+  /**
+   * X2 / C1 — the server's usage receipt for an ASSISTANT turn (`null` = none
+   * recorded) and its verification stamp (`null` = recorded before judging;
+   * absent = the server sent none). The turn header prints both; the judged
+   * label is never blank.
+   */
+  usageReceipt?: ConsultUsageReceipt | null
+  verification?: ConsultVerification | null
+  /**
+   * Q-1 — the turn contract (`consult_contract/1`): the window in force,
+   * coverage, explanations, grounding, the cost stop. Absent/`null` = the
+   * server sent none (an unarmed turn, or an older registry).
+   */
+  contract?: TurnContract | null
 }
 
 /**
@@ -140,7 +218,20 @@ export interface ProvenanceCensus {
   history?: number | null
   seed?: number | null
   unclassified?: number | null
+  /**
+   * An id that matched a real substrate row whose `origin_class` the census
+   * does not read — a finding, a situation, a hypothesis, an event, a nexus.
+   * NOT the same thing as `fabricated`, and the two were one bucket until
+   * 2026-09-28: an answer citing fifteen real findings and one citing fifteen
+   * invented ids produced the same census.
+   */
   unresolved?: number | null
+  /** A well-formed uuid in citation position that matches NO substrate table. */
+  fabricated?: number | null
+  /** Citation tokens that were not uuids at all (`sit-001`). Bounded server-side. */
+  malformed?: string[] | null
+  /** What the resolved ids ARE: `{signal: 51, finding: 15, situation: 8, …}`. */
+  by_kind?: Record<string, number> | null
   cited_total?: number | null
   model_knowledge?: number | null
   sentences_examined?: number | null
@@ -171,6 +262,8 @@ export interface PendingTurn {
    */
   pageLoadId: string
   steps: StepFrame[]
+  /** UI-B6 — the ambient pin at send time; copied onto the user turn. */
+  pinnedTo?: TurnPin | null
   /**
    * Set when a reattached turn has been polled to its deadline without the
    * server producing an answer. The panel stops waiting and offers to dismiss
@@ -201,6 +294,13 @@ export interface PendingTurn {
    * of it before the server ever decides whether it finished.
    */
   answerPreview?: string
+  /**
+   * The `segment` (`round-<n>` / `final`) the preview's frames came from. A
+   * frame from a NEW segment restarts the preview: on the native route a
+   * drilling round streams too, and a tool round's preamble ("Let me check…")
+   * is not the answer — the round that answers replaces it.
+   */
+  answerSegment?: string
 }
 
 export interface ConsultPanelState {
@@ -548,6 +648,53 @@ export function usageFromFrame(
   return found ? out : null
 }
 
+// ---------------------------------------------------------------------------
+// The FINAL frame, stripped from the live answer preview (W11 SWEEP-2)
+// ---------------------------------------------------------------------------
+
+/** Every sentinel form a model emits — the server's `_SENTINEL_RE`
+ *  (consult_reply_parsing.py) mirrored: `<<<FINAL>>>`, `<<<FINAL>>`, one or no
+ *  closing bracket, inner spaces, any case; never a longer word. */
+const FINAL_SENTINEL_RE = /^<{2,3}\s*FINAL\s*>{0,3}(?![A-Za-z0-9_])/i
+/** The same marker ENDING a narration line (the mid-text form). */
+const FINAL_SENTINEL_TAIL_RE = /(?:^|\s)<{2,3}\s*FINAL\s*>{0,3}$/i
+const FINAL_HEADER_KEYS = ['uncertainty', 'cited_refs', 'unanswered_aspects', 'watch_candidates']
+const FINAL_HEADER_RE = /^\s*(uncertainty|cited_refs|unanswered_aspects|watch_candidates)\s*:/i
+
+function isSentinelLine(line: string): boolean {
+  const lead = line.trim().replace(/^[#>*_`\s]+/, '')
+  if (FINAL_SENTINEL_RE.test(lead)) return true
+  return FINAL_SENTINEL_TAIL_RE.test(line.trimEnd().replace(/[*_`\s]+$/, ''))
+}
+
+/**
+ * The live answer preview with the FINAL frame removed — the sentinel line
+ * (and any narration before it) and the header block under it. The settled
+ * answer is parsed server-side by `_sentinel_lead`; the preview is the raw
+ * synthesis stream, so without this the operator watched `<<<FINAL>>>` and
+ * `cited_refs: …` render as the first lines of the forming answer. A tail that
+ * could still become the marker or a header (`<<<FI`, `cited_r`) is held back
+ * until the next chunk says what it is.
+ */
+export function stripFinalFrame(text: string): string {
+  const lines = text.split('\n')
+  let start = 0
+  lines.forEach((line, i) => {
+    if (isSentinelLine(line)) start = i + 1
+  })
+  let i = start
+  while (i < lines.length && FINAL_HEADER_RE.test(lines[i])) i++
+  const rest = lines.slice(i)
+  const last = rest.length ? rest[rest.length - 1].trim() : ''
+  const partial =
+    rest.length === 1 &&
+    last !== '' &&
+    (/^<{1,3}\s*F?I?N?A?L?\s*>{0,2}$/i.test(last) ||
+      FINAL_HEADER_KEYS.some((k) => k.startsWith(last.toLowerCase())))
+  if (partial) return ''
+  return rest.join('\n').replace(/^\s*\n/, '')
+}
+
 /**
  * Fold one streamed frame into the pending turn.
  *
@@ -568,7 +715,14 @@ export function applyFrame(pending: PendingTurn, frame: StepFrame): PendingTurn 
   if (kind === 'answer_delta') {
     const text = typeof frame.text === 'string' ? frame.text : ''
     if (!text) return pending
-    return { ...pending, answerPreview: (pending.answerPreview ?? '') + text }
+    const segment = typeof frame.segment === 'string' ? frame.segment : undefined
+    // A frame with no segment (an older runtime) keeps accumulating as before.
+    const restart = segment !== undefined && segment !== pending.answerSegment
+    return {
+      ...pending,
+      answerPreview: (restart ? '' : (pending.answerPreview ?? '')) + text,
+      ...(segment !== undefined ? { answerSegment: segment } : {}),
+    }
   }
   const next: PendingTurn = { ...pending, steps: [...pending.steps, frame] }
   const usage = usageFromFrame(frame, pending.usage, SPEND_FRAME_KINDS.has(kind))
@@ -598,6 +752,12 @@ export function applyFrame(pending: PendingTurn, frame: StepFrame): PendingTurn 
  * steps for a `degraded_final` / `partial_final` instead. Reading them here
  * means the cheaper, exact signal starts working the day the server sends it,
  * with no client change.
+ *
+ * The response bag (migration 0223) is lifted onto the assistant turn exactly
+ * as a live answer carries it — uncertainty, census, hold, floor stamp, watch
+ * candidates, model — so a reloaded turn renders what the live one did. A turn
+ * the server says carries no bag is marked `responseRecorded: false`; one from
+ * a registry that predates the field is left undefined (renders as before).
  */
 export function turnsFromServer(detail: ConsultSessionDetail): ChatTurn[] {
   return detail.turns.map((t) => ({
@@ -611,7 +771,47 @@ export function turnsFromServer(detail: ConsultSessionDetail): ChatTurn[] {
     turnId: t.id,
     requestId: t.request_id ?? null,
     synthesisStatus: t.synthesis_status ?? null,
+    ...(t.role === 'assistant' ? responseBagFromServer(t) : {}),
+    ...(t.role === 'assistant' ? turnStampsFromServer(t) : {}),
   }))
+}
+
+/** X2 / C1 — lift the usage receipt and verification stamp, when sent. */
+function turnStampsFromServer(t: ConsultSessionDetail['turns'][number]): Partial<ChatTurn> {
+  const out: Partial<ChatTurn> = {}
+  if ('usage' in t) out.usageReceipt = parseUsageReceipt(t.usage)
+  if ('verification' in t) {
+    const v = parseVerification(t.verification)
+    if (v !== undefined) out.verification = v
+  }
+  return out
+}
+
+function responseBagFromServer(t: ConsultSessionDetail['turns'][number]): Partial<ChatTurn> {
+  if (t.response_recorded === undefined) return {}
+  if (!t.response_recorded) return { responseRecorded: false }
+  return {
+    responseRecorded: true,
+    uncertainty: t.uncertainty ?? null,
+    provenanceCensus: t.provenance_census ?? null,
+    holdReason: t.hold_reason ?? null,
+    uncertaintyFloor: t.uncertainty_floor_applied ?? null,
+    watchCandidates: t.watch_candidates ?? null,
+    watchMinted: t.watch_minted ?? null,
+    model: t.model ?? null,
+    // C-1b — the case record, lifted with the rest of the bag: what Replay
+    // re-runs without the model. Only present when the turn presented one.
+    ...caseOf(t.case),
+    // C-2b-1 — the writes bag; only an ARMED turn carries a list.
+    ...(Array.isArray(t.writes) ? { writes: t.writes } : {}),
+    // Q-1 — the turn contract, lifted with the rest of the bag.
+    ...(parseTurnContract(t.contract) ? { contract: parseTurnContract(t.contract) } : {}),
+  }
+}
+
+function caseOf(raw: unknown): Partial<ChatTurn> {
+  const rec = parseCaseRecord(raw)
+  return rec ? { caseRecord: rec } : {}
 }
 
 export interface ReconcileResult {
@@ -762,7 +962,14 @@ export const useConsultSessions = create<ConsultSessionsState>((set, get) => ({
 
   startTurn: (panelId, pending) =>
     updatePanel(set, panelId, (panel) => ({
-      transcript: [...panel.transcript, { role: 'user', content: pending.question }],
+      transcript: [
+        ...panel.transcript,
+        {
+          role: 'user',
+          content: pending.question,
+          ...(pending.pinnedTo !== undefined ? { pinnedTo: pending.pinnedTo } : {}),
+        },
+      ],
       pendingTurn: pending,
       draft: '',
       error: null,

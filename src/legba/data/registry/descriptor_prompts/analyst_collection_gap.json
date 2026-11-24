@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:collection_gap": {
+      "source": "analyst_collection_gap.yaml",
+      "state": "active"
+    }
+  }
+}

@@ -37,7 +37,7 @@ import pytest_asyncio
 
 from legba.data.analysts.deterministic import run_method
 from legba.data.analysts.deterministic_handlers import claim_watch as cw
-from legba.data.analysts.handler_options import HANDLER_OPTIONS
+from legba.data.option_catalog.handler_options import HANDLER_OPTIONS
 from legba.data.config import PostgresConfig
 
 _ANALYST = "test_kw3_f5"

@@ -5,8 +5,8 @@
  * what the page SAYS rather than about how many requests it made:
  *
  *   * every section renders, including its empty / unmeasured state;
- *   * the ambient consult scope pin is set to the desk on open and re-pinned
- *     to a unit's read when the block is opened;
+ *   * a unit block drill re-pins Consult to that unit's read (UI-B6's hook;
+ *     the subject itself is pinned by `subject.page` around this tab);
  *   * the JSON action hands the browser the document the route served, byte
  *     for byte — never a re-serialisation of the page's own state;
  *   * the PNG action goes through `html-to-image` (mocked) against the page's
@@ -42,8 +42,14 @@ vi.mock('@/lib/api', async () => {
 
 import DeskBriefPagePanel from './DeskBriefPage'
 import { resetUnitCorrectnessCache } from '@/lib/unitCorrectnessModel'
-import { resetScope, useScope } from '@/state/scope'
-import { GAP_STRIP_UNITS } from '@/lib/gapStripModel'
+import { resetScope } from '@/state/scope'
+import { resetAmbientPins, resolveAmbientPin, useAmbientPins } from '@/lib/consultContext'
+import { subjectUnits } from '@/lib/profileUi'
+import ASSESSMENT_TW from '@/v4/read/__fixtures__/assessment.country.json'
+
+/** UI-B3 — a scored desk's OWN roster: the scored subjects' units (the lane
+ *  unit, scoped to the unscored supply-chain leg, is not on it). */
+const ROSTER = subjectUnits()
 import type { PanelRegistration } from '@/types'
 
 const TARGET = 'country_watch_tw'
@@ -351,7 +357,9 @@ function routedFetch(over: { exportBody?: unknown } = {}) {
     if (url.includes('country_scorecard')) return { ok: true, json: async () => SCORECARD }
     if (url.includes('/correctness')) return { ok: true, json: async () => CORRECTNESS }
     if (url.includes('/v3/layers/divergence')) return { ok: true, json: async () => DIVERGENCE }
-    if (url.includes('analyst_id=country_composition')) {
+    // UI-B3: the composition is the newest row ANY composing frame published
+    // on the subject (`analyst_id_in=<the profile's frame producers>`).
+    if (url.includes('analyst_id_in=') && url.includes('country_composition')) {
       return { ok: true, json: async () => ({ data: [COMPOSITION] }) }
     }
     if (url.includes('/situations')) {
@@ -386,6 +394,7 @@ beforeEach(() => {
   downloadExportArtifact.mockClear()
   resetUnitCorrectnessCache()
   resetScope()
+  resetAmbientPins()
   localStorage.clear()
 })
 
@@ -405,7 +414,7 @@ describe('DeskBriefPage', () => {
     renderPanel()
     await waitFor(() =>
       expect(screen.getByTestId('desk-brief-units-carried')).toHaveTextContent(
-        `1 of ${GAP_STRIP_UNITS.length} on the roster`,
+        `1 of ${ROSTER.length} on the roster`,
       ),
     )
   })
@@ -424,15 +433,20 @@ describe('DeskBriefPage', () => {
     expect(screen.getAllByText(/What changed on the escalation ladder\?/).length).toBeGreaterThan(0)
   })
 
-  it('pins the consult scope to the desk on open, and to the unit read when a block is opened', async () => {
+  it('re-pins Consult to the unit read when a block is opened (UI-B6\'s hook), and focuses it', async () => {
     vi.stubGlobal('fetch', routedFetch())
     renderPanel()
-    await waitFor(() => expect(useScope.getState().scope?.id).toBe(TARGET))
-    expect(useScope.getState().scope?.kind).toBe('target')
+    // The tab claims nothing on open — the subject page around it pins the subject.
+    await screen.findByTestId('desk-brief-index-card')
+    expect(resolveAmbientPin(useAmbientPins.getState().claims, null)).toBeNull()
 
     fireEvent.click(await screen.findByTestId('desk-brief-unit-open'))
-    await waitFor(() => expect(useScope.getState().scope?.id).toBe('unit-esc'))
-    expect(useScope.getState().scope?.members.findingIds).toContain('unit-esc')
+    await waitFor(() => {
+      const pin = resolveAmbientPin(useAmbientPins.getState().claims, null)
+      expect(pin?.pin.kind).toBe('finding')
+      expect(pin?.pin.id).toBe('unit-esc')
+      expect(pin?.surface).toBe('subject brief')
+    })
     expect(selectRow).toHaveBeenCalledWith('finding', 'unit-esc', 'Escalation', {
       origin: 'desk-brief-page',
     })
@@ -442,9 +456,11 @@ describe('DeskBriefPage', () => {
     vi.stubGlobal('fetch', routedFetch())
     renderPanel()
     await screen.findByTestId('desk-brief-evidence')
-    for (const unit of GAP_STRIP_UNITS) {
+    for (const unit of ROSTER) {
       expect(screen.getByTestId(`desk-brief-evidence-row-${unit.id}`)).toBeInTheDocument()
     }
+    // The lane unit is the supply-chain leg's, never a country desk's row.
+    expect(screen.queryByTestId('desk-brief-evidence-row-disruption_status')).toBeNull()
     await waitFor(() =>
       expect(screen.getByTestId('desk-brief-evidence-row-energy_security')).toHaveAttribute(
         'data-state',
@@ -558,12 +574,134 @@ describe('DeskBriefPage', () => {
     vi.stubGlobal('fetch', fetchMock)
     renderPanel()
     expect(await screen.findByTestId('desk-brief-no-composition')).toBeInTheDocument()
-    for (const unit of GAP_STRIP_UNITS) {
+    // UI-D1 Table A's absence line, the profile's noun substituted.
+    expect(screen.getByTestId('desk-brief-no-composition-headline')).toHaveTextContent(
+      'No composition on record for this desk.',
+    )
+    for (const unit of ROSTER) {
       expect(screen.getByTestId(`desk-brief-evidence-row-${unit.id}`)).toHaveAttribute(
         'data-state',
         'no_read',
       )
     }
     expect(screen.getByTestId('desk-brief-endnotes-empty')).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// X1/D1 — the headline agrees with "composition as of"; the voice is markdown
+// ---------------------------------------------------------------------------
+
+describe('DeskBriefPage — one source of truth (X1/D1)', () => {
+  /** The export answers with no document (a refused or still-composing POST —
+   *  what review D's GET-only run saw on Brazil). */
+  function exportRefused(extra: (url: string) => unknown = () => null) {
+    const base = routedFetch()
+    return vi.fn(async (url: string, init?: RequestInit): Promise<unknown> => {
+      if (url.includes('/v3/export')) {
+        return { ok: true, headers: { get: () => null }, text: async (): Promise<string> => '' }
+      }
+      const hit = extra(url)
+      if (hit) return { ok: true, json: async () => hit }
+      return base(url, init)
+    })
+  }
+
+  it('headlines the composition the as-of dates, even when the export document never arrives', async () => {
+    vi.stubGlobal('fetch', exportRefused())
+    renderPanel()
+    const title = await screen.findByTestId('desk-brief-title')
+    await waitFor(() => expect(title).toHaveAttribute('data-composition', 'present'))
+    expect(title).toHaveTextContent(COMPOSITION.title)
+    expect(title.textContent).not.toMatch(/no composition/i)
+    // The as-of is the SAME row's, printed short (the full instant stays in
+    // the reading limits, where it cannot overflow a figure tile).
+    const asOf = screen.getByTestId('desk-brief-asof')
+    expect(asOf).toHaveTextContent(`${FRESH.slice(0, 10)} ${FRESH.slice(11, 16)}Z`)
+  })
+
+  it('renders the voice’s markdown through the one renderer, its [[ref:N]] as chips', async () => {
+    vi.stubGlobal(
+      'fetch',
+      exportRefused((url) =>
+        url.includes('analyst_id=country_assessment') ? { data: [ASSESSMENT_TW] } : null,
+      ),
+    )
+    renderPanel()
+    const body = await screen.findByTestId('read-assessment-body')
+    expect(body).toHaveAttribute('data-render', 'markdown')
+    const text = body.textContent ?? ''
+    expect(text).not.toContain('**BLUF:**')
+    expect(text).not.toContain('[[ref:')
+    expect(text).not.toMatch(/^##\s/m)
+    expect(body.querySelector('strong')?.textContent).toContain('BLUF:')
+    expect(body.querySelector('h2')).not.toBeNull()
+    expect(body.querySelectorAll('[data-testid="citation-chip"]').length).toBeGreaterThan(0)
+    // The flagged spans keep their letters inline, and the notes list stays.
+    expect(text).toContain('ᵃ')
+    expect(screen.getByTestId('read-unsupported-notes')).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// C2 / fix 2 — one number from one source; nothing printed before it is read
+// ---------------------------------------------------------------------------
+
+describe('DeskBriefPage — one count, read before it prints (C2)', () => {
+  /** A routed fetch whose matching route never answers until released. */
+  function holding(match: (url: string) => boolean) {
+    const base = routedFetch()
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit): Promise<unknown> => {
+      if (match(url)) await gate
+      return base(url, init)
+    })
+    return { fetchMock, release: () => release() }
+  }
+
+  it('counts units carried off the composition the headline counts, while the document still composes', async () => {
+    const { fetchMock } = holding((url) => url.includes('/v3/export'))
+    vi.stubGlobal('fetch', fetchMock)
+    renderPanel()
+    await screen.findByTestId('desk-brief-page-doc-loading')
+    // The headline counts the assembly's one block; the card says the same,
+    // never "0 of N" because the export document has not answered yet.
+    expect(screen.getByTestId('desk-brief-units-carried')).toHaveTextContent(
+      `1 of ${ROSTER.length} on the roster`,
+    )
+  })
+
+  it('says "–" for units carried when the composition carries no readable assembly', async () => {
+    const bare = { ...COMPOSITION, data: { data: {} } }
+    const base = routedFetch()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit): Promise<unknown> => {
+        if (url.includes('analyst_id_in=') && url.includes('country_composition')) {
+          return { ok: true, json: async () => ({ data: [bare] }) }
+        }
+        return base(url, init)
+      }),
+    )
+    renderPanel()
+    await screen.findByTestId('desk-brief-index-card')
+    expect(screen.getByTestId('desk-brief-units-carried')).toHaveTextContent(
+      `– of ${ROSTER.length} on the roster`,
+    )
+  })
+
+  it('never says the assessment is unwritten before its read answered', async () => {
+    const { fetchMock, release } = holding((url) => url.includes('analyst_id=country_assessment'))
+    vi.stubGlobal('fetch', fetchMock)
+    renderPanel()
+    expect(await screen.findByTestId('desk-brief-voice-loading')).toBeInTheDocument()
+    expect(screen.queryByTestId('read-assessment-absent')).toBeNull()
+    release()
+    // The read answered empty: now, and only now, the absence line.
+    expect(await screen.findByTestId('read-assessment-absent')).toBeInTheDocument()
+    expect(screen.queryByTestId('desk-brief-voice-loading')).toBeNull()
   })
 })

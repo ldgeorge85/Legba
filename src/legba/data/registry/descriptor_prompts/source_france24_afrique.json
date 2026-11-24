@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.france24.afrique": {
+      "source": "source_france24_afrique.yaml",
+      "state": "draft"
+    }
+  }
+}

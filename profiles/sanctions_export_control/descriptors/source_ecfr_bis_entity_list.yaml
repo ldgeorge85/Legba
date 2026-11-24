@@ -1,0 +1,79 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Sanctions / export-control profile SKELETON (PROFILE-1; DEC-11) — X2/E2.
+# The BIS Entity List as the INSTRUMENT itself: 15 CFR Part 744, Supplement
+# No. 4, from the electronic Code of Federal Regulations (kind
+# instrument_snapshot). The Federal Register binding
+# (source_federalregister_bis.yaml) reports the RULES that amend it; this
+# binding keeps the consolidated text those rules produce, and diffs it.
+#
+# Ships DRAFT and UNPROBED: the eCFR renderer URL below (the `current`
+# point-in-time, the one supplement) was NOT fetched by this lane (X2/E2 made
+# one real fetch, of the OFAC SDN list). The operator probes it before
+# activating. Read as TEXT — a unified line diff of the rendering.
+#
+# US Government work: public domain.
+
+identity:
+  id: source.ecfr.bis_entity_list
+  name: "eCFR — 15 CFR 744 Supplement No. 4 (BIS Entity List, diffed)"
+  kind: instrument_snapshot
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: profile_sanctions_export_control
+  created: "2026-10-08T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [US]
+  languages: [en]
+  tags: [export_control, entity_list, gov, instrument, bis, ecfr]
+  source_class: official
+  access_class: public
+  license_class: public_domain       # US Government work (17 U.S.C. §105)
+
+acquisition: poll
+
+cadence:
+  # eCFR is updated daily on business days; one poll a day after the update.
+  schedule:
+    factory_kind: cron
+    raw: "35 13 * * *"
+  cooldown_seconds: 600
+  jitter_seconds: 120
+
+config:
+  instrument_name:
+    factory_kind: text
+    raw: "15 CFR 744 Supplement No. 4 (Entity List)"
+  url:
+    factory_kind: text
+    raw: "https://www.ecfr.gov/api/renderer/v1/content/enhanced/current/title-15?part=744&appendix=Supplement%20No.%204%20to%20Part%20744"
+  license_class:                     # the same class as scope.license_class (a test pins the pair)
+    factory_kind: text
+    raw: "public_domain"
+  differ:
+    factory_kind: text
+    raw: "text"
+  timeout_seconds:
+    factory_kind: number
+    raw: 180
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_2            # the (previous, current) sha pair; no URL tier (one URL, many changes)
+      config: {}
+  enrichment: []
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

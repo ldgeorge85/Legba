@@ -11,9 +11,9 @@
 # This wraps the SAME proven, load-bearing ordering those docs describe, and the
 # PHASE banners below print exactly these steps in exactly this order:
 #   [3] substrate + dapr control plane → [4] baseline schema + future migrations
-#   → [5] registry up, then vault → stack → packs → sources + catalog → G20 →
-#   watch tier → region frames → region/applicability tags → analyst set →
-#   deterministic set → budget → [6] optional seeds → [7] runtime + ui [+ caddy]
+#   → [5] registry up, then profile check → vault → stack → descriptors (one
+#   walker over the profile's descriptors dir + its source catalog) → budget
+#   → [6] optional seeds (the profile's list) → [7] runtime + ui [+ caddy]
 #   → [8] boot-verify.
 #
 # It applies the single proven baseline (deploy/baseline/0001_baseline.sql), NOT
@@ -33,8 +33,8 @@
 #
 # ----------------------------------------------------------------------------
 # USAGE
-#   deploy/deploy.sh [--project NAME] [--env-file PATH] [--seed]
-#                    [--no-caddy] [--teardown]
+#   deploy/deploy.sh [--project NAME] [--env-file PATH] [--profile DIR]
+#                    [--seed] [--no-caddy] [--teardown]
 #
 #   --project NAME     Compose project name. Default: legba (the REAL stack).
 #                      Any other name triggers the DATA-ISOLATION GATE and the
@@ -42,7 +42,14 @@
 #                      volumes + scheduler bind). Use a non-legba project for a
 #                      throwaway clean-slate validation stack.
 #   --env-file PATH    Env file passed to compose + bringup. Default: .env
-#   --seed             Run the curated knowledge-seed sequence (world_baseline,
+#   --profile DIR      The instance profile (docs/PROFILES.md): a directory
+#                      under the repo holding profile.yaml, the manifest that
+#                      names the descriptors dir the walker registers, its
+#                      live-state overlay, its source catalog and its seed
+#                      list. Default: $LEGBA_PROFILE, else profiles/geopolitics
+#                      (the reference instance — today's command line).
+#   --seed             Run the curated knowledge-seed sequence: the profile's
+#                      `seeds:` list (the geopolitics profile: world_baseline,
 #                      sipri_arms_transfers; wikidata_leaders/acled need network/
 #                      creds and are opt-in via env, see SEED_SOURCES below).
 #                      The curated seed DATA is OPERATOR-PROVIDED (not bundled) —
@@ -72,6 +79,7 @@ cd "${REPO_ROOT}"
 # --- defaults ----------------------------------------------------------------
 PROJECT="legba"
 ENV_FILE=".env"
+PROFILE="${LEGBA_PROFILE:-profiles/geopolitics}"
 DO_SEED=0
 NO_CADDY=0
 DO_TEARDOWN=0
@@ -84,10 +92,10 @@ MIGRATIONS_DIR="src/legba/data/migrations"
 # Registry health endpoint (served by legba-registry, proxied by caddy).
 REGISTRY_HEALTH_PATH="/api/v1/registry/healthz"
 
-# Curated seed sources run by --seed. Network/cred-dependent adapters
-# (wikidata_leaders, acled_conflict) are opt-in: set LEGBA_SEED_SOURCES to
-# override this list (space-separated). Default = offline curated YAML only.
-SEED_SOURCES="${LEGBA_SEED_SOURCES:-world_baseline sipri_arms_transfers}"
+# Curated seed sources run by --seed: the profile's `seeds:` list, read in
+# PHASE 6. Network/cred-dependent adapters (wikidata_leaders, acled_conflict)
+# are opt-in: set LEGBA_SEED_SOURCES to override the list (space-separated).
+SEED_SOURCES="${LEGBA_SEED_SOURCES:-}"
 
 # --- pretty logging ----------------------------------------------------------
 _c() { printf '\033[%sm' "$1" 2>/dev/null || true; }
@@ -105,6 +113,8 @@ while [ $# -gt 0 ]; do
     --project=*) PROJECT="${1#*=}"; shift ;;
     --env-file)  ENV_FILE="${2:?--env-file needs a value}"; shift 2 ;;
     --env-file=*) ENV_FILE="${1#*=}"; shift ;;
+    --profile)   PROFILE="${2:?--profile needs a value}"; shift 2 ;;
+    --profile=*) PROFILE="${1#*=}"; shift ;;
     --seed)      DO_SEED=1; shift ;;
     --no-caddy)  NO_CADDY=1; shift ;;
     --teardown)  DO_TEARDOWN=1; shift ;;
@@ -115,6 +125,25 @@ done
 
 IS_REAL=0
 [ "${PROJECT}" = "legba" ] && IS_REAL=1
+
+# The profile's prompt packages (docs/PROFILES.md "Prompt packages"; W9
+# SPLIT-2): <profile>/prompts/ holds ONE package, legba_<id> (the geopolitics
+# profile: legba_geopolitics, the six political-lean lenses). Descriptors name
+# its modules as prompt_module legba_<id>.<module>:ATTR, and registration
+# resolves every prompt_module — so the directory is exported onto PYTHONPATH
+# for every registrar run, AFTER the image's own site-packages: the image's
+# baked copy (the build arg LEGBA_PROFILE copies it in) wins, and an image
+# built before the package existed still registers from this checkout. The
+# runtime has no checkout mounted, so its copy is the image's; PHASE 8 (e)
+# verifies it imports.
+case "${PROFILE}" in
+  /*) PROFILE_ABS="${PROFILE}" ;;
+  *)  PROFILE_ABS="${REPO_ROOT}/${PROFILE}" ;;
+esac
+PROFILE_PROMPTS=""
+[ -d "${PROFILE_ABS}/prompts" ] && PROFILE_PROMPTS="${PROFILE_ABS}/prompts"
+REGISTRAR_PYTHONPATH="/install/lib/python3.11/site-packages${PROFILE_PROMPTS:+:${PROFILE_PROMPTS}}"
+export LEGBA_PROFILE_PROMPTS="${PROFILE_PROMPTS}"
 
 # --- compose invocation builder ----------------------------------------------
 # Real `legba` project → base file only (back-compat, unchanged volumes).
@@ -148,7 +177,18 @@ run_registrar() {
     -v "${REPO_ROOT}:${REPO_ROOT}" -w "${REPO_ROOT}" \
     -e "LEGBA_DATA_PG_DB=${APP_DB}" \
     -e "LEGBA_REGISTRY_URL=http://legba-registry:8090/api/v1/registry" \
+    -e "PYTHONPATH=${REGISTRAR_PYTHONPATH}" \
     --entrypoint python legba-registry "${script}" "$@"
+}
+
+# Profile query: the manifest loader (src/legba/data/profile.py, a leaf) in the
+# registry image, -T so its stdout can be captured. Read-only.
+profile_query() {
+  # usage: profile_query check|seeds
+  dc run --rm --no-deps -T \
+    -v "${REPO_ROOT}:${REPO_ROOT}" -w "${REPO_ROOT}" \
+    -e "PYTHONPATH=${REGISTRAR_PYTHONPATH}" \
+    --entrypoint python legba-registry -m legba.data.profile --profile "${PROFILE}" "$@"
 }
 
 # The migration head THIS checkout carries: the numeric prefix of the
@@ -226,17 +266,23 @@ fi
 # =============================================================================
 # PHASE 1 — PREFLIGHT
 # =============================================================================
-phase "PHASE 1 — PREFLIGHT (project=${PROJECT}, env=${ENV_FILE})"
+phase "PHASE 1 — PREFLIGHT (project=${PROJECT}, env=${ENV_FILE}, profile=${PROFILE})"
 
 command -v docker >/dev/null 2>&1 || die "docker not found on PATH"
 docker compose version >/dev/null 2>&1 || die "docker compose v2 not available"
 [ -f "${COMPOSE_BASE}" ]   || die "missing ${COMPOSE_BASE} (run from repo root: ${REPO_ROOT})"
 [ -f "${BASELINE_SQL}" ]   || die "missing baseline schema ${BASELINE_SQL}"
 [ -f "${ENV_FILE}" ]       || die "env file '${ENV_FILE}' not found"
+# The profile is read inside the registrar container, which mounts only the
+# repo: it must live under it. Full validation happens in PHASE 5.
+case "${PROFILE}" in
+  /*) case "${PROFILE}/" in "${REPO_ROOT}/"*) ;; *) die "profile '${PROFILE}' is outside the repo (${REPO_ROOT})" ;; esac ;;
+esac
+[ -f "${PROFILE}/profile.yaml" ] || die "profile '${PROFILE}' has no profile.yaml"
 if [ "${IS_REAL}" -eq 0 ]; then
   [ -f "${ISOLATION_OVERRIDE}" ] || die "missing isolation override ${ISOLATION_OVERRIDE}"
 fi
-ok "docker + compose + compose-files + baseline + env file present"
+ok "docker + compose + compose-files + baseline + env file + profile manifest present"
 
 # Required boot env keys = the operator-must-provide SECRETS/config that live in
 # the env file. The substrate CONNECTION params (PG/NATS/Qdrant/Redis host+port,
@@ -368,31 +414,27 @@ wait_for "registry-healthz" 120 \
   dc exec -T legba-registry curl -fsS "http://localhost:8090${REGISTRY_HEALTH_PATH}" \
   || warn "registry healthz not confirmed via exec (continuing; registrars will surface errors)"
 
-# Ordered registrar sequence — the audit's ordering (§1.3), extended with the
-# S2 region-composition topology (5c region frames + 5d desk region/applicability
-# tags — both idempotent, both required or region_composition's has_tag("region")
-# predicate matches ZERO targets and the S2 region floor silently vanishes):
-#   1 vault → 2 stack → 3 packs(HTTP) → 4 sources → 4b catalog → 5 G20 targets →
-#   5b watch tier → 5c region frames → 5d region/applicability tags →
-#   6 analyst set → 7 deterministic set → 8 budget.
+# Ordered registrar sequence. [0] loads the instance profile (PROFILE-1) and
+# fails here, before any write, if its manifest does not validate.
+# Descriptors have ONE registrar (W6 SPLIT-1, DEC-13):
+# scripts/bringup_register_descriptors.py --profile walks the profile's
+# descriptors dir (the geopolitics profile: descriptors/*.yaml) of
+# the four registry families (action packs → sources → targets → analysts) plus
+# the embedded source catalog, minus descriptors/RETIRED.md, and registers each
+# head idempotently by content (an unchanged head is never written). It also
+# upserts the non-builtin analyst_kind vocabulary rows and the source
+# credibility seeds the per-family scripts used to. The region/applicability
+# desk tags (formerly step 5d) live in the target files themselves, so the
+# S2 region floor (region_composition's has_tag("region")) cannot vanish.
+# docs/BRINGUP.md triages every bring-up script this replaced.
+#   0 profile → 1 vault → 2 stack → 3 descriptors (the walker) → 4 budget.
+info "[0] instance profile ${PROFILE}"
+profile_query check || die "profile ${PROFILE} does not load (see above)"
 info "[1] vault secrets (HTTP)";             run_registrar scripts/bringup_vault_load.py
 info "[2] stack components (HTTP)";          run_registrar scripts/bringup_register_stack.py
-info "[3] action packs (HTTP)";              run_registrar scripts/bringup_register_action_packs.py
-info "[4] pinned standalone sources (direct: shared wires + state media + UCDP)"
-run_registrar scripts/bringup_register_sources.py
-info "[4b] full no-auth source catalog (direct)"
-run_registrar scripts/bringup_register_source_catalog.py
-info "[5] G20 country targets";              run_registrar scripts/bringup_register_g20_country_targets.py
-info "[5b] watch-tier country targets";      run_registrar scripts/bringup_register_watch_country_targets.py
-info "[5c] region frames (HTTP)";            run_registrar scripts/bringup_register_region_targets.py
-info "[5d] region/applicability desk tags (HTTP)"; run_registrar scripts/bringup_tag_targets.py
-info "[6] analyst working set";              run_registrar scripts/bringup_register_analysts.py
-info "[7] deterministic analysts (HTTP)"
-for det in cross_source_dedup cross_source_coalesce entity_resolution \
-           finding_supersession integrity_sweep situation_clustering; do
-  run_registrar "scripts/bringup_register_${det}.py"
-done
-info "[8] budget envelope (direct)";         run_registrar scripts/bringup_set_budget_envelope.py
+info "[3] descriptors — packs, sources + catalog, targets, analysts (direct; one walker)"
+run_registrar scripts/bringup_register_descriptors.py --profile "${PROFILE}" || die "descriptor bring-up reported failures (see the ! lines above)"
+info "[4] budget envelope (direct)";         run_registrar scripts/bringup_set_budget_envelope.py
 ok "all registrars complete (idempotent — re-run safe)"
 
 # =============================================================================
@@ -401,6 +443,10 @@ ok "all registrars complete (idempotent — re-run safe)"
 if [ "${DO_SEED}" -eq 1 ]; then
   phase "PHASE 6 — SEEDS (knowledge layer, before runtime boot)"
   info "nlp_client footgun: seeds run NOW, before the runtime builds its clients."
+  if [ -z "${SEED_SOURCES}" ]; then
+    SEED_SOURCES="$(profile_query seeds | tr -d '\r')" || die "could not read the seed list of ${PROFILE}"
+  fi
+  [ -n "${SEED_SOURCES}" ] || info "profile ${PROFILE} declares no seeds"
   for src in ${SEED_SOURCES}; do
     info "seed: ${src}"
     run_registrar scripts/seed.py --source "${src}"
@@ -414,6 +460,11 @@ fi
 # PHASE 7 — APP UP (registry already up → runtime → ui [→ caddy])
 # =============================================================================
 phase "PHASE 7 — APP UP"
+# The workstation reads its labels from legba-ui-v3/src/lib/profile_ui.json at
+# BUILD time; the committed file is the default profile's. Read-only check.
+if ! run_registrar scripts/gen_profile_ui.py --profile "${PROFILE}" --check; then
+  warn "profile_ui.json is not ${PROFILE}'s export: run scripts/gen_profile_ui.py --profile ${PROFILE}, then rebuild the UI image"
+fi
 # --force-recreate the runtime is MANDATORY: if it ever booted before seeding,
 # nlp_client is pinned None for the process lifetime. Recreating rebuilds it
 # against the now-seeded stack.
@@ -473,12 +524,29 @@ else
   run_registrar -m legba.data.migrate --dry-run 2>&1 | sed 's/^/        /' || true
 fi
 
-# (e) COLD ACTIVATION — NOT WIRED IN YET (RUNBOOK §26); run it by hand after this
+# (e) the profile's prompt packages import inside the RUNTIME (W9 SPLIT-2): the
+#     runtime carries the image's copy only (no checkout is mounted), and a
+#     descriptor naming a module the image lacks fails its first run loud.
+if [ -n "${PROFILE_PROMPTS}" ]; then
+  for pkg_init in "${PROFILE_PROMPTS}"/*/__init__.py; do
+    [ -e "${pkg_init}" ] || continue
+    pkg="$(basename "$(dirname "${pkg_init}")")"
+    if dc exec -T legba-runtime-dapr python -c "import ${pkg}" >/dev/null 2>&1; then
+      ok "runtime imports the profile prompt package ${pkg}"
+    else
+      warn "runtime CANNOT import ${pkg} — rebuild legba-runtime-dapr (and legba-registry) with --build-arg LEGBA_PROFILE=${PROFILE}"; VERIFY_FAIL=1
+    fi
+  done
+else
+  info "profile ${PROFILE} has no prompts/ directory (no profile prompt package to verify)"
+fi
+
+# (f) COLD ACTIVATION — NOT WIRED IN YET (RUNBOOK §26); run it by hand after this
 #     script finishes:
 #
 #         scripts/deploy_smoke_cold_activation.sh --env-file "${ENV_FILE}"
 #
-#     Checks (a)-(d) all confirm that processes STARTED. None of them proves an
+#     Checks (a)-(e) all confirm that processes STARTED. None of them proves an
 #     actor can go from cold to a completed run, and that is the exact gap the
 #     2026-08-01 outage fell through: the descriptor-parse bug only bites on the
 #     COLD path, so warm actors kept serving and every check above stayed green
@@ -499,6 +567,7 @@ fi
 phase "SUMMARY"
 printf '   project       : %s\n' "${PROJECT}"
 printf '   env file      : %s\n' "${ENV_FILE}"
+printf '   profile       : %s\n' "${PROFILE}"
 printf '   app DB        : %s\n' "${APP_DB}"
 printf '   isolation     : %s\n' "$([ "${IS_REAL}" -eq 1 ] && echo 'real legba volumes' || echo "ISOLATED (${PROJECT}_*)")"
 printf '   caddy edge    : %s\n' "$([ "${NO_CADDY}" -eq 1 ] && echo 'skipped (--no-caddy)' || echo 'up')"

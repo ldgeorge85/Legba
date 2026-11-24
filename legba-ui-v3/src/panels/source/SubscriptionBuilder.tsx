@@ -222,7 +222,7 @@ export default function SubscriptionBuilderPanel({ registration }: PanelProps) {
   // ---- preview: matching signals ----
   const signals = useQuery<SignalsPage>({
     queryKey: ['subbuilder-signals'],
-    queryFn: () => apiGet<SignalsPage>('/signals?limit=100'),
+    queryFn: () => apiGet<SignalsPage>('/signals?limit=100&fields=full'),
   })
 
   const signalPreview = useMemo(() => {

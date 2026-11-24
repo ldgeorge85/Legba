@@ -71,19 +71,13 @@ from typing import Any, Mapping, Sequence
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-# The 12 inline_target analysts (9 bounded units incl. disruption_status,
-# + the three non-unit inline_target analysts). p2_probe_unit is excluded
-# (retired probe, not an operator-facing surface).
+from legba.data import rosters as _rosters  # noqa: E402
+
+# The inline_target analysts: the profile's bounded units (ROSTER-2: read from
+# the roster, roster order) + the three non-unit inline_target analysts.
+# p2_probe_unit is excluded (retired probe, not an operator-facing surface).
 UNIT_ANALYSTS: tuple[str, ...] = (
-    "escalation",
-    "energy_security",
-    "internal_stability",
-    "military_posture",
-    "narrative_coordination",
-    "leadership_transition",
-    "economic_coercion",
-    "proliferation_watch",
-    "disruption_status",
+    *_rosters.unit_roster(),
     "cross_doc_corroborator",
     "corpus_researcher",
     "country_assessor",
@@ -585,7 +579,7 @@ def _descriptor_temperature(descriptor_body: Mapping[str, Any]) -> str:
     """The synthesis temperature: descriptor value, else the builder default
     (analyst_deps_builder.py:523)."""
     t = ((descriptor_body.get("method") or {}).get("llm") or {}).get("temperature")
-    return str(t) if t is not None else "0.2(default)"
+    return str(t) if t is not None else "1.0(default)"
 
 
 def unit_call_params_md(descriptor_body: Mapping[str, Any]) -> str:
@@ -841,13 +835,13 @@ def render_judge_file(out_dir: Path) -> dict[str, Any] | None:
         "`https://api.cerebras.ai`, stack-component timeout 90s."
     )
     lines.append(
-        "- call params: `max_tokens=16384, temperature=0.0` at the ONE judge "
+        "- call params: `max_tokens=16384, temperature=1.0` at the ONE judge "
         "call site `_judge_claim_partition` (verify.py:4932-4947). NOTE: the "
         "component id ends `.openai_compat` so the vLLM handler serves it, "
         "and that handler DROPS `max_tokens` from the wire payload unless "
         "`LEGBA_LLM_SEND_MAX_TOKENS` is set (vllm.py:118-131; env UNSET) — "
         "the requested 16384 cap is NOT actually sent to Cerebras. "
-        "`temperature=0.0` IS sent (vllm.py:114-117)."
+        "`temperature=1.0` IS sent (vllm.py:114-117)."
     )
     lines.append("")
     lines.append(

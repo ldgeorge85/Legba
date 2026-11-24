@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.ransomware_live.claims": {
+      "source": "source_ransomware_live.yaml",
+      "state": "draft"
+    }
+  }
+}

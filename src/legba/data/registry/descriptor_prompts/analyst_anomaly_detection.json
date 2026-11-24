@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:anomaly_detection": {
+      "source": "analyst_anomaly_detection.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:lens_militarist": {
+      "source": "analyst_lens_militarist.yaml",
+      "state": "draft"
+    }
+  }
+}

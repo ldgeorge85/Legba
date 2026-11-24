@@ -36,6 +36,8 @@ from legba.data.registry.api import (
     require_bearer,
 )
 
+from legba.data.registry._deps import principal_actor, principal_label
+
 from .test_registry_api_unit import _build_app
 
 _GUARDED_PATH = "/api/v1/registry/descriptors/target/anything"
@@ -115,7 +117,9 @@ def test_token_comparison_goes_through_compare_digest(monkeypatch):
     monkeypatch.setenv(API_TOKEN_ENV, "b2-ct-token")
     monkeypatch.setattr(hmac_mod, "compare_digest", spy)
     principal = require_bearer(authorization="Bearer b2-ct-token")
-    assert principal == "b2-ct-token"
+    # The gate returns the operator principal + hashed LABEL, never the
+    # credential (W4; X2-B1).
+    assert principal == principal_actor("operator", "b2-ct-token")
     assert calls == [(b"b2-ct-token", b"b2-ct-token")]
 
     calls.clear()
@@ -174,7 +178,7 @@ def test_ws_authorize_fn_fail_closed_and_constant_time(monkeypatch):
     # Unconfigured + dev flag → permitted, anonymous principal.
     monkeypatch.setenv(DEV_MODE_ENV, "1")
     assert _authorize_ws_token(None) == "anonymous"
-    assert _authorize_ws_token("whatever") == "whatever"
+    assert _authorize_ws_token("whatever") == principal_label("whatever")
 
     # Configured → enforced through hmac.compare_digest, dev flag or not.
     calls: list[tuple[bytes, bytes]] = []
@@ -186,7 +190,7 @@ def test_ws_authorize_fn_fail_closed_and_constant_time(monkeypatch):
 
     monkeypatch.setenv(API_TOKEN_ENV, "b2-ws-ct")
     monkeypatch.setattr(hmac_mod, "compare_digest", spy)
-    assert _authorize_ws_token("b2-ws-ct") == "b2-ws-ct"
+    assert _authorize_ws_token("b2-ws-ct") == principal_actor("operator", "b2-ws-ct")
     assert calls == [(b"b2-ws-ct", b"b2-ws-ct")]
     with pytest.raises(HTTPException) as exc:
         _authorize_ws_token("nope")
@@ -206,7 +210,8 @@ def test_ws_header_bearer_accepted_when_no_query_token(monkeypatch):
     monkeypatch.setenv(API_TOKEN_ENV, "b2-ws-header")
     monkeypatch.delenv(DEV_MODE_ENV, raising=False)
     assert (
-        _authorize_ws_token(None, "Bearer b2-ws-header") == "b2-ws-header"
+        _authorize_ws_token(None, "Bearer b2-ws-header")
+        == principal_actor("operator", "b2-ws-header")
     )
 
 
@@ -230,15 +235,16 @@ def test_ws_query_token_still_works_alongside_header(monkeypatch):
     monkeypatch.setenv(API_TOKEN_ENV, "b2-ws-both")
     monkeypatch.delenv(DEV_MODE_ENV, raising=False)
     # Query alone, no header at all.
-    assert _authorize_ws_token("b2-ws-both") == "b2-ws-both"
-    assert _authorize_ws_token("b2-ws-both", None) == "b2-ws-both"
+    both = principal_actor("operator", "b2-ws-both")
+    assert _authorize_ws_token("b2-ws-both") == both
+    assert _authorize_ws_token("b2-ws-both", None) == both
     # Both present, both valid → query wins (returned principal).
     assert (
-        _authorize_ws_token("b2-ws-both", "Bearer b2-ws-both") == "b2-ws-both"
+        _authorize_ws_token("b2-ws-both", "Bearer b2-ws-both") == both
     )
     # Query present + valid, header garbage → query still authenticates.
     assert (
-        _authorize_ws_token("b2-ws-both", "Bearer wrong") == "b2-ws-both"
+        _authorize_ws_token("b2-ws-both", "Bearer wrong") == both
     )
 
 

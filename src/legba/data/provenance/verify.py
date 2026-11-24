@@ -73,6 +73,7 @@ from .citation_markers import (  # noqa: F401 — re-exported verify surface
     _canonical_annotation,
     _expand_ref_list,
     _normalize_verify_markers,
+    _pull_trailing_markers,
     _range_markers,
 )
 # K-1 (2026-08-03) — the V-B ABSENCE-SLICE subsystem lives in a sibling module
@@ -81,6 +82,9 @@ from .citation_markers import (  # noqa: F401 — re-exported verify surface
 # ``verify.SliceRow``, ``verify.load_absence_slice_rows`` — resolves exactly as
 # before. The ORCHESTRATION (``_fold_absence_slice`` / ``_absence_slice_stage2``)
 # stays below: it manipulates the report + ledger types this module owns.
+# W10 CANON-1: the country TABLES and matchers are no longer re-exported here —
+# they are the profile's gazetteer (``legba.data.gazetteer``), and this module
+# imports the loader's accessor, not country symbols.
 from .absence_slice import (  # noqa: F401 — re-exported verify surface
     _ABSENCE_MARKERS,
     _ABSENCE_SCOPE_QUALIFIERS,
@@ -93,30 +97,18 @@ from .absence_slice import (  # noqa: F401 — re-exported verify surface
     _ABSENCE_SLICE_THIN_ROWS,
     _ABSENCE_SLICE_TITLE_CAP,
     _ABSENCE_SLICE_UBIQUITY,
-    _CAMEO_TITLE_RE,
     _COLLECTION_SCOPE_MARKERS,
-    _COUNTRY_TOKENS,
-    _IRREGULAR_DEMONYMS,
     _MACHINE_STRUCTURED_PROVENANCE_KINDS,
     _MACHINE_STRUCTURED_SOURCE_IDS,
     _SCALE_QUALIFIERS,
-    _SLICE_DESK_COUNTRIES,
-    _SLICE_GEO_COUNTRIES,
-    _TARGET_SLUG_TO_ABBREV,
-    _TARGET_SLUG_TO_COUNTRY,
     SliceRow,
     _absence_carve_outs,
     _absence_content_terms,
     _absence_route_exclusion,
     _absence_slice_candidates,
-    _country_desk_slug,
     _first_absence_marker_pos,
     _is_absence_claim,
     _is_machine_structured_row,
-    _mentions_abbrev,
-    _mentions_country,
-    _mentions_own_country,
-    _names_country,
     _row_field,
     _row_in_claim_scope,
     _scale_undershoots_claim,
@@ -129,6 +121,9 @@ from .absence_slice import (  # noqa: F401 — re-exported verify surface
     quote_misses_the_denied_scope,
     row_restates_the_negative,
 )
+from ..claim_attribution import claim_as_fact_fail_class
+from ..claim_support import claim_of, claim_only_failure, claim_sentence_attributed, ordinal_claims
+from ..gazetteer import NotApplicable, applicable
 from . import composition_integrity  # H2 — the composition-integrity brick (§6)
 # D-3 (2026-09-03) — THE ASSEMBLY ARMS, the judge subsystem's seventh brick and
 # the verify seam this train names in its first commit (D-1 §5.1 requires one:
@@ -642,14 +637,9 @@ _CITATION_ONLY_RE = re.compile(
 # P7-F1(2) — a citation marker that sits AFTER a sentence terminator
 # (``…fighters. [[ref:1]]`` / ``…zones.\n[21]``) is severed from the claim it
 # supports by _SENTENCE_SPLIT_RE, orphaning the clause as ``no_citation`` even
-# though it IS cited. This pulls a run of trailing markers back INSIDE the
-# sentence (before the terminator) so the split keeps the marker on the claim.
-# It also handles the marker-leads-the-next-line style (the marker glues to the
-# PRECEDING clause, which is the one it grounds). Applied at the top of
-# _segment_claims, after marker-drift normalization and before the split.
-_TRAILING_MARKER_PULL_RE = re.compile(
-    r"([.!?])(\s+)((?:\[\d+\]|\[\[ref:\d+\]\])(?:\s*(?:\[\d+\]|\[\[ref:\d+\]\]))*)"
-)
+# though it IS cited. ``_pull_trailing_markers`` (citation_markers, W11-F86 —
+# now also the no-space and closing-quote shapes) pulls the run back INSIDE the
+# sentence; applied at the top of _segment_claims, after drift normalization.
 
 # W4 (2026-08-02) — an INLINE markdown heading, welded to the preceding sentence
 # with no newline ("…coercive measures on Russia.## Key points"). 2+ hashes and a
@@ -830,7 +820,9 @@ from .judge_assessability import (  # noqa: F401 — re-exported verify surface
     JUDGE_SAMPLE_ALWAYS_DEFAULT,
     JUDGE_STATUS_UNSAMPLED,
     JudgeSamplingPolicy,
+    NON_SCORE_STATES,
     PROVISIONAL_SCORE_CEILING,
+    SCORE_STATE_CARRIED_UNGRADED,
     SCORE_STATE_SCORED,
     SCORE_STATE_UNASSESSABLE,
     UNASSESSABLE_GATE_SCORE,
@@ -939,6 +931,8 @@ _ADVISORY_REASONS = frozenset({"double_counted", "hedge_laundering"})
 
 _PERIPHERY_TIER = "periphery"
 _UNHEDGED_PERIPHERY = "unhedged_periphery_citation"
+#: C-1 — a clause resting only on CLAIM rows that states the claimed event.
+_CLAIM_AS_FACT = "claim_as_fact"
 
 # Hedge/attribution lexicon for the periphery rule — deliberately GENEROUS
 # (substring, lowercased): the periphery prompt section dictates the canonical
@@ -1075,6 +1069,8 @@ _FAIL_CLASS_BY_REASON: dict[str, str] = {
     "stale_leader_vs_facts": FAIL_CLASS_HARD,
     # M15 — per-country finding naming only OTHER countries (entity scramble)
     "cross_target_leak": FAIL_CLASS_HARD,
+    # B6 — a desk claim naming only a HOMONYM of its subject (runtime.actor_critic)
+    "off_subject": FAIL_CLASS_HARD,
     # -- soft: unsupported inference / hedge laundering / overclaim -----------
     # a fact-asserting claim with no citation at all — overclaim/uncited
     "no_citation": FAIL_CLASS_SOFT,
@@ -1095,6 +1091,18 @@ _FAIL_CLASS_BY_REASON: dict[str, str] = {
     # evidence cannot carry. Same overclaim family as _UNHEDGED_PERIPHERY —
     # SOFT, because nothing is fabricated and nothing is contradicted.
     "register_self_corroboration": FAIL_CLASS_SOFT,
+    # Q4 — a DATED or NUMERIC claim whose only resolved citations are MEMORY
+    # blocks (the prior read, the window ledger). The block is real and the
+    # model was shown it; what the sentence claims is that a date or a figure
+    # is ESTABLISHED, which memory cannot say. Same overclaim family as H1,
+    # and SOFT for the same reason — nothing fabricated a citation.
+    "carried_unsupported": FAIL_CLASS_SOFT,
+    # C-1 — a clause whose only resolving citations are CLAIM rows (source
+    # class 'claim') and that states the claimed event rather than the claim
+    # ("<claimant> claimed/posted/listed ..."). The citation is real; what the
+    # sentence claims (that the event happened) a claim cannot carry. Same
+    # overclaim family as H1/Q4 — SOFT, counted on the floor.
+    _CLAIM_AS_FACT: FAIL_CLASS_SOFT,
     # two cited sub-claims share underlying lineage — evidence overclaim (advisory)
     "double_counted": FAIL_CLASS_SOFT,
     # S3-T1 — a 'triggered' structured indicator with no citation — uncited claim
@@ -1215,7 +1223,10 @@ def fail_class_for_reason(reason: str) -> str:
     """The hard/soft fail class for a span reason. UNKNOWN reasons classify
     ``soft_fail`` (conservative: never escalate an unrecognized label to hard;
     the drift-guard test keeps the table total so this fallback stays unused).
+    C-2: ``claim_as_fact`` reads its declared severity (soft unless set hard).
     """
+    if reason == _CLAIM_AS_FACT:
+        return claim_as_fact_fail_class()
     return _FAIL_CLASS_BY_REASON.get(reason, FAIL_CLASS_SOFT)
 
 # S3-T1 — a structured I&W indicator whose status is 'triggered' asserts an
@@ -1225,6 +1236,13 @@ def fail_class_for_reason(reason: str) -> str:
 # forward-looking 'not_observed' / 'expired' statuses are exempt (nothing exists
 # to cite for a non-occurrence — mirroring the prose watch-section exemption).
 _INDICATOR_UNCITED_TRIGGERED = "indicator_uncited_triggered"
+# X4 LEVEL (W11-F36) — a level-shaped indicator 'observed_at_level' asserts the
+# condition stands NOW, so it is held to a citation exactly like 'triggered'
+# (same reason, same class); only its ledger label differs.
+_INDICATOR_EVIDENCED_LABELS = {
+    "triggered": "triggered indicator",
+    "observed_at_level": "level indicator observed at level",
+}
 
 # Env flag (code DEFAULT OFF) gating the optional LLM judge. When unset / falsey
 # the pass is the deterministic floor labelled 'judge-unavailable'.
@@ -1557,7 +1575,7 @@ class FaithfulnessReport:
             # fold on. The raw tally itself is untouched on the report object.
             "faithfulness_score": (
                 None
-                if self.score_state == SCORE_STATE_UNASSESSABLE
+                if self.score_state in NON_SCORE_STATES  # SW-9: + carried_ungraded
                 else round(self.faithfulness_score, 4)
             ),
             "checkable_claims": self.checkable_claims,
@@ -1622,6 +1640,25 @@ def _resolved_citation_ids(citations: Any) -> set[str]:
             sid = entry.get("signal_id")
             if isinstance(sid, str) and sid:
                 out.add(sid)
+    return out
+
+
+def _marker_to_claim(citations: Any) -> dict[int, dict[str, Any]]:
+    """C-1: each CLAIM citation's ``[N]`` marker index -> its claim stamp
+    (``citation['claim']``, copied off the row by ``_citation_entry``)."""
+    out: dict[int, dict[str, Any]] = {}
+    if not isinstance(citations, (list, tuple)):
+        return out
+    for entry in citations:
+        if not isinstance(entry, Mapping):
+            continue
+        claim = claim_of(entry)
+        marker = entry.get("marker")
+        if claim is None or not isinstance(marker, str):
+            continue
+        m = _CLAIM_MARKER_RE.search(marker)
+        if m:
+            out[int(m.group(1))] = claim
     return out
 
 
@@ -2811,9 +2848,7 @@ def _segment_claims_raw(body: str) -> list[str]:
     # inside the sentence (``…fighters. [[ref:1]]`` -> ``…fighters [[ref:1]].``)
     # so the split below keeps the marker on the claim it supports instead of
     # orphaning a ``no_citation`` fragment.
-    body = _TRAILING_MARKER_PULL_RE.sub(
-        lambda m: f" {m.group(3)}{m.group(1)}{m.group(2)}", body
-    )
+    body = _pull_trailing_markers(body)
     # W4 (2026-08-02): break out an INLINE markdown heading. The assessors emit
     # ``…measures on Russia.## Key points`` with NO newline, which defeats BOTH
     # the line-based section skip below AND the sentence split (which needs
@@ -3037,124 +3072,34 @@ def _is_strong_absence_assertion(low: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# H1 — SELF-CORROBORATION FROM THE REGISTER (CORRECTNESS-R2 M-1 / rec. 1)
+# 2026-09-28 (Q4) — the DESK-GROUNDING BACKSTOPS moved to
+# ``grounding_backstops.py``. H1 (SELF-CORROBORATION FROM THE REGISTER) left
+# this file VERBATIM — its banner, its four constants and its one function —
+# because Q4's CARRIED DATED ANCHOR guard is the second member of the same
+# family (a claim warranted only by a grounding block, asserting something the
+# block cannot warrant) and this file stood at 5,900 lines against its 5,900
+# DO-NOT-RAISE ceiling. The gate is honoured by splitting, never by pinning a
+# new number.
+#
+# WHAT STAYED: the FOLDS and the fail-class table, for the reason the
+# world-knowledge banner above already recorded — they manipulate the report +
+# ledger types this module owns, and ``_fold_guard_spans`` is shared with W31
+# and the absence route besides.
+#
+# Imported ONE WAY and RE-EXPORTED, so ``verify.register_self_corroboration_spans``
+# and ``verify._REGISTER_REF_KIND`` resolve exactly as before.
 # ---------------------------------------------------------------------------
-#
-# THE DEFECT, verbatim from the round's worst read. The AR escalation head:
-# "The open-situation register records a high intensity (59.1) and recent
-# activity, indicating concrete operational impact rather than mere rhetoric" —
-# confidence 0.90, citing ordinals past its own slice count, i.e. the register
-# grounding block. The AR composition's BLUF: "the register CONFIRMS the strike
-# remains the active driver with high intensity". The strike had ended three
-# weeks earlier; the register's intensity was the sum of the desks' own "no
-# material change" bookkeeping.
-#
-# The register is ``[[ref:N]]``-citable — deliberately, because an UNCITED prior
-# leaking into cited analysis is this platform's named failure mode. But being
-# citable is exactly what exempts it from the standing "no claim may rest on
-# orientation alone" clause, and that exemption is the bug. This guard closes it
-# from the verify side: a world claim whose ONLY support is the register, stated
-# in the language of currency or corroboration, is not supported by anything.
-#
-# SOFT, and the class is earned rather than assumed. The clause is not
-# fabricating a citation (the register block is real and the model was shown it)
-# and its cited source does not contradict it — it claims a VERIFICATION STATUS
-# its evidence cannot carry, which is the ``_UNHEDGED_PERIPHERY`` /
-# ``hedge_laundering`` overclaim family. The render-side rule
-# (``window_ledger.REGISTER_SELF_CORROBORATION_RULE``) is the primary fix; this
-# is the backstop that measures whether it took.
-#
-# CONSERVATIVE ON BOTH LEGS, because a false positive here demotes a legitimate
-# continuity sentence:
-#   * the claim's resolved markers must ALL be register ordinals — one basis or
-#     ledger citation alongside and the clause has real evidence, so it passes;
-#   * and it must assert CURRENCY ("remains", "ongoing", "continues") or
-#     CORROBORATION ("confirms", "corroborates"). A clause that merely reports
-#     what the register holds ("the register lists three open frames") asserts
-#     nothing about the world and is never flagged.
 
-_REGISTER_SELF_CORROBORATION = "register_self_corroboration"
-
-#: ``ref_kind`` the register citation carries
-#: (``window_ledger.SITUATION_REGISTER_REF_KIND``). Duplicated as a literal
-#: rather than imported: ``verify`` sits UNDER ``data.analysts`` in the import
-#: graph, and the analysts package imports verify. A drift-guard test asserts the
-#: two strings are equal.
-_REGISTER_REF_KIND = "situation_register"
-
-#: CORROBORATION language — the product vouching for the world with its own
-#: bookkeeping. These are the verbs that turn an orienting index into evidence.
-_REGISTER_CORROBORATION_RE = re.compile(
-    r"\b(?:confirm(?:s|ed|ing)?|corroborat(?:es|ed|ing|ion)"
-    r"|substantiat(?:es|ed|ing)|validat(?:es|ed|ing)|verif(?:ies|ied|ying)"
-    r"|bears?\s+out|attests?\s+to|demonstrat(?:es|ed|ing))\b"
+from .grounding_backstops import (  # noqa: E402,F401 — re-exported surface
+    _REGISTER_CORROBORATION_RE,
+    _REGISTER_CURRENCY_RE,
+    _REGISTER_REF_KIND,
+    CARRIED_UNSUPPORTED as _CARRIED_UNSUPPORTED,
+    REGISTER_SELF_CORROBORATION as _REGISTER_SELF_CORROBORATION,
+    carried_anchor_spans,
+    memory_only_citations,
+    register_self_corroboration_spans,
 )
-
-#: CURRENCY language — asserting that the underlying event is still happening.
-#: The exact shapes the AR read used ("remains the active driver", "the strike
-#: continues", "ongoing"), plus the near neighbours.
-_REGISTER_CURRENCY_RE = re.compile(
-    r"\b(?:remains?|remaining|continu(?:es|ing)|ongoing|still\s+\w+"
-    r"|persist(?:s|ing)|sustain(?:s|ing|ed)|active\s+driver"
-    r"|currently\s+(?:active|underway|ongoing)|underway"
-    r"|shows?\s+no\s+sign\s+of\s+(?:easing|abating))\b"
-)
-
-
-def register_self_corroboration_spans(
-    body: str, citations: Any
-) -> list[UnsupportedSpan]:
-    """FLAG world claims resting ONLY on the open-situation register (H1).
-
-    One soft :data:`_REGISTER_SELF_CORROBORATION` span per hit, text = the RAW
-    segmented claim (the #116c judge-path dedup matches on it, so a claim the
-    judge already graded stays the judge's).
-
-    INERT unless the finding actually cites the register: with no
-    ``ref_kind='situation_register'`` citation in the list this returns ``[]``
-    without segmenting the body, so every finding in the fleet that never sees a
-    register block is byte-identical to its pre-H1 verdict.
-
-    Never raises — a malformed citation list yields no spans, never an exception
-    inside the verify path.
-    """
-    if not body:
-        return []
-    try:
-        register_ords = {
-            n
-            for n, kind in _build_ordinal_map(
-                citations, lambda entry, _n: entry.get("ref_kind")
-            ).items()
-            if kind == _REGISTER_REF_KIND
-        }
-    except Exception:  # noqa: BLE001 — a guard never breaks the verify path
-        return []
-    if not register_ords:
-        return []
-    spans: list[UnsupportedSpan] = []
-    for claim in _segment_claims(body):
-        if not _is_fact_asserting(claim):
-            continue
-        markers = _markers_in_claim(claim, subclaim=True) or _markers_in_claim(
-            claim, subclaim=False
-        )
-        # ALL resolved markers must be the register. A clause with one real
-        # evidence citation beside it is grounded in that citation.
-        if not markers or not all(n in register_ords for n in markers):
-            continue
-        low = claim.lower()
-        if _REGISTER_CORROBORATION_RE.search(low) or _REGISTER_CURRENCY_RE.search(
-            low
-        ):
-            spans.append(
-                UnsupportedSpan(
-                    text=claim,
-                    reason=_REGISTER_SELF_CORROBORATION,
-                    markers=list(markers),
-                )
-            )
-    return spans
 
 
 def unscoped_absence_spans(body: str) -> list[UnsupportedSpan]:
@@ -3241,6 +3186,9 @@ def _deterministic_floor(
     # standing questions), so it must not score as an ``unresolved_citation``.
     # EMPTY for every pre-QW1-B finding ⇒ this floor stays byte-identical.
     grounding_ords = set(_grounding_ordinals(citations))
+    # C-1 — the ordinals backed by a CLAIM row. EMPTY unless a claim source is
+    # cited, so the floor is byte-identical for every other finding.
+    claim_map = _marker_to_claim(citations)
 
     claims = [c for c in _segment_claims(body) if _is_fact_asserting(c)]
     supported = 0
@@ -3256,10 +3204,22 @@ def _deterministic_floor(
             continue
         # Supported when ANY marker resolves to a real cited signal_id — or, from
         # QW1-B, to a cited DESK GROUNDING block (real captured evidence with no
-        # signal row behind it).
+        # signal row behind it). C-1: a CLAIM row's marker supports the clause
+        # only when the clause is ABOUT the claim (names the claimant with an
+        # attribution verb); otherwise it does not count toward ``ok``.
+        resolving = [
+            n for n in markers if marker_map.get(n) and marker_map.get(n) in resolved_ids
+        ]
         ok = any(
-            marker_map.get(n) in resolved_ids for n in markers if marker_map.get(n)
+            n not in claim_map or claim_sentence_attributed(claim, claim_map[n])
+            for n in resolving
         ) or any(n in grounding_ords for n in markers)
+        if not ok and resolving and all(n in claim_map for n in resolving):
+            spans.append(
+                UnsupportedSpan(text=claim, reason=_CLAIM_AS_FACT, markers=markers)
+            )
+            verdicts.append(ClaimVerdict.failed(claim, _CLAIM_AS_FACT, list(markers)))
+            continue
         if ok:
             supported += 1
             verdicts.append(ClaimVerdict.supported(claim, list(markers)))
@@ -3335,6 +3295,7 @@ def _deterministic_floor_subclaim(
     source_map = _ordinal_source_map(citations)
     # C-TIER: the periphery-tier ordinals (empty ⇒ the rule below is inert).
     periphery_ords = _periphery_ordinals(citations)
+    claim_ords = ordinal_claims(citations)  # C-2: sub-claims that rested only on claims
 
     claims = [c for c in _segment_claims(body) if _is_fact_asserting(c)]
     supported = 0
@@ -3356,6 +3317,10 @@ def _deterministic_floor_subclaim(
             verdicts.append(
                 ClaimVerdict.failed(claim, "unresolved_citation", list(markers))
             )
+            continue
+        if claim_only_failure(claim, resolved_markers, claim_ords):  # C-2: claim lineage, hop 2
+            spans.append(UnsupportedSpan(text=claim, reason=_CLAIM_AS_FACT, markers=list(resolved_markers)))
+            verdicts.append(ClaimVerdict.failed(claim, _CLAIM_AS_FACT, list(resolved_markers)))
             continue
         # C-TIER — a clause resting ONLY on periphery-tier citations (below-
         # floor / unverified sub-claims) is SUPPORTED only when hedged/
@@ -3477,7 +3442,8 @@ def _indicator_spans(indicators: Any) -> tuple[int, int, list[UnsupportedSpan]]:
     for entry in indicators:
         if not isinstance(entry, Mapping):
             continue
-        if entry.get("status") != "triggered":
+        kind = _INDICATOR_EVIDENCED_LABELS.get(str(entry.get("status")))
+        if kind is None:
             continue  # not_observed / expired are forward-looking → exempt
         checkable += 1
         if _indicator_citation_markers(entry):
@@ -3486,7 +3452,7 @@ def _indicator_spans(indicators: Any) -> tuple[int, int, list[UnsupportedSpan]]:
             label = _indicator_label(entry)
             spans.append(
                 UnsupportedSpan(
-                    text=f"triggered indicator without citation: {label}"[:500],
+                    text=f"{kind} without citation: {label}"[:500],
                     reason=_INDICATOR_UNCITED_TRIGGERED,
                 )
             )
@@ -3505,18 +3471,19 @@ def _indicator_claim_verdicts(indicators: Any) -> list[ClaimVerdict]:
     for entry in indicators:
         if not isinstance(entry, Mapping):
             continue
-        if entry.get("status") != "triggered":
+        kind = _INDICATOR_EVIDENCED_LABELS.get(str(entry.get("status")))
+        if kind is None:
             continue
         markers = _indicator_citation_markers(entry)
         label = _indicator_label(entry)
         if markers:
             verdicts.append(
-                ClaimVerdict.supported(f"triggered indicator: {label}"[:500], list(markers))
+                ClaimVerdict.supported(f"{kind}: {label}"[:500], list(markers))
             )
         else:
             verdicts.append(
                 ClaimVerdict.failed(
-                    f"triggered indicator without citation: {label}"[:500],
+                    f"{kind} without citation: {label}"[:500],
                     _INDICATOR_UNCITED_TRIGGERED,
                 )
             )
@@ -3572,14 +3539,7 @@ def _fold_indicators(
 from .world_knowledge_guards import (  # noqa: F401 — re-exported verify surface
     _CROSS_TARGET_REASON,
     _CURRENT_OFFICEHOLDER_SQL,
-    _LEADER_OF_PREDICATE,
-    _OFFICEHOLDER_ACRONYMS,
-    _OFFICEHOLDER_COUNTRY_FIRST_RE,
-    _OFFICEHOLDER_COUNTRY_GROUPS,
-    _OFFICEHOLDER_FAMILY_PREDICATES,
     _OFFICEHOLDER_NAME_RE,
-    _OFFICEHOLDER_ROLE_FIRST_RE,
-    _OFFICEHOLDER_ROLE_PREDICATES,
     _OFFICEHOLDER_ROLE_RE,
     _OFFICEHOLDER_SKIP_QUALIFIER_RE,
     _PERSON_NAME_NOISE,
@@ -3591,8 +3551,6 @@ from .world_knowledge_guards import (  # noqa: F401 — re-exported verify surfa
     _STALE_VS_FACTS_MAX_SPANS,
     _STALE_WRONG_POTUS_RE,
     OfficeholderClaim,
-    _country_aliases_for,
-    _officeholder_country_alternation,
     _person_name_tokens,
     cross_target_leak_span,
     extract_officeholder_claims,
@@ -3618,7 +3576,9 @@ def _fold_world_knowledge_guards(
     """
     guard_spans = stale_leader_spans(f"{title}\n{body}")
     leak = cross_target_leak_span(title=title, body=body, target_id=target_id)
-    if leak is not None:
+    if isinstance(leak, NotApplicable):  # CANON-1: labelled, never a pass
+        floor.bump(leak.counter)
+    elif leak is not None:
         guard_spans = guard_spans + [leak]
     return _fold_guard_spans(floor, guard_spans)
 
@@ -4547,13 +4507,18 @@ async def _maybe_llm_judge(
         )
         shape = "citations_unresolvable" if has_entries else "citations_absent"
         floor.bump(shape)
+        # SW-9: "no resolvable SIGNAL citation" is not "empty map" — a unit
+        # finding citing only grounding blocks hands the judge their text, and
+        # the memory-only subset scores HIGH, not low (two live 1.0 specimens).
+        # That subset is published as ``carried_ungraded``; see resolve below.
         logger.warning(
             "verify.judge.citationless_graded claims=%d shape=%s convention=%s "
-            "— the judge graded a finding with NO resolvable citations (its "
-            "evidence map is empty; this class fails at ~4x the base rate)",
+            "grounding_ordinals=%d — the judge graded a finding with NO "
+            "resolvable SIGNAL citation",
             len(verdicts),
             shape,
             "subclaim" if subclaim_convention else "marker",
+            len(_grounding_ordinals(citations)),
         )
 
     # Refine: when the LLM judge RAN, its per-claim verdicts are AUTHORITATIVE.
@@ -4594,6 +4559,7 @@ async def _maybe_llm_judge(
     # authoritative over the prose it saw.
     ungraded_nonpropositional = 0
     floor_counted_nonpropositional = 0
+    subclaim = _uses_subclaim_convention(citations)
     for claim_text, verdict, quote, _aligned_by in verdicts:
         judged_texts.add(claim_text.strip())
         if verdict == VERDICT_NOT_A_PROPOSITION:
@@ -4611,6 +4577,10 @@ async def _maybe_llm_judge(
                 UnsupportedSpan(
                     text=claim_text,
                     reason=reason,
+                    # W11-F86: the markers the claim carried, read exactly as the
+                    # ledger row below reads them (they were [] on every judge
+                    # span: 492 of 771 judge_unsupported spans, 7 d, two units).
+                    markers=_markers_in_claim(claim_text, subclaim=subclaim),
                     detail=_judge_detail(verdict, quote, claim_text),
                 )
             )
@@ -4661,7 +4631,6 @@ async def _maybe_llm_judge(
     # guard hits — the same dedup-by-text rule the span reconciliation uses).
     # NOTE: carried SUPPORTED non-prose rows are provenance, not arithmetic —
     # the headline tallies above are untouched.
-    subclaim = _uses_subclaim_convention(citations)
     judge_ledger: list[ClaimVerdict] = []
     for claim_text, verdict, quote, aligned_by in verdicts:
         # RUST-3: an ungraded non-proposition is provenance, not a verdict. It
@@ -5373,6 +5342,11 @@ async def _fold_absence_slice(
 
     overrides: list[_ClaimOverride] = []
     stage2: list[_Stage2Claim] = []
+    # CANON-1: a gazetteer-less screen is LABELLED by name (SEAMS #67), never a pass.
+    if (scope_na := applicable("absence_slice_scope", record=False)) is not None:
+        report.bump(scope_na.counter, len(scoped))
+    if (shape_na := applicable("machine_structured_title", record=False)) is not None:
+        report.bump(shape_na.counter)
     for claim, qual in scoped:
         # W1(a): only rows within the CLAIM's target scope can bear on it.
         scope = _slice_scope_countries(claim, target_id=target_id)
@@ -5775,6 +5749,12 @@ async def verify_finding_faithfulness(
     floor = _fold_guard_spans(
         floor, register_self_corroboration_spans(body, citations)
     )
+    # Q4: the CARRIED DATED ANCHOR backstop, beside H1 because it is the same
+    # family one block over — a dated or numeric claim warranted ONLY by this
+    # desk's own memory (prior read / window ledger). INERT unless the finding
+    # cites one. Folded here, before the judge, span text = the raw claim, so
+    # the #116c dedup leaves the judge authoritative over prose it graded.
+    floor = _fold_guard_spans(floor, carried_anchor_spans(body, citations))
     if facts_conn is not None:
         # E-1: the facts-reconciled officeholder guard (never raises — degrade-
         # not-drop lives inside stale_leader_vs_facts_spans).
@@ -5782,6 +5762,8 @@ async def verify_finding_faithfulness(
             floor,
             await stale_leader_vs_facts_spans(facts_conn, f"{title}\n{body}"),
         )
+        if (e1_na := applicable("officeholder_vs_facts", record=False)) is not None:
+            floor.bump(e1_na.counter)
     # J2 (2026-08-15) — THE SAMPLING GATE. Decided FIRST, before the flag /
     # handler gates inside _maybe_llm_judge, so a finding's membership in the
     # unsampled stratum depends only on its id and the descriptor's rate —
@@ -5878,8 +5860,12 @@ async def verify_finding_faithfulness(
     # critique row (previously six of eight instances carried no counter at all —
     # the claims were not dropped, they were never segmented, so nothing fired).
     report.score_state, report.score_state_reason = resolve_score_state(
-        checkable_claims=report.checkable_claims, body=body
+        checkable_claims=report.checkable_claims,
+        body=body,
+        memory_only=memory_only_citations(body, citations, indicators),
     )
+    if report.score_state == SCORE_STATE_CARRIED_UNGRADED:  # SW-9
+        report.bump(SCORE_STATE_CARRIED_UNGRADED)
     if report.score_state == SCORE_STATE_UNASSESSABLE:
         report.bump(f"unassessable_{report.score_state_reason}")
         logger.warning(

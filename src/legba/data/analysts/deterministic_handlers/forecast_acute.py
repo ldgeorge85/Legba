@@ -40,6 +40,8 @@ import math
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
+from ... import subject as _subject
+
 logger = logging.getLogger(__name__)
 
 # --- The frozen class-K definition. The ONE place the event class is defined. ---
@@ -280,9 +282,9 @@ async def _g20_regions(conn: Any) -> list[tuple[str, list[str]]]:
             except Exception:  # noqa: BLE001
                 geo = []
         if not geo:
-            suffix = r["descriptor_id"].rsplit("_", 1)[-1].upper()
-            if len(suffix) == 2 and suffix.isalpha():
-                geo = [suffix]
+            # The subject ladder: the profile's DECLARED geometry for this id
+            # (legba.data.subject), never a code parsed out of the id.
+            geo = list(_subject.subject_geo(str(r["descriptor_id"])))
         if geo:
             out.append((r["descriptor_id"], geo))
     return out
@@ -668,8 +670,10 @@ async def resolve_open_acute_forecasts(
 
 
 async def _region_geo(conn: Any, region: str) -> list[str]:
-    """Resolve a region's geo codes — prefer scope.geo, fall back to the ISO2
-    suffix (mirrors calibration_tracking._resolve_region_geo)."""
+    """Resolve a region's geo codes — prefer the live head's scope.geo, fall
+    back to the profile's declared geometry for the id (the subject ladder,
+    ``legba.data.subject``; mirrors calibration_tracking._resolve_region_geo).
+    Never a code parsed out of the id: an id nothing declares has no geo."""
     try:
         trow = await conn.fetchrow(
             "SELECT body->'scope'->'geo' AS geo FROM target_descriptors "
@@ -694,8 +698,7 @@ async def _region_geo(conn: Any, region: str) -> list[str]:
                     pass
     except Exception:  # noqa: BLE001
         pass
-    suffix = region.rsplit("_", 1)[-1].upper() if region else ""
-    return [suffix] if len(suffix) == 2 and suffix.isalpha() else []
+    return list(_subject.subject_geo(region)) if region else []
 
 
 async def pull_expired_forecast_count(

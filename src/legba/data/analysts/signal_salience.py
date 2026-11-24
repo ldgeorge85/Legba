@@ -28,11 +28,12 @@ returned finding is the cadence receipt.
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Protocol, runtime_checkable
 
@@ -41,6 +42,9 @@ from ..provenance.kinds import TRACE_ONLY as _TRACE_ONLY
 from ..provenance.models import FindingPayload
 from ..provenance.origin import origin_class_clause
 from ._tradecraft import with_preamble
+from ..taxon_families import SALIENCE_CLASS, bind_taxon, taxon_set
+from ..taxon_families import SALIENCE_CLASSES as _SALIENCE_CLASSES
+from . import salience_institutional as _inst
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +56,10 @@ _LIVE_SIGNALS = origin_class_clause("s")
 
 # --- analyst-kind contract (discover_analyst_kinds reads these) --------------
 KIND_NAME: str = "signal_salience"
-HANDLER_VERSION: str = "0.1.0"
+#: 0.2.0 (2026-11-07): the deterministic ``institutional_change`` lift
+#: (:mod:`.salience_institutional`) runs on every scored verdict; every scored
+#: row carries ``lift_rule`` and a lifted one carries ``lift``.
+HANDLER_VERSION: str = "0.2.0"
 # TRACE_ONLY (the entity_researcher / relationship_reifier precedent): the REAL
 # product is the signals.salience column this sweep side-writes; the per-run
 # finding is a cadence RECEIPT captured in analyst_traces. Keeps it off the
@@ -62,7 +69,7 @@ OUTPUT_KIND: object = _TRACE_ONLY
 DEFAULT_MAX_ROWS = 300          # signals scored per tick
 DEFAULT_BATCH = 12              # signals per LLM call
 DEFAULT_MAX_TOKENS = 1400
-DEFAULT_TEMPERATURE = 0.0
+DEFAULT_TEMPERATURE = HOUSE_TEMPERATURE
 DEFAULT_WINDOW_HOURS = 96       # bound to a recent window ("backfill 72h then forward")
 DEFAULT_SNIPPET_CHARS = 320
 
@@ -70,11 +77,10 @@ DEFAULT_SNIPPET_CHARS = 320
 # Closed taxonomies (S-1a). A row that scores outside these is coerced via the
 # alias maps below or dropped to the safe generic bucket — never invented.
 # ---------------------------------------------------------------------------
-EVENT_CLASSES: frozenset[str] = frozenset({
-    "leader_death", "kinetic_strike", "mass_casualty", "coup_unrest",
-    "diplomatic_rupture", "sanctions_economic", "market_move",
-    "disaster_natural", "procurement_routine", "meme_sports_culture", "other",
-})
+#: The event classes are the registered ``salience_class`` vocabulary family
+#: (W7 TAXON-1); this literal is its fallback, owned by the leaf
+#: :mod:`legba.data.taxon_families` (the walker seeds the rows from it).
+EVENT_CLASSES: frozenset[str] = frozenset(_SALIENCE_CLASSES)
 _EVENT_CLASS_ALIASES: dict[str, str] = {
     "death": "leader_death", "assassination": "leader_death",
     "strike": "kinetic_strike", "airstrike": "kinetic_strike",
@@ -445,6 +451,12 @@ class SalienceVerdict:
     confidence: float
     degraded: bool = False
     model_id: str | None = None
+    #: The ``institutional_change`` lift stamp when the deterministic lift
+    #: raised this verdict's magnitude (``None`` otherwise).
+    lift: Mapping[str, Any] | None = None
+    #: The lift rule this verdict was checked against (``None`` on a degraded
+    #: verdict, which the lift never touches).
+    lift_rule: str | None = None
 
 
 _SALIENCE_SYSTEM = with_preamble(
@@ -518,10 +530,13 @@ def _signal_text(payload: Any, *, snippet_chars: int = DEFAULT_SNIPPET_CHARS) ->
 
 
 def _coerce_event_class(raw: object) -> str:
+    """Coerce a model-emitted class onto the ``salience_class`` family (read
+    through the installed vocabulary, the literal when none is loaded), then
+    bind it: a value the family does not hold persists as ``unclassified``."""
     v = str(raw or "").strip().lower().replace(" ", "_").replace("-", "_")
-    if v in EVENT_CLASSES:
-        return v
-    return _EVENT_CLASS_ALIASES.get(v.replace("_", ""), "other")
+    if v not in taxon_set(SALIENCE_CLASS):
+        v = _EVENT_CLASS_ALIASES.get(v.replace("_", ""), "other")
+    return bind_taxon(SALIENCE_CLASS, v).value
 
 
 def _coerce_actor_rank(raw: object) -> str:
@@ -557,6 +572,35 @@ def _extract_json_array(content: str) -> list[Any]:
     except (ValueError, TypeError):
         return []
     return parsed if isinstance(parsed, list) else []
+
+
+def apply_institutional_lift(v: SalienceVerdict, row: SignalRow) -> SalienceVerdict:
+    """Run the deterministic ``institutional_change`` lift on one verdict.
+
+    The model's taxonomy has no political class, so a cabinet-level personnel
+    change, an impeachment push, a government-formation step, a change of
+    legislative control or a treaty ratification scored 0.30-0.45, under
+    :data:`MASS_FLOOR`. The lift reads the same text the model saw plus the
+    source class (no LLM call) and raises the magnitude to the act's anchor;
+    it never lowers one. A degraded verdict passes through untouched. The class
+    is stamped through the ``salience_class`` family: until the registry holds
+    ``institutional_change`` the model's class is kept and only the magnitude
+    and the ``lift`` stamp change."""
+    if v.degraded or v.magnitude is None:
+        return v
+    rule = _inst.INSTITUTIONAL_LIFT_VERSION
+    match = _inst.recognise_institutional_change(row.text, source_class=row.source_class)
+    new_mag = _inst.lifted_magnitude(v.magnitude, match)
+    if match is None or new_mag is None or new_mag <= v.magnitude:
+        return replace(v, lift_rule=rule)
+    binding = bind_taxon(SALIENCE_CLASS, _inst.INSTITUTIONAL_CHANGE)
+    return replace(
+        v,
+        magnitude=new_mag,
+        event_class=binding.value if binding.bound else v.event_class,
+        lift=_inst.lift_stamp(match, from_magnitude=v.magnitude, from_class=v.event_class),
+        lift_rule=rule,
+    )
 
 
 def _build_prompt(batch: list[SignalRow]) -> str:
@@ -745,6 +789,8 @@ def _verdict_to_jsonb(v: SalienceVerdict, *, scored_at: str) -> str:
         "model_id": v.model_id,
         "scored_at": scored_at,
         **({"degraded": True} if v.degraded else {}),
+        **({"lift_rule": v.lift_rule} if v.lift_rule else {}),
+        **({"lift": dict(v.lift)} if v.lift else {}),
     })
 
 
@@ -788,6 +834,10 @@ async def score_signals(
             )
             content = getattr(response, "content", "") or ""
             batch_v = _parse_salience_batch(content, batch, model_id=model_id)
+            rows_by_id = {s.id: s for s in batch}
+            batch_v = [
+                apply_institutional_lift(v, rows_by_id[v.signal_id]) for v in batch_v
+            ]
         except Exception as exc:  # degrade-not-break: whole batch → unscored marker
             logger.warning("signal_salience.batch_failed err=%s", exc)
             authority_by = {s.id: _authority_for(s.source_class) for s in batch}
@@ -809,6 +859,7 @@ async def score_signals(
                 sample.append({
                     "event_class": v.event_class, "actor_rank": v.actor_rank,
                     "magnitude": v.magnitude, "authority": v.authority,
+                    **({"lifted": v.lift.get("subclass")} if v.lift else {}),
                 })
         if not apply:
             continue
@@ -942,6 +993,7 @@ __all__ = [
     "MASS_FLOOR", "ABOVE_BAR", "CITED_SALIENCE_VERSION",
     "cited_salience", "pool_salience",
     "build_signal_finding_salience",
+    "apply_institutional_lift",
     "score_signals", "select_salience_candidates",
     "run_method",
 ]

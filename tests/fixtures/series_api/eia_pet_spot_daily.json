@@ -1,0 +1,21 @@
+{
+  "response": {
+    "total": "6",
+    "dateFormat": "YYYY-MM-DD",
+    "frequency": "daily",
+    "data": [
+      {"period": "2026-03-02", "duoarea": "NUS", "area-name": "U.S.", "product": "EPCBRENT", "product-name": "UK Brent Crude Oil", "process": "PF4", "process-name": "Spot Price FOB", "series": "RBRTE", "series-description": "Europe Brent Spot Price FOB (Dollars per Barrel)", "value": "97.11", "units": "$/BBL"},
+      {"period": "2026-03-02", "duoarea": "YCUOK", "area-name": "CUSHING", "product": "EPCWTI", "product-name": "WTI Crude Oil", "process": "PF4", "process-name": "Spot Price FOB", "series": "RWTC", "series-description": "Cushing, OK WTI Spot Price FOB (Dollars per Barrel)", "value": "93.40", "units": "$/BBL"},
+      {"period": "2026-03-03", "duoarea": "NUS", "area-name": "U.S.", "product": "EPCBRENT", "product-name": "UK Brent Crude Oil", "process": "PF4", "process-name": "Spot Price FOB", "series": "RBRTE", "series-description": "Europe Brent Spot Price FOB (Dollars per Barrel)", "value": "101.25", "units": "$/BBL"},
+      {"period": "2026-03-03", "duoarea": "YCUOK", "area-name": "CUSHING", "product": "EPCWTI", "product-name": "WTI Crude Oil", "process": "PF4", "process-name": "Spot Price FOB", "series": "RWTC", "series-description": "Cushing, OK WTI Spot Price FOB (Dollars per Barrel)", "value": "96.02", "units": "$/BBL"},
+      {"period": "2026-03-04", "duoarea": "NUS", "area-name": "U.S.", "product": "EPCBRENT", "product-name": "UK Brent Crude Oil", "process": "PF4", "process-name": "Spot Price FOB", "series": "RBRTE", "series-description": "Europe Brent Spot Price FOB (Dollars per Barrel)", "value": "99.80", "units": "$/BBL"},
+      {"period": "2026-03-04", "duoarea": "YCUOK", "area-name": "CUSHING", "product": "EPCWTI", "product-name": "WTI Crude Oil", "process": "PF4", "process-name": "Spot Price FOB", "series": "RWTC", "series-description": "Cushing, OK WTI Spot Price FOB (Dollars per Barrel)", "value": null, "units": "$/BBL"}
+    ],
+    "description": "Spot prices for crude oil and petroleum products (fictional values; shape per the EIA API v2 documentation)."
+  },
+  "request": {
+    "command": "/v2/petroleum/pri/spt/data/",
+    "params": {"frequency": "daily", "data": ["value"], "facets": {"series": ["RBRTE", "RWTC"]}, "start": "2026-03-01", "offset": 0, "length": 5000}
+  },
+  "apiVersion": "2.1.10"
+}

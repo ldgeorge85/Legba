@@ -24,7 +24,10 @@ from typing import Any, Iterable, Mapping
 from uuid import UUID
 
 from ... import critic_fold
+from ...case_columns import EVENT_TYPES as _CASE_EVENT_TYPES, topic_key_sql
+from ...claim_support import CLAIM_SOURCE_CLASS
 from ...provenance.models import EventEntityLinkPayload, EventSignalLinkPayload
+from ...signal_slice_scope import canonical_only_sql_for
 from ._event_matcher import (
     EventCluster,
     EventEvidence,
@@ -35,12 +38,13 @@ from ._event_matcher import (
     latest_evidence_at,
 )
 
-_SOURCE_CLASSES = {"reporting", "analysis", "official", "state_media"}
+_SOURCE_CLASSES = {"reporting", "analysis", "official", "state_media", "claim"}
 _EVENT_ENTITY_ROLES = {
     "actor", "target", "location", "observer", "victim", "mediator"
 }
 _SEVERITIES = {"critical", "high", "medium", "low", "routine"}
-_EVENT_TYPES = {"incident", "development", "shift", "threshold"}
+#: The `event_type` family literal (TAX-4: `case_columns.EVENT_TYPES`, the CHECK).
+_EVENT_TYPES = frozenset(_CASE_EVENT_TYPES)
 _TOWER_PRODUCER_ID = "tower_backfill"
 
 
@@ -265,8 +269,10 @@ class EventCandidate:
 
     @property
     def distinct_source_count(self) -> int:
-        """Distinct non-empty ``source_id`` values across members."""
-        return len({m.source_id for m in self.members if m.source_id})
+        """Distinct non-empty ``source_id`` values across members. C-1: a
+        claim member never counts as an independent source."""
+        return len({m.source_id for m in self.members
+                    if m.source_id and m.source_class != CLAIM_SOURCE_CLASS})
 
     @property
     def derived_from(self) -> list[UUID]:
@@ -337,7 +343,12 @@ def cluster_candidate(cluster: EventCluster) -> EventCandidate:
         reason = "oversized"
     elif signature is None:
         reason = "signature_unmintable"
-    elif len({m.source_id for m in members if m.source_id}) >= 2:
+    elif not any(m.source_class != CLAIM_SOURCE_CLASS for m in members):
+        # C-1: an event evidenced ONLY by claims is the claim, not the event.
+        reason = "claim_only"
+    elif len({m.source_id for m in members
+              if m.source_id and m.source_class != CLAIM_SOURCE_CLASS}) >= 2:
+        # C-1: claim members never count toward the two-source bar.
         promoted = True
     elif any(m.source_class == "official" for m in members):
         promoted = True
@@ -465,24 +476,26 @@ def entity_links_for(candidate: EventCandidate) -> list[EventEntityLinkPayload]:
 #: stored ($3/$4); without one the lookback is the backstop (the
 #: situation_tracker idiom: a watermark, however old, is honored as-is and
 #: only an absent one falls back to the window).
-_SIGNAL_SLICE_SQL = """
+_SIGNAL_SLICE_SQL = f"""
     SELECT s.id, s.source_id, s.fetched_at, s.payload, s.geo, s.tags,
            s.source_credibility, s.embedding_ref,
            COALESCE(sd.kind, '') AS source_kind,
-           CASE WHEN sd.body->'scope'->>'source_class' IN
-                     ('reporting','analysis','official','state_media')
+           CASE WHEN s.payload->'claim'->>'source_class' = 'claim' THEN 'claim'
+                WHEN sd.body->'scope'->>'source_class' IN
+                     ('reporting','analysis','official','state_media','claim')
                 THEN sd.body->'scope'->>'source_class'
                 ELSE 'reporting' END AS source_class
       FROM signals s
       LEFT JOIN source_descriptors sd
         ON sd.descriptor_id = s.source_id AND sd.is_head
      WHERE s.modality = 'text'
-       AND (s.canonical_signal_id IS NULL OR s.canonical_signal_id = s.id)
+       AND {canonical_only_sql_for("s")}
        AND (
             ($3::timestamptz IS NULL AND s.fetched_at > $1)
          OR ($3::timestamptz IS NOT NULL
              AND (s.fetched_at, s.id) > ($3::timestamptz, $4::uuid))
        )
+       AND ($5::timestamptz IS NULL OR s.fetched_at < $5::timestamptz)
      ORDER BY s.fetched_at ASC, s.id ASC
      LIMIT $2
 """
@@ -521,8 +534,9 @@ _SIGNAL_BY_ID_SQL = """
     SELECT s.id, s.source_id, s.fetched_at, s.payload, s.geo, s.tags,
            s.source_credibility, s.embedding_ref,
            COALESCE(sd.kind, '') AS source_kind,
-           CASE WHEN sd.body->'scope'->>'source_class' IN
-                     ('reporting','analysis','official','state_media')
+           CASE WHEN s.payload->'claim'->>'source_class' = 'claim' THEN 'claim'
+                WHEN sd.body->'scope'->>'source_class' IN
+                     ('reporting','analysis','official','state_media','claim')
                 THEN sd.body->'scope'->>'source_class'
                 ELSE 'reporting' END AS source_class
       FROM signals s
@@ -558,13 +572,18 @@ _FINDING_CANDIDATES_SQL = f"""
 """
 
 
-_SITUATION_CANDIDATES_SQL = """
+#: ``category`` is the TOPIC KEY (TAX-4, ``case_columns.topic_key_sql``): the
+#: producer's value byte for byte, before and after the case-column retrofit —
+#: the event signature below is minted from it, so a registered column value
+#: must never reach it.
+_SITUATION_CANDIDATES_SQL = f"""
     SELECT se.id, se.situation_id, se.occurred_at, se.delta, se.why,
-           se.derived_from, s.name, s.category, s.intensity_score
+           se.derived_from, s.name, {topic_key_sql("s")} AS category,
+           s.intensity_score
       FROM situation_events se
       JOIN situations s ON s.id = se.situation_id
      WHERE se.delta <> 'unchanged_checkpoint'
-       AND se.derived_from <> '{}'::uuid[]
+       AND se.derived_from <> '{{}}'::uuid[]
        AND (
             ($3::timestamptz IS NULL AND se.occurred_at > $1)
          OR ($3::timestamptz IS NOT NULL
@@ -640,15 +659,48 @@ async def fetch_signal_evidence(
     ``cursor`` is the (fetched_at, id) watermark the last tick stopped at;
     when present it — not ``since`` — is the resume bound.
     """
+    evidence, _positions = await fetch_signal_page(
+        conn, since=since, max_signals=max_signals, cursor=cursor
+    )
+    return evidence
+
+
+async def fetch_signal_page(
+    conn: Any,
+    *,
+    since: datetime,
+    max_signals: int,
+    cursor: tuple[datetime, UUID] | None = None,
+    until: datetime | None = None,
+) -> tuple[list[EventEvidence], list[tuple[datetime, UUID]]]:
+    """The slice plus every returned row's ``(fetched_at, id)`` position.
+
+    ``until`` (N-Z) is an exclusive upper bound on ``fetched_at``: the
+    catch-up backfill reads the gap BEHIND the live head with it, so the two
+    segments partition the slice with no row read twice and none missed.
+
+    The positions include rows ``normalize_signal`` cannot read, so the
+    caller's watermark can move past them instead of re-reading them forever
+    (2026-11-09: a page the normalizer dropped whole would otherwise stall
+    the slice the same way the seven-week freeze did).
+    """
     rows = await conn.fetch(
         _SIGNAL_SLICE_SQL,
         since,
         int(max_signals),
         cursor[0] if cursor else None,
         cursor[1] if cursor else None,
+        until,
     )
+    positions: list[tuple[datetime, UUID]] = []
+    for r in rows:
+        ts, rid = r.get("fetched_at"), _uuid(r.get("id"))
+        if isinstance(ts, datetime) and rid is not None:
+            positions.append(
+                (ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc), rid)
+            )
     evidence = [x for x in (normalize_signal(r) for r in rows) if x is not None]
-    return await _enrich_signal_evidence(conn, evidence)
+    return await _enrich_signal_evidence(conn, evidence), positions
 
 
 async def resolve_candidate_signals_batch(
@@ -867,6 +919,7 @@ __all__ = [
     "cluster_candidate",
     "entity_links_for",
     "fetch_signal_evidence",
+    "fetch_signal_page",
     "fetch_tower_candidates",
     "normalize_signal",
     "resolve_candidate_signals_batch",

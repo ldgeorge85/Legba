@@ -33,51 +33,101 @@ import type {
   AssemblySignal,
   ReadFindingRow,
 } from '@/lib/assemblyModel'
+import {
+  PLATFORM_NOUNS,
+  readTiers,
+  tierForProducer,
+  untargetedSubject,
+  type ProfileFrame,
+} from '@/lib/profileUi'
+import { humanizeId } from '@/lib/deskNames'
+import { feedPreview } from '@/lib/proseText'
+
+/** Names a subject id in reader words, or null when it cannot. */
+export type SubjectNamer = (id: string) => string | null
+
+/**
+ * U-1 — a subject's reader name: the namer's (the subject roster) when it
+ * knows the id, else {@link humanizeId} (the declared name, else the id
+ * de-underscored and title-cased). A machine id is never returned as-is.
+ */
+export function readerSubjectName(id: string, nameOf?: SubjectNamer): string {
+  return nameOf?.(id) ?? humanizeId(id)
+}
+
+const MACHINE_ID_RE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/
+
+/**
+ * U-1 — a block's or finding's subject in reader words. Some stored blocks
+ * carry the machine id in their `target_name` field, so a name that is itself
+ * id-shaped is named like an id; a real name passes through.
+ */
+export function readerBlockName(name: string | null | undefined, id: string | null | undefined, nameOf?: SubjectNamer): string {
+  if (name && !MACHINE_ID_RE.test(name)) return name
+  const key = id ?? name
+  return key ? readerSubjectName(key, nameOf) : ''
+}
+
+/** A snake_case machine token (`military_posture`, `country_g20_sa`). */
+const MACHINE_TOKEN_RE = /\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b/g
+
+/**
+ * U-1 — a report's title in reader words. Some read tiers title their rows
+ * with the subject's machine id and the units' ids ("<subject_id>, <date> —
+ * 3 desks: unit_a, unit_b"); the subject id becomes its name and any other
+ * snake_case token reads as words. A title with no machine token is unchanged.
+ */
+export function readerReportTitle(
+  title: string,
+  subjectId: string | null,
+  nameOf?: SubjectNamer,
+): string {
+  let t = title
+  if (subjectId) t = t.split(subjectId).join(readerSubjectName(subjectId, nameOf))
+  return t.replace(MACHINE_TOKEN_RE, (tok) => nameOf?.(tok) ?? tok.replace(/_/g, ' '))
+}
 
 // ── the read producers ───────────────────────────────────────────────────────
 
 /**
- * The analyst ids that produce reads, one per tier.
+ * The read tiers — the PROFILE's frames that carry a producer (UI-B2; the
+ * profile's `ui.frames`, or the projection's `tiers` section when the plane
+ * answers — `lib/profileUi.ts::useReadTiers`). Top floor first, then the
+ * manifest's order: the way the operator reads down the page, widest first.
  *
- * These are the substrate's own producer ids (`world_assessor` per
- * `standing_auditor.WORLD_ANALYST_ID`; the three `*_composition` ids per
- * `composition_slice`; `world_assessment` per the assessment channel). They
- * are the ONLY tier discriminator the findings row carries — there is no
- * `tier` column on `/findings`, so the analyst id is what tells a country read
- * from a world read.
+ * Each tier's producer is the substrate's own analyst id, and it is the ONLY
+ * tier discriminator the findings row carries — there is no `tier` column on
+ * `/findings`, so the analyst id is what tells one tier's read from another's.
+ * No tier, label or producer is spelled here.
  */
-export const READ_ANALYSTS = {
-  world: 'world_assessor',
-  assessment: 'world_assessment',
-  region: 'region_composition',
-  country: 'country_composition',
-  thematic: 'escalation_composition',
-} as const
+export const PROFILE_TIERS: readonly ProfileFrame[] = readTiers()
 
-export type ReportTier = keyof typeof READ_ANALYSTS
-
-/** Display order — the way the operator reads down the page, widest first. */
-export const TIER_ORDER: ReportTier[] = ['world', 'assessment', 'region', 'country', 'thematic']
-
-export const TIER_LABEL: Record<ReportTier, string> = {
-  world: 'World',
-  assessment: 'Assessment',
-  region: 'Region',
-  country: 'Country',
-  thematic: 'Thematic',
-}
+/** A read tier's id (a profile frame id). */
+export type ReportTier = string
 
 /** The CSV the Reports list sends as `analyst_id_in` — one request, all tiers. */
-export const READ_ANALYST_CSV = TIER_ORDER.map((t) => READ_ANALYSTS[t]).join(',')
+export function readAnalystCsv(tiers: readonly ProfileFrame[] = PROFILE_TIERS): string {
+  return tiers.map((t) => t.producer).join(',')
+}
 
-/** Reverse map, resolved once. */
-const TIER_BY_ANALYST = new Map<string, ReportTier>(
-  TIER_ORDER.map((t) => [READ_ANALYSTS[t], t] as const),
-)
+export const READ_ANALYST_CSV = readAnalystCsv()
 
-export function tierOf(row: ReadFindingRow): ReportTier | null {
-  const id = row.analyst_id
-  return id ? (TIER_BY_ANALYST.get(id) ?? null) : null
+/** A tier's label, in the profile's words (an unknown tier reads as its id). */
+export function tierLabel(tier: ReportTier, tiers: readonly ProfileFrame[] = PROFILE_TIERS): string {
+  return tiers.find((t) => t.id === tier)?.label ?? tier
+}
+
+export function tierOf(row: ReadFindingRow, tiers: readonly ProfileFrame[] = PROFILE_TIERS): ReportTier | null {
+  return tierForProducer(row.analyst_id, tiers)?.id ?? null
+}
+
+/** What a read with no target is about (`untargetedSubject`), or the platform noun off the read set. */
+export function untargetedReadSubject(
+  tier: ReportTier | null,
+  tiers: readonly ProfileFrame[] = PROFILE_TIERS,
+): string {
+  const frame = tier ? tiers.find((t) => t.id === tier) : undefined
+  return frame ? untargetedSubject(frame, tiers) : PLATFORM_NOUNS.read
 }
 
 // ── the list row ─────────────────────────────────────────────────────────────
@@ -85,13 +135,17 @@ export function tierOf(row: ReadFindingRow): ReportTier | null {
 /**
  * One row of the Reports navigator.
  *
- * `leadThread` is the sentence the operator scans; `verifyScore`/`verifyState`
- * are read straight off the row's verification block (never recomputed — the
- * Morning Read's rule that the reader does not do arithmetic on a disclosure).
+ * `leadThread` is the sentence the reader scans. M-0a — the navigator is built
+ * from the `fields=summary` projection (no blocks, no body), so for a summary
+ * row the lead is the read's own title past its "<subject>, <date> —" prefix.
+ * The verify number left the card with the full-weight read: an unexplained
+ * 0.60 pill is an engine figure, not a reader's word.
  */
 export interface ReportRow {
   id: string
   tier: ReportTier
+  /** The producing analyst — with the subject and instant, what re-finds the full row on open. */
+  analystId: string | null
   /** The read's subject: a country/region name where the row names one. */
   target: string
   targetId: string | null
@@ -102,19 +156,8 @@ export interface ReportRow {
   title: string
   /** The one-line thread; empty string when the row carries none. */
   leadThread: string
-  verifyScore: number | null
-  verifyState: string | null
   /** Which region a country read belongs under, when derivable. */
   regionHint: string | null
-}
-
-function verification(row: ReadFindingRow): Record<string, unknown> | null {
-  const v = row.verification
-  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
-}
-
-function numOrNull(v: unknown): number | null {
-  return typeof v === 'number' && Number.isFinite(v) ? v : null
 }
 
 /** `YYYY-MM-DD` in UTC. Tolerates the substrate's space-separated stamps. */
@@ -144,12 +187,34 @@ export function leadThread(row: ReadFindingRow, assembly: AssemblyPayload | null
     ]
     for (const b of ordered) {
       const bluf = b.spans.find((s) => s.role === 'bluf') ?? b.spans[0]
-      if (bluf?.text) return bluf.text.trim()
+      // U-1 — a list line is plain prose: no `**`, `##` or `[N]` noise.
+      if (bluf?.text) return feedPreview(bluf.text)
     }
   }
   const body = typeof row.body === 'string' ? row.body.trim() : ''
   if (body) return bodyLead(body)
-  return ''
+  return titleLead(row.title)
+}
+
+/**
+ * "<subject>, <date> — " / "<subject> read · 3 Sep — ": the prefix a read's
+ * title opens with before its own headline. Anchored on the DATE, so a
+ * subject whose name carries a dash ("Region — Africa, 2026-11-13 — …") is
+ * cut at the right one.
+ */
+const TITLE_PREFIX_RE = /^.*?(?:\d{4}-\d{2}-\d{2}|\b\d{1,2} [A-Z][a-z]{2})\s+—\s+/
+
+/**
+ * M-0a — the lead of a SUMMARY row (`fields=summary` carries no blocks and no
+ * body): the title's headline past its subject-and-date prefix, the quotes it
+ * is wrapped in dropped, in plain words. A title with no prefix is its own
+ * headline (an Assessment's).
+ */
+export function titleLead(title: string | null | undefined): string {
+  if (!title) return ''
+  const rest = title.replace(TITLE_PREFIX_RE, '').trim()
+  const unquoted = rest.replace(/^[“"]/, '').replace(/[”"]$/, '')
+  return feedPreview(readerReportTitle(unquoted, null))
 }
 
 /**
@@ -166,7 +231,7 @@ function bodyLead(body: string): string {
   const lines = body.split('\n').map((l) => l.trim())
   const isAsOf = (l: string) => /^\*[^*].*\*$/.test(l)
   const isHeading = (l: string) => l.startsWith('#')
-  const strip = (l: string) => l.replace(/\*\*/g, '').replace(/^BLUF:\s*/i, '').trim()
+  const strip = (l: string) => feedPreview(l.replace(/\*\*/g, '').replace(/^BLUF:\s*/i, ''))
 
   const bluf = lines.find((l) => /^\*\*BLUF:?\*\*/i.test(l))
   if (bluf) return strip(bluf)
@@ -184,28 +249,56 @@ function bodyLead(body: string): string {
 export function toReportRow(
   row: ReadFindingRow,
   assembly: AssemblyPayload | null = null,
+  tiers: readonly ProfileFrame[] = PROFILE_TIERS,
+  nameOf?: SubjectNamer,
 ): ReportRow | null {
-  const tier = tierOf(row)
+  const tier = tierOf(row, tiers)
   if (!tier) return null
-  const ver = verification(row)
-  const blocks = assembly?.blocks ?? []
-  const target =
-    blocks.find((b) => b.target_name)?.target_name ??
-    row.target_id ??
-    (tier === 'world' || tier === 'assessment' ? 'World' : TIER_LABEL[tier])
   return {
     id: row.id,
     tier,
-    target,
-    targetId: row.target_id ?? blocks.find((b) => b.target_id)?.target_id ?? null,
+    analystId: row.analyst_id ?? null,
+    target: readSubjectTitle(row, assembly, tier, tiers, nameOf),
+    targetId: row.target_id ?? null,
     producedAt: row.produced_at,
     day: dayKey(row.produced_at),
     title: row.title ?? '',
     leadThread: leadThread(row, assembly),
-    verifyScore: numOrNull(ver?.overall_score),
-    verifyState: typeof ver?.score_state === 'string' ? (ver.score_state as string) : null,
     regionHint: null,
   }
+}
+
+/**
+ * U-1 / M-0a — what a read's card is titled: the subject the READ is about.
+ *
+ * A targeted read is its target's name (the block that speaks about that
+ * target names it best; the roster names it otherwise). An untargeted read —
+ * the World read, a thematic read — is named for what it covers, never for the
+ * first block it quotes: titling the World read with its first block's country
+ * was the 2026-11-14 phone audit's finding.
+ */
+export function readSubjectTitle(
+  row: ReadFindingRow,
+  assembly: AssemblyPayload | null,
+  tier: ReportTier | null,
+  tiers: readonly ProfileFrame[] = PROFILE_TIERS,
+  nameOf?: SubjectNamer,
+): string {
+  const id = row.target_id ?? null
+  if (!id) return untargetedReadSubject(tier, tiers)
+  const named = (assembly?.blocks ?? []).find((b) => b.target_id === id && b.target_name)?.target_name
+  return readerBlockName(named ?? null, id, nameOf)
+}
+
+/**
+ * M-0a, roll 84 — the path that reads ONE read at full weight when it is
+ * opened: `GET /findings/{id}` (P-8), exact and one row. `null` when the row is
+ * not in the summary page (an old link): the caller then says the read is not
+ * in the loaded window, as before.
+ */
+export function fullReadQuery(id: string, rows: readonly ReportRow[]): string | null {
+  if (!rows.some((r) => r.id === id)) return null
+  return `/findings/${encodeURIComponent(id)}`
 }
 
 // ── grouping + date navigation ───────────────────────────────────────────────
@@ -223,13 +316,13 @@ export interface TierGroup {
  * screen has no room to spend on a heading that says nothing, and an absent
  * tier is already visible as an absence in the date strip.
  */
-export function groupByTier(rows: ReportRow[]): TierGroup[] {
+export function groupByTier(rows: ReportRow[], tiers: readonly ProfileFrame[] = PROFILE_TIERS): TierGroup[] {
   const out: TierGroup[] = []
-  for (const tier of TIER_ORDER) {
+  for (const { id: tier, label } of tiers) {
     const inTier = rows
       .filter((r) => r.tier === tier)
       .sort((a, b) => b.producedAt.localeCompare(a.producedAt))
-    if (inTier.length > 0) out.push({ tier, label: TIER_LABEL[tier], rows: inTier })
+    if (inTier.length > 0) out.push({ tier, label, rows: inTier })
   }
   return out
 }
@@ -272,7 +365,7 @@ export function reportFindings(a: AssemblyPayload | null): ReportFinding[] {
     question: b.question,
     severity: b.severity,
     verifyScore: b.verify?.overall_score ?? null,
-    bluf: (b.spans.find((s) => s.role === 'bluf') ?? b.spans[0])?.text?.trim() ?? '',
+    bluf: feedPreview((b.spans.find((s) => s.role === 'bluf') ?? b.spans[0])?.text ?? ''),
     signalCount: b.signals.length,
   }))
 }

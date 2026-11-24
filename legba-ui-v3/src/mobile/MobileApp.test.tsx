@@ -4,7 +4,7 @@
  *   1. the navigator lists the latest reads, by tier            — the landing
  *   2. tapping a report sets the URL context and every section
  *      below it follows the selection                            — the Crossroads
- *   3. the Consult sheet is pinned to whatever you are reading    — the centre
+ *   3. (M-3g) the Consult moved to the phone shell's Consult tab — not tested here
  *   4. a dead network still renders yesterday's read, labelled    — the train
  *
  * Rendered against the LIVE read fixtures, through a stubbed `fetch`, so the
@@ -23,9 +23,9 @@ import assessmentRow from '@/v4/read/__fixtures__/assessment.world.json'
 import { projectAssembly, type ReadFindingRow } from '@/lib/assemblyModel'
 import { __resetReadTelemetry, __pendingReadEvents } from '@/lib/readTelemetry'
 import { consultActions } from '@/state/consultSession'
-import { __clearMobileCache, saveReport, saveReportsList } from './mobileCache'
-import { toReportRow } from './mobileModel'
-import { MOBILE_PANEL_ID } from './components/ConsultSheet'
+import { __LEGACY_KEYS, hasStoredReads, loadedAtLabel, purgeStoredReads } from './mobileCache'
+import { MOBILE_PANEL_ID } from './mobileConsult'
+import { dropCachedGets } from '@/lib/queryCache'
 
 type Row = Record<string, unknown>
 
@@ -59,23 +59,64 @@ const CONSOLIDATION = {
 
 interface StubOptions {
   reads?: Row[] | 'fail'
+  /** Fail every `/findings` read after the first N answered (a connection that drops). */
+  failAfter?: number
   onPost?: (url: string, body: unknown) => void
+  answer?: Record<string, unknown>
+}
+
+/** The `fields=summary` projection of a row: its scalars, no `data`, no `body`. */
+function summaryOf(r: Row): Row {
+  const { id, analyst_id, target_id, kind, title, produced_at, severity, confidence } = r
+  return { id, analyst_id, target_id, kind, title, produced_at, severity, confidence }
+}
+
+/** The urls the stub answered, in order (the request pattern under test). */
+const findingsUrls: string[] = []
+
+/**
+ * The `/findings` route as the registry answers it: `fields=summary` → the
+ * summary projection; otherwise the full rows that match `analyst_id`,
+ * `target_id` / `target_id_null` and `since`, newest first, cut to `limit`.
+ */
+function answerFindings(u: string, reads: Row[]): Row[] {
+  const q = new URL(u, 'http://x').searchParams
+  let rows = [...reads]
+  const inList = q.get('analyst_id_in')?.split(',')
+  if (inList) rows = rows.filter((r) => inList.includes(String(r.analyst_id)))
+  if (q.get('analyst_id')) rows = rows.filter((r) => r.analyst_id === q.get('analyst_id'))
+  if (q.get('target_id')) rows = rows.filter((r) => r.target_id === q.get('target_id'))
+  if (q.get('target_id_null') === 'true') rows = rows.filter((r) => r.target_id == null)
+  const t = (s: unknown) => Date.parse(String(s).replace(' ', 'T').replace(/([+-]\d{2})$/, '$1:00'))
+  if (q.get('since')) rows = rows.filter((r) => t(r.produced_at) >= t(q.get('since')))
+  rows.sort((a, b) => t(b.produced_at) - t(a.produced_at))
+  rows = rows.slice(0, Number(q.get('limit') ?? 50))
+  return q.get('fields') === 'summary' ? rows.map(summaryOf) : rows
 }
 
 function stubFetch(opts: StubOptions = {}) {
   const reads = opts.reads ?? ALL_READS
+  findingsUrls.length = 0
   const mock = vi.fn(async (url: string, init?: RequestInit) => {
     const u = String(url)
     if (init?.method === 'POST') {
       opts.onPost?.(u, init.body ? JSON.parse(String(init.body)) : null)
       if (u.includes('/consult')) {
-        return ok({ answer: 'Because of the Hormuz attacks.', finding_id: null, session_id: 's1' })
+        return ok(opts.answer ?? { answer: 'Because of the Hormuz attacks.', finding_id: null, session_id: 's1' })
       }
       return ok({})
     }
     if (u.includes('/findings')) {
+      findingsUrls.push(u)
       if (reads === 'fail') throw new TypeError('network down')
-      return ok({ data: reads })
+      if (opts.failAfter != null && findingsUrls.length > opts.failAfter) throw new TypeError('network down')
+      // roll 84: GET /findings/{id} answers ONE full row (P-8)
+      const byId = /\/findings\/([^/?]+)/.exec(new URL(u, 'http://x').pathname)
+      if (byId) {
+        const row = reads.find((r) => String(r.id) === decodeURIComponent(byId[1]))
+        return row ? ok(row) : notFound()
+      }
+      return ok({ data: answerFindings(u, reads) })
     }
     if (u.includes('/journal')) {
       return ok({ consolidation: CONSOLIDATION, entries: [], next_cursor: null, calibration: {} })
@@ -95,6 +136,15 @@ function ok(body: unknown): Response {
   } as unknown as Response
 }
 
+function notFound(): Response {
+  return {
+    ok: false,
+    status: 404,
+    json: async () => ({ detail: 'no such finding' }),
+    text: async () => '{"detail":"no such finding"}',
+  } as unknown as Response
+}
+
 function wrap(ui: ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return <QueryClientProvider client={qc}>{ui}</QueryClientProvider>
@@ -103,7 +153,7 @@ function wrap(ui: ReactElement) {
 beforeEach(() => {
   window.history.replaceState(null, '', '/')
   localStorage.clear()
-  __clearMobileCache()
+  purgeStoredReads()
   __resetReadTelemetry()
   consultActions().reset(MOBILE_PANEL_ID)
 })
@@ -129,15 +179,56 @@ describe('the Reports navigator', () => {
     expect(screen.getAllByTestId('report-row').length).toBe(ALL_READS.length)
   })
 
-  it('shows the lead thread and the verify score on a row', async () => {
+  it('shows the lead on a row, and no unexplained verify pill (M-0a)', async () => {
     stubFetch()
     render(wrap(<MobileApp />))
 
     const world = await screen.findByTestId('tier-group-world')
     const row = within(world).getAllByTestId('report-row')[0]
     expect(row.textContent).toContain('World')
-    // The fixture's lead block BLUF is the thread the row must show.
+    // The summary row's lead is its title's headline.
     expect(row.textContent).toContain('Saudi Arabia remains under high energy')
+    expect(row.querySelector('.m-chip')).toBeNull()
+    expect(row.textContent).not.toMatch(/\d\.\d\d/)
+  })
+
+  it('M-0a: the navigator reads the summary projection, never the full rows', async () => {
+    stubFetch()
+    render(wrap(<MobileApp />))
+    await screen.findByTestId('tier-group-world')
+    expect(findingsUrls).toHaveLength(1)
+    const q = new URL(findingsUrls[0], 'http://x').searchParams
+    expect(q.get('fields')).toBe('summary')
+    expect(q.get('limit')).toBe('80')
+    expect(q.get('analyst_id_in')).toContain('world_assessor')
+  })
+
+  it('M-0a: the World read is titled for the world, not for its first block\'s country', async () => {
+    stubFetch()
+    render(wrap(<MobileApp />))
+    const world = await screen.findByTestId('tier-group-world')
+    const title = within(world).getAllByTestId('report-row')[0].querySelector('.m-row-target')!.textContent
+    const firstBlock = projectAssembly(WORLD as unknown as ReadFindingRow)!.blocks.find((b) => b.target_name)!
+    expect(title).not.toBe(firstBlock.target_name)
+    expect(title).toMatch(/world/i)
+  })
+
+  it('M-0a: the journal row is plain words, no raw markdown', async () => {
+    stubFetch()
+    const consol = { ...CONSOLIDATION, title: '**Anchor held.** The week in brief' }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        const u = String(url)
+        if (u.includes('/journal')) return ok({ consolidation: consol, entries: [], next_cursor: null, calibration: {} })
+        if (u.includes('/findings')) return ok({ data: answerFindings(u, ALL_READS) })
+        return ok({ data: [] })
+      }),
+    )
+    render(wrap(<MobileApp />))
+    const group = await screen.findByTestId('journal-group')
+    expect(group.textContent).toContain('Anchor held. The week in brief')
+    expect(group.textContent).not.toContain('**')
   })
 
   it('lists the journal consolidation as its own row', async () => {
@@ -186,11 +277,33 @@ describe('selecting a report', () => {
     })
   })
 
-  it('renders the record, the verify line and the drop ledger', async () => {
+  it('renders the record, without the engine line (M-0a)', async () => {
     const view = await openWorldReport()
-    expect(within(view).getByTestId('verify-line')).toBeInTheDocument()
-    expect(within(view).getByTestId('drop-ledger')).toBeInTheDocument()
+    expect(within(view).queryByTestId('verify-line')).toBeNull()
+    expect(within(view).queryByTestId('drop-ledger')).toBeNull()
     expect(within(view).getAllByTestId('record-block').length).toBeGreaterThan(0)
+  })
+
+  it('M-0a: opening a report fetches that one read at full weight, once', async () => {
+    await openWorldReport()
+    expect(findingsUrls).toHaveLength(2)
+    // roll 84: by id, exact — GET /findings/{id}, no list filters
+    const u = new URL(findingsUrls[1], 'http://x')
+    expect(u.pathname).toBe(`/api/v1/findings/${encodeURIComponent(String(WORLD.id))}`)
+    expect([...u.searchParams.keys()]).toEqual([])
+  })
+
+  it('M-0a: an Assessment fetches its underlying world read beside it when it is in the window', async () => {
+    stubFetch()
+    render(wrap(<MobileApp />))
+    const group = await screen.findByTestId('tier-group-assessment')
+    fireEvent.click(within(group).getAllByTestId('report-row')[0])
+    await screen.findByTestId('report-view')
+    // the list, the assessment, and (only if its spine is in the loaded page) the spine
+    expect(findingsUrls.length).toBeGreaterThanOrEqual(2)
+    expect(findingsUrls.length).toBeLessThanOrEqual(3)
+    const assessment = ALL_READS.find((r) => r.analyst_id === 'world_assessment')!
+    expect(new URL(findingsUrls[1], 'http://x').pathname).toBe(`/api/v1/findings/${encodeURIComponent(String(assessment.id))}`)
   })
 
   it('fills Findings, Targets and Signals from the report itself', async () => {
@@ -242,106 +355,81 @@ describe('selecting a report', () => {
   })
 })
 
-// ── 3 · the Consult, pinned ──────────────────────────────────────────────────
-
-describe('the Consult sheet', () => {
-  it('is present on the navigator, unpinned', async () => {
-    stubFetch()
-    render(wrap(<MobileApp />))
-    await screen.findByTestId('reports-list')
-    expect(screen.getByTestId('consult-pin').textContent).toContain('No report pinned')
-  })
-
-  it('names the selected report once one is open', async () => {
-    stubFetch()
-    render(wrap(<MobileApp />))
-    const world = await screen.findByTestId('tier-group-world')
-    fireEvent.click(within(world).getAllByTestId('report-row')[0])
-    await screen.findByTestId('report-view')
-    expect(screen.getByTestId('consult-pin').textContent).toContain('World')
-  })
-
-  it('sends the pinned report inside the question the server receives', async () => {
-    const posts: { url: string; body: unknown }[] = []
-    stubFetch({ onPost: (url, body) => posts.push({ url, body }) })
-    render(wrap(<MobileApp />))
-
-    const world = await screen.findByTestId('tier-group-world')
-    fireEvent.click(within(world).getAllByTestId('report-row')[0])
-    await screen.findByTestId('report-view')
-
-    fireEvent.click(screen.getByTestId('consult-toggle'))
-    fireEvent.change(screen.getByTestId('consult-input'), {
-      target: { value: 'What is driving this?' },
-    })
-    fireEvent.click(screen.getByTestId('consult-send'))
-
-    await waitFor(() => {
-      const consult = posts.find((p) => p.url.includes('/consult'))
-      expect(consult).toBeDefined()
-      const body = consult!.body as Record<string, unknown>
-      // The text channel — what today's server reads.
-      expect(String(body.question)).toContain(String(WORLD.id))
-      expect(String(body.question)).toContain('What is driving this?')
-      // The structured channel — what the server is growing a field for.
-      expect(body.pinned_context).toBeInstanceOf(Array)
-      expect((body.pinned_context as { kind: string }[])[0].kind).toBe('report')
-    })
-
-    // And the answer lands in the transcript.
-    await waitFor(() => {
-      expect(screen.getByTestId('consult-transcript').textContent).toContain('Hormuz')
-    })
-  })
-
-  it('records consult_open when the sheet is pulled up', async () => {
-    stubFetch()
-    render(wrap(<MobileApp />))
-    await screen.findByTestId('reports-list')
-    fireEvent.click(screen.getByTestId('consult-toggle'))
-    await waitFor(() => {
-      expect(__pendingReadEvents().some((e) => e.event_kind === 'consult_open')).toBe(true)
-    })
-  })
-})
+// ── 3 · the Consult (M-3g: no longer here — Consult is the phone shell's tab,
+//        `screens/consult/ConsultScreen.test.tsx`) ───────────────────────────
 
 // ── 4 · offline ──────────────────────────────────────────────────────────────
 
-describe('offline', () => {
-  it('renders the cached navigator, labelled with when it was cached', async () => {
-    const rows = ALL_READS.map(
-      (r) => toReportRow(r as unknown as ReadFindingRow, projectAssembly(r as unknown as ReadFindingRow))!,
-    )
-    saveReportsList(rows)
-    stubFetch({ reads: 'fail' })
-
+describe('offline (M-0a: nothing of the record is stored on the device)', () => {
+  it('deletes the list and the report bodies an earlier build stored', async () => {
+    localStorage.setItem(__LEGACY_KEYS.list, JSON.stringify({ v: 1, savedAt: 'x', rows: [] }))
+    localStorage.setItem(`${__LEGACY_KEYS.reportPrefix}abc`, JSON.stringify({ v: 1, savedAt: 'x', row: WORLD }))
+    localStorage.setItem('legba_consult_model', 'core') // a preference, kept
+    expect(hasStoredReads()).toBe(true)
+    stubFetch()
     render(wrap(<MobileApp />))
-
-    const banner = await screen.findByTestId('cached-banner')
-    expect(banner.textContent).toMatch(/offline — cached \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/)
-    expect(screen.getAllByTestId('report-row').length).toBe(rows.length)
+    await screen.findByTestId('reports-list')
+    expect(hasStoredReads()).toBe(false)
+    expect(localStorage.getItem('legba_consult_model')).toBe('core')
   })
 
-  it('renders the last viewed report from cache when the network is gone', async () => {
-    const rows = ALL_READS.map(
-      (r) => toReportRow(r as unknown as ReadFindingRow, projectAssembly(r as unknown as ReadFindingRow))!,
+  it('writes no read to localStorage while reading, opening a report included', async () => {
+    stubFetch()
+    render(wrap(<MobileApp />))
+    const world = await screen.findByTestId('tier-group-world')
+    fireEvent.click(within(world).getAllByTestId('report-row')[0])
+    await screen.findByTestId('report-view')
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const v = localStorage.getItem(localStorage.key(i)!) ?? ''
+      expect(v).not.toContain('Saudi Arabia remains under high energy')
+    }
+    expect(hasStoredReads()).toBe(false)
+  })
+
+  it('a refresh that fails keeps what was loaded on screen, with the time it was loaded', async () => {
+    stubFetch({ failAfter: 1 })
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <MobileApp />
+      </QueryClientProvider>,
     )
-    saveReportsList(rows)
-    saveReport(WORLD as unknown as ReadFindingRow)
+    await screen.findByTestId('tier-group-world')
+    expect(screen.queryByTestId('offline-banner')).toBeNull()
+    dropCachedGets() // past the shared GET cache's 30 s reuse: the next read goes to the network
+    await qc.refetchQueries({ queryKey: ['mobile-reads'] }).catch(() => {})
+    const banner = await screen.findByTestId('offline-banner')
+    expect(banner.textContent).toMatch(/^No connection\. Showing what was loaded at \d{2}:\d{2} UTC\.$/)
+    expect(screen.getAllByTestId('report-row').length).toBe(ALL_READS.length)
+  })
+
+  it('with no connection and nothing loaded, says so — no stale list from the device', async () => {
     stubFetch({ reads: 'fail' })
+    render(wrap(<MobileApp />))
+    const msg = await screen.findByTestId('reports-offline')
+    expect(msg.textContent).toMatch(/No connection\. Nothing has been loaded yet\./)
+    expect(screen.queryAllByTestId('report-row')).toHaveLength(0)
+  })
+
+  it('a read not loaded before the connection dropped says so', async () => {
+    stubFetch({ failAfter: 1 }) // the list answers; the full read does not
     window.history.replaceState(null, '', `/?report=${WORLD.id}`)
-
     render(wrap(<MobileApp />))
-
-    const view = await screen.findByTestId('report-view')
-    expect(within(view).getByTestId('cached-banner')).toBeInTheDocument()
-    expect(within(view).getAllByTestId('record-block').length).toBeGreaterThan(0)
+    const msg = await screen.findByTestId('report-missing')
+    expect(msg.textContent).toMatch(/No connection\. This read was not loaded/)
   })
 
-  it('says so plainly when a report is neither live nor cached', async () => {
+  it('says so plainly when a report is not in the loaded window', async () => {
     stubFetch({ reads: [] })
     window.history.replaceState(null, '', '/?report=does-not-exist')
     render(wrap(<MobileApp />))
-    expect(await screen.findByTestId('report-missing')).toBeInTheDocument()
+    expect(await screen.findByTestId('report-missing')).toHaveTextContent('not in the loaded window')
+  })
+})
+
+describe('the offline line', () => {
+  it('names the time what is on screen was loaded, in UTC', () => {
+    expect(loadedAtLabel(Date.UTC(2026, 10, 14, 7, 41))).toBe('No connection. Showing what was loaded at 07:41 UTC.')
+    expect(loadedAtLabel(null)).toBe('No connection.')
   })
 })

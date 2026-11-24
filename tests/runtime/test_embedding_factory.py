@@ -450,3 +450,48 @@ async def test_build_embedding_service_live_against_hosted(
     assert isinstance(vec, list)
     assert len(vec) == svc.dim
     assert all(isinstance(x, float) for x in vec)
+
+
+# ---------------------------------------------------------------------------
+# W4-F1 — embed_many: ONE request, vectors in input order
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_embed_many_is_one_request_and_reorders_by_index() -> None:
+    import json as _json
+
+    seen: list[Any] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        payload = _json.loads(request.content)
+        seen.append(payload["input"])
+        # The upstream may answer out of order; the client re-orders by index.
+        return httpx.Response(200, json={"object": "list", "data": [
+            {"object": "embedding", "index": 1, "embedding": [0.0, 1.0]},
+            {"object": "embedding", "index": 0, "embedding": [1.0, 0.0]},
+        ]})
+
+    svc = _make_client_with_transport(httpx.MockTransport(_handler))
+    try:
+        vecs = await svc.embed_many(["first", "second"])
+    finally:
+        await svc.aclose()
+    assert seen == [["first", "second"]]
+    assert vecs == [[1.0, 0.0], [0.0, 1.0]]
+
+
+@pytest.mark.asyncio
+async def test_embed_many_refuses_a_partial_batch() -> None:
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [
+            {"index": 0, "embedding": [1.0, 0.0]},
+        ]})
+
+    svc = _make_client_with_transport(httpx.MockTransport(_handler))
+    try:
+        with pytest.raises(EmbeddingFactoryError, match="1 items for 2 inputs"):
+            await svc.embed_many(["a", "b"])
+        assert await svc.embed_many([]) == []
+    finally:
+        await svc.aclose()

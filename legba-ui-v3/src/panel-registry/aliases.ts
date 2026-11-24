@@ -14,23 +14,36 @@
  * No component import, no bundle weight, no catalog membership, no sidebar row
  * to argue about.
  *
- * WHAT IS RETIRED HERE: the twelve U-3/GLASS-2 merge originals whose survivor
- * already renders them, unmodified, as a tab (`panels/merged/*` +
- * `PanelEmbedProvider`). Opening `system.watchlist` gives you Alerts & Watches
- * on its Watches tab — the same component tree the old kind rendered, so the
- * retirement costs nothing and the alias is exact rather than approximate.
+ * WHAT IS RETIRED HERE: the twelve U-3/GLASS-2 merge originals, and the twenty
+ * UI-D1 Table B ids UI-B1/merges (W8) folded into the merged wrappers
+ * (`system.registry`, `system.status`, `system.ledgers`, `system.optimizer`,
+ * `system.wall`, `system.provenance`, and `system.navigator` onto the read) —
+ * each survivor renders the retired component, unmodified, as a tab
+ * (`panels/merged/*` + `PanelEmbedProvider`). Opening `system.watchlist` gives
+ * you Alerts & Watches on its Watches tab — the same component tree the old
+ * kind rendered, so the retirement costs nothing and the alias is exact rather
+ * than approximate. UI-B1/merges also RE-POINTED three rows (Table B:
+ * "re-pointed, not new"): `v4.flow` → the Registry's Canvas, and
+ * `system.situations` / `system.narratives` → the new Register kind.
  *
- * WHAT IS NOT RETIRED YET, and why (honesty over arithmetic): the design's
- * remaining retirements each need a survivor that does not exist in the bundle
- * yet — `target.desk` (9 target kinds), `analyst.desk` (4 + eval scorecard),
- * `system.registry` (9 registry/source kinds + the flow canvas),
- * `system.engine` (5 ops kinds), `system.ledgers` (3). An alias may only point
- * at a surface that genuinely renders the retired one; pointing it at an
- * approximation would silently lose a capability. Those rows land with their
- * merge trains, and land HERE — the table is the reason those trains are
- * non-breaking.
+ * Two rows land on a survivor WITHOUT a tab, by design: `v4.kpi` is the Wall's
+ * header band (on every tab), and `system.navigator` — the products index —
+ * is the object rail's Reads section now, so its id opens the read itself.
+ * `source.detail` shares the Registry's Sources tab with `registry.sources`:
+ * the tab mounts the list and the per-source detail together.
  *
- * THREE CALL SITES resolve through this and nothing else changes:
+ * UI-B3 (W11) retired the eight per-subject reads onto `subject.page`'s tabs
+ * — the first BOUND survivor: a retired bound tile `target.findings:<id>`
+ * becomes `subject.page:<id>` on its Evidence tab, registration and all.
+ *
+ * WHAT IS NOT RETIRED YET (kindPlan.ts `RETIREMENT_SCHEDULE`): `target.map` /
+ * `target.timeline` (the map and the clock with a subject param) and the four
+ * `analyst.*` kinds wait for their survivors (`unit.page`), `v4.assessment`
+ * for the A/B to close, and `system.search` for the palette's `/` family. An alias may only point at a surface that genuinely
+ * renders the retired one; pointing it at an approximation would silently lose
+ * a capability.
+ *
+ * FOUR CALL SITES resolve through this and nothing else changes:
  *   1. `panel-registry/loader.ts` — a stale `panel_id` on a runtime
  *      registration row maps to its survivor before dispatch;
  *   2. `App.tsx`'s singleton opener — a stale kind maps to its survivor and
@@ -39,7 +52,10 @@
  *      ids, COLLAPSES DUPLICATES (a saved layout holding both `v4.why` and
  *      `system.lineage` becomes one Provenance tile, not two), and drops the
  *      unresolvable BEFORE Dockview sees it (which has no per-panel fallback
- *      for an unknown component and would throw).
+ *      for an unknown component and would throw);
+ *   4. `lib/applyAction.ts` — the one executor's `open_panel` resolves a
+ *      retired kind to its survivor (and tab) before the shell port opens it,
+ *      so ⌘K, the rail, a mission, the hash and a consult case all land there.
  */
 
 import type { SerializedDockview } from 'dockview-react'
@@ -56,18 +72,33 @@ export interface PanelAlias {
 /**
  * Retired panel KIND → its survivor. The only place a retired id is named.
  *
- * Every row here was `hidden: true` in `PANEL_REGISTRY` before this train and
- * pointed at a component that its survivor already mounts as a tab.
+ * Every row points at a survivor that mounts the retired component (or, for
+ * the two tab-less rows above, carries it on every tab / replaced it with the
+ * rail).
  */
 export const KIND_ALIASES: Readonly<Record<string, PanelAlias>> = {
+  // → the subject page (Brief / Evidence / Claims / Signals / Situations /
+  //   Sources / Graph / Runtime) — UI-B3. BOUND: `target.findings:<id>`
+  //   becomes `subject.page:<id>` on its tab (the pre-pass below rewrites the
+  //   bound tile's registration too, and collapses a subject's several retired
+  //   tiles onto one page).
+  'target.overview': { kind: 'subject.page', tab: 'runtime' },
+  'target.signals': { kind: 'subject.page', tab: 'signals' },
+  'target.findings': { kind: 'subject.page', tab: 'evidence' },
+  'target.claims': { kind: 'subject.page', tab: 'claims' },
+  'target.situations': { kind: 'subject.page', tab: 'situations' },
+  'target.sources': { kind: 'subject.page', tab: 'sources' },
+  'target.graph': { kind: 'subject.page', tab: 'graph' },
+  'target.desk_brief_page': { kind: 'subject.page', tab: 'brief' },
   // → Timeline (Events / Validity)
   'v4.timeline': { kind: 'system.timeline', tab: 'events' },
-  // → Provenance (Why / Lineage / Flow / Trajectory / Narratives)
+  // → Provenance (Why / Lineage / Fan-out)
   'v4.why': { kind: 'system.provenance', tab: 'why' },
   'system.lineage': { kind: 'system.provenance', tab: 'lineage' },
-  'v4.flow': { kind: 'system.provenance', tab: 'flow' },
-  'system.situations': { kind: 'system.provenance', tab: 'trajectory' },
-  'system.narratives': { kind: 'system.provenance', tab: 'narratives' },
+  'source.fanout': { kind: 'system.provenance', tab: 'fanout' },
+  // → Register (Situations / Narratives) — re-pointed off Provenance (UI-B1/merges)
+  'system.situations': { kind: 'system.register', tab: 'situations' },
+  'system.narratives': { kind: 'system.register', tab: 'narratives' },
   // → Alerts & Watches (Watches / Triggers / Deliveries)
   'system.watchlist': { kind: 'system.alerts_watches', tab: 'watches' },
   'system.alert_center': { kind: 'system.alerts_watches', tab: 'triggers' },
@@ -77,30 +108,51 @@ export const KIND_ALIASES: Readonly<Record<string, PanelAlias>> = {
   // → Entities (List / Graph / Structure)
   'system.entity_graph': { kind: 'system.entities', tab: 'graph' },
   'system.notable_structure': { kind: 'system.entities', tab: 'structure' },
+  // → Registry (Subjects / Units / Sources / Stack / Packs / Builder / Policy / Canvas)
+  'registry.targets': { kind: 'system.registry', tab: 'subjects' },
+  'registry.analysts': { kind: 'system.registry', tab: 'units' },
+  'registry.sources': { kind: 'system.registry', tab: 'sources' },
+  'source.detail': { kind: 'system.registry', tab: 'sources' },
+  'registry.stack': { kind: 'system.registry', tab: 'stack' },
+  'registry.action_packs': { kind: 'system.registry', tab: 'packs' },
+  'source.subscription_builder': { kind: 'system.registry', tab: 'builder' },
+  'source.subscription_policy': { kind: 'system.registry', tab: 'policy' },
+  'v4.flow': { kind: 'system.registry', tab: 'canvas' },
+  // → System Status (Status / Production / Failures / Actors / Queues)
+  'system.production_gauge': { kind: 'system.status', tab: 'production' },
+  'system.dead_letter': { kind: 'system.status', tab: 'failures' },
+  'system.actor_health': { kind: 'system.status', tab: 'actors' },
+  'system.stream_lag': { kind: 'system.status', tab: 'queues' },
+  // → Ledgers (Governor / Audit / Budget)
+  'system.governor': { kind: 'system.ledgers', tab: 'governor' },
+  'system.audit': { kind: 'system.ledgers', tab: 'audit' },
+  'system.budget': { kind: 'system.ledgers', tab: 'budget' },
+  // → Optimizer (Candidates / Diff)
+  'system.optimizer.diff': { kind: 'system.optimizer', tab: 'diff' },
+  // → the Wall (the At-a-Glance band over Overview / Movers)
+  'v4.kpi': { kind: 'system.wall' },
+  'system.wall_movers': { kind: 'system.wall', tab: 'movers' },
+  // → the read (the products index is the object rail's Reads section)
+  'system.navigator': { kind: 'v4.morning_read' },
 }
 
 /**
  * Retired descriptor-facing `panel_id` → the same survivor.
  *
  * The runtime registry (`ui_panel_registrations`) and any descriptor that ever
- * named one of these persists the SNAKE_CASE id, not the dotted kind, so the
- * loader needs its own lookup. Kept beside the kind table (and asserted
- * 1:1 with it in `aliases.test.ts`) so a retirement can never be half-declared.
+ * named one of these persists the SNAKE_CASE id, not the dotted kind (every
+ * `def()` row spells it as the kind with dots → underscores), so the loader
+ * needs its own lookup. DERIVED from the kind table, so a retirement can never
+ * be half-declared (`aliases.test.ts` asserts the 1:1).
  */
-export const PANEL_ID_ALIASES: Readonly<Record<string, PanelAlias>> = {
-  v4_timeline: KIND_ALIASES['v4.timeline'],
-  v4_why: KIND_ALIASES['v4.why'],
-  system_lineage: KIND_ALIASES['system.lineage'],
-  v4_flow: KIND_ALIASES['v4.flow'],
-  system_situations: KIND_ALIASES['system.situations'],
-  system_narratives: KIND_ALIASES['system.narratives'],
-  system_watchlist: KIND_ALIASES['system.watchlist'],
-  system_alert_center: KIND_ALIASES['system.alert_center'],
-  system_escalations: KIND_ALIASES['system.escalations'],
-  system_deep_consult: KIND_ALIASES['system.deep_consult'],
-  system_entity_graph: KIND_ALIASES['system.entity_graph'],
-  system_notable_structure: KIND_ALIASES['system.notable_structure'],
-}
+export const PANEL_ID_ALIASES: Readonly<Record<string, PanelAlias>> = Object.fromEntries(
+  Object.entries(KIND_ALIASES).map(([kind, alias]) => [kind.replace(/[.]/g, '_'), alias]),
+)
+
+/** Retired descriptor-facing `panel_id` → the retired KIND it named. */
+const RETIRED_KIND_BY_PANEL_ID: Readonly<Record<string, string>> = Object.fromEntries(
+  Object.keys(KIND_ALIASES).map((kind) => [kind.replace(/[.]/g, '_'), kind]),
+)
 
 /**
  * Resolve a panel kind that may be retired.
@@ -163,6 +215,13 @@ export function rewriteSerializedLayout(input: SerializedDockview): LayoutRewrit
   const nextPanels: Record<string, SerializedPanel> = {}
 
   for (const [id, panel] of Object.entries(panels)) {
+    // U-2 — a SLOT view (an honest empty region, `lib/surfaces.ts::SLOTS`) is
+    // not a registry kind and never retires: it passes through untouched.
+    if (panel?.contentComponent === 'slot') {
+      idMap.set(id, id)
+      nextPanels[id] = panel
+      continue
+    }
     const kind = panelKindOf(id, panel)
     const resolved = kind ? resolveKind(kind) : undefined
 
@@ -186,7 +245,7 @@ export function rewriteSerializedLayout(input: SerializedDockview): LayoutRewrit
 
     if (targetId !== id) rewritten.push(id)
     idMap.set(id, targetId)
-    nextPanels[targetId] = retargetPanel(panel, targetId, resolved)
+    nextPanels[targetId] = retargetPanel(panel, targetId, resolved, kind !== resolved.kind)
   }
 
   layout.panels = nextPanels as typeof layout.panels
@@ -226,7 +285,14 @@ function panelKindOf(id: string, panel: SerializedPanel): string | undefined {
   if (typeof fromParams === 'string' && fromParams) return fromParams
   const registration = panel.params?.registration as { panel_id?: string } | undefined
   if (registration?.panel_id) {
-    const alias = resolveRetiredPanelId(registration.panel_id)
+    // A bound tile names its kind by its registration's panel id. A RETIRED
+    // panel id answers with the retired KIND (not its survivor), so the walk
+    // below re-targets the tile id and lands it on the alias's tab.
+    const raw = registration.panel_id.trim()
+    const normalized = raw.startsWith('panels.') ? raw.slice('panels.'.length) : raw
+    const retired = RETIRED_KIND_BY_PANEL_ID[normalized]
+    if (retired) return retired
+    const alias = resolveRetiredPanelId(normalized)
     if (alias) return alias.kind
   }
   // Fall back to the id itself: `<kind>` or `<kind>:<record>`.
@@ -245,16 +311,41 @@ function retargetPanel(
   panel: SerializedPanel,
   targetId: string,
   alias: PanelAlias,
+  /** The saved id was a RETIRED kind (not the live kind itself). */
+  retired: boolean,
 ): SerializedPanel {
   const entry = PANEL_REGISTRY[alias.kind]
   const params = { ...(panel.params ?? {}) }
   if (typeof params.singletonKind === 'string') params.singletonKind = alias.kind
   if (alias.tab) params.tab = alias.tab
+  // A BOUND tile carries its own registration (`App.addBound`): a retired one
+  // is re-pointed at the survivor so the tile id, the registration's panel id
+  // and its layout slot all name the same kind (UI-B3 — the first bound
+  // survivor). Its binding — the subject — is kept verbatim.
+  const reg = params.registration as Record<string, unknown> | null | undefined
+  if (retired && reg && typeof reg === 'object' && entry) {
+    const recordId = typeof reg.descriptor_id === 'string' ? reg.descriptor_id : null
+    params.registration = {
+      ...reg,
+      id: targetId,
+      panel_id: entry.definition.panelId,
+      layout_slot: alias.kind,
+      title: recordId ? `${entry.definition.defaultTitle} · ${recordId}` : entry.definition.defaultTitle,
+    }
+  }
+  // A live kind keeps its saved title. A retired one takes the survivor's —
+  // with a tab or without one (`v4.kpi` → the Wall must not stay titled
+  // "At a Glance").
+  const keepTitle = panel.title && !retired && !alias.tab
   return {
     ...panel,
     id: targetId,
     params,
-    title: panel.title && !alias.tab ? panel.title : entry?.definition.defaultTitle ?? panel.title,
+    title: keepTitle
+      ? panel.title
+      : ((params.registration as { title?: string } | null | undefined)?.title ??
+        entry?.definition.defaultTitle ??
+        panel.title),
   }
 }
 

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:unit_optimizer": {
+      "source": "analyst_unit_optimizer.yaml",
+      "state": "paused"
+    }
+  }
+}

@@ -1,0 +1,71 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# THE READ-TIME VIEW of the geopolitics profile (VIEW-1, Review A §2.2d).
+#
+# One declared shape per profile. The projector
+# (src/legba/data/analysts/deterministic_handlers/profile_projector.py) builds
+# it into the `profile_projection` table under this profile's plane — a whole
+# rebuild per plane, a `_meta` row carrying `projected_at` — and the registry
+# serves it at GET /api/v1/registry/projection/<plane>[/<section>], refusing by
+# name (projection_disabled / projection_empty / projection_stale).
+#
+# Loaded by src/legba/data/profile_projection.py (closed: an unknown key is
+# refused). Each key below is one SECTION of the plane; a key left out is a
+# section the plane does not carry. Sections that name a manifest block are
+# resolved from profile.yaml at export time (scripts/gen_profile_projection.py
+# packages the result into src/legba/data/profile_projection.json, because the
+# images carry src/ only); the rest are read off the substrate at build time.
+#
+# What reads it today: the absence route's scope resolution (behind
+# LEGBA_PROFILE_PROJECTION), and the workstation (UI-B2): the Reads rail and
+# the phone navigator take `tiers`, the Morning Read takes `bands`, the rail's
+# Subjects take `subject_groups` — each falling back to the packaged profile
+# (or the platform's default) and naming the refusal when the plane refuses.
+
+schema: legba/projection_view/1
+
+# subject_groups — the `frame` family's subtrees under these kinds (FRAME-1):
+# each frame with its label, parent, member rule and its resolved member target
+# heads. Read off vocabulary_entries + target_descriptors at build time.
+subject_groups:
+  kinds: [region, thematic]
+
+# units — the profile's unit roster (rosters.units, read through
+# src/legba/data/rosters.py) in display order, each with its scored flag and
+# its OWN cadence read off the live descriptor head (never one shared constant;
+# a unit with no head carries a null cadence and is named in _meta).
+units:
+  cadence_from: descriptor_head
+
+# tiers — ui.frames in manifest order: each tier's label, parent and producer
+# (today's mobile/mobileModel.ts TIER_ORDER / TIER_LABEL / READ_ANALYSTS).
+tiers: ui.frames
+
+# labels — ui.subject, ui.unit_noun, ui.landing, ui.map.title and ui.labels
+# (the panel titles, the unscoped-subject label, the roster labels).
+labels: ui.labels
+
+# bands — the Morning Read's reading order (today's lib/morningReadBands.ts
+# BANDS literal, in its order).
+bands:
+  - {id: changed, label: Changed, question: "What landed since you last looked?"}
+  - {id: checked, label: Checked, question: "Which claims held, and which did not?"}
+  - {id: gaps, label: Gaps, question: "Where did the evidence run out?"}
+  - {id: due, label: Due, question: "What does the platform owe an answer on?"}
+
+# scope — the absence route's scope-resolution table: the units it checks (the
+# roster), the analysts whose runs stamp the banding and audit kinds, and the
+# grace over a unit's cadence before its latest read reads silent (today's
+# absence_api BOUNDED_UNITS / BANDING_ANALYST_ID / AUDIT_ANALYST_ID /
+# UNIT_GRACE_MULTIPLE, the pinned twin of lib/gapStripModel.ts).
+scope:
+  banding_analyst: scorecard_producer
+  audit_analyst: standing_auditor
+  unit_grace_multiple: 1.5
+
+# crosswalk — the `crosswalk` family's rows under this profile's namespace:
+# `<profile>.<axis>:<value>` -> `<platform_family>:<value>`. An unmapped value
+# is simply absent; nothing is inferred.
+crosswalk:
+  namespace: geopolitics

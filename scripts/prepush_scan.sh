@@ -110,6 +110,11 @@ section "5. PASS|SECRET|TOKEN|API_KEY assigned a long literal"
 if git grep -nI -E -- \
    '(PASS(WORD)?|SECRET|TOKEN|API_?KEY)["'"'"']?\s*[:=]\s*["'"'"']?[A-Za-z0-9/+_.-]{16,}' \
    . ':(exclude)scripts/prepush_scan.sh' >/tmp/_ps_tok 2>/dev/null; then
+  # Second EXACT-STRING carve-out (release prepush audit, 2026-11): five
+  # self-describing fake test tokens (x4/b3 bearer-gate fixtures, the c1 usage
+  # test token, the fictional series key) and two CODE expressions the keyword
+  # pattern reads as a value (a function call and a class instantiation).
+  # Fixed strings — any other value on the same line is still caught.
   # Narrow EXACT-STRING carve-out (release-gate prepush audit, 2026-08):
   # three self-describing FAKE test-fixture tokens, confirmed not real
   # credentials — none of the existing placeholder markers below
@@ -118,7 +123,10 @@ if git grep -nI -E -- \
   # OTHER token value stays caught even if it sat on the same line.
   while IFS= read -r line; do report token-literal "${line}"; done < <(
     grep -vE '\$\{|\$[A-Z_]|<[^>]+>|example|changeme|placeholder|your-|xxxx|REDACTED|\.invalid|getenv|os\.environ|environ\.get|process\.env|EXAMPLE|dummy|fake|TODO|"dev"|=dev$|:-dev|"LEGBA_[A-Z_]+"' /tmp/_ps_tok \
-      | grep -vF -e "super-secret-registry-token" -e "disconnect-test-token" -e "ws-subproto-token"
+      | grep -vF -e "super-secret-registry-token" -e "disconnect-test-token" -e "ws-subproto-token" \
+      | grep -vF -e "x4-gate-operator-" -e "x4-gate-service-" -e "b3-operator-token-" \
+                 -e "c1-usage-judging-test-token" -e "k3y-fict1onal-0123456789" \
+                 -e "passwordFromFile(" -e "LocalPasswordProvider()"
   )
 fi
 
@@ -143,10 +151,16 @@ if git grep -nI -E -- "['\"][A-Za-z0-9+/]{40,}={0,2}['\"]|['\"][0-9a-fA-F]{48,}[
   # that exact file AND that exact variable's assignment line; no other literal
   # in the file, or anywhere else, is exempted by it.
   UNITREF_PACKET_RE='^scripts/load_unit_reference\.py:[0-9]+:V4_PACKET_SHA = "[0-9a-f]{64}"$'
+  # Third narrow PATH+CONTEXT carve-out (release prepush audit, 2026-11): the
+  # bake-off scripts pin the sha256 of the prompt and of the design file they
+  # were measured with — content-integrity pins, not credentials. Scoped to
+  # those two files AND those two variables' assignment lines.
+  BAKEOFF_PIN_RE='^scripts/bakeoff/(arm_open|design)\.py:[0-9]+:(RAW_PROMPT_SHA256|PINNED_SHA256) = "[0-9a-f]{64}"$'
   while IFS= read -r line; do report high-entropy "${line}"; done < <(
     grep -vE 'sha256-|sha512-|integrity|test|fixture|mock|example|sample|hash|digest|did:key:|base64|encode|decode|ALPHABET|alphabet|charset|/[a-z]+/[a-z]+/' /tmp/_ps_ent \
       | grep -vE "${FLIP_DIGEST_RE}" \
-      | grep -vE "${UNITREF_PACKET_RE}"
+      | grep -vE "${UNITREF_PACKET_RE}" \
+      | grep -vE "${BAKEOFF_PIN_RE}"
   )
 fi
 
@@ -195,6 +209,19 @@ while IFS= read -r f; do report tracked-planning "${f}"; done < <(git ls-files p
 #    (.gitignore), but had no gate backstop — a `git add -f` could sneak it in.
 section "9. tracked corpora/ files"
 while IFS= read -r f; do report tracked-corpora "${f}"; done < <(git ls-files corpora/ 2>/dev/null)
+
+# 10. The README front door. The centred logo block at the top of README.md is
+#     the operator's front page; a docs lane rewrote the file on 2026-09-26 and
+#     dropped it, and the squash carried that to the public main. It never ships
+#     without the logo again: the check reads the file as it is TRACKED (what a
+#     push would carry), not the working copy.
+section "10. README logo block present"
+if ! git show HEAD:README.md 2>/dev/null | grep -q 'src="logo_small.png"'; then
+  report readme-logo-missing "README.md at HEAD has no <img src=\"logo_small.png\"> block"
+fi
+for f in logo_small.png logo.png; do
+  git ls-files --error-unmatch "${f}" >/dev/null 2>&1 || report readme-logo-asset-untracked "${f}"
+done
 
 # Optional gitleaks pass.
 section "gitleaks (optional)"

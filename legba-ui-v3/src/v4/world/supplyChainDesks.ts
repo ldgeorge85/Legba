@@ -25,10 +25,16 @@
  * the same `/findings?analyst_id=…` shape `useCountryVerdicts` uses. A desk
  * with findings outside the fetch window (or none yet) simply shows no age —
  * never a fabricated "just now".
+ *
+ * WEIGHT (W11-F262, U-8): only `target_id` + `produced_at` are read, so the
+ * page is asked at `fields=summary` (the route's `FindingSummaryRow` carries
+ * both). At full weight this read was 8.56 MB of the live landing after roll
+ * 80 — for one timestamp per desk.
  */
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { apiGet } from '@/lib/api'
+import { SUBJECT_ROSTER_ROUTE } from '@/lib/deskNames'
 
 const SUPPLY_CHAIN_TAG = 'supply_chain'
 const DISRUPTION_STATUS_ANALYST_ID = 'disruption_status'
@@ -62,16 +68,16 @@ function hasSupplyChainTag(row: TargetDescriptorRow): boolean {
 }
 
 async function fetchActiveSupplyChainTargetIds(): Promise<string[]> {
-  const rows = await apiGet<TargetDescriptorRow[]>(
-    '/registry/descriptors?family=target&head_only=true&limit=500',
-  )
+  // state + scope.tags: the subject roster's summary weight (one request with it)
+  const rows = await apiGet<TargetDescriptorRow[]>(SUBJECT_ROSTER_ROUTE)
   return rows.filter((r) => r.state === 'active' && hasSupplyChainTag(r)).map((r) => r.descriptor_id)
 }
 
+/** The recency read — summary weight (W11-F262); exported for the guard test. */
+export const DISRUPTION_RECENCY_READ = `/findings?analyst_id=${DISRUPTION_STATUS_ANALYST_ID}&limit=200&fields=summary`
+
 async function fetchLatestDisruptionFindingAt(): Promise<Map<string, string>> {
-  const page = await apiGet<FindingsResponse>(
-    `/findings?analyst_id=${DISRUPTION_STATUS_ANALYST_ID}&limit=200`,
-  )
+  const page = await apiGet<FindingsResponse>(DISRUPTION_RECENCY_READ)
   const latest = new Map<string, string>()
   for (const row of page.data ?? []) {
     if (!row.target_id) continue

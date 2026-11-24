@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from legba.data.analysts.handler_options import HANDLER_OPTIONS
+from legba.data.option_catalog.handler_options import HANDLER_OPTIONS
 from legba.data.registry.production_gauge import (
     LOOP_CLASSES,
     LOOP_DESK_HEAD_STALENESS,

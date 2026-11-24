@@ -35,6 +35,7 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any, Iterable
 
+from ..tags import is_reserved_src, signal_tag_key
 from .errors import PredicateRuntimeError
 
 # ---------------------------------------------------------------------------
@@ -260,20 +261,37 @@ def _org_match(ctx: dict[str, Any]) -> Callable[[], bool]:
     return org_match
 
 
-def _has_tag(ctx: dict[str, Any]) -> Callable[[str], bool]:
-    """All-surfaces tag check.
+def _tag_universe(ctx: dict[str, Any]) -> set[str]:
+    """The tag set ``has_tag()`` / ``has_any_tag()`` compare against — NAMESPACED.
 
-    Source of tags depends on context:
-      * signal-scoped: ``signal.tags``
-      * descriptor-scoped: ``target.tags`` (or analyst.tags via ctx["target"])
-      * event-scoped: ``event.tags``
-
-    We union all three so the same helper Just Works on every surface.
+    Tags come from every surface (signal-scoped ``signal.tags``,
+    descriptor-scoped ``target.tags``, event-scoped ``event.tags``), but a
+    SIGNAL tag enters under its namespaced key (``data.tags.signal_tag_key``):
+    a bare publisher category ``g20`` is ``src:g20``, so it can never satisfy
+    a target-tag predicate ``has_tag("g20")`` (W7 TAG-1; Review A §2.2c — the
+    union used to let a signal tagged ``g20`` match the desk roster). To test
+    a signal's source category, ask for it by namespace:
+    ``has_tag("src:energy")``. A registered ``<family>:<value>`` tag compares
+    verbatim on every surface. A target or event tag in the reserved ``src``
+    namespace is ignored — that namespace is signal provenance.
     """
-    sig_tags = _as_set((ctx.get("signal") or {}).get("tags"))
-    tgt_tags = _as_set((ctx.get("target") or {}).get("tags"))
-    evt_tags = _as_set((ctx.get("event") or {}).get("tags"))
-    tags: set[str] = sig_tags | tgt_tags | evt_tags
+    sig_keys = {
+        k for t in _as_set((ctx.get("signal") or {}).get("tags"))
+        if (k := signal_tag_key(t)) is not None
+    }
+    own = {
+        t for t in (
+            _as_set((ctx.get("target") or {}).get("tags"))
+            | _as_set((ctx.get("event") or {}).get("tags"))
+        )
+        if isinstance(t, str) and not is_reserved_src(t)
+    }
+    return sig_keys | own
+
+
+def _has_tag(ctx: dict[str, Any]) -> Callable[[str], bool]:
+    """All-surfaces tag check over the namespaced universe (`_tag_universe`)."""
+    tags = _tag_universe(ctx)
 
     def has_tag(tag: object) -> bool:
         return isinstance(tag, str) and tag in tags
@@ -282,10 +300,7 @@ def _has_tag(ctx: dict[str, Any]) -> Callable[[str], bool]:
 
 
 def _has_any_tag(ctx: dict[str, Any]) -> Callable[[Iterable[str]], bool]:
-    sig_tags = _as_set((ctx.get("signal") or {}).get("tags"))
-    tgt_tags = _as_set((ctx.get("target") or {}).get("tags"))
-    evt_tags = _as_set((ctx.get("event") or {}).get("tags"))
-    tags: set[str] = sig_tags | tgt_tags | evt_tags
+    tags = _tag_universe(ctx)
 
     def has_any_tag(values: object) -> bool:
         for t in _as_list(values):

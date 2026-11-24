@@ -18,6 +18,7 @@
  */
 import { useQuery } from '@tanstack/react-query'
 import { apiGet } from '@/lib/api'
+import { rosterRoute, SOURCE_ROSTER_ROUTE } from '@/lib/deskNames'
 import type { SelectionKind } from '@/state/selection'
 
 /** One registry record the palette can jump to. */
@@ -44,9 +45,9 @@ async function softList(
   recordKind: PaletteRecord['recordKind'],
 ): Promise<PaletteRecord[]> {
   try {
-    const rows = await apiGet<DescriptorRow[]>(
-      `/registry/descriptors?family=${family}&head_only=true&limit=500`,
-    )
+    // id, name and state are all the palette reads: the summary weight
+    // RA-1: the reader's roster read (id, name, state — all the palette reads)
+    const rows = await apiGet<DescriptorRow[]>(family === 'source' ? SOURCE_ROSTER_ROUTE : rosterRoute(family))
     return rows
       .filter((r) => r.state !== 'retired')
       .map((r) => ({

@@ -34,6 +34,7 @@ from _p17_registrar import (  # noqa: E402
     print_results,
     register_descriptor,
 )
+from _frame_kind import catalog_from_db, frame_family_enabled, frame_kind_tags  # noqa: E402
 
 from legba.data.schemas.target import TargetDescriptor  # noqa: E402
 
@@ -45,18 +46,24 @@ SITUATION_TARGET_FILES = [
 ]
 
 
-def _load(name: str) -> TargetDescriptor:
+def _load(name: str, catalog=None) -> TargetDescriptor:
     body = yaml.safe_load((DESCRIPTORS_DIR / name).read_text())
     body.setdefault("identity", {})["version"] = "0" * 16
+    # W10 TAX-2: a situation head that IS a registered frame gains
+    # `frame:<kind>` when the frame family is live; otherwise unchanged.
+    scope = body.get("scope")
+    if catalog is not None and isinstance(scope, dict) and "tags" in scope:
+        scope["tags"] = frame_kind_tags(body["identity"].get("id", ""), scope["tags"], catalog)
     return TargetDescriptor.model_validate(body, strict=False)
 
 
 async def main() -> int:
     pg, reg = await open_registry()
     try:
+        catalog = await catalog_from_db(pg) if frame_family_enabled() else None
         results: list[RegisterResult] = []
         for fname in SITUATION_TARGET_FILES:
-            desc = _load(fname)
+            desc = _load(fname, catalog)
             results.append(
                 await register_descriptor(pg, reg, family=Family.TARGET, descriptor=desc)
             )

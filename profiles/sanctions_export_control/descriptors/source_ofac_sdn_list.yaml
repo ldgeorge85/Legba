@@ -1,0 +1,109 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Sanctions / export-control profile SKELETON (PROFILE-1; DEC-11) — X2/E2.
+# The OFAC Specially Designated Nationals and Blocked Persons List, as the
+# INSTRUMENT itself: the whole published list, fetched, hashed, archived and
+# diffed entry by entry against the last snapshot (kind instrument_snapshot,
+# src/legba/data/sources/instrument_snapshot.py). The SDN RSS feed was retired
+# 2025-01-31; the list download is the source of record now.
+#
+# Ships DRAFT — registering it never schedules it; the operator activates.
+# The download was fetched ONCE from a worktree on 2026-10-08 (scratch archive,
+# not the live one) to prove the URL, the size and the hash — see the X2/E2
+# report. US Government work: public domain.
+#
+# One change signal per changed list: the two sha256 hashes, the added /
+# removed / changed entries keyed on the list's own <uid>, the entry count
+# before and after, and the list's own Publish_Date. An unchanged list emits
+# nothing and writes a `checked, unchanged` receipt (instrument_unchanged).
+
+identity:
+  id: source.ofac.sdn_list
+  name: "OFAC — SDN List (the published instrument, diffed)"
+  kind: instrument_snapshot
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: profile_sanctions_export_control
+  created: "2026-10-08T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [US]
+  languages: [en]
+  tags: [sanctions, designation, gov, instrument, ofac]
+  source_class: official
+  access_class: public
+  license_class: public_domain       # US Government work (17 U.S.C. §105)
+
+acquisition: poll
+
+cadence:
+  # OFAC publishes on action days, often more than once; a conditional GET
+  # makes an unchanged poll a 304 when the server sends a validator.
+  schedule:
+    factory_kind: cron
+    raw: "23 */4 * * *"
+  cooldown_seconds: 600
+  jitter_seconds: 120
+
+config:
+  instrument_name:
+    factory_kind: text
+    raw: "OFAC SDN List"
+  url:
+    factory_kind: text
+    raw: "https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN.XML"
+  license_class:                     # the same class as scope.license_class (a test pins the pair)
+    factory_kind: text
+    raw: "public_domain"
+  differ:
+    factory_kind: text
+    raw: "xml_records"
+  record_tag:
+    factory_kind: text
+    raw: "sdnEntry"
+  key_path:                          # the list's OWN identifier, never a name or a position
+    factory_kind: text
+    raw: "uid"
+  label_paths:
+    factory_kind: list
+    item_kind: text
+    raw: ["lastName", "firstName"]
+  summary_paths:
+    factory_kind: list
+    item_kind: text
+    raw: ["sdnType", "programList/program"]
+  published_date_path:
+    factory_kind: text
+    raw: "publshInformation/Publish_Date"   # sic — OFAC's own element name
+  published_date_format:
+    factory_kind: text
+    raw: "%m/%d/%Y"
+  declared_count_path:
+    factory_kind: text
+    raw: "publshInformation/Record_Count"
+  timeout_seconds:
+    factory_kind: number
+    raw: 180
+
+pipeline:
+  ingestion_filters:
+    # Tier 2 only: the content hash is the (previous, current) sha pair, so a
+    # re-emitted change collapses. Tier 1 (URL) is deliberately absent — every
+    # change signal of this list shares one URL and must NOT alias the first.
+    - kind: dedupe_tier_2
+      config: {}
+  enrichment: []                     # a structured change record — no text chain
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

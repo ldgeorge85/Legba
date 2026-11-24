@@ -203,7 +203,7 @@ export default function DeepConsultPanel({ registration }: PanelProps) {
         <textarea
           id="dc-question"
           className="min-h-[88px] rounded border border-neutral-700 bg-neutral-900 p-2 text-sm"
-          placeholder="Ask a deep analytical question over the substrate…"
+          placeholder="Ask a deep analytical question…"
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
           disabled={submitting}

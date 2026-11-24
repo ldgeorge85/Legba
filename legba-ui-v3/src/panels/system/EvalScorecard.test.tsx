@@ -109,6 +109,36 @@ describe('EvalScorecardPanel', () => {
     })
   })
 
+  it('names carried, ungraded verdicts on the card and never scores them', async () => {
+    const carried = {
+      id: 'c1',
+      analyst_id: 'quiet.analyst',
+      analyst_version: 'v1',
+      scores: {},
+      overall_score: 0.5,
+      produced_at: '2026-06-04T00:00:00Z',
+      score_state: 'carried_ungraded',
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) =>
+        Promise.resolve({
+          ok: true,
+          json: async () => (url.includes('/v3/eval/scorecard') ? [...PAGE, carried] : []),
+        }),
+      ),
+    )
+    render(wrap(<EvalScorecardPanel registration={reg()} scope={{}} mode="personal" />))
+    await waitFor(() => expect(screen.getByTestId('eval-card-quiet.analyst')).toBeInTheDocument())
+    expect(screen.getByTestId('eval-carried-quiet.analyst')).toHaveTextContent(
+      '1 carried, ungraded',
+    )
+    const header = screen.getByTestId('eval-card-header-quiet.analyst')
+    expect(header).toHaveTextContent('—')
+    expect(header).not.toHaveTextContent('50')
+    expect(screen.queryByTestId('eval-carried-cred.analyst')).toBeNull()
+  })
+
   it('shows empty state when no judgements', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => [] })
     vi.stubGlobal('fetch', fetchMock)

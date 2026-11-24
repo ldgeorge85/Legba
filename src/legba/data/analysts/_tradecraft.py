@@ -474,6 +474,58 @@ UNIT_BLUF_ABSENCE_RULE: str = (
     "COVERAGE result, not a NEGATIVE result: say so in those words."
 )
 
+#: X4 / ESC (W11-F52) — EVERY FACT-STATING SENTENCE CARRIES ITS MARKER, and the
+#: BLUF is one of them. Pasted VERBATIM, as its own paragraph ahead of the
+#: response-schema paragraph, into the NINE bounded-unit descriptors - first
+#: ``escalation`` and ``military_posture`` (X4), then, once the 10-15 after-read
+#: on those two held (uncited fact share 0.508 -> 0.094 and 0.571 -> 0.082,
+#: judge-path faithfulness inside the -0.03 guard), the other seven (W11-F86,
+#: 2026-10-24): internal_stability, economic_coercion, energy_security,
+#: leadership_transition, narrative_coordination, proliferation_watch and the
+#: draft disruption_status. ``tests/data_pkg/test_esc_cited_sentences.py`` pins
+#: descriptor-vs-constant equality on the nine and absence on every other
+#: analyst descriptor. Still deliberately NOT folded into
+#: :data:`UNIT_READ_CONTRACT`: the descriptors carry the paragraph, so a live
+#: head moves only when its own descriptor does. MEASURED (7 d to 2026-10-13, read-only, ``uncited_share_fields`` over
+#: the persisted bodies): 50.8 % of escalation's and 57.1 % of military_posture's
+#: fact-asserting sentences carried no marker, and the BLUF was uncited in 67.9 %
+#: / 82.9 % of reads. The LLM judge grades those sentences as synthesis and
+#: forgives most of them; the deterministic floor counts every one as
+#: ``no_citation`` (``verify._is_fact_asserting`` treats any prose sentence as a
+#: claim unless it is scaffolding, a scoped absence, forward-looking, or a
+#: labelled synthesis opener that names no particular) - so a floor-only read
+#: (judge down) lands at 0.45-0.56 on the same bodies the judge scores 0.74-0.80.
+#: The rule therefore asks for a marker on every sentence of the two sections
+#: that carry the read, not only on the ones that name something: a looser
+#: statement of the line would leave the model guessing where the floor draws it.
+UNIT_CITED_SENTENCE_RULE: str = (
+    "EVERY SENTENCE THAT STATES A FACT CARRIES ITS MARKER. The verification "
+    "pass reads your body one sentence at a time, and a sentence that states "
+    "anything about the world and carries no [N] marker is scored as an "
+    "uncited claim — in any section, and in the BLUF above all, because the "
+    "BLUF is the sentence a reader takes away. Three consequences. "
+    "(1) THE BLUF IS A CITED SENTENCE: it ends with the [N] marker(s) of the "
+    "signals that carry the facts it names, like any other claim "
+    "('**BLUF:** <the verdict, naming who is doing what> [N][N].'). A BLUF "
+    "that names nothing is the bare category label the verdict rule bans, so "
+    "there is no uncited form of it worth writing (a BLUF that is itself a "
+    "scoped negative follows the exception below). "
+    "(2) EVERY SENTENCE IN '## What changed' AND IN '## Why it matters' ends "
+    "with the marker(s) of the signals it reports or reasons from — analysis is "
+    "not exempt, because the grader cannot tell your inference from a fact you "
+    "left unsourced, and a sentence that rests on nothing you can cite is a "
+    "sentence to cut. ('## What would change this read' and '## Indicators' "
+    "look forward and need none.) "
+    "(3) Write each marker in ASCII brackets at the end of the sentence, [N] "
+    "or [N][N] — never in full-width brackets and never as a bare number. "
+    "A scoped negative, written in the house form (\"no <X> appears in this "
+    "desk's collection through <date>\"), has nothing to cite and carries no "
+    "marker; keep it scoped and keep the \"no\" at its head. Before you "
+    "emit, re-read the body once as a grader would, and for every sentence "
+    "without a marker either add the signal it rests on or cut it: a fact you "
+    "cannot point to is a fact you may not state."
+)
+
 #: D5 — the pipeline's own bookkeeping is being read aloud as intelligence:
 #: microsecond ISO timestamps in 56/117 compositions, ``intensity NN.NN`` /
 #: event counts in 27/117, and raw ``effective_confidence`` numbers sorted and
@@ -718,6 +770,93 @@ RETRIEVED_CONTEXT_RULE: str = (
 )
 
 
+#: Q4 (2026-09-28) — THE CARRIED DATED ANCHOR: the THIRD member of the family
+#: above, and the one that cost three months of a desk's credibility.
+#:
+#: THE LIVE CASE (consult review 2026-09-28 §A). ``leadership_transition`` on
+#: ``country_g20_fr`` wrote, at confidence 0.9: *"the presidential hand-over
+#: from Emmanuel Macron to his successor is virtually certain on 28 September
+#: 2026"*. Nothing in its 120-row slice names that date or that event — the
+#: slice held Senate elections, a remark about a term-limited departure, and
+#: the Pope. The date was nevertheless ALREADY IN THE RENDERED EVIDENCE,
+#: because it sat in the PRIOR READ block, and a prior read is a CITABLE ref:
+#: the faithfulness judge scored the sentence 1.00 twice (5/5 supported), the
+#: WINDOW LEDGER re-fed it every cycle, and 24 findings since 07-01 read "No
+#: material change: the scheduled 28 September handover remains" with the
+#: countdown ticking and the confidence rising.
+#:
+#: WHY ``_DATED_CLAIM_RULE`` CANNOT CATCH IT — the same hole
+#: :data:`RETRIEVED_CONTEXT_RULE` exists to close, one block-kind over. That
+#: rule closes with "every date you print must ALREADY APPEAR in the rendered
+#: evidence you were shown", which a prior read that printed the date LAST
+#: CYCLE satisfies trivially. A rule against INVENTING a date says nothing
+#: about a date that survives by being COPIED FORWARD, and from the inside a
+#: fabrication laundered through one's own memory is indistinguishable from a
+#: well-grounded carry.
+#:
+#: SO THE RULE IS ABOUT WHICH BLOCK MAY CARRY A NUMBER, never about whether a
+#: number may be present: MEMORY blocks re-state, only SIGNAL blocks
+#: re-establish. The block's OWN STAMP is the one exception and it has to be,
+#: because the house's licensed continuity idiom is built on it ("no material
+#: change since the 3 August morning read [N]") — that date is a fact about
+#: THE RECORD, which the block genuinely does establish.
+#:
+#: FAITHFULNESS-SAFE: like both its siblings it REMOVES a licence rather than
+#: granting one, and names the two honest moves so the rule is followable —
+#: a bare prohibition here would cost the desk its continuity voice.
+CARRIED_ANCHOR_RULE: str = (
+    "A CARRIED BLOCK IS MEMORY, NOT EVIDENCE, FOR A DATE OR A FIGURE. The "
+    "PRIOR READ and the WINDOW LEDGER tell you WHAT THIS DESK SAID BEFORE. "
+    "They are not reporting and they cannot re-establish a fact: everything "
+    "in them that is not their own stamp is LAST CYCLE'S CLAIM — every date "
+    "and every number inside one included. So a DATE (a deadline, a scheduled "
+    "event, a hand-over, a countdown, an anniversary) or a FIGURE (a count, a "
+    "total, a share, a casualty number) may be ASSERTED — in the BLUF or "
+    "anywhere in the body — ONLY where a SIGNAL block you cite IN THAT SAME "
+    "SENTENCE carries it. A prior-read handle or a window-ledger handle is "
+    "NOT that support, however exactly the number appears inside it. "
+    "THE ONE EXCEPTION IS THE BLOCK'S OWN STAMP. The date a prior read was "
+    "PRODUCED, and the dates printed on the ledger's own lines, are facts "
+    "about this record: state them and cite them exactly as you do today — "
+    "'no material change since the 3 August morning read [N]', 'mass protests "
+    "recorded on 7 August [N] have since subsided'. That is the licensed "
+    "continuity idiom and this rule does not touch it. "
+    "WHEN THIS WINDOW DOES NOT RE-SOURCE A CARRIED DATE OR FIGURE you have "
+    "TWO honest moves and no third. Report it AS a carry, in these words — "
+    "'carried from the prior read, not re-sourced this window' (or 'carried "
+    "from the window ledger, not re-sourced this window') — or DROP it. "
+    "NEVER let a date or a number survive a cycle by being copied forward as "
+    "though it were established: a scheduled date no signal has restated does "
+    "not become truer by being repeated, and your confidence in it must FALL "
+    "as it ages, never rise."
+)
+
+#: The SAME rule, compressed to one sentence and rendered ON the memory blocks
+#: themselves (``unit_grounding._render_prior_read`` and the unit-scoped
+#: ``window_ledger.ledger_block_lines`` header), because the clause above is
+#: read once at the top of a long system prompt and the temptation arrives
+#: 8,000 tokens later, at the moment the model is looking straight at the
+#: carried date. One definition, two render sites, no drift.
+CARRIED_ANCHOR_BLOCK_NOTE: str = (
+    "MEMORY, NOT EVIDENCE: any date or figure here but this block's own stamp "
+    "is LAST CYCLE'S CLAIM — re-assert it only from a SIGNAL block cited this "
+    "window, or mark it 'not re-sourced'."
+)
+
+#: THE LICENSED DISCLOSURE TOKEN, generated once so the prompt that asks for it
+#: and the verify-side guard that exempts it cannot drift apart on the wording.
+#: Deliberately the SHORT form: the full rule offers "carried from the prior
+#: read, not re-sourced this window" and the block note offers "not
+#: re-sourced", and a guard keyed on the short token accepts both spellings
+#: plus the ledger variant.
+#:
+#: ``data.provenance`` may not import ``data.analysts`` (the edge runs the
+#: other way), so ``provenance.grounding_backstops`` RESTATES this literal and
+#: a drift-guard test holds the two equal — the posture
+#: ``verify._REGISTER_REF_KIND`` already takes for the register's ref kind.
+CARRIED_ANCHOR_DISCLOSURE: str = "not re-sourced"
+
+
 def as_of_rule(anchor: str) -> str:
     """The AS-OF + dated-claim rule, worded for one layer's date source.
 
@@ -810,6 +949,9 @@ __all__ = [
     "ASSESSMENT_STANDARDS",
     "BANNED_PHRASE_MARKERS",
     "BANNED_TEMPLATE_PHRASES",
+    "CARRIED_ANCHOR_BLOCK_NOTE",
+    "CARRIED_ANCHOR_DISCLOSURE",
+    "CARRIED_ANCHOR_RULE",
     "COMPOSITION_BODY_SHAPE",
     "CONSEQUENCE_RULE",
     "NO_INSTRUMENT_READINGS",
@@ -820,6 +962,7 @@ __all__ = [
     "UNIT_BLUF_ABSENCE_RULE",
     "UNIT_BODY_SHAPE",
     "UNIT_BODY_SHAPE_D6",
+    "UNIT_CITED_SENTENCE_RULE",
     "UNIT_READ_CONTRACT",
     "UNIT_READ_CONTRACT_D6",
     "UNIT_VERDICT_RULE",

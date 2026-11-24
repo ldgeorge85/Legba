@@ -1,0 +1,8 @@
+{
+  "states": {
+    "action_pack:media_processing": {
+      "source": "action_pack_media_processing.yaml",
+      "state": "active"
+    }
+  }
+}

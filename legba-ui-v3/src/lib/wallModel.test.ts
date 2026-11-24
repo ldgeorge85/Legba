@@ -7,6 +7,9 @@ import {
   DEFAULT_LOOKBACK_HOURS,
   MAX_LOOKBACK_DAYS,
   WALL_CURSOR_KEY,
+  __resetWallVisit,
+  markWallRead,
+  wallVisitForPage,
   bandChangeDeskLabel,
   bandDirectionTone,
   buildMovers,
@@ -336,5 +339,43 @@ describe('healthRollup', () => {
   it('empty inputs → green zeros (honest, not fabricated red)', () => {
     const h = healthRollup([], [])
     expect(h).toMatchObject({ signals24h: 0, sourcesTotal: 0, analystsTotal: 0, worst: 'green' })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// X1/D1 — one anchor per page load; only a real read moves the cursor
+// ---------------------------------------------------------------------------
+
+describe('wallVisitForPage + markWallRead (X1/D1)', () => {
+  function memStorage(initial: Record<string, string> = {}) {
+    const m = new Map(Object.entries(initial))
+    return {
+      getItem: (k: string) => m.get(k) ?? null,
+      setItem: (k: string, v: string) => void m.set(k, v),
+    }
+  }
+
+  it('resolves the anchor once per page load — a later stamp does not move it', () => {
+    __resetWallVisit()
+    const store = memStorage({ [WALL_CURSOR_KEY]: '2026-07-24T06:00:00Z' })
+    const first = wallVisitForPage(store, NOW)
+    store.setItem(WALL_CURSOR_KEY, '2026-07-24T11:59:00Z')
+    const second = wallVisitForPage(store, NOW + 60_000)
+    expect(second).toBe(first)
+    expect(second.cursor).toBe('2026-07-24T06:00:00.000Z')
+    __resetWallVisit()
+    expect(wallVisitForPage(store, NOW).cursor).toBe('2026-07-24T11:59:00.000Z')
+    __resetWallVisit()
+  })
+
+  it('a fetch the reader could not see is not a read', () => {
+    const store = memStorage()
+    const at = '2026-07-24T12:00:00Z'
+    expect(markWallRead(at, { tileVisible: false, documentVisible: true }, store)).toBe(false)
+    expect(markWallRead(at, { tileVisible: true, documentVisible: false }, store)).toBe(false)
+    expect(markWallRead(null, { tileVisible: true, documentVisible: true }, store)).toBe(false)
+    expect(store.getItem(WALL_CURSOR_KEY)).toBeNull()
+    expect(markWallRead(at, { tileVisible: true, documentVisible: true }, store)).toBe(true)
+    expect(store.getItem(WALL_CURSOR_KEY)).toBe(at)
   })
 })

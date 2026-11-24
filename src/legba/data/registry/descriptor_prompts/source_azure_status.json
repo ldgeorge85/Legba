@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.azure.status": {
+      "source": "source_azure_status.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:thematic_proposal": {
+      "source": "analyst_thematic_proposal.yaml",
+      "state": "active"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.federalregister.ofac_feed": {
+      "source": "source_federalregister_ofac_feed.yaml",
+      "state": "draft"
+    }
+  }
+}

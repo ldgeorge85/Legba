@@ -96,6 +96,7 @@ hourly drain, and why the cap is a descriptor knob rather than a constant.
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import logging
 from datetime import datetime, timezone
@@ -173,7 +174,6 @@ DEFAULT_CONTENTION_TTL_HOURS = 168
 #: does not already handle — while a per-run override would put a model's
 #: sampling regime in a descriptor field nobody reads and make two runs of the
 #: same claim incomparable for a reason invisible on the row.
-HOUSE_TEMPERATURE = 1.0
 
 #: Receipt sample cap — ``composition_lineage_sweep``'s count+sample contract.
 _SAMPLE_CAP = 25

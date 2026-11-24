@@ -79,7 +79,7 @@ method:
   # of batches per tick grows. Revert to default by deleting this block once the
   # drain completes.
   options:
-    max_embeds: 1000
+    max_embeds: 200   # live value (W6 SPLIT-1 fold, 2026-10-04: the live head carries this; the tree now does too); the file said 1000
   # Deterministic kind, NO LLM block: this sweep uses the Qdrant vector plane +
   # the hosted embedding service, not an LLM. The runtime deps-builder connects a
   # QdrantStore into deps.extras["signal_embedder_qdrant"] and threads the process-

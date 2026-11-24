@@ -61,24 +61,26 @@ from ...provenance import AnalystContext, ScorecardPayload, write_analyst_output
 from ...provenance.kinds import OutputKind
 from ...provenance.models import FindingPayload
 from ....runtime.analyst_method import AnalystMethodResult
+from ... import rosters as _rosters
 from . import scorecard_banding
 
 logger = logging.getLogger(__name__)
 
 SUB_HANDLER_NAME = "scorecard_producer"
 
-# Enumerate the active ASSESSED countries by COVERAGE TAG (g20 OR watch) — every
-# country the units fan out to: the G20 tier PLUS the high-consequence `watch`
-# tier (Israel / Iran / Ukraine / Taiwan / North Korea, extensible). Tag-based
-# (NOT an id LIKE) so registering a target with the g20/watch tag auto-cards it
-# with zero code change, matching the analysts' has_tag("g20") or has_tag("watch")
-# subscription. Only `retired` is excluded (draft + active both get a card).
+# Enumerate the active ASSESSED subjects by COVERAGE TAG — the profile's SCORED
+# roster tags (``rosters.scored_roster_tags()``, bound as ``$1``; the
+# geopolitics profile: g20 OR watch — the G20 tier PLUS the high-consequence
+# `watch` tier). Tag-based (NOT an id LIKE) so registering a target with a
+# scored tag auto-cards it with zero code change, matching the analysts'
+# has_tag(...) subscription. Only `retired` is excluded (draft + active both get
+# a card).
 _G20_TARGETS_SQL = """
     SELECT descriptor_id
       FROM target_descriptors
      WHERE is_head = TRUE
        AND COALESCE(state, 'active') <> 'retired'
-       AND (body -> 'scope' -> 'tags') ?| array['g20', 'watch']
+       AND (body -> 'scope' -> 'tags') ?| $1::text[]
      ORDER BY descriptor_id
 """
 
@@ -359,10 +361,10 @@ async def _pull_eval_by_unit(pool: Any) -> dict[str, dict[str, Any]]:
 
 
 async def _enumerate_targets(pool: Any) -> list[str]:
-    """The active G20 country descriptor ids (empty on any failure)."""
+    """The active scored-roster descriptor ids (empty on any failure)."""
     try:
         async with pool.acquire() as conn:
-            rows = await conn.fetch(_G20_TARGETS_SQL)
+            rows = await conn.fetch(_G20_TARGETS_SQL, list(_rosters.scored_roster_tags()))
     except Exception as exc:  # noqa: BLE001
         logger.warning("scorecard_producer.enumerate_failed err=%s", exc)
         return []

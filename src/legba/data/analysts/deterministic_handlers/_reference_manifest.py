@@ -65,6 +65,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Iterable, Mapping, Sequence
 
+from ... import rosters as _rosters
 from ._reference_page import ArchivedPage, parse_iso_date
 
 # ---------------------------------------------------------------------------
@@ -380,69 +381,70 @@ def clean_query(query: str) -> tuple[str, list[str]]:
 # ---------------------------------------------------------------------------
 
 #: Three to five patterns per dimension, given to the model in the stage-1
-#: instruction. ``{country}`` is the only substitution. They name EVENTS a
-#: fortnight can contain, not outlets and not dates, because that is what a
-#: metasearch indexes and what a reference records.
-QUERY_PATTERNS: dict[str, tuple[str, ...]] = {
-    "leadership_transition": (
-        "{country} cabinet reshuffle minister appointed",
-        "{country} prime minister resignation no-confidence vote",
-        "{country} election result coalition talks",
-        "{country} central bank governor appointed replaced",
-    ),
-    "energy_security": (
-        "{country} gas supply pipeline outage",
-        "{country} electricity grid blackout capacity",
-        "{country} LNG contract export terminal",
-        "{country} fuel price cap subsidy decision",
-    ),
-    "escalation": (
-        "{country} border incident troops clash",
-        "{country} strike attack casualties",
-        "{country} airspace violation intercepted",
-        "{country} summons ambassador protest diplomatic",
-    ),
-    "narrative_coordination": (
-        "{country} foreign ministry statement condemns",
-        "{country} joint statement allies communique",
-        "{country} disinformation campaign attributed",
-        "{country} state media coordinated messaging",
-    ),
-    "internal_stability": (
-        "{country} protest thousands police",
-        "{country} strike union industrial action",
-        "{country} court ruling government challenge",
-        "{country} arrests crackdown opposition",
-    ),
-    "military_posture": (
-        "{country} defence spending budget announcement",
-        "{country} military exercise deployment",
-        "{country} arms purchase procurement contract",
-        "{country} troops deployed reinforcements",
-    ),
-    "economic_coercion": (
-        "{country} tariffs imposed imports",
-        "{country} sanctions export ban trade",
-        "{country} investment screening blocked deal",
-        "{country} IMF review forecast downgrade",
-    ),
-    "proliferation_watch": (
-        "{country} IAEA inspection enrichment",
-        "{country} missile test launch",
-        "{country} nuclear programme agreement",
-        "{country} export controls dual-use technology",
-    ),
-}
+#: instruction. ``{subject}`` is the only substitution — the subject ladder's
+#: name for the target (``legba.data.subject``, W10 SUBJECT-1), whatever kind
+#: of subject the profile's frames make it. ``{country}`` is the compatibility
+#: spelling, filled from the SAME value, so a profile written before the
+#: ladder (the exemplar's ``reference_queries`` still say ``{country}``)
+#: renders byte-identically. They name EVENTS a fortnight can contain, not
+#: outlets and not dates, because that is what a metasearch indexes and what a
+#: reference records.
+#:
+#: ROSTER-2: PROFILE data — each unit's ``reference_queries`` on the profile's
+#: ``rosters.units`` entry, roster order; a unit that declares none gets
+#: :data:`_GENERIC_PATTERNS` by name. Built at import from the process's roster.
+QUERY_PATTERNS: dict[str, tuple[str, ...]] = _rosters.unit_reference_queries()
 
 #: Patterns for a dimension this module does not know by name.
 _GENERIC_PATTERNS: tuple[str, ...] = (
-    "{country} {dimension} announcement",
-    "{country} {dimension} decision this month",
-    "{country} {dimension} report",
+    "{subject} {dimension} announcement",
+    "{subject} {dimension} decision this month",
+    "{subject} {dimension} report",
 )
 
 
-def query_guidance(country: str, dimensions: Sequence[str]) -> str:
+def _fill(pattern: str, subject: str, **extra: str) -> str:
+    """One pattern, its subject substituted under both spellings."""
+    return pattern.format(subject=subject, country=subject, **extra)
+
+
+#: INST-1 — words per query a unit's own ``query_terms`` are cut into when it
+#: declares no ``reference_queries``: two, the length of the pin's shortest
+#: declared pattern after its subject. At most :data:`_MAX_TERM_PATTERNS` of them.
+_TERMS_PER_PATTERN = 2
+_MAX_TERM_PATTERNS = 5
+
+
+def unit_patterns(dimension: str) -> tuple[str, ...]:
+    """One unit's query patterns, ``{subject}`` unsubstituted — the population
+    a reference over that unit searches.
+
+    The ladder, every rung profile data or the platform's own: the unit's
+    declared ``reference_queries`` (:data:`QUERY_PATTERNS`); else (INST-1) its
+    OWN ``query_terms`` — the desk reference's search terms, the one other
+    statement the profile makes about what the unit is about — cut into
+    two-word queries after the subject (``{subject} shipping traffic``,
+    ``{subject} disruption closure`` …), so a unit declared for a non-country
+    leg searches its own vocabulary rather than its id; else the generic
+    patterns, by name.
+    """
+    declared = QUERY_PATTERNS.get(dimension)
+    if declared:
+        return tuple(declared)
+    words = (_rosters.terms_for(dimension).query or "").split()
+    if words:
+        chunks = [
+            " ".join(words[i:i + _TERMS_PER_PATTERN])
+            for i in range(0, len(words), _TERMS_PER_PATTERN)
+        ]
+        return tuple("{subject} " + c for c in chunks[:_MAX_TERM_PATTERNS])
+    return tuple(
+        _fill(p, "{subject}", dimension=dimension.replace("_", " "))
+        for p in _GENERIC_PATTERNS
+    )
+
+
+def query_guidance(subject: str, dimensions: Sequence[str]) -> str:
     """The query block the stage-1 instruction carries, for THESE dimensions."""
     lines = [
         "Write queries the way an index works: the WORDS THAT WOULD APPEAR IN "
@@ -455,12 +457,9 @@ def query_guidance(country: str, dimensions: Sequence[str]) -> str:
         "Patterns that work, per dimension:",
     ]
     for dimension in dimensions:
-        patterns = QUERY_PATTERNS.get(dimension) or tuple(
-            p.format(country="{country}", dimension=dimension.replace("_", " "))
-            for p in _GENERIC_PATTERNS
-        )
+        patterns = unit_patterns(dimension)
         rendered = "; ".join(
-            f"`{p.format(country=country)}`" for p in patterns
+            f"`{_fill(p, subject)}`" for p in patterns
         )
         lines.append(f"* `{dimension}` — {rendered}")
     return "\n".join(lines)

@@ -1,0 +1,106 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# deploy/compose.drill.yml — the THROWAWAY stores scripts/restore_drill.sh
+# restores a backup set into. STANDALONE on purpose: it is never merged with
+# docker-compose.yml.
+#
+# Why not docker-compose.yml + deploy/compose.isolation.yml: the base file pins
+# every volume with an explicit `name: legba_*`, and the isolation override
+# re-declares only some of them — opensearch_data, archive_data and ntfy_cache
+# keep their real `legba_*` names under ANY project name, so an isolated stack
+# that starts opensearch mounts the live corpus volume. This file declares its
+# own volumes with NO `name:`, so compose scopes them to the drill project
+# (`<project>_drill_pg`, ...) and nothing here can resolve to a live volume.
+# restore_drill.sh still renders `config` and refuses on any `legba_` volume.
+#
+# Same engine versions as the live stack (a backup is proven on the engine it
+# will be restored to), small memory, loopback-only alternate ports so it runs
+# beside the live stack:
+#   LEGBA_DRILL_PG_PORT (55432) · LEGBA_DRILL_QDRANT_PORT (56333) ·
+#   LEGBA_DRILL_OS_PORT (59200)
+#
+# Usage (restore_drill.sh does all of this):
+#   docker compose -p legba_drill -f deploy/compose.drill.yml up -d --wait
+#   docker compose -p legba_drill -f deploy/compose.drill.yml down -v
+
+services:
+  postgres:
+    image: apache/age@sha256:4241e2d8bb86a6b2ea44e9ad06c73856e12b209de295124603a599dd7feb70eb
+    environment:
+      POSTGRES_USER: legba
+      POSTGRES_PASSWORD: legba
+      POSTGRES_DB: legba
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_preload_libraries=age"
+      - "-c"
+      - "shared_buffers=512MB"
+      - "-c"
+      - "maintenance_work_mem=512MB"
+      - "-c"
+      - "max_wal_size=512MB"
+      # A throwaway restore target: no replica, no archive, so the bulk COPYs
+      # of a restore write the least WAL the engine allows.
+      - "-c"
+      - "wal_level=minimal"
+      - "-c"
+      - "max_wal_senders=0"
+      - "-c"
+      - "archive_mode=off"
+      - "-c"
+      - "fsync=off"
+      - "-c"
+      - "full_page_writes=off"
+    shm_size: 512mb
+    mem_limit: 4g
+    ports:
+      - "127.0.0.1:${LEGBA_DRILL_PG_PORT:-55432}:5432"
+    volumes:
+      - drill_pg:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U legba"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  qdrant:
+    image: qdrant/qdrant:v1.16.3
+    mem_limit: 3g
+    ports:
+      - "127.0.0.1:${LEGBA_DRILL_QDRANT_PORT:-56333}:6333"
+    volumes:
+      - drill_qdrant:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333'"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  opensearch:
+    image: opensearchproject/opensearch:2.19.4
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
+      # The drill shares the live disk: never let the throwaway node's own
+      # watermarks block a restore the drill's disk guard already allowed.
+      - cluster.routing.allocation.disk.threshold_enabled=false
+    mem_limit: 2g
+    ports:
+      - "127.0.0.1:${LEGBA_DRILL_OS_PORT:-59200}:9200"
+    volumes:
+      - drill_os:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 30s
+
+volumes:
+  drill_pg: {}
+  drill_qdrant: {}
+  drill_os: {}

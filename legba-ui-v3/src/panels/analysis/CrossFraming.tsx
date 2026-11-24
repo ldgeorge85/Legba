@@ -76,11 +76,8 @@ import {
   type FramingUnitRow,
   type UnitRowState,
 } from '@/lib/framingModel'
-import {
-  OPEN_CROSS_FRAMING_EVENT,
-  drainPendingCrossFraming,
-  type CrossFramingSubject,
-} from '@/lib/crossFramingLink'
+import { crossFramingSubjectFromParams, type CrossFramingSubject } from '@/lib/crossFramingLink'
+import { usePanelOpenParams } from '@/state/panelParams'
 import { formatZ, type PairState } from '@/lib/layerDivergence'
 import { useScope } from '@/state/scope'
 import type { PanelProps } from '@/types'
@@ -288,7 +285,14 @@ function LensRow({ row }: { row: FramingLensRow }) {
     >
       <div className="flex flex-wrap items-baseline gap-1.5 text-label">
         <span className="font-medium text-ink-1">{row.name ?? humanizeId(row.analystId)}</span>
-        <span className="text-ink-3">
+        <span
+          className="text-ink-3"
+          title={
+            row.priorStamped
+              ? 'The prior this read was written under, as the row stamped it.'
+              : 'The prior as this bundle mirrors it from the persona module; the read carries no stamp of its own.'
+          }
+        >
           prior: {row.prior ?? 'not named in this bundle'}
         </span>
         <span className="text-ink-3">
@@ -337,22 +341,17 @@ function LensRow({ row }: { row: FramingLensRow }) {
 // ---------------------------------------------------------------------------
 
 export default function CrossFramingPanel({ registration }: PanelProps) {
-  // The subject: the parked deep link first (a claim chip or a situation row
-  // clicked before this tile existed), then the live event, then the wall
-  // scope's desk when it names exactly one. A scope over fourteen desks does
-  // NOT pick one of them — that would show a fourteenth of the scope and call
-  // it the scope (the `scopeParams` precedent).
-  const [subject, setSubject] = useState<CrossFramingSubject | null>(() =>
-    drainPendingCrossFraming(),
-  )
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent<CrossFramingSubject>).detail
-      if (detail?.targetId) setSubject(detail)
-    }
-    window.addEventListener(OPEN_CROSS_FRAMING_EVENT, handler)
-    return () => window.removeEventListener(OPEN_CROSS_FRAMING_EVENT, handler)
-  }, [])
+  // The subject: the `open_panel` that opened (or re-focused) this drill —
+  // a claim chip or a situation row, before or after this tile existed
+  // (`state/panelParams`, UI-B1/shell; the window park and the DOM event are
+  // retired) — then the wall scope's desk when it names exactly one. A scope
+  // over fourteen desks does NOT pick one of them — that would show a
+  // fourteenth of the scope and call it the scope (the `scopeParams` precedent).
+  const [subject, setSubject] = useState<CrossFramingSubject | null>(null)
+  usePanelOpenParams('analysis.cross_framing', (params) => {
+    const next = crossFramingSubjectFromParams(params)
+    if (next) setSubject(next)
+  })
 
   const wallScope = useScope((s) => s.scope)
   const setScope = useScope((s) => s.setScope)
@@ -368,7 +367,7 @@ export default function CrossFramingPanel({ registration }: PanelProps) {
         return await apiGet<{ data: ReadFindingRow[] }>(
           `/findings?analyst_id=${COUNTRY_COMPOSITION}&target_id=${encodeURIComponent(
             targetId!,
-          )}&limit=1`,
+          )}&limit=1&fields=full`,
         )
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) return { data: [] }

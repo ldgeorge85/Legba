@@ -1,0 +1,8 @@
+{
+  "states": {
+    "action_pack:journal_read": {
+      "source": "action_pack_journal_read.yaml",
+      "state": "active"
+    }
+  }
+}

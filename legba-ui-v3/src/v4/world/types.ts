@@ -12,7 +12,8 @@ export interface WorldSignal {
   countries: string[]
   severity: Severity
   sourceId: string | null
-  /** epoch ms (fetched_at). */
+  /** epoch ms — the VALID time (the publisher's `data.published_at`); NaN when
+   *  the row carries none (the fetch time is never borrowed). */
   ts: number
   title: string
   language?: string | null

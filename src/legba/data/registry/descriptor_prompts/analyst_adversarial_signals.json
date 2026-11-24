@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:adversarial_signals": {
+      "source": "analyst_adversarial_signals.yaml",
+      "state": "draft"
+    }
+  }
+}

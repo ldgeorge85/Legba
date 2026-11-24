@@ -137,6 +137,26 @@ class _FakeConn:
     async def fetchrow(self, sql: str, *args: Any) -> Any:
         return None
 
+    async def fetch(self, sql: str, *args: Any) -> list[Any]:
+        return []
+
+    async def executemany(self, sql: str, args: Any) -> None:
+        # the citation rows (lane DM-A) land in bulk; they are not the
+        # finding/fact/hypothesis writes this file counts
+        return None
+
+    def transaction(self) -> Any:
+        # A finding and its citation rows (lane DM-A) commit in one
+        # transaction; this fake records statements and has none to open.
+        class _Tx:
+            async def __aenter__(self) -> None:
+                return None
+
+            async def __aexit__(self, *exc: Any) -> None:
+                return None
+
+        return _Tx()
+
 
 class _FakeAcquire:
     def __init__(self, conn: _FakeConn) -> None:
@@ -212,7 +232,10 @@ async def test_in_process_runs_four_stages_and_writes_finding() -> None:
 
     assert isinstance(result, DeepConsultWorkflowResult)
     assert result.finding_id  # a finding row was written
-    assert result.answer.startswith("Brazil")
+    # Q-1: the deep answer carries the turn contract's window line, then the
+    # model's prose unchanged.
+    assert result.answer.startswith("> **Window in force:**")
+    assert "\n\nBrazil" in result.answer
     assert 0.0 <= result.uncertainty <= 1.0
     # acquire used the real dispatcher against the stub port (search_signals).
     assert any(c[0] == "search_signals" for c in substrate.calls)
@@ -281,7 +304,8 @@ async def test_analyze_reuses_consult_run_method() -> None:
     acquired = await _run_acquire(plan, deps)
     analyzed = await _run_analyze(acquired, deps)
 
-    assert analyzed["answer"].startswith("Brazil")
+    assert analyzed["answer"].startswith("> **Window in force:**")  # Q-1 contract
+    assert "\n\nBrazil" in analyzed["answer"]
     assert analyzed["uncertainty"] == pytest.approx(0.3)
     # candidate extraction surfaced both legs.
     assert analyzed["candidate_facts"]

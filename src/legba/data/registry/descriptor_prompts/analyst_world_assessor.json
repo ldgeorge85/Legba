@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:world_assessor": {
+      "source": "analyst_world_assessor.yaml",
+      "state": "active"
+    }
+  }
+}

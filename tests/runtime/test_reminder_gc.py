@@ -535,3 +535,81 @@ async def test_sweep_with_sidecar_deleter_alerts_only_on_genuine_removal(
     body = json.loads(fired[0][1])
     assert body["removed"] == 1
     assert body["reminders"] == [{"actor_id": "source::dead::d", "reminder": "poll_dead"}]
+
+
+# --------------------------------------------------------------------------
+# W11-F268 — a confirmed absence is not re-asked every sweep
+# --------------------------------------------------------------------------
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.t = 1000.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+@pytest.mark.asyncio
+async def test_absence_memo_skips_rechecking_a_confirmed_absent_reminder() -> None:
+    from legba.runtime.reminder_gc import ReminderAbsenceMemo
+
+    gone = _rec("source::lemonde::dbcc5090c4a39159", "source", lifecycle=RETIRED)
+    orphan = _rec("analyst::old::1111", "analyst", lifecycle=RETIRED)
+    store = _FakeStore([gone, orphan])
+    clock = _Clock()
+    memo = ReminderAbsenceMemo(recheck_after_s=3600, clock=clock)
+    deleter = _RecordingDeleter(present={("AnalystActor", "analyst::old::1111", "run_cadence")})
+
+    r1 = await sweep_orphan_reminders(state_store=store, delete_reminder=deleter, absence_memo=memo)
+    assert (r1.removed, r1.already_absent, r1.recently_confirmed_absent) == (1, 1, 0)
+
+    # Next resync (5 min later): the absent one is not asked about; the one
+    # that WAS present is asked again (a removal is never memoised).
+    clock.t += 300
+    deleter.calls.clear()
+    r2 = await sweep_orphan_reminders(state_store=store, delete_reminder=deleter, absence_memo=memo)
+    assert deleter.calls == [("AnalystActor", "analyst::old::1111", "run_cadence")]
+    assert r2.recently_confirmed_absent == 1 and r2.candidates == 2
+
+    # Past the re-check interval it is asked again.
+    clock.t += 3600
+    deleter.calls.clear()
+    await sweep_orphan_reminders(state_store=store, delete_reminder=deleter, absence_memo=memo)
+    assert ("SourceActor", "source::lemonde::dbcc5090c4a39159", "poll_lemonde") in deleter.calls
+
+
+@pytest.mark.asyncio
+async def test_absence_memo_invalidated_by_a_row_write() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from legba.runtime.reminder_gc import ReminderAbsenceMemo
+
+    rec = _rec("source::x::aaaa", "source", lifecycle=RETIRED)
+    memo = ReminderAbsenceMemo(recheck_after_s=3600, clock=_Clock())
+    deleter = _RecordingDeleter(present=set())
+    await sweep_orphan_reminders(state_store=_FakeStore([rec]), delete_reminder=deleter, absence_memo=memo)
+    rec.updated_at = datetime.now(timezone.utc) + timedelta(seconds=1)  # re-retired after a revival
+    deleter.calls.clear()
+    await sweep_orphan_reminders(state_store=_FakeStore([rec]), delete_reminder=deleter, absence_memo=memo)
+    assert deleter.calls == [("SourceActor", "source::x::aaaa", "poll_x")]
+
+
+@pytest.mark.asyncio
+async def test_absence_memo_never_remembers_a_failed_check_and_prunes_gone_rows() -> None:
+    from legba.runtime.reminder_gc import ReminderAbsenceMemo
+
+    rec = _rec("source::y::bbbb", "source", lifecycle=RETIRED)
+    memo = ReminderAbsenceMemo(recheck_after_s=3600, clock=_Clock())
+
+    async def _boom(*_a) -> bool:
+        raise RuntimeError("sidecar down")
+
+    r = await sweep_orphan_reminders(state_store=_FakeStore([rec]), delete_reminder=_boom, absence_memo=memo)
+    assert r.failed == 1 and not memo.recently_absent(rec, "poll_y")
+    await sweep_orphan_reminders(
+        state_store=_FakeStore([rec]), delete_reminder=_RecordingDeleter(present=set()), absence_memo=memo,
+    )
+    assert memo.recently_absent(rec, "poll_y")
+    await sweep_orphan_reminders(state_store=_FakeStore([]), delete_reminder=_RecordingDeleter(), absence_memo=memo)
+    assert not memo.recently_absent(rec, "poll_y")  # row no longer retired-listed: pruned

@@ -198,7 +198,8 @@ describe('judge — faithfulness, never without its n', () => {
 
   it('states the mean with its unit, its window and its as-of', () => {
     const f = judgeFigure(stats(), false, NOW)
-    expect(f.value).toBe('0.83 faithfulness')
+    // C2 — named for what it is: a MEAN, over its window.
+    expect(f.value).toBe('0.83 mean faithfulness · 7d')
     expect(f.asOf).toBe('7m ago')
     expect(f.title).toContain('over 4,497 scored critiques in a 7d window')
     expect(f.title).toContain('2,973 attributed')

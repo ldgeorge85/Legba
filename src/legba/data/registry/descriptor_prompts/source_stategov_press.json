@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.stategov.press_releases": {
+      "source": "source_stategov_press.yaml",
+      "state": "draft"
+    }
+  }
+}

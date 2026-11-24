@@ -268,10 +268,13 @@ async def test_flag_on_per_country_read_splits_basis_and_periphery(monkeypatch):
     # TWO evidence gathers: the basis read at the SPLIT floor (0.50), then the
     # periphery complement at the SAME floor — plus the two memory-section
     # gathers (the Phase-1 continuity register and FRAME-2's window ledger),
-    # neither of which is a tier.
-    assert len(conn.calls) == 4
+    # neither of which is a tier — plus (W11 SWEEP-2) the ONE cadence lookup
+    # on analyst_descriptors that stamps each quoted read's cadence so a stale
+    # read can be marked; never a tier, never a selection.
+    assert len(conn.calls) == 5
     assert "FROM situations" in conn.calls[2][0]
-    assert "CASE f.severity" in conn.calls[-1][0]
+    assert "CASE f.severity" in conn.calls[-2][0]
+    assert "FROM analyst_descriptors" in conn.calls[-1][0]
     basis_q, basis_p = conn.calls[0]
     peri_q, peri_p = conn.calls[1]
     assert "LEAST(f.confidence, v.faithfulness_score) >= $4" in basis_q

@@ -11,7 +11,7 @@ object detection for the `process_media` job loop.
 
 ## D2 posture: PREP, not PROVISION
 
-Per the locked operator decision **D2** (`planning/FEATURE_COMPLETE_PLAN.md`) the
+Per the locked operator decision **D2** the
 *deploy + test path* is built but the *live model endpoint is held as the stated
 seam* (`docs/SEAMS.md` #1). Concretely:
 

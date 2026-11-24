@@ -55,6 +55,7 @@
  *    flattering direction, which is the one bias the instrument must not have.
  */
 
+import { humanizeAnalystId } from '@/lib/analystNames'
 import {
   ABSENCE_KIND_LABEL,
   ABSENCE_KIND_ORDER,
@@ -65,6 +66,7 @@ import {
 } from '@/lib/absenceModel'
 import { severityRank } from '@/lib/findingsViews'
 import { humanizeId } from '@/lib/deskNames'
+import { bandsFromProjection, PROFILE_UI, useProjection, type ProjectionRead } from '@/lib/profileUi'
 import { sessionNonce } from '@/lib/readTelemetry'
 import { whyNot, type UnsupportedSpanView } from '@/lib/claimsModel'
 import {
@@ -73,6 +75,7 @@ import {
   type CountryScorecard,
   type DimensionBand,
 } from '@/lib/evalOps'
+import { isVerifyExemptState, unverifiedStateOf, type UnverifiedInfo } from '@/lib/unverifiedState'
 import type { BandChange, SinceAlert, SinceFinding, SinceResponse, SituationChange, SinceSection } from '@/lib/wallModel'
 
 // ---------------------------------------------------------------------------
@@ -255,7 +258,8 @@ export function formatElapsed(ms: number): string {
 
 /** The bucket rows with no desk fall into (a world-tier read, an orphan). */
 export const UNSCOPED_DESK = '__unscoped__'
-export const UNSCOPED_DESK_LABEL = 'No desk (world / unscoped)'
+/** The profile's words for that bucket (`ui.labels.unscoped_subject`; the platform noun when undeclared). */
+export const UNSCOPED_DESK_LABEL = PROFILE_UI.labels.unscoped_subject
 
 export interface DeskGroup<T> {
   /** The target id, or {@link UNSCOPED_DESK}. */
@@ -310,6 +314,16 @@ export function groupByDesk<T>(
 
 export type ChangedKind = 'finding' | 'alert' | 'situation' | 'band'
 
+/** An alert folded INTO the item it alerts on: shown as a mark on that row. */
+export interface ChangedAlertMark {
+  /** The alert row id — still a citation. */
+  id: string
+  /** The alert's trigger class (`verified_finding`, `situation_escalation`, …). */
+  channel: string
+  severity: string | null
+  at: string
+}
+
 export interface ChangedRow {
   kind: ChangedKind
   /** The substrate row id — the citation. Every row is openable. */
@@ -322,56 +336,104 @@ export interface ChangedRow {
   severity: string | null
   at: string
   targetId: string | null
-}
-
-function changedWeight(row: ChangedRow): number {
-  // +1 so a low-severity row still counts as movement, never as nothing.
-  return severityRank(row.severity) + 1
+  /** The desk this row sits on, {@link UNSCOPED_DESK} when it has none. */
+  deskId: string
+  /** The humanized desk name, printed on the row (the list is ranked, not grouped). */
+  deskLabel: string
+  /** Alerts that point at this item, folded in rather than listed beside it. */
+  alerts: ChangedAlertMark[]
 }
 
 /**
- * Everything the diff says landed, as one cited list per desk.
+ * W11-F73 — a since-finding's effective confidence as printed, or `—` when the
+ * row does not carry a finite number. The live `/v3/since` route cannot omit
+ * it on `new_findings` (`SinceFinding.effective_confidence` is a required
+ * float over `LEAST(confidence NOT NULL, faithfulness_score)` on a JOINed
+ * critique — checked 2026-10-13: 50 of 50 items numeric), but this band also
+ * reads fixtures, cached envelopes and older registries, and one row without
+ * the field used to throw inside the render and blank every band.
+ */
+export function confidenceText(v: unknown): string {
+  return typeof v === 'number' && Number.isFinite(v) ? v.toFixed(2) : '—'
+}
+
+/** How an alert's trigger class reads as a mark on the item it alerts on. */
+export function alertMarkText(channel: string): string {
+  const c = (channel || '').trim()
+  if (c === 'verified_finding') return 'alerted: verified'
+  if (c === 'situation_escalation') return 'alerted: escalation'
+  return c ? `alerted: ${c.replace(/_/g, ' ')}` : 'alerted'
+}
+
+/** The verified-finding alert's title shape (`alert_trigger_scan`). */
+const VERIFIED_ALERT_RE = /^Verified [a-z]+-severity finding: ([\s\S]+)$/
+/** The situation-escalation alert's title shape (`_situation_escalation_scan`). */
+const ESCALATION_ALERT_RE = /^Situation escalated: ([\s\S]+) \((\S+) -> (\S+)\)$/
+
+function deskOf(targetId: string | null | undefined): string {
+  return targetId && targetId.trim() !== '' ? targetId : UNSCOPED_DESK
+}
+
+/** The worse of a row's own severity and the severities of the alerts folded into it. */
+export function changedRankSeverity(row: Pick<ChangedRow, 'severity' | 'alerts'>): number {
+  return Math.max(severityRank(row.severity), ...row.alerts.map((a) => severityRank(a.severity)))
+}
+
+/**
+ * Everything the diff says landed, as ONE ranked, de-duplicated, cited list.
  *
  * FOUR SOURCES, ONE GRAMMAR. A verified finding, an alert, a situation
- * lifecycle edge and a band crossing are four different rows in the substrate
- * and four different answers to "what happened"; a reader working a desk in
- * twenty minutes needs them interleaved by how bad they are, not segregated by
- * which table they came from. `superseded` is deliberately NOT here: a
- * reversal is a change to a record the reader may never have seen, and it has
- * its own surface on the Wall.
+ * lifecycle edge and a band crossing are four different rows in the substrate;
+ * a reader with twenty minutes needs them in one list by how bad they are.
+ * `superseded` is deliberately NOT here: a reversal is a change to a record
+ * the reader may never have seen, and it has its own surface on the Wall.
+ *
+ * THREE RULES (UI 2026-11-13, "changed de-duplicated and ranked"):
+ *  1. AN ALERT COLLAPSES INTO WHAT IT ALERTS ON. An alert that points at an
+ *     item already in the list — by the pointer the route carries
+ *     (`finding_id` / `situation_id`), else by its own title shape on the same
+ *     desk — is not a row: it becomes a mark on that item. An alert whose item
+ *     is not in the list stays a row. Two identical alerts on one desk are one.
+ *  2. A STATE TO THE SAME STATE IS NOT A CHANGE. A situation edge or a band
+ *     crossing whose from and to are equal, and an escalation alert `x -> x`,
+ *     are dropped.
+ *  3. RANKED, NOT GROUPED. Order: the worse of the row's severity and its
+ *     folded alerts' severities (an alert raises its item, it does not add a
+ *     row), then most recent first, then id for a stable paint. A situation
+ *     carries intensity, not severity, so it ranks with the unscored rows.
  */
-export function changedBand(since: JudgmentSince | null | undefined): DeskGroup<ChangedRow>[] {
+export function changedList(since: JudgmentSince | null | undefined): ChangedRow[] {
   if (!since) return []
   const rows: ChangedRow[] = []
+  const base = (targetId: string | null) => {
+    const deskId = deskOf(targetId)
+    return { targetId, deskId, deskLabel: deskLabel(deskId), alerts: [] as ChangedAlertMark[] }
+  }
 
+  const findingById = new Map<string, ChangedRow>()
   for (const f of since.new_findings?.items ?? ([] as SinceFinding[])) {
-    rows.push({
+    if (findingById.has(f.id)) continue
+    const row: ChangedRow = {
       kind: 'finding',
       id: f.id,
       rowKind: 'finding',
       headline: f.title,
-      note: `${f.analyst_id ?? 'unknown producer'} · effective confidence ${f.effective_confidence.toFixed(2)}`,
+      // The producing unit in words, never its machine id (`energy_security` → `Energy security`).
+      note: `${humanizeAnalystId(f.analyst_id, 'unknown producer')} · effective confidence ${confidenceText(f.effective_confidence)}`,
       severity: f.severity,
       at: f.produced_at,
-      targetId: f.target_id,
-    })
+      ...base(f.target_id),
+    }
+    findingById.set(f.id, row)
+    rows.push(row)
   }
 
-  for (const a of since.alerts?.items ?? ([] as SinceAlert[])) {
-    rows.push({
-      kind: 'alert',
-      id: a.id,
-      rowKind: 'alert',
-      headline: a.summary,
-      note: `alert · ${a.channel || 'unrouted'}`,
-      severity: a.severity,
-      at: a.produced_at,
-      targetId: a.target_id,
-    })
-  }
-
+  const situationById = new Map<string, ChangedRow>()
   for (const s of since.situations?.items ?? ([] as SituationChange[])) {
-    rows.push({
+    // Rule 2 — `x → x` is not a change.
+    if (s.from_status !== null && s.from_status === s.to_status) continue
+    if (situationById.has(s.id)) continue
+    const row: ChangedRow = {
       kind: 'situation',
       id: s.id,
       rowKind: 'situation',
@@ -381,14 +443,17 @@ export function changedBand(since: JudgmentSince | null | undefined): DeskGroup<
           ? `situation ${s.change} · now ${s.to_status}`
           : `situation ${s.change} · ${s.from_status} → ${s.to_status}`,
       // A situation carries an intensity, not a severity; leaving it null keeps
-      // the two scales from being read as one (rule 1).
+      // the two scales from being read as one (rule 1 of this module).
       severity: null,
       at: s.updated_at,
-      targetId: s.target_id,
-    })
+      ...base(s.target_id),
+    }
+    situationById.set(s.id, row)
+    rows.push(row)
   }
 
   for (const b of since.band_changes?.items ?? ([] as BandChange[])) {
+    if (b.from_band === b.to_band) continue
     rows.push({
       kind: 'band',
       id: b.to_scorecard_row_id,
@@ -397,19 +462,78 @@ export function changedBand(since: JudgmentSince | null | undefined): DeskGroup<
       note: `band ${b.direction}`,
       severity: b.severity,
       at: b.changed_at,
-      targetId: b.target_id,
+      ...base(b.target_id),
     })
   }
 
-  const groups = groupByDesk(rows, (r) => r.targetId, changedWeight)
-  for (const g of groups) {
-    g.items.sort(
-      (a, b) =>
-        severityRank(b.severity) - severityRank(a.severity) ||
-        Date.parse(b.at) - Date.parse(a.at),
-    )
+  const alertRowByKey = new Map<string, ChangedRow>()
+  for (const a of since.alerts?.items ?? ([] as SinceAlert[])) {
+    const deskId = deskOf(a.target_id)
+    const mark: ChangedAlertMark = { id: a.id, channel: a.channel || '', severity: a.severity, at: a.produced_at }
+    const summary = a.summary ?? ''
+    const esc = ESCALATION_ALERT_RE.exec(summary)
+    const from = a.state_from ?? esc?.[2] ?? null
+    const to = a.state_to ?? esc?.[3] ?? null
+    // Rule 2 — an escalation page from a state to the same state.
+    if (from !== null && to !== null && from === to) continue
+
+    // Rule 1 — fold into the item it points at.
+    let host: ChangedRow | undefined
+    if (a.finding_id) host = findingById.get(a.finding_id)
+    if (!host && a.situation_id) host = situationById.get(a.situation_id)
+    if (!host) {
+      const verified = VERIFIED_ALERT_RE.exec(summary)
+      if (verified) {
+        const title = verified[1].trim()
+        host = rows.find(
+          (r) =>
+            r.kind === 'finding' &&
+            r.deskId === deskId &&
+            (r.headline === title || r.headline.startsWith(title)),
+        )
+      } else if (esc) {
+        const name = esc[1].trim()
+        host = rows.find((r) => r.kind === 'situation' && r.deskId === deskId && r.headline === name)
+      }
+    }
+    if (host) {
+      host.alerts.push(mark)
+      continue
+    }
+
+    // Two identical alerts on one desk are one row.
+    const key = `${deskId}\u0000${summary}`
+    const twin = alertRowByKey.get(key)
+    if (twin) {
+      twin.alerts.push(mark)
+      continue
+    }
+    const row: ChangedRow = {
+      kind: 'alert',
+      id: a.id,
+      rowKind: 'alert',
+      headline: summary,
+      // The trigger class in words (`situation_escalation` → `situation escalation`).
+      note: `alert · ${(a.channel || 'unrouted').replace(/_/g, ' ')}`,
+      severity: a.severity,
+      at: a.produced_at,
+      ...base(a.target_id),
+    }
+    alertRowByKey.set(key, row)
+    rows.push(row)
   }
-  return groups
+
+  return rows.sort(
+    (x, y) =>
+      changedRankSeverity(y) - changedRankSeverity(x) ||
+      (Date.parse(y.at) || 0) - (Date.parse(x.at) || 0) ||
+      x.id.localeCompare(y.id),
+  )
+}
+
+/** How many distinct desks a changed list spans (the band's note). */
+export function changedDeskCount(rows: readonly ChangedRow[]): number {
+  return new Set(rows.map((r) => r.deskId)).size
 }
 
 // ---------------------------------------------------------------------------
@@ -434,6 +558,8 @@ export interface JudgmentCitation {
   single_source: boolean
   wire_folded: boolean
   marker_class: string | null
+  /** C-1: the claimant when the cited row is a CLAIM, else null. */
+  claimant?: string | null
 }
 
 /**
@@ -458,6 +584,9 @@ export interface JudgmentFindingRow {
   severity: string | null
   confidence: number
   schema_uri: string
+  /** The verify block, or — X4 READPATH — the registry's pending|absent
+   *  state block (`lib/unverifiedState`) when no verdict exists; `null` only
+   *  from a registry that predates it. */
   verification: Record<string, unknown> | null
   citations: JudgmentCitation[]
 }
@@ -470,6 +599,15 @@ export interface UnsupportedClaim extends UnsupportedSpanView {
   producedAt: string
 }
 
+/** One finding on a desk with NO verify verdict, in the registry's own state. */
+export interface UnverifiedFinding {
+  findingId: string
+  title: string
+  analystId: string | null
+  producedAt: string
+  info: UnverifiedInfo
+}
+
 export interface CheckedDesk {
   targetId: string
   label: string
@@ -477,8 +615,16 @@ export interface CheckedDesk {
   verified: number
   /** Findings whose verify pass flagged at least one claim. */
   unsupported: number
-  /** Findings with NO verify block at all — an absence, not a pass (rule 2). */
+  /** Findings with NO verify block at all — an absence, not a pass (rule 2).
+   *  Always `pending + notJudged`. */
   unchecked: number
+  /** X4 READPATH — no verdict YET: inside the judge's window. */
+  pending: number
+  /** X4 READPATH — no verdict and none coming (window passed, or verify-exempt). */
+  notJudged: number
+  /** The block-less findings a reader should see by name — every one but the
+   *  verify-EXEMPT producers' (they never enter the pass; counted, not listed). */
+  unverified: UnverifiedFinding[]
   /** Every flagged sentence on the desk, with the finding it came from. */
   claims: UnsupportedClaim[]
   weight: number
@@ -492,7 +638,9 @@ export interface CheckedDesk {
  * the effective-confidence floor (`/since`'s `new_findings` gate) — a finding
  * can clear 0.50 and still carry a flagged sentence, and this band exists
  * precisely to show that sentence. A row with no block is `unchecked`, because
- * "we did not look" and "we looked and it held" must not render the same.
+ * "we did not look" and "we looked and it held" must not render the same —
+ * and since X4 READPATH it is split by the REGISTRY's own state (never this
+ * band's clock): `pending` (the verify pass may still land) or `notJudged`.
  *
  * THE SOURCE ON EACH SENTENCE is the finding it was written in — id, title and
  * producer — which is what a reader needs to go argue with it. The `markers`
@@ -513,14 +661,33 @@ export function checkedBand(rows: readonly JudgmentFindingRow[] | null | undefin
         verified: 0,
         unsupported: 0,
         unchecked: 0,
+        pending: 0,
+        notJudged: 0,
+        unverified: [],
         claims: [],
         weight: 0,
       }
       byDesk.set(target, desk)
     }
+    // X4 READPATH — the registry's pending|absent state block is NOT a verify
+    // block: it is read first, so it can never be counted as a pass.
+    const unverified = unverifiedStateOf(row)
     const verification = row.verification ?? null
-    const flagged = whyNot(verification)
-    if (flagged) {
+    const flagged = unverified ? null : whyNot(verification)
+    if (unverified) {
+      desk.unchecked += 1
+      if (unverified.state === 'pending') desk.pending += 1
+      else desk.notJudged += 1
+      if (!isVerifyExemptState(unverified)) {
+        desk.unverified.push({
+          findingId: row.id,
+          title: row.title,
+          analystId: row.analyst_id ?? null,
+          producedAt: row.produced_at,
+          info: unverified,
+        })
+      }
+    } else if (flagged) {
       desk.unsupported += 1
       for (const span of flagged.unsupportedSpans) {
         desk.claims.push({
@@ -531,11 +698,13 @@ export function checkedBand(rows: readonly JudgmentFindingRow[] | null | undefin
           producedAt: row.produced_at,
         })
       }
-    } else if (verification && typeof verification === 'object') {
-      desk.verified += 1
     } else {
-      desk.unchecked += 1
+      desk.verified += 1
     }
+  }
+  // Newest first inside a desk — the pending ones are the ones still moving.
+  for (const desk of byDesk.values()) {
+    desk.unverified.sort((a, b) => Date.parse(b.producedAt) - Date.parse(a.producedAt))
   }
   // A desk is ranked by how much it FAILED, not by how much it produced: the
   // flagged sentences are the thing a reader has twenty minutes to act on.
@@ -808,6 +977,42 @@ export const BANDS: readonly BandSpec[] = [
   { id: 'gaps', label: 'Gaps', question: 'Where did the evidence run out?' },
   { id: 'due', label: 'Due', question: 'What does the platform owe an answer on?' },
 ]
+
+/**
+ * The bands as THIS profile words them (UI-B2): the projection's `bands`
+ * section overrides a band's label and question by id when the plane answers;
+ * otherwise the platform's own reading order above stands. The ORDER and the
+ * ids are the platform's (the argument above) — a projected band id the
+ * platform does not have is not rendered, never invented. `read` carries the
+ * refusal for the surface to name.
+ */
+export function bandsWithProjection(read: ProjectionRead): readonly BandSpec[] {
+  if (read.state !== 'ok') return BANDS
+  const byId = new Map(bandsFromProjection(read.rows).map((b) => [b.id, b]))
+  return BANDS.map((b) => {
+    const p = byId.get(b.id)
+    return p ? { id: b.id, label: p.label, question: p.question } : b
+  })
+}
+
+/** {@link bandsWithProjection} over the live plane, plus the read itself. */
+export function useBands(): { bands: readonly BandSpec[]; read: ProjectionRead } {
+  const read = useProjection('bands')
+  return { bands: bandsWithProjection(read), read }
+}
+
+/** One band's spec, by id, with the projection's precedence. */
+export function useBand(id: BandId): BandSpec {
+  const { bands } = useBands()
+  return bands.find((b) => b.id === id) ?? BANDS.find((b) => b.id === id)!
+}
+
+/** Where the bands' words came from, in one line (the reading rail's tooltip). */
+export function bandsSourceText(read: ProjectionRead): string {
+  if (read.state === 'ok') return `bands from the ${read.plane} projection`
+  if (read.state === 'loading') return 'bands: the platform reading order (projection not read yet)'
+  return `bands: the platform reading order — ${read.name}: ${read.reason}`
+}
 
 /** The DOM id / test id a band container carries (`morning-read-changed`). */
 export function bandTestId(id: BandId): string {

@@ -40,7 +40,7 @@ from uuid import uuid4
 import pytest
 
 from legba.data.analysts import unit_grounding as ug
-from legba.data.analysts.handler_options import (
+from legba.data.option_catalog.handler_options import (
     ANALYST_KIND_OPTIONS,
     RESERVED_OPTION_KEYS,
     known_kind_option_names,
@@ -1303,6 +1303,17 @@ _VERIFY_SEAM_KIND_KNOBS = frozenset({"judge_sample_rate", "judge_sample_always"}
 #: unit's render is byte-identical).
 _RUN_PHASE_KIND_KNOBS = frozenset({"spread_block"})
 
+#: Lane K-2 — the FEED ROSTER knob, read by its own leaf
+#: (``feed_roster_block.feed_roster_from_options``) which run_method calls
+#: with the merged options. Proven BEHAVIOURALLY in
+#: ``tests/data_pkg/test_cyber_reader_k2.py`` (the descriptor's own options,
+#: merged by the runtime, render the block; an undeclared unit renders none).
+_ROSTER_LEAF_KIND_KNOBS = frozenset({"feed_roster"})
+_ROSTER_LEAF_SRC = (
+    Path(__file__).resolve().parents[2]
+    / "src/legba/data/analysts/feed_roster_block.py"
+).read_text()
+
 #: V3/P2 — kind knobs read by the SLICE READER, not by run_method and not by
 #: the verify seam. The DESK GROUNDING gather fires inside
 #: ``actor_substrate_slice._read_substrate_slice``, which runs BEFORE the
@@ -1318,6 +1329,63 @@ _SLICE_READER_KIND_KNOBS = frozenset({
     # same place and for the same reason as the events pair above.
     "offer_history", "history_series_limit",
 })
+
+#: W8 TAX-1 — the per-source diversity cap, read by BOTH slice readers through
+#: the leaf ``data/signal_slice_scope.slice_per_source_cap`` (validated against
+#: this catalog's OptionSpec there). Reachability is proven against the leaf and
+#: the two readers' sources here and BEHAVIOURALLY in
+#: ``tests/data_pkg/test_signal_tag_slice.py`` (a declared cap holds per source
+#: on the real driver; its absence changes nothing).
+_SCOPE_LEAF_KIND_KNOBS = frozenset({"slice_per_source_cap"})
+
+#: Lane N-B — the WATERMARK window, read by the slice reader through the leaf
+#: ``data/slice_coverage.watermark_config`` (resolved via the X-1 kind catalog
+#: there). Proven BEHAVIOURALLY in ``tests/data_pkg/test_slice_coverage.py``.
+_WATERMARK_KIND_KNOBS = frozenset({
+    "slice_since_watermark", "slice_watermark_min_hours",
+    "slice_watermark_first_run_hours",
+})
+
+_WATERMARK_LEAF_SRC = (
+    Path(__file__).resolve().parents[2]
+    / "src" / "legba" / "data" / "slice_coverage.py"
+).read_text()
+
+#: X4 LEVEL (W11-F36) — the level-shaped indicator declaration, read by
+#: run_method's REFLECT phase through the leaf ``data/indicator_shape.py``
+#: (``level_specs(options)``), not by the slice-focus resolver. Reachability is
+#: proven against both sources here and BEHAVIOURALLY in
+#: ``tests/data_pkg/test_level_indicators.py`` (run_method with the option
+#: stamps and sets back level entries; without it, nothing changes).
+_LEVEL_SHAPE_KIND_KNOBS = frozenset({"level_indicators"})
+
+_INDICATOR_SHAPE_SRC = (
+    Path(__file__).resolve().parents[2]
+    / "src" / "legba" / "data" / "indicator_shape.py"
+).read_text()
+
+#: W11-F91 — the multi-round GATHER evidence cap, read by run_method through the
+#: leaf ``data/analysts/gather_context_budget.py``
+#: (``resolve_gather_context_budget(options, ...)``), not by the slice-focus
+#: resolver. Reachability is proven against both sources here and BEHAVIOURALLY
+#: in ``tests/data_pkg/test_gather_context_budget.py`` (the cap packs the slice,
+#: compacts, pre-flights; 0 turns it off).
+_GATHER_BUDGET_KIND_KNOBS = frozenset({"evidence_char_cap"})
+
+_GATHER_BUDGET_SRC = (
+    Path(__file__).resolve().parents[2]
+    / "src" / "legba" / "data" / "analysts" / "gather_context_budget.py"
+).read_text()
+
+_SCOPE_LEAF_SRC = (
+    Path(__file__).resolve().parents[2]
+    / "src" / "legba" / "data" / "signal_slice_scope.py"
+).read_text()
+
+_CROSS_TARGET_SRC = (
+    Path(__file__).resolve().parents[2]
+    / "src" / "legba" / "data" / "analysts" / "cross_target_raw.py"
+).read_text()
 
 _SLICE_READER_SRC = (
     Path(__file__).resolve().parents[2]
@@ -1356,11 +1424,37 @@ def test_every_declared_kind_knob_is_actually_read_by_its_kind():
                 f"{name} never reaches the verify call in actor_critic"
             )
             continue
+        if name in _ROSTER_LEAF_KIND_KNOBS:
+            assert f'FEED_ROSTER_OPTION = "{name}"' in _ROSTER_LEAF_SRC
+            assert "options.get(FEED_ROSTER_OPTION)" in _ROSTER_LEAF_SRC
+            assert "feed_roster_from_options(options," in _INLINE_TARGET_SRC
+            continue
         if name in _RUN_PHASE_KIND_KNOBS:
             assert f'options.get("{name}")' in _INLINE_TARGET_SRC, (
                 f"ANALYST_KIND_OPTIONS declares inline_target.{name} as a "
                 "run-phase knob but run_method never reads it off the options"
             )
+            continue
+        if name in _LEVEL_SHAPE_KIND_KNOBS:
+            assert "_shape.level_specs(options)" in _INLINE_TARGET_SRC, (
+                f"inline_target.{name} is declared but run_method never "
+                "resolves the level declaration off its options"
+            )
+            assert "LEVEL_INDICATORS_OPTION" in _INDICATOR_SHAPE_SRC
+            continue
+        if name in _GATHER_BUDGET_KIND_KNOBS:
+            assert "resolve_gather_context_budget(\n        options," in _INLINE_TARGET_SRC
+            assert "EVIDENCE_CHAR_CAP_OPTION)" in _GATHER_BUDGET_SRC
+            continue
+        if name in _SCOPE_LEAF_KIND_KNOBS:
+            assert f'"{name}"' in _SCOPE_LEAF_SRC
+            assert "slice_per_source_cap(descriptor)" in _SLICE_READER_SRC
+            assert "slice_per_source_cap(descriptor)" in _CROSS_TARGET_SRC
+            continue
+        if name in _WATERMARK_KIND_KNOBS:
+            assert f'"{name}"' in _WATERMARK_LEAF_SRC
+            assert "resolve_kind_options" in _WATERMARK_LEAF_SRC
+            assert "watermark_config(descriptor)" in _SLICE_READER_SRC
             continue
         if name in _SLICE_READER_KIND_KNOBS:
             assert f'"{name}"' in _SLICE_READER_SRC, (
@@ -1443,8 +1537,9 @@ def test_kind_resolution_still_refuses_runtime_owned_keys():
 def test_kind_resolution_of_an_undeclared_kind_degrades_loudly():
     # (Was meta_findings_synthesizer — that kind gained the J2 sampling
     # catalog, so an undeclared KEY there is now 'unknown_key'; the
-    # no-catalog-at-all lane needs a kind that still has none.)
-    res = resolve_kind_options("cross_target_raw", {"slice_focus": ["x"]})
+    # no-catalog-at-all lane needs a kind that still has none; W8 TAX-1 gave
+    # cross_target_raw its slice_per_source_cap, so the example is predictor.)
+    res = resolve_kind_options("predictor", {"slice_focus": ["x"]})
     assert res.accepted == {}
     assert res.rejected[0].cause == "unknown_kind"
 
@@ -1566,12 +1661,13 @@ def test_a_kind_with_no_catalog_still_cannot_carry_options():
 
     (Was ``meta_findings_synthesizer`` — J2 gave every verify-bearing kind a
     catalog for the judge sampling knobs, so the no-catalog example moves to a
-    kind that still has none.)"""
+    kind that still has none; W8 TAX-1 then gave ``cross_target_raw`` its
+    ``slice_per_source_cap``, so it moved again, to ``predictor``.)"""
     from legba.data.schemas.analyst import AnalystDescriptor
 
     with pytest.raises(ValueError, match="silently inert"):
         AnalystDescriptor.model_validate(
-            _descriptor_body("cross_target_raw", "llm_planner",
+            _descriptor_body("predictor", "llm_planner",
                              {"slice_focus": ["hormuz"]}),
             strict=False,
         )

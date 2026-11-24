@@ -2,6 +2,17 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Example scraper-impl — generic RSS- / sitemap-driven news scraper.
 
+AN EXAMPLE AND A TEST FIXTURE, NOT A PRODUCTION PATH (lane I-2). It writes
+its text under ``payload.body`` (downstream readers — enrichment, the
+summariser, the desks' slices, verify — read ``raw_body``), invents nothing
+but also checks nothing (no wall, challenge, soft-404 or navigation gates),
+and reads Trafilatura's metadata date, which can be a guess. Nothing
+registered uses it. A page that should land as a document is fetched by the
+``page`` source kind (:mod:`legba.data.sources.page`) under the default page
+pipeline ``source.page.default``; a guard test
+(``tests/data_pkg/test_page_kind.py``) keeps any descriptor or module from
+depending on this one.
+
 Demonstrates the :class:`~legba.data.sources.scraper.ScraperImpl` contract
 against the common shape of "news site with an RSS feed and/or a
 ``/sitemap.xml`` index". Not tied to any specific site — the handler's
@@ -26,6 +37,7 @@ handler provides — this keeps proxy / rate-limit / robots policy honored.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import re
@@ -128,18 +140,13 @@ class ExampleNewsScraper:
         *,
         ctx: SourceContext,
     ) -> Signal | None:
-        # trafilatura.extract returns the article body or None.
-        body = trafilatura.extract(
-            html,
-            include_comments=False,
-            include_tables=False,
-            with_metadata=False,
-            favor_recall=True,
-        )
+        # Extraction is CPU-bound (a whole page through lxml): it runs in a
+        # worker thread so a scraper run never holds the event loop (I-1: the
+        # intake drain runs this kind on the runtime loop; same output).
+        body, meta_obj = await asyncio.to_thread(_extract_page, html, url)
         if not body:
             return None
 
-        meta_obj = trafilatura.extract_metadata(html, default_url=url)
         title: str | None = None
         author: str | None = None
         published_at: str | None = None
@@ -176,6 +183,21 @@ class ExampleNewsScraper:
             canonical_url=url,
             language_hint=None,
         )
+
+
+def _extract_page(html: str, url: str) -> tuple[str | None, object | None]:
+    """``(body, metadata)`` — trafilatura's article body (None when there is
+    none; then no metadata is read) and its metadata object."""
+    body = trafilatura.extract(
+        html,
+        include_comments=False,
+        include_tables=False,
+        with_metadata=False,
+        favor_recall=True,
+    )
+    if not body:
+        return None, None
+    return body, trafilatura.extract_metadata(html, default_url=url)
 
 
 def _parse_sitemap(xml_text: str) -> list[str]:

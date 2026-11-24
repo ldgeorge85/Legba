@@ -78,7 +78,7 @@ BASE = os.environ.get(
     "LEGBA_REGISTRY_URL",
     "http://127.0.0.1:8090/api/v1/registry",
 )
-TOKEN = resolve_token()
+TOKEN = resolve_token(principal="operator")  # X2-B1: the vault is operator-only
 
 
 def already_exists(secret_id: str) -> bool:

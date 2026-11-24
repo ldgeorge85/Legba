@@ -18,6 +18,8 @@ from __future__ import annotations
 import datetime
 from typing import Any, Mapping
 
+from ..claim_support import claim_of, claim_row_label
+from ..evidence_drift_slice import SOURCE_DRIFT_LEGEND, source_drift_line
 from .wire_pair_collapse import WIRE_COLLAPSE_ROW_KEY, carried_by_line
 
 
@@ -61,6 +63,60 @@ _CAMEO_LEGEND = (
 )
 
 
+#: Lane N-X — the one-line legend for incidents at sea, emitted only when the
+#: slice carries one (so an in-country slice renders byte-identically).
+_AT_SEA_LEGEND = (
+    "Note: rows with a location= line marked 'at sea' are incidents reported "
+    "at sea, filed under no country. The countries on that line are the "
+    "nearest coasts, inferred from the reported coordinates with the distance "
+    "offshore. Never describe such an incident as having happened in, or "
+    "inside the territory of, one of those countries.\n"
+)
+
+
+def _names_list(names: list[str]) -> str:
+    if len(names) <= 1:
+        return "".join(names)
+    return ", ".join(names[:-1]) + " or " + names[-1]
+
+
+def at_sea_line(row: Mapping[str, Any]) -> str | None:
+    """The ``location=`` line for an unfiled at-sea row, else ``None``.
+
+    "at sea (Strait of Hormuz), about 16 km off Oman, 46 km off United Arab
+    Emirates, 67 km off Iran (nearest coasts inferred from the reported
+    coordinates; not an event in Oman, United Arab Emirates or Iran)".
+    Only for a row the ingest left unfiled (empty ``geo``) with
+    ``payload.geo.at_sea`` — a filed row never gets one."""
+    if row.get("geo"):
+        return None
+    data = row.get("data")
+    geo = data.get("geo") if isinstance(data, Mapping) else None
+    if not isinstance(geo, Mapping) or geo.get("at_sea") is not True:
+        return None
+    from .._polity_match import home_country_name
+
+    place = geo.get("location_name")
+    head = f"at sea ({place})" if isinstance(place, str) and place.strip() else "at sea"
+    offs: list[str] = []
+    names: list[str] = []
+    for entry in geo.get("inferred") or []:
+        if not isinstance(entry, Mapping) or not isinstance(entry.get("iso2"), str):
+            continue
+        iso2 = entry["iso2"]
+        name = home_country_name(iso2) or iso2
+        km = entry.get("distance_km")
+        dist = f"{round(km)} km" if isinstance(km, (int, float)) else "near"
+        offs.append(f"{dist} off {name}")
+        names.append(name)
+    if not offs:
+        return f"    location={head}, no coast within 200 km (not an event in any country)"
+    return (
+        f"    location={head}, about {', '.join(offs)} (nearest coasts inferred "
+        f"from the reported coordinates; not an event in {_names_list(names)})"
+    )
+
+
 def _row_is_cameo_coded(row: Mapping[str, Any]) -> bool:
     """True when this slice row's title is a synthesized CAMEO code label."""
     data = row.get("data")
@@ -101,6 +157,20 @@ def _render_signal(idx: int, row: Mapping[str, Any]) -> str:
         f"[{idx}] {title}",
         f"    ingested={produced_at}{published_str} source={source}",
     ]
+    # C-1: a CLAIM row (payload.claim, stamped at ingest) is labelled as one —
+    # claimant and the only sentence it can support. Claim rows only; every
+    # other row renders byte-identically.
+    claim = claim_of(data) if isinstance(data, Mapping) else None
+    if claim is not None:
+        lines.append(f"    {claim_row_label(claim)}")
+    sea = at_sea_line(row)
+    if sea is not None:
+        lines.append(sea)
+    # Lane D-1: only a row the slice reader stamped (LEGBA_SLICE_SOURCE_DRIFT_MARK,
+    # off by default) carries the line; an unstamped row renders byte-identically.
+    drift = source_drift_line(row)
+    if drift is not None:
+        lines.append(drift)
     marker = row.get(WIRE_COLLAPSE_ROW_KEY)
     if isinstance(marker, Mapping):
         lines.append(carried_by_line(marker))
@@ -189,6 +259,7 @@ def _render_user_prompt(
     run_date: str | None = None,
     window_hours: int | None = None,
     spread_block: str | None = None,
+    feed_roster: str | None = None,
 ) -> str:
     """Render the (already ORIENTed) substrate slice into a user prompt.
 
@@ -244,8 +315,17 @@ def _render_user_prompt(
     # machine-coded-row marker must survive the Phase-V header restructure.
     if any(_row_is_cameo_coded(r) for r in inputs):
         header_lines.append(_CAMEO_LEGEND.strip("\n"))
+    if any(at_sea_line(r) is not None for r in inputs):
+        header_lines.append(_AT_SEA_LEGEND.strip("\n"))
+    if any(source_drift_line(r) is not None for r in inputs):
+        header_lines.append(SOURCE_DRIFT_LEGEND.strip("\n"))
     if spread_block is not None:
         header_lines.append(spread_block)
+    # Lane K-2 — a desk's declared FEED ROSTER (feed_roster_block.py): per feed,
+    # the rows it collected in this window and the ordinals it supplied. None
+    # (every descriptor without ``method.options.feed_roster``) adds nothing.
+    if feed_roster is not None:
+        header_lines.append(feed_roster)
     header = "\n".join(header_lines) + "\n\n"
     body_lines = [_render_signal(i, row) for i, row in enumerate(inputs, start=1)]
     return header + "\n".join(body_lines)

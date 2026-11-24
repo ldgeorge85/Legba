@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Sanctions / export-control profile SKELETON (PROFILE-1; DEC-11; Review B §1.2 F1).
+# One regime = one authority-and-programme pair. Ships DRAFT: registering it
+# never schedules it. The predicate is a first cut for INST-2 to tune; no
+# unit reads this subject yet (the five questions are in ../profile.yaml).
+
+identity:
+  id: regime_uk_russia
+  name: "Regime — UK Russia sanctions"
+  schema_uri: legba/target/2.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  inherits: []
+  state: draft
+  owner: profile_sanctions_export_control
+  created: "2026-10-04T00:00:00Z"
+
+scope:
+  domain: thematic
+  themes: [sanctions, designation, russia]
+  geo: []
+  entity_classes: [country, organization, corporation, person, international_org]
+  relationship_types: [SanctionsAgainst, SubsidiaryOf, PartOf, TradesWith]
+  time_horizon_days: 90
+  predicate: >-
+    contains_any(["ofsi", "office of financial sanctions implementation", "uk sanctions", "hm treasury"]) and contains_any(["russia", "russian"])
+  tags: [regime, sanctions, jurisdiction_uk]
+
+sources:
+  - source_selector:
+      tags: [sanctions]
+      kinds: [rss, json_api, opensanctions]
+      owner_tenant: shared
+    subscription:
+      canonical_only: true
+
+allowed_action_packs: []
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  routing: []

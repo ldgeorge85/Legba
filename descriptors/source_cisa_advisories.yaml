@@ -1,0 +1,94 @@
+# K-1 cyber desk (2026-11-14) — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# CISA's "All CISA Advisories" feed: cybersecurity advisories, alerts and the
+# industrial-control-systems (ICS) advisories in one feed (the ICS-only feed,
+# cybersecurity-advisories/ics-advisories.xml, is a strict subset and is not
+# added). Probed 2026-11-13 (one GET, generic client identity): HTTP 200,
+# application/rss+xml, ~21 items spanning ~3 weeks, newest first, dated
+# pubDates in a two-digit-year RFC 822 form ("Fri, 13 Nov 26 12:00:00 +0000"),
+# which feedparser reads as 2026. Descriptions are long (median ~3.3 KB; an
+# ICS advisory carries its full text, ~11 KB) — good-summary to full text.
+#
+# Keyword gate: the "CISA Adds N Known Exploited Vulnerabilities to Catalog"
+# alerts are EXCLUDED — source.cisa.kev carries each entry as its own signal,
+# with the fields; the alert would be a second, poorer copy of the same news.
+#
+# Geography: deliberately NO declared geo. An advisory's subject is a vendor's
+# product or an actor's tradecraft, not the United States; a declared US
+# would file every advisory that names no country under the US desk (the
+# publisher-origin fallback, data/sources/baseline.py). The in-body geocoder
+# still files an advisory that names a country.
+#
+# robots.txt (read 2026-11-13): `User-agent: *` with no
+# rule covering the feed path. Credibility: cisa.gov 0.92 / gov.
+# First poll: the 72 h look-back admits the last three days (about 5-10
+# items); the cursor then follows the feed. Every two hours.
+#
+# Desk routing: scope.classifications `geopolitics.topic:cyber` is stamped on
+# every signal (W10 TAX-2) — the cyber desk's tag arm (target_cyber.yaml).
+
+identity:
+  id: source.cisa.advisories
+  name: CISA — cybersecurity advisories, alerts and ICS advisories
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: cyber_desk_k1
+  created: "2026-11-14T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [cyber, advisory, ics, gov, cyber_desk]
+  classifications: ["geopolitics.topic:cyber"]
+  source_class: official
+  license_class: public_domain
+  attribution: "Source: Cybersecurity and Infrastructure Security Agency (cisa.gov)"
+  access_class: public          # free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "11 */2 * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.cisa.gov/cybersecurity-advisories/all.xml"
+  keyword_exclude:
+    factory_kind: list
+    item_kind: text
+    raw: ["Known Exploited Vulnerabilities to Catalog", "Known Exploited Vulnerability to Catalog"]
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor (the conservative default of the official-feed drafts).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

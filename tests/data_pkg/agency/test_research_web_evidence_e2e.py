@@ -53,6 +53,7 @@ from legba.data.analysts.agency import (
     ToolContext,
     WritebackContext,
 )
+from legba.data import archive_codec
 from legba.data.analysts.agency import research_tools, robots as robots_mod
 from legba.data.provenance import AnalystContext
 from legba.data.research_flag import (
@@ -142,9 +143,28 @@ async def _reset_db(dsn, restore_source_credibility_seed):
     later ``source_credibility`` test in the suite (the 09-05 merge-wave
     ordering pollution)."""
     await _clean(dsn)
-    yield
-    async with _conn(dsn) as conn:
-        await restore_source_credibility_seed(conn)
+    try:
+        yield
+    finally:
+        async with _conn(dsn) as conn:
+            await restore_source_credibility_seed(conn)
+            await _scrub_targets(conn)
+
+
+async def _scrub_targets(conn) -> None:
+    """Take out the subject this file's tests register (``country_watch_il``, owner
+    ``test``, a draft head by column default) and the open questions aimed at it.
+
+    ``_clean`` only runs BEFORE each test, so the last test's rows outlived the
+    file. A draft ``country_watch_il`` head is OFF the reference roster (the
+    roster admits an active head or none), so ``test_reference_builder`` read
+    ``[country_g20_ar] != [country_watch_il]`` and a thin-dimension set widened by
+    the head's ``news`` tag whenever the shuffle ran it after this file
+    (nightly 10-05 .. 10-06 and the W11-F50 seed 290567073)."""
+    await conn.execute(
+        "DELETE FROM target_descriptors WHERE descriptor_id = 'country_watch_il' AND owner = 'test'")
+    await conn.execute(
+        "DELETE FROM hypotheses WHERE target_id = 'country_watch_il' AND status = 'open_question'")
 
 
 @pytest.fixture
@@ -640,7 +660,8 @@ async def test_cleared_host_archives_bytes_and_returns_a_citable_row(dsn, web, a
     # …and the BYTES are really on disk, content-addressed.
     digest = row["object_ref"].split("/")[-1]
     stored = archive_root / digest[:2] / digest
-    assert stored.exists() and stored.read_bytes() == _ARTICLE_HTML.encode()
+    assert stored.exists()
+    assert archive_codec.decode(stored.read_bytes()) == _ARTICLE_HTML.encode()
 
     async with _conn(dsn) as conn:
         arch = await conn.fetchrow("SELECT * FROM evidence_archive")
@@ -877,15 +898,26 @@ async def test_geo_is_inherited_from_the_dispatching_questions_target(dsn, web):
 
 
 async def test_a_planner_supplied_geo_cannot_reach_a_desk(dsn, web):
-    """The planner's arguments are not a reachability claim. A made-up geo
-    argument is ignored outright — the ONLY geo is the target descriptor's."""
+    """The planner's arguments are not a reachability claim. ``geo`` and
+    ``target_id`` are not arguments of this tool at all — the geo that decides
+    desk reachability is read from the TARGET DESCRIPTOR (``_dispatch``), and
+    a planner naming one is making a claim it has no standing to make.
+
+    It used to be dropped in silence, which left the planner believing it had
+    scoped the call. Since the 2026-09-28 tool seam the gate refuses the call
+    outright (``agency`` step 2.5) and hands the declared grammar back, so the
+    provider is never even reached."""
     web()
-    await _run(
-        dsn, _StubProvider(_response(_hit("https://unreviewed.test/x"))),
+    provider = _StubProvider(_response(_hit("https://unreviewed.test/x")))
+    outcome = await _run(
+        dsn, provider,
         args={"query": "q", "geo": ["IL"], "target_id": "country_watch_il"},
     )
-    rows = await _signals(dsn)
-    assert rows[0]["geo"] == []
+    assert outcome.admitted is False
+    assert outcome.block_cause == "invalid_arg"
+    assert "geo" in outcome.detail and "target_id" in outcome.detail
+    assert "hypothesis_id" in outcome.detail      # the declared grammar
+    assert provider.queries == []
 
 
 async def test_self_selected_run_has_novelty_scope_none(dsn, web):
@@ -2155,3 +2187,19 @@ async def test_a_hard_failed_assigned_run_does_not_hold_its_claim(
             pool, analyst_id="corpus_researcher"
         ) is None
     await _sweep_backlog(dsn)
+
+
+async def test_the_teardown_scrub_takes_out_the_registered_subject(dsn):
+    """X4 NIGHTLY: the head this file registers must not outlive it."""
+    async with _conn(dsn) as conn:
+        await conn.execute(
+            "INSERT INTO target_descriptors (descriptor_id, version, is_head, "
+            "schema_uri, owner, name, body) "
+            "VALUES ($1, $2, TRUE, 'legba/target/1.0.0', 'test', 'IL', $3::jsonb)",
+            "country_watch_il", "c" * 16, json.dumps({"scope": {"geo": ["IL"], "tags": ["news"]}}),
+        )
+        assert await conn.fetchval(
+            "SELECT state FROM target_descriptors WHERE descriptor_id = 'country_watch_il'") == "draft"
+        await _scrub_targets(conn)
+        assert await conn.fetchval(
+            "SELECT count(*) FROM target_descriptors WHERE descriptor_id = 'country_watch_il'") == 0

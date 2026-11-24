@@ -65,8 +65,6 @@ pytestmark = pytest.mark.asyncio
         ("correction", {"op": "supersede_fact", "subject": "Postgres",
                          "predicate": "status", "value": "up"}),
         ("correction", {"op": "merge_entities", "from": "a", "into": "b"}),
-        ("correction", {"op": "correct_situation", "situation_id": str(uuid4()),
-                         "patch": {}}),
         ("change", {"op": "update_descriptor", "family": "analyst",
                      "descriptor_id": "country_critic",
                      "patch": {"cadence": {"cooldown_seconds": 21000}}}),
@@ -98,6 +96,10 @@ async def test_each_of_the_three_shapes_validates(proposal_kind, diff):
                      "value": "z"}),
         # Present op, missing required fields.
         ("correction", {"op": "supersede_fact", "subject": "Postgres"}),
+        ("correction", {"op": "merge_entities", "from": "a"}),
+        # W11: never applied (a situation is a tower product) — refused by name.
+        ("correction", {"op": "correct_situation", "situation_id": str(uuid4()),
+                         "patch": {}}),
         ("change", {"op": "update_descriptor", "family": "analyst"}),
         ("change", {"op": "update_stack", "patch": {"x": 1}}),
         # Unknown proposal_kind entirely.

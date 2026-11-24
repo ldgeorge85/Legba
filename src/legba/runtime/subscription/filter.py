@@ -42,6 +42,7 @@ from ...data.predicates import (
     compile_predicate,
 )
 from ...data.schemas.source import Subscription
+from ...data.signal_slice_scope import CANONICAL_ONLY_SQL
 
 logger = logging.getLogger(__name__)
 
@@ -102,9 +103,7 @@ def build_sql_filter(
     # ONLY if it is itself canonical (not an alias of another). A row is an
     # alias iff canonical_signal_id is set and points elsewhere.
     if sub.canonical_only:
-        clauses.append(
-            "(canonical_signal_id IS NULL OR canonical_signal_id = id)"
-        )
+        clauses.append(CANONICAL_ONLY_SQL)
 
     # The reactive per-binding slice a UNIT reads (SubscriptionEngine.read_slice
     # / read_target_slice, and the new-binding subscription backfill that reuses

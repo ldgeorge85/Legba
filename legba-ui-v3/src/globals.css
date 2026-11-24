@@ -10,141 +10,146 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ---------------------------------------------------------------------------
+   THE FACES (U-2 shell; 04_LAYOUT_AND_MAP_DESIGN §1 "Type", the owner's
+   "sure"). Three open-licence (SIL OFL 1.1) faces, SELF-HOSTED in the bundle —
+   no font host is contacted at runtime. Latin subset, only the weights the
+   type scale uses (~136 KB). Licences beside the files in `src/assets/fonts/`.
+     Source Serif 4 — statements (a sentence somebody stands behind)
+     IBM Plex Sans  — the interface
+     IBM Plex Mono  — data, with tabular figures
+   --------------------------------------------------------------------------- */
+@font-face { font-family: 'IBM Plex Sans'; font-style: normal; font-weight: 400; font-display: swap; src: url('./assets/fonts/ibm-plex-sans-latin-400-normal.woff2') format('woff2'); }
+@font-face { font-family: 'IBM Plex Sans'; font-style: normal; font-weight: 500; font-display: swap; src: url('./assets/fonts/ibm-plex-sans-latin-500-normal.woff2') format('woff2'); }
+@font-face { font-family: 'IBM Plex Sans'; font-style: normal; font-weight: 600; font-display: swap; src: url('./assets/fonts/ibm-plex-sans-latin-600-normal.woff2') format('woff2'); }
+@font-face { font-family: 'IBM Plex Mono'; font-style: normal; font-weight: 400; font-display: swap; src: url('./assets/fonts/ibm-plex-mono-latin-400-normal.woff2') format('woff2'); }
+@font-face { font-family: 'IBM Plex Mono'; font-style: normal; font-weight: 500; font-display: swap; src: url('./assets/fonts/ibm-plex-mono-latin-500-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Source Serif 4'; font-style: normal; font-weight: 400; font-display: swap; src: url('./assets/fonts/source-serif-4-latin-400-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Source Serif 4'; font-style: normal; font-weight: 600; font-display: swap; src: url('./assets/fonts/source-serif-4-latin-600-normal.woff2') format('woff2'); }
+
 /* ===========================================================================
-   Wave 3 — design tokens (redesign Move 5).
+   THE TOKENS — ONE DARK THEME (U-2 shell; 04_LAYOUT_AND_MAP_DESIGN §1; the
+   owner: "just dark. just dark.").
 
-   Two orthogonal token axes, both driven by CSS custom properties so the
-   token system is centralized (one place to retune) and the high-traffic
-   surfaces read tokens, not ad-hoc `text-[10px]` / `gap-1` composition:
+   There is no light theme and no theme switch: the `.theme-light` override
+   set, the toggle and its stored preference are gone. The token NAMES are the
+   ones every surface already reads (`--surf-*` / `--ink-*` / `--line-*`,
+   aliased to `bg-surf-*` / `text-ink-*` / `border-line` in
+   tailwind.config.ts), so the re-skin is a change of values here, not of call
+   sites.
 
-     1. THEME tokens — `--surf-*` / `--ink-*` / `--line-*`. Default is dark
-        (root `:root`, also `.dark`); `.theme-light` overrides them. Tailwind
-        `darkMode:'class'` stays the engine; the light toggle just adds/removes
-        `.theme-light` on <html> and these vars flip.
+   The look is a CHART ROOM, not a control room:
+     - a deep SLATE ground, never black;
+     - regions divided by HAIRLINE RULES, never boxed cards — a fill only where
+       the content differs in kind (the Consult column, a popover, a sheet);
+     - ONE ACCENT, chart magenta (`--point`), for the reader's point and
+       Consult's actions and nothing else — never severity, never a link;
+     - good / warning / critical are their own colours, never the accent.
 
-     2. DENSITY tokens — `--density-*` spacing + the type scale. The density
-        context sets `.density-tight` / `.density-cozy` / `.density-comfortable`
-        on a wrapper; the spacing utilities below read `--density-pad` /
-        `--density-gap` / `--density-row`. `comfortable` is the daily-driver
-        default; `cozy` is acceptable for ops/runtime panels.
+   Contrast on --surf-base: --ink-1 ≈ 13:1, --ink-2 ≈ 9:1, --ink-3 ≈ 6.3:1;
+   the semantic colours on --surf-3 are ≥ 4.6:1.
 
-   The WCAG-AA pass lives here too: `--ink-2` (secondary text) is a ≥4.5:1
-   ramp on the surface it sits on, replacing the borderline `slate-600`.
+   DENSITY (`--density-*`, the `.density-*` classes below) is the second,
+   orthogonal axis and is unchanged.
    =========================================================================== */
 
 :root,
 .dark {
-  /* Surface ramp (darkest → lightest chrome). Mirrors tailwind `surface.*`
-     but as vars so light mode can flip them. Avoids pure black (P-C: dark-mode
-     rule — use #1a1d23..#0a0c10, never #000). */
-  --surf-base: #0a0c10; /* app background  (surface-300) */
-  --surf-1: #0f1115; /* panel body      (surface-200) */
-  --surf-2: #15171c; /* panel chrome    (surface-100) */
-  --surf-3: #1a1d23; /* header / raised (surface-50)  */
+  color-scheme: dark;
 
-  /* Ink ramp. --ink-1 primary, --ink-2 secondary (AA ≥4.5:1 on --surf-2),
-     --ink-3 tertiary/muted (still ≥3:1 — used only for non-essential meta). */
-  --ink-1: #e2e8f0; /* slate-200 — primary text         */
-  --ink-2: #aeb8c6; /* AA ≥4.5:1 secondary (was slate-600/400) */
-  --ink-3: #8b97a8; /* tertiary meta (timestamps, hashes) ~4.5:1 */
+  /* Surface ramp. The ground and the dock's regions share one value: a region
+     is told apart by the rule around it, not by a fill (04 §1 "Chrome"). */
+  --surf-base: #11161a; /* --ground: the page                                  */
+  --surf-1: #11161a; /* the dock's regions (ground: rules, not fills)         */
+  --surf-2: #141a1f; /* a panel body                                          */
+  --surf-3: #171d22; /* --surface: the Consult column, headers, chips         */
+  --surf-4: #1d252b; /* overlays: popover, sheet, the palette, dialogs        */
 
-  /* Hairlines / borders. */
-  --line-1: rgba(148, 163, 184, 0.18);
-  --line-2: rgba(148, 163, 184, 0.30);
+  /* Ink ramp: --ink-1 text, --ink-2 secondary, --ink-3 = --muted. */
+  --ink-1: #e6e2d8;
+  --ink-2: #bdbfba;
+  --ink-3: #8f9aa2;
 
-  --accent: #3b82f6; /* info / link / focus */
+  /* Rules — one hue, three strengths. --line-1 is THE hairline (`--rule`). */
+  --line-0: #20292f; /* intra-panel row dividers   */
+  --line-1: #2a343b; /* --rule: regions, sections  */
+  --line-2: #3b4851; /* interactive borders, hover */
+
+  /* THE ONE ACCENT — chart magenta: the point, the focus ring, Consult's
+     mark and its pulled-up chips. Nothing else. */
+  --point: #ec6fa9;
+  --accent-emphasis: var(--point); /* the :focus-visible ring is the point colour */
+  /* Links and informational marks: a quiet steel ink, deliberately NOT the
+     accent. The name is kept because every surface reads it. */
+  --accent: #9dbacb;
+
+  /* The three semantic colours (04 §1). */
+  --good: #5cbf8e;
+  --warn: #e2a43c;
+  --critical: #f2694d;
 
   /* ── THE THREE CHANNELS (UI_HOLISTIC_DESIGN_2026-08-24 §5.2) ─────────────
-     "One meaning, one channel, one ramp." Four overlapping colour systems had
-     grown up: red meant "critical severity" AND "danger" AND "low confidence";
-     green meant "LOW severity" (nothing is wrong) AND "ok" AND "high
-     confidence". Three different questions sharing one set of hues with three
-     different mappings. These tokens are the single home for each answer —
-     values are Primer's graduated dark set, which ships the four-rung shape
-     this product's severity axis actually needs.
+     "One meaning, one channel, one ramp", re-valued onto the semantic colours
+     above. `tailwind.config.ts` mirrors them as LITERALS (Tailwind v3 drops an
+     opacity modifier on a plain var) — keep the two in sync by hand.
 
-     These tokens are the DOCUMENTED HOME of the three ramps and the values the
-     light theme re-tunes. `tailwind.config.ts` mirrors them as literals rather
-     than reading them, because Tailwind v3 drops every opacity modifier
-     (`bg-accent-ok/20`) applied to a plain `var(--…)` colour — the two must be
-     kept in sync by hand.
+     A · SEVERITY — the only warm ramp; `low` recedes to a quiet grey. */
+  --sev-critical: #f2694d;
+  --sev-high: #e8843f;
+  --sev-medium: #e2a43c;
+  --sev-low: #7d8890;
+  --sev-info: #9dbacb;
 
-     A · SEVERITY — the only WARM ramp in the product. Note `low`: it was
-     #55ff55, pure neon green, which made the calmest datum on the screen the
-     brightest colour on it. Low severity RECEDES. */
-  --sev-critical: #f85149;
-  --sev-high: #db6d28;
-  --sev-medium: #d29922;
-  --sev-low: #6e7681;
-  --sev-info: #4493f8;
+  /* B · CONFIDENCE — one cool hue, sequential, plus a "no data" neutral;
+     never red/amber/green and never the magenta. */
+  --conf-high: #b4d0df;
+  --conf-moderate: #86aabf;
+  --conf-low: #5d8299;
+  --conf-unassessed: #2a343b;
 
-  /* B · CONFIDENCE — one hue, sequential, plus a cartographic "no data"
-     neutral. Deliberately desaturated so a band chip never competes with a
-     severity mark, and never borrows red/green's meaning (low confidence is
-     not "danger", high confidence is not "ok"). */
-  --conf-high: #79c0ff;
-  --conf-moderate: #4493f8;
-  --conf-low: #1f6feb;
-  --conf-unassessed: #30363d;
+  /* C · SYSTEM STATE — ops surfaces only. */
+  --state-ok: #5cbf8e;
+  --state-warn: #e2a43c;
+  --state-error: #f2694d;
+  --state-muted: var(--ink-3); /* absent / ungraded / not measured */
 
-  /* C · SYSTEM STATE — the ONLY place ok-green appears, and only on ops
-     surfaces (`accent.*` in tailwind.config.ts is this channel). */
-  --state-ok: #3fb950;
-  --state-warn: #d29922;
-  --state-error: #f85149;
-}
+  /* ROW HEIGHT — retuned by the density classes below. */
+  --row-h: 32px;
 
-/* Light theme (accessibility affordance — dark stays the default + design
-   target, per the fixed constraint). Same token names, light values; AA
-   audited: --ink-2 #475569 on #f1f5f9 ≈ 7:1, --ink-3 #64748b ≈ 4.8:1. */
-.theme-light {
-  --surf-base: #e7ebf0;
-  --surf-1: #f1f5f9;
-  --surf-2: #ffffff;
-  --surf-3: #f8fafc;
+  /* TYPE — the three faces above, each over a system fallback. */
+  --font-ui: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, Menlo, monospace;
+  --font-serif: 'Source Serif 4', ui-serif, Georgia, Cambria, 'Times New Roman', serif;
 
-  --ink-1: #0f172a;
-  --ink-2: #475569;
-  --ink-3: #64748b;
+  /* SHAPE — 2 px on controls; regions are square (04 §1). */
+  --radius-control: 2px;
+  --radius-panel: 2px;
 
-  --line-1: rgba(15, 23, 42, 0.12);
-  --line-2: rgba(15, 23, 42, 0.20);
-
-  --accent: #2563eb;
-
-  /* The three channels, re-tuned for light (same meanings, darker rungs so
-     they hold contrast on a white surface). */
-  --sev-critical: #cf222e;
-  --sev-high: #bc4c00;
-  --sev-medium: #9a6700;
-  --sev-low: #6e7781;
-  --sev-info: #0969da;
-
-  --conf-high: #0969da;
-  --conf-moderate: #218bff;
-  --conf-low: #54aeff;
-  --conf-unassessed: #afb8c1;
-
-  --state-ok: #1a7f37;
-  --state-warn: #9a6700;
-  --state-error: #cf222e;
+  /* THE FRAME (04 §2 "The common frame"). */
+  --frame-top: 2.75rem; /* the top bar (44 px at the 16 px root) */
+  --frame-health: 1.75rem; /* the health line (28 px at the 16 px root) */
+  /* The Record sheet slides over the main area at this width. */
+  --sheet-w: 40rem; /* 640 px at the 16 px root */
 }
 
 /* Density tokens. The default (no class / comfortable) targets ~30–40%
    whitespace on the daily-driver surfaces; cozy is the ops/runtime mode. */
 .density-comfortable {
+  --row-h: 40px; /* pinned row height (UI-B1) */
   --density-pad: 0.75rem; /* 12px — panel body padding              */
   --density-gap: 0.625rem; /* 10px — inter-element gap               */
   --density-row: 0.5rem; /* 8px  — list row vertical padding       */
   --density-section: 1rem; /* 16px — between major sections          */
 }
 .density-cozy {
+  --row-h: 32px; /* pinned row height (UI-B1) */
   --density-pad: 0.5rem; /* 8px  */
   --density-gap: 0.375rem; /* 6px  */
   --density-row: 0.3125rem; /* 5px  */
   --density-section: 0.625rem; /* 10px */
 }
 .density-tight {
+  --row-h: 24px; /* pinned row height (UI-B1) */
   --density-pad: 0.375rem; /* 6px  */
   --density-gap: 0.25rem; /* 4px  */
   --density-row: 0.1875rem; /* 3px  */
@@ -157,11 +162,57 @@ html, body, #root {
   padding: 0;
 }
 
+/* THE TYPE STEP (U-6; `lib/frameGrid.ts::TYPE_STEPS`). The whole console is
+   set in rem, so one root size scales every measure: 16 px below 2200 px of
+   width, 18 px from 2200, 24 px from 3000 — text on a 3840-wide screen is
+   1.5× its 1920 size instead of the same 12–14 px. */
+html {
+  font-size: 16px;
+}
+@media (min-width: 2200px) {
+  html {
+    font-size: 18px;
+  }
+}
+@media (min-width: 3000px) {
+  html {
+    font-size: 24px;
+  }
+}
+
 body {
-  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
   background: var(--surf-base);
   color: var(--ink-1);
+}
+
+/* ---------------------------------------------------------------------------
+   THE ONE FOCUS RING (§5.4 change 6). `:focus-visible` only — a mouse click
+   never paints it — in `--accent-emphasis` (the outline follows the
+   element's own radius). Before
+   this, the palette drew `ring-1 ring-[var(--accent)]`, inputs drew
+   `focus:border-line-strong` and most controls drew the browser default: three
+   answers to one question. Both halves sit in `:where()`, so the rule has ZERO
+   specificity and a surface that needs no ring opts out with `outline-none`
+   on itself (the palette's search box, whose caret already says where focus is).
+   --------------------------------------------------------------------------- */
+:where(a, button, input, select, textarea, summary, [tabindex], [role='tab'], [role='option']):where(:focus-visible) {
+  outline: 2px solid var(--accent-emphasis);
+  outline-offset: 1px;
+}
+
+/* Identity reads in mono with tabular figures (§5.4 change 7). */
+.font-mono {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The overlay host (src/ui/portal.tsx): a zero-size static box beside the
+   dock. Its fixed-position children are placed against the viewport. */
+.legba-portal-host {
+  position: static;
+  width: 0;
+  height: 0;
 }
 
 /* ---------------------------------------------------------------------------
@@ -294,7 +345,7 @@ body {
   flex-direction: row;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   color: var(--ink-3);
 }
 @media (min-width: 52rem) {
@@ -363,7 +414,7 @@ body {
 }
 .read-tension .read-tension-kicker {
   display: block;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--sev-medium);
@@ -380,7 +431,7 @@ body {
    raises, and an accent rule runs the height of the channel. The badge is ONE
    quiet line: it is present, sourced and never shouting (§2.3). */
 .read-assessment {
-  font-family: ui-serif, Georgia, Cambria, 'Times New Roman', Times, serif;
+  font-family: var(--font-serif);
   max-width: 62ch;
   background: var(--surf-1);
   border-left: 2px solid var(--accent);
@@ -398,14 +449,14 @@ body {
   color: var(--ink-2);
 }
 .read-assessment-label {
-  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  font-size: 0.6875rem;
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink-3);
 }
 .read-assessment-badge {
-  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-ui);
   font-size: 0.75rem;
   line-height: 1.6;
   color: var(--ink-2);
@@ -424,64 +475,216 @@ body {
   padding: 0;
 }
 .read-unsup sup {
-  font-family: ui-sans-serif, system-ui, sans-serif;
-  font-size: 0.625rem;
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
   color: var(--sev-medium);
   padding-left: 0.1rem;
 }
 
-/* Dockview dark theme tweaks to match Personal-mode palette. */
-.dockview-theme-abyss {
-  --dv-paneview-active-outline-color: #3b82f6;
-  --dv-tabs-and-actions-container-background-color: #15171c;
-  --dv-group-view-background-color: #0f1115;
-}
+/* ---------------------------------------------------------------------------
+   THE DOCKVIEW THEME (UI_HOLISTIC_DESIGN §5.5) — the stylesheet half of the
+   theme OBJECT in `src/ui/dockviewTheme.ts` (`className: 'dockview-theme-legba'`).
 
-/* Light-theme Dockview: keep the same engine (theme-abyss) but flip its
-   surface/tab vars so docked tiles match the light token surfaces. */
-.theme-light .dockview-theme-abyss {
-  --dv-paneview-active-outline-color: #2563eb;
-  --dv-tabs-and-actions-container-background-color: #f8fafc;
-  --dv-group-view-background-color: #f1f5f9;
-  --dv-tabs-container-scrollbar-color: #cbd5e1;
-  --dv-activegroup-visiblepanel-tab-background-color: #ffffff;
-  --dv-activegroup-visiblepanel-tab-color: #0f172a;
-  --dv-inactivegroup-visiblepanel-tab-color: #475569;
-  --dv-separator-border: #cbd5e1;
+   Every `--dv-*` variable Dockview 8's themes set is mapped here onto a
+   workstation token, so retuning a token retunes the dock with it. This
+   replaced the Abyss className plus its three overrides. Structural values are Abyss's, except the
+   tab strip (§5.4 change 3: 28px, 12px type) and the separator (change 5:
+   one hairline).
+   --------------------------------------------------------------------------- */
+.dockview-theme-legba {
+  /* Structure */
+  --dv-tabs-and-actions-container-font-size: 0.75rem;
+  --dv-tabs-and-actions-container-height: 1.75rem;
+  --dv-tab-font-size: 0.75rem;
+  --dv-tab-margin: 0;
+  --dv-tab-close-icon-size: inherit;
+  --dv-border-radius: 0px;
+  --dv-tab-border-radius: 0px;
+  --dv-sash-border-radius: 0px;
+  --dv-dropdown-border-radius: var(--radius-control);
+  --dv-spacing-padding: 0px;
+  --dv-overlay-z-index: 999;
+  --dv-active-sash-transition-duration: 0.1s;
+  --dv-active-sash-transition-delay: 0.5s;
+  --dv-floating-group-border: none;
+  --dv-floating-group-dragging-opacity: 0.5;
+  --dv-floating-titlebar-height: 22px;
+  --dv-floating-titlebar-background-color: var(--surf-3);
+  --dv-floating-titlebar-border-bottom: var(--dv-floating-border);
+  --dv-floating-box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.25);
+  --dv-floating-border: 1px solid var(--line-1);
+  --dv-drag-over-border: none;
+
+  /* Surfaces (U-2: hairline chrome). The region and its tab strip sit on the
+     ground; the visible view's tab is told apart by ink and an underline
+     (below), not by a box. */
+  --dv-group-view-background-color: var(--surf-1);
+  --dv-tabs-and-actions-container-background-color: var(--surf-base);
+  --dv-activegroup-visiblepanel-tab-background-color: var(--surf-base);
+  --dv-activegroup-hiddenpanel-tab-background-color: var(--surf-base);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--surf-base);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--surf-base);
+
+  /* Ink on the tabs. */
+  --dv-activegroup-visiblepanel-tab-color: var(--ink-1);
+  --dv-activegroup-hiddenpanel-tab-color: var(--ink-3);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--ink-2);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--ink-3);
+
+  /* Lines: one hairline between tiles, the tab dividers a step quieter. */
+  --dv-separator-border: var(--line-1);
+  --dv-tab-divider-color: var(--line-0);
+  --dv-paneview-header-border-color: var(--line-1);
+  --dv-sash-color: transparent;
+  --dv-active-sash-color: var(--line-2);
+  --dv-tabs-container-scrollbar-color: var(--line-2);
+  --dv-icon-hover-background-color: var(--line-1);
+
+  /* Accent: the active outline and the drop affordances. */
+  --dv-paneview-active-outline-color: var(--accent-emphasis);
+  --dv-drag-over-background-color: color-mix(in srgb, var(--accent) 22%, transparent);
+  --dv-drag-over-border-color: transparent;
+  --dv-edge-dock-indicator-color: var(--accent);
+
+  /* Tab groups (Abyss's chip geometry; the colours are Dockview's own
+     categorical set and carry no channel meaning here). */
+  --dv-tab-group-color-grey: #5f6368;
+  --dv-tab-group-color-blue: #1a73e8;
+  --dv-tab-group-color-red: #d93025;
+  --dv-tab-group-color-yellow: #f9ab00;
+  --dv-tab-group-color-green: #188038;
+  --dv-tab-group-color-pink: #d01884;
+  --dv-tab-group-color-purple: #a142f4;
+  --dv-tab-group-color-cyan: #007b83;
+  --dv-tab-group-color-orange: #e8710a;
+  --dv-tab-group-chip-padding: 4px 8px;
+  --dv-tab-group-chip-border-radius: var(--radius-panel);
+  --dv-tab-group-chip-font-size: 0.75rem;
+  --dv-tab-group-line-height: 2px;
+  --dv-tab-group-line-opacity: 0.6;
+}
+.dockview-theme-legba .dv-drop-target-container .dv-drop-target-anchor.dv-drop-target-anchor-container-changed {
+  opacity: 0;
+  transition: none;
+}
+/* U-2 — a region's header is a hairline over the ground: one rule under the
+   tab strip, the visible view marked by a 1 px underline in ink. */
+.dockview-theme-legba .dv-tabs-and-actions-container {
+  border-bottom: 1px solid var(--line-1);
+}
+.dockview-theme-legba .dv-tab {
+  letter-spacing: 0.02em;
+}
+.dockview-theme-legba .dv-tab.dv-active-tab {
+  box-shadow: inset 0 -1px 0 var(--ink-2);
+}
+/* X3/D2 — THE INSPECTOR EDGE CLOSES, IT NEVER OVERLAPS (review D C3). A
+   group whose tab header sits on its SIDE (the Inspector's right edge group:
+   `dv-groupview-header-right`, a `row-reverse` flex row) gives its content
+   container `flex-grow: 1` but no `min-width: 0`, so the content keeps its
+   min-content width (~400 px of the Inspector's header row) and, under
+   row-reverse, overflows LEFT of the group — text clipped at the left edge,
+   read on screen as the Inspector drawing over Consult (10-08 render:
+   group 380 px, content 395 px starting 44 px left of it). Letting the
+   content shrink keeps it inside its own group; the grid already reflows
+   beside it (Consult and the edge never share a pixel). */
+.dockview-theme-legba .dv-groupview.dv-groupview-header-right > .dv-content-container,
+.dockview-theme-legba .dv-groupview.dv-groupview-header-left > .dv-content-container {
+  min-width: 0;
+  overflow: hidden;
 }
 
 /* ---------------------------------------------------------------------------
    MapLibre popup (the World map's hover cards — gallery-2 audit fix 3).
    MapLibre ships a WHITE card; the popup HTML uses light ink and the basemap
    is ALWAYS dark (the map never follows the app theme), so the header was
-   near-invisible. The card is pinned to the DARK panel palette — the dark
-   values of --surf-2 / --ink-1 / --line-2 — in BOTH themes: driving it off
-   the theme vars would regress light mode right back to light-on-white.
-   Scoped by the `className: 'legba-map-popup'` the map passes to
-   maplibregl.Popup. The tip is MapLibre's border-triangle, so each anchor
-   direction's border color is overridden to match the card.
+   near-invisible. With one dark theme (U-2) the card reads the overlay
+   tokens directly. Scoped by the `className: 'legba-map-popup'` the map
+   passes to maplibregl.Popup. The tip is MapLibre's border-triangle, so each
+   anchor direction's border color is overridden to match the card.
    --------------------------------------------------------------------------- */
 .legba-map-popup .maplibregl-popup-content {
-  background: #15171c; /* --surf-2 (dark) */
-  color: #e2e8f0; /* --ink-1 (dark) */
-  border: 1px solid rgba(148, 163, 184, 0.3); /* --line-2 (dark) */
-  border-radius: 6px;
+  background: var(--surf-4);
+  color: var(--ink-1);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-panel);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
   padding: 8px 10px;
 }
 .legba-map-popup.maplibregl-popup-anchor-top .maplibregl-popup-tip,
 .legba-map-popup.maplibregl-popup-anchor-top-left .maplibregl-popup-tip,
 .legba-map-popup.maplibregl-popup-anchor-top-right .maplibregl-popup-tip {
-  border-bottom-color: #15171c;
+  border-bottom-color: var(--surf-4);
 }
 .legba-map-popup.maplibregl-popup-anchor-bottom .maplibregl-popup-tip,
 .legba-map-popup.maplibregl-popup-anchor-bottom-left .maplibregl-popup-tip,
 .legba-map-popup.maplibregl-popup-anchor-bottom-right .maplibregl-popup-tip {
-  border-top-color: #15171c;
+  border-top-color: var(--surf-4);
 }
 .legba-map-popup.maplibregl-popup-anchor-left .maplibregl-popup-tip {
-  border-right-color: #15171c;
+  border-right-color: var(--surf-4);
 }
 .legba-map-popup.maplibregl-popup-anchor-right .maplibregl-popup-tip {
-  border-left-color: #15171c;
+  border-left-color: var(--surf-4);
+}
+
+/* ---------------------------------------------------------------------------
+   U-4 — the globe's series glyphs: a capsule of dot + "% of 30-day baseline"
+   (+ a small "r" for a revised day). The only DOM marks on the map (at most
+   24); 12 px mono, the reader floor. MapLibre's attribution in the map's
+   quiet chrome.
+   --------------------------------------------------------------------------- */
+.legba-series-glyph {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px 1px 4px;
+  border: 1px solid var(--line-1);
+  border-radius: 2px;
+  background: rgba(17, 22, 26, 0.88);
+  color: var(--ink-1);
+  font: 500 12px/16px var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: opacity 120ms;
+}
+.legba-series-glyph:hover {
+  border-color: var(--line-2);
+}
+.legba-series-glyph--point {
+  border-color: var(--point);
+  box-shadow: 0 0 0 1px var(--point);
+}
+.legba-series-glyph--folded {
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+}
+.legba-series-glyph--folded .legba-series-val,
+.legba-series-glyph--folded .legba-series-r {
+  display: none;
+}
+.legba-series-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  flex: none;
+}
+.legba-series-r {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+[data-testid='globe-map'] .maplibregl-ctrl-attrib,
+[data-testid='globe-map'] .maplibregl-ctrl-attrib.maplibregl-compact {
+  background: rgba(17, 22, 26, 0.8);
+  color: var(--ink-3);
+  font: 12px/16px var(--font-ui);
+}
+[data-testid='globe-map'] .maplibregl-ctrl-attrib a {
+  color: var(--ink-3);
+}
+[data-testid='globe-map'] .maplibregl-ctrl-attrib-button {
+  filter: invert(0.75);
+  background-color: transparent;
 }

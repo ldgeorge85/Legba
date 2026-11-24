@@ -116,6 +116,7 @@ async def write_suppressed(
     analyst_id: str,
     analyst_version: Optional[str],
     run_uuid: Any,
+    written_rows: "Optional[list[Any]]" = None,
 ) -> tuple[int, int]:
     """Writes every guard-suppressed candidate DIRECTLY — never through the
     desk-cap/budget pageable pipeline, never fanned out. SUPPRESS != DROP:
@@ -140,6 +141,8 @@ async def write_suppressed(
             write_failures += 1
             continue
         written += 1
+        if written_rows is not None:  # L-1: raised as held alerts by the scan
+            written_rows.append((row_id, cand))
         for wm_class, wm_key, wm_state in cand.watermarks:
             await _upsert_watermark(conn, wm_class, wm_key, wm_state, fired=False)
         # Deliberately no dispatcher.fan_out call here.

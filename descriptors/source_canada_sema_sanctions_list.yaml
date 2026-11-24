@@ -1,0 +1,81 @@
+# X-1 source expansion (2026-11-14) — Canada's consolidated list under the
+# Special Economic Measures Act (Global Affairs Canada), as the INSTRUMENT
+# itself (kind instrument_snapshot: fetch, hash, archive, diff). Ships DRAFT;
+# the reference host walks it to CONFIGURED (descriptors/LIFECYCLE.md), never
+# active — activation is the owner's call, and the kind refuses activation
+# without a writable evidence archive.
+#
+# THE ENDPOINT. Checked 2026-11-14 by the source-expansion review (one GET,
+# generic client identity): HTTP 200, text/xml, 2.9 MB; root
+# <data-set xmlns:xsi=...>. robots.txt allows the path for `*`. The entry
+# element and its identifier were not part of the check, so the list is read
+# as TEXT (a unified line diff) until a probe names them; switching to
+# `differ: xml_records` is then a config change (record_tag / key_path), and a
+# record_tag that matches nothing fails loud as a parse_failed receipt — the
+# UK Sanctions List binding's convention. Re-checked every twelve hours.
+#
+# Language: en. Region: Canada (CA, the issuing
+# state — the list itself is global). Class: official (a government register).
+
+identity:
+  id: source.canada.sema_sanctions_list
+  name: "Canada — SEMA consolidated sanctions list (the published instrument, diffed)"
+  kind: instrument_snapshot
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: x1_source_expansion
+  created: "2026-11-14T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [CA]
+  languages: [en]
+  tags: [sanctions, designation, gov, instrument, canada]
+  source_class: official
+  access_class: public
+  license_class: cc_nc               # Crown terms: non-commercial reproduction allowed
+  attribution: "Source: Global Affairs Canada, Consolidated Canadian Autonomous Sanctions List (international.gc.ca)"
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "33 4,16 * * *"
+  cooldown_seconds: 600
+  jitter_seconds: 120
+
+config:
+  instrument_name:
+    factory_kind: text
+    raw: "Canada SEMA consolidated sanctions list"
+  url:
+    factory_kind: text
+    raw: "https://www.international.gc.ca/world-monde/assets/office_docs/international_relations-relations_internationales/sanctions/sema-lmes.xml"
+  license_class:                     # the same class as scope.license_class (a test pins the pair)
+    factory_kind: text
+    raw: "cc_nc"
+  differ:
+    factory_kind: text
+    raw: "text"
+  timeout_seconds:
+    factory_kind: number
+    raw: 120
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_2            # the (previous, current) sha pair; no URL tier (one URL, many changes)
+      config: {}
+  enrichment: []                     # a structured change record — no text chain
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

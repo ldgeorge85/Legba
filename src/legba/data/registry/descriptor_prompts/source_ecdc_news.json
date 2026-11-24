@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.ecdc.news": {
+      "source": "source_ecdc_news.yaml",
+      "state": "draft"
+    }
+  }
+}

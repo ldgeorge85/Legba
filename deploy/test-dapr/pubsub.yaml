@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The TEST daprd's pubsub component (deploy/compose.test.yml). Identical to
+# dapr/components/pubsub.yaml except the NATS address: inside the test network
+# namespace the test NATS is 127.0.0.1:4222, and the compose service name
+# `nats` the production file names does not resolve there. The statestore,
+# secretstore and configuration are the production files, mounted unchanged.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: legba-actor-pubsub
+spec:
+  type: pubsub.jetstream
+  version: v1
+  metadata:
+    - name: natsURL
+      value: "nats://127.0.0.1:4222"
+    - name: name
+      value: "legba-runtime"
+    - name: jwt
+      value: ""
+    - name: seedKey
+      value: ""
+    - name: tls_client_cert
+      value: ""
+    - name: tls_client_key
+      value: ""
+    - name: token
+      secretKeyRef:
+        name: LEGBA_NATS_TOKEN
+        key: LEGBA_NATS_TOKEN
+    - name: streamName
+      value: "LEGBA_ACTORS"
+auth:
+  secretStore: legba-env-secrets

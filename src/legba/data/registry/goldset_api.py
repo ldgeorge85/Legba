@@ -46,7 +46,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from .. import critic_fold
+from ..principals import handle_for_actor
 from .api import RegistryAPIDeps, require_bearer
+from .route_roles import recorded_author
 from .goldset_sampling import (
     DEFAULT_SAMPLE_SIZE,
     DEFAULT_UNITS,
@@ -191,14 +193,15 @@ _LABEL_COLS = (
 _UPSERT_LABEL_SQL = f"""
     INSERT INTO correctness_labels
         (finding_id, unit_analyst_id, target_id, label, rationale,
-         labeled_by, finding_snapshot)
-    VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+         labeled_by, finding_snapshot, written_by)
+    VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, legba_principal($8))
     ON CONFLICT (finding_id) DO UPDATE SET
         label            = EXCLUDED.label,
         rationale        = EXCLUDED.rationale,
         labeled_by       = EXCLUDED.labeled_by,
         labeled_at       = NOW(),
-        finding_snapshot = EXCLUDED.finding_snapshot
+        finding_snapshot = EXCLUDED.finding_snapshot,
+        written_by       = EXCLUDED.written_by
     RETURNING {_LABEL_COLS}
 """
 
@@ -403,7 +406,7 @@ def build_goldset_router(deps: RegistryAPIDeps) -> APIRouter:
         exclusion). The finding's title/claims/citations are snapshotted HERE,
         at label time, so supersession can never orphan the judgment."""
         fid = _coerce_finding_uuid(body.finding_id)
-        labeled_by = body.labeled_by or principal
+        labeled_by = recorded_author(principal, body.labeled_by or principal)
         async with deps.descriptor_registry.pg.acquire() as conn:
             f = await conn.fetchrow(
                 "SELECT id::text AS finding_id, analyst_id, target_id, title, "
@@ -440,6 +443,7 @@ def build_goldset_router(deps: RegistryAPIDeps) -> APIRouter:
                 body.rationale,
                 labeled_by,
                 json.dumps(snapshot),
+                handle_for_actor(principal),
             )
         return _label_state(row)
 

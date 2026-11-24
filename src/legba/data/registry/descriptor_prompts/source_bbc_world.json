@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.bbc.world": {
+      "source": "source_bbc_world.yaml",
+      "state": "active"
+    }
+  }
+}

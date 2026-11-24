@@ -128,16 +128,34 @@ export function proposalEffect(
         unrecognized: !complete,
       }
     }
-    if (op === 'merge_entities' || op === 'correct_situation') {
+    if (op === 'merge_entities') {
+      // W11: applied through the write plane's entity merge (the same one
+      // consult's merge_entities runs), or refused by name — never a silent
+      // "routed" success.
+      const from = str(diff, 'from')
+      const into = str(diff, 'into')
+      const complete = Boolean(from && into)
       return {
         op,
-        summary: `Routes to the existing ${
-          op === 'merge_entities' ? 'entity-resolution' : 'situation-lifecycle'
-        } path. The accept is recorded in the audit trail; the lifecycle subsystem owns the write.`,
+        summary: complete
+          ? `Merges “${from}” into “${into}”: the loser becomes a redirect and its name and aliases fold onto the keeper, with a version row, provenance and a signed audit row. Refused by name when either side is unknown, ambiguous, already merged or compacted. It can be unmerged from Consult until entity_gc compacts the loser.`
+          : 'merge_entities is INCOMPLETE — it needs from (the loser) and into (the keeper); accepting would fail and archive the row.',
+        fields: [
+          { key: 'from (loser)', value: from || '(missing)' },
+          { key: 'into (keeper)', value: into || '(missing)' },
+        ],
+        unrecognized: !complete,
+      }
+    }
+    if (op === 'correct_situation') {
+      return {
+        op,
+        summary:
+          'NOT APPLIED — a situation is a product of the tower, not a writable record: accepting would fail and archive the row. Correct the unit that produced it and rerun it.',
         fields: Object.entries(diff)
           .filter(([k]) => k !== 'op')
           .map(([k, v]) => ({ key: k, value: pretty(v) })),
-        unrecognized: false,
+        unrecognized: true,
       }
     }
   }

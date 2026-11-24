@@ -95,7 +95,11 @@ except ModuleNotFoundError:  # pragma: no cover — slim deploy images (the regi
     # This keeps a registry-side import of the handler package from hard-crashing.
     pycountry = None  # type: ignore[assignment]
 
+from .gazetteer import or_empty
 from .vocabulary import ENTITY_CLASSES
+
+#: The consumer name this module's absent gazetteer reads are recorded under.
+_GAZETTEER_CONSUMER = "entity_canon"
 
 # ---------------------------------------------------------------------------
 # Canonical class strings — drawn from the closed taxonomy, never invented.
@@ -202,47 +206,23 @@ def _strip_name(name: str) -> str:
 # Keys are matched case-insensitively against the STRIPPED name. Values are
 # canonical country names that the gazetteer below recognises (so the type
 # correction then fires and stamps COUNTRY_CLASS).
+#
+# W10 CANON-1: this map, ``_ALIAS_ORG``, ``_DEMONYM_MAP``,
+# ``_REGION_ADJECTIVE_MAP``, ``_KNOWN_REGIONS`` and the country gazetteer's
+# curated names + its pycountry directive are the PROFILE'S
+# (``legba.data.gazetteer`` sections ``alias_map`` / ``alias_org`` /
+# ``demonym_map`` / ``region_adjective_map`` / ``known_regions`` /
+# ``polities``), read ONCE at import — the geopolitics file reproduces the
+# literals that stood here byte for byte. A profile that declares a section
+# not gets the empty table (canonicalisation then passes the surface through),
+# recorded by name in ``gazetteer.absent_reads()``.
 # ---------------------------------------------------------------------------
 
-_ALIAS_MAP: dict[str, str] = {
-    # United States
-    "us": "United States",
-    "u.s.": "United States",
-    "u.s": "United States",
-    "usa": "United States",
-    "u.s.a.": "United States",
-    "u.s.a": "United States",
-    "united states": "United States",
-    "united states of america": "United States",
-    "america": "United States",
-    "the united states": "United States",
-    # United Kingdom
-    "uk": "United Kingdom",
-    "u.k.": "United Kingdom",
-    "u.k": "United Kingdom",
-    "britain": "United Kingdom",
-    "great britain": "United Kingdom",
-    "united kingdom": "United Kingdom",
-    # Other high-frequency collisions
-    "uae": "United Arab Emirates",
-    "u.a.e.": "United Arab Emirates",
-    "united arab emirates": "United Arab Emirates",
-    "eu": "European Union",
-    "european union": "European Union",
-    "drc": "Democratic Republic of the Congo",
-    "south korea": "South Korea",
-    "north korea": "North Korea",
-    "russia": "Russia",
-    # Supranational bodies kept as legitimate short orgs (NOT junk-dropped by
-    # the length≤2 predicate): UN / WHO / NATO are real organizations.
-    "un": "United Nations",
-    "u.n.": "United Nations",
-    "united nations": "United Nations",
-}
+_ALIAS_MAP: dict[str, str] = or_empty("alias_map", consumer=_GAZETTEER_CONSUMER)
 
 #: Aliases that resolve to a supranational body, not an ISO country. The
 #: gazetteer won't match these, so they carry their own class hint here.
-_ALIAS_ORG: frozenset[str] = frozenset({"European Union", "United Nations"})
+_ALIAS_ORG: frozenset[str] = or_empty("alias_org", consumer=_GAZETTEER_CONSUMER)
 
 
 # ---------------------------------------------------------------------------
@@ -265,179 +245,7 @@ _ALIAS_ORG: frozenset[str] = frozenset({"European Union", "United Nations"})
 #: followed by COUNTRY_CLASS typing. Curated (NOT a suffix regex): surnames
 #: ("Meloni") + multi-country adjectives ("Asian", "European", "Arab",
 #: "Latin", "African") are deliberately NOT here so they are never mis-collapsed.
-_DEMONYM_MAP: dict[str, str] = {
-    # --- original curated core (kept verbatim) -------------------------------
-    "american": "United States",
-    "british": "United Kingdom",
-    "french": "France",
-    "german": "Germany",
-    "italian": "Italy",
-    "spanish": "Spain",
-    "russian": "Russia",
-    "ukrainian": "Ukraine",
-    "chinese": "China",
-    "japanese": "Japan",
-    "indian": "India",
-    "pakistani": "Pakistan",
-    "iranian": "Iran",
-    "iraqi": "Iraq",
-    "israeli": "Israel",
-    # Resolve to the bare "Palestine" (now in the country gazetteer) so the
-    # demonym, the bare name, and the plural all fold to ONE country referent.
-    "palestinian": "Palestine",
-    "syrian": "Syria",
-    "lebanese": "Lebanon",
-    "yemeni": "Yemen",
-    "saudi": "Saudi Arabia",
-    "egyptian": "Egypt",
-    "turkish": "Turkey",
-    "qatari": "Qatar",
-    "afghan": "Afghanistan",
-    "polish": "Poland",
-    "canadian": "Canada",
-    "mexican": "Mexico",
-    "brazilian": "Brazil",
-    "argentine": "Argentina",
-    "argentinian": "Argentina",
-    "australian": "Australia",
-    "indonesian": "Indonesia",
-    "nigerian": "Nigeria",
-    "venezuelan": "Venezuela",
-    "sudanese": "Sudan",
-    "south korean": "South Korea",
-    "north korean": "North Korea",
-    # --- comprehensive expansion (live-review misses + wide ISO coverage) ----
-    # Europe
-    "albanian": "Albania",
-    "austrian": "Austria",
-    "belgian": "Belgium",
-    "bosnian": "Bosnia and Herzegovina",
-    "bulgarian": "Bulgaria",
-    "croatian": "Croatia",
-    "cypriot": "Cyprus",
-    "czech": "Czechia",
-    "danish": "Denmark",
-    "dutch": "Netherlands",
-    "estonian": "Estonia",
-    "finnish": "Finland",
-    "greek": "Greece",
-    "hungarian": "Hungary",
-    "icelandic": "Iceland",
-    "irish": "Ireland",
-    "latvian": "Latvia",
-    "lithuanian": "Lithuania",
-    "luxembourgish": "Luxembourg",
-    "macedonian": "North Macedonia",
-    "maltese": "Malta",
-    "moldovan": "Moldova",
-    "montenegrin": "Montenegro",
-    "norwegian": "Norway",
-    "portuguese": "Portugal",
-    "romanian": "Romania",
-    "serbian": "Serbia",
-    "slovak": "Slovakia",
-    "slovenian": "Slovenia",
-    "swedish": "Sweden",
-    "swiss": "Switzerland",
-    "belarusian": "Belarus",
-    "georgian": "Georgia",
-    "armenian": "Armenia",
-    "azerbaijani": "Azerbaijan",
-    "kosovar": "Kosovo",
-    # Middle East / Central & South Asia
-    "jordanian": "Jordan",
-    "kuwaiti": "Kuwait",
-    "omani": "Oman",
-    "bahraini": "Bahrain",
-    "emirati": "United Arab Emirates",
-    "kazakh": "Kazakhstan",
-    "uzbek": "Uzbekistan",
-    "turkmen": "Turkmenistan",
-    "tajik": "Tajikistan",
-    "kyrgyz": "Kyrgyzstan",
-    "bangladeshi": "Bangladesh",
-    "sri lankan": "Sri Lanka",
-    "nepalese": "Nepal",
-    "nepali": "Nepal",
-    "bhutanese": "Bhutan",
-    "maldivian": "Maldives",
-    "burmese": "Myanmar",
-    "myanmarese": "Myanmar",
-    # East / Southeast Asia & Pacific
-    "thai": "Thailand",
-    "vietnamese": "Vietnam",
-    "cambodian": "Cambodia",
-    "laotian": "Laos",
-    "malaysian": "Malaysia",
-    "singaporean": "Singapore",
-    "filipino": "Philippines",
-    "philippine": "Philippines",
-    "mongolian": "Mongolia",
-    "taiwanese": "Taiwan, Province of China",
-    "bruneian": "Brunei Darussalam",
-    "fijian": "Fiji",
-    "papua new guinean": "Papua New Guinea",
-    "new zealander": "New Zealand",
-    # Africa
-    "kenyan": "Kenya",
-    "liberian": "Liberia",
-    "ethiopian": "Ethiopia",
-    "ghanaian": "Ghana",
-    "senegalese": "Senegal",
-    "ivorian": "Côte d'Ivoire",
-    "malian": "Mali",
-    "nigerien": "Niger",
-    "chadian": "Chad",
-    "cameroonian": "Cameroon",
-    "congolese": "Congo",
-    "angolan": "Angola",
-    "mozambican": "Mozambique",
-    "zambian": "Zambia",
-    "zimbabwean": "Zimbabwe",
-    "malawian": "Malawi",
-    "tanzanian": "Tanzania",
-    "ugandan": "Uganda",
-    "rwandan": "Rwanda",
-    "burundian": "Burundi",
-    "somali": "Somalia",
-    "eritrean": "Eritrea",
-    "djiboutian": "Djibouti",
-    "south african": "South Africa",
-    "namibian": "Namibia",
-    "botswanan": "Botswana",
-    "moroccan": "Morocco",
-    "algerian": "Algeria",
-    "tunisian": "Tunisia",
-    "libyan": "Libya",
-    "mauritanian": "Mauritania",
-    "gabonese": "Gabon",
-    "togolese": "Togo",
-    "beninese": "Benin",
-    "guinean": "Guinea",
-    "gambian": "Gambia",
-    "sierra leonean": "Sierra Leone",
-    "madagascan": "Madagascar",
-    "malagasy": "Madagascar",
-    # Americas
-    "colombian": "Colombia",
-    "peruvian": "Peru",
-    "chilean": "Chile",
-    "bolivian": "Bolivia",
-    "ecuadorian": "Ecuador",
-    "paraguayan": "Paraguay",
-    "uruguayan": "Uruguay",
-    "guatemalan": "Guatemala",
-    "honduran": "Honduras",
-    "salvadoran": "El Salvador",
-    "nicaraguan": "Nicaragua",
-    "costa rican": "Costa Rica",
-    "panamanian": "Panama",
-    "cuban": "Cuba",
-    "dominican": "Dominican Republic",
-    "haitian": "Haiti",
-    "jamaican": "Jamaica",
-    "trinidadian": "Trinidad and Tobago",
-}
+_DEMONYM_MAP: dict[str, str] = or_empty("demonym_map", consumer=_GAZETTEER_CONSUMER)
 
 # ---------------------------------------------------------------------------
 # REGION-ADJECTIVE MAP — multi-country / continental adjectives (DQ P4, the
@@ -448,16 +256,9 @@ _DEMONYM_MAP: dict[str, str] = {
 # LOCATION, never a country). Deliberately conservative — "arab", "latin",
 # "western", "eastern", "scandinavian" are ambiguous and are NOT here.
 # ---------------------------------------------------------------------------
-_REGION_ADJECTIVE_MAP: dict[str, str] = {
-    "african": "Africa",
-    "european": "Europe",
-    "europe": "Europe",
-    "asian": "Asia",
-    "north american": "North America",
-    "south american": "South America",
-    "oceanian": "Oceania",
-    "antarctic": "Antarctica",
-}
+_REGION_ADJECTIVE_MAP: dict[str, str] = or_empty(
+    "region_adjective_map", consumer=_GAZETTEER_CONSUMER,
+)
 
 
 def _collapse_target(low: str) -> str | None:
@@ -1367,8 +1168,17 @@ def is_junk_entity(name: str) -> bool:
 
 @lru_cache(maxsize=1)
 def _country_name_set() -> frozenset[str]:
+    """The country gazetteer: the profile's ``polities`` section — its
+    ``universe: pycountry`` directive DERIVES every ISO-3166-1 record's name /
+    common name / official name (where pycountry is installed: the runtime;
+    slim images read the curated names alone), and its ``curated`` names are
+    the canonical short forms pycountry stores under another head or not at
+    all ("russia", "south korea", "turkiye", "kosovo", bare "palestine" …), so
+    a name an alias or demonym resolves to still types COUNTRY_CLASS. W10
+    CANON-1 moved both out of this function's body."""
+    polities = or_empty("polities", consumer=_GAZETTEER_CONSUMER)
     names: set[str] = set()
-    if pycountry is not None:
+    if pycountry is not None and polities.universe == "pycountry":
         for c in pycountry.countries:
             names.add(c.name.lower())
             common = getattr(c, "common_name", None)
@@ -1377,43 +1187,7 @@ def _country_name_set() -> frozenset[str]:
                 names.add(common.lower())
             if isinstance(official, str):
                 names.add(official.lower())
-    # A few canonical short names pycountry stores in non-obvious forms, so a
-    # name an alias resolves to ("Russia", "South Korea", …) still matches the
-    # gazetteer and gets COUNTRY_CLASS. Conservative + curated.
-    names.update({
-        "russia",
-        "south korea",
-        "north korea",
-        "united states",
-        "united kingdom",
-        "united arab emirates",
-        "democratic republic of the congo",
-        "czechia",
-        "iran",
-        "syria",
-        "vietnam",
-        "laos",
-        "moldova",
-        "tanzania",
-        "bolivia",
-        "venezuela",
-        # Short / common forms a curated demonym value resolves to that
-        # pycountry stores under a different head (or not at all): "Türkiye"
-        # vs the common "Turkey", and Kosovo (no ISO-3166-1 assignment). Both
-        # are demonym-map values, so the COUNTRY_CLASS typing must recognise
-        # them or the collapse would land short of a country. "turkiye" is the
-        # common ASCII spelling of the official "Türkiye" (pycountry's head) that
-        # the gazetteer would otherwise miss, so the direction/type gates that
-        # rely on COUNTRY typing (DQ M1 inverted-membership) recognise it.
-        "turkey",
-        "turkiye",
-        "kosovo",
-        # pycountry stores PS as "Palestine, State of" with no common_name, so
-        # bare "Palestine" (the dominant live surface form) never typed as a
-        # country and kept leaking as entity/location/person (DQ P4). Add the
-        # bare form; the "palestinian" demonym resolves to it too (below).
-        "palestine",
-    })
+    names.update(polities.curated)
     return frozenset(names)
 
 
@@ -1954,26 +1728,7 @@ def is_place_surface(name: str) -> bool:
 #: routinely mis-types them person/organization ("the West Bank" -> org because
 #: it ends in "bank"). Article-stripped whole-surface match. Curated: only
 #: unambiguous places (no "Georgia"-style country/state homonyms).
-_KNOWN_REGIONS: frozenset[str] = frozenset({
-    "west bank", "gaza", "gaza strip", "middle east", "the levant", "levant",
-    "strait of hormuz", "horn of africa", "sahel", "maghreb", "mesopotamia",
-    "anatolia", "donbas", "donbass", "crimea", "golan heights", "golan",
-    "sinai", "sinai peninsula", "kurdistan", "nagorno-karabakh", "transnistria",
-    "abkhazia", "south ossetia", "xinjiang", "west coast", "east coast",
-    "gulf coast", "west africa", "east africa", "north africa",
-    "southern africa", "central africa", "sub-saharan africa", "the balkans",
-    "south china sea", "east china sea", "sea of azov", "indo-pacific",
-    "asia-pacific", "pacific rim", "arabian peninsula", "iberian peninsula",
-    "korean peninsula", "great lakes region",
-    # R8 — SUB-NATIONAL regions that carry the story in their own right on the
-    # conflict / disaster beat ("Odisha floods", "Tigray offensive") and were
-    # falling to the generic bucket. Curated + unambiguous (no country/US-state
-    # homonyms).
-    "odisha", "kerala", "punjab", "sindh", "balochistan", "gilgit-baltistan",
-    "tigray", "amhara", "oromia", "darfur", "north kivu", "south kivu",
-    "rakhine", "kachin", "aceh", "papua", "catalonia", "bavaria",
-    "sverdlovsk region", "rostov region", "belgorod region",
-})
+_KNOWN_REGIONS: frozenset[str] = or_empty("known_regions", consumer=_GAZETTEER_CONSUMER)
 
 
 def is_region_surface(name: str) -> bool:

@@ -31,11 +31,11 @@ from typing import Any
 
 import pytest
 
+from legba.runtime import llm_handler_cache
 from legba.runtime.llm_handler_cache import (
     clear_handler_cache_registry,
     evict_all_llm_handlers,
     register_handler_cache,
-    registered_cache_labels,
 )
 from legba.runtime.nats_informer import (
     DEFAULT_VAULT_CONSUMER_DURABLE_PREFIX,
@@ -62,12 +62,14 @@ def _informer(evict_all) -> NatsVaultRotationInformer:
 
 @pytest.fixture(autouse=True)
 def _isolate_registry():
-    """Each test owns the sweep set — see the S-2 test file for why."""
-    saved = registered_cache_labels()
+    """Each test owns the sweep set — see the S-2 test file for why — and the
+    process's import-time registrations are put back exactly at teardown
+    (W11-F112: a bare clear here emptied the sweep set for every later test in
+    a shuffled session; nothing re-registers them)."""
+    saved = list(llm_handler_cache._CACHES)
     clear_handler_cache_registry()
     yield
-    clear_handler_cache_registry()
-    assert saved is not None  # the import-time registrations are re-made lazily
+    llm_handler_cache._CACHES[:] = saved
 
 
 def test_vault_informer_uses_its_own_durable_prefix():

@@ -19,6 +19,9 @@ import type { ReactElement } from 'react'
 import JudgmentBands, { CHECKED_LIMIT } from './JudgmentBands'
 import { __pendingReadEvents, __resetReadTelemetry } from '@/lib/readTelemetry'
 import { bandTestId } from '@/lib/morningReadBands'
+import { resetScope, useScope } from '@/state/scope'
+import { scopeFromTarget } from '@/lib/scopeFromReport'
+import { fireEvent } from '@testing-library/react'
 
 // ---------------------------------------------------------------------------
 // A URL-routed stub over the three routes the surface reads.
@@ -365,7 +368,78 @@ describe('CHECKED', () => {
     const desk = within(checked).getByTestId('morning-read-checked-desk')
     expect(desk.textContent).toContain('1 verified')
     expect(desk.textContent).toContain('1 with a flagged claim')
-    expect(desk.textContent).toContain('1 unchecked')
+    // X4 READPATH — the unchecked finding is split by the registry's state (a
+    // null block from an older registry reads `not judged`) and LISTED with
+    // its mark, never left as a plain count.
+    expect(desk.textContent).toContain('unverified: 0 judge pending, 1 not judged')
+    const unverified = within(desk).getAllByTestId('morning-read-checked-unverified-row')
+    expect(unverified).toHaveLength(1)
+    expect(unverified[0].textContent).toContain('Unverified note')
+    expect(within(unverified[0]).getByTestId('unverified-state').textContent).toBe(
+      'unverified · not judged',
+    )
+  })
+
+  it('X4 READPATH — a just-written finding reads `judge pending`, a lost one `not judged`; never plain, never 0', async () => {
+    const base = {
+      kind: 'finding',
+      analyst_version: null,
+      target_id: 'country_g20_jp',
+      target_version: null,
+      confidence: 0.87,
+      severity: 'elevated',
+      schema_uri: 'iglu:legba/finding/jsonschema/1-0-0',
+      citations: [],
+    }
+    await renderBands({
+      findings: {
+        data: [
+          {
+            ...base,
+            id: 'f-pending',
+            title: 'Japan escalation read',
+            analyst_id: 'escalation',
+            produced_at: '2026-09-24T08:58:00Z',
+            verification: {
+              score_state: 'pending',
+              since: '2026-09-24T08:58:00+00:00',
+              judge_window_s: 900,
+              reason: 'awaiting_verify',
+            },
+          },
+          {
+            ...base,
+            id: 'f-lost',
+            title: 'Japan posture read',
+            analyst_id: 'military_posture',
+            produced_at: '2026-09-24T04:41:26Z',
+            verification: {
+              score_state: 'absent',
+              since: '2026-09-24T04:41:26+00:00',
+              judge_window_s: 900,
+              reason: 'no_verdict',
+            },
+          },
+        ],
+      },
+    })
+    const checked = screen.getByTestId('morning-read-checked')
+    // Nothing verified, nothing flagged — and the band does not call that a pass.
+    expect(screen.getByTestId('morning-read-checked-note').textContent).toBe(
+      '0 verified · 0 claims flagged · unverified: 1 judge pending, 1 not judged',
+    )
+    const desk = within(checked).getByTestId('morning-read-checked-desk')
+    expect(desk.textContent).not.toContain('Nothing flagged on this desk.')
+    expect(desk.textContent).toContain('Nothing on this desk carries a verify verdict, so nothing is claimed as held.')
+    const marks = within(desk).getAllByTestId('unverified-state')
+    expect(marks.map((m) => [m.getAttribute('data-state'), m.textContent])).toEqual([
+      ['pending', 'unverified · judge pending'],
+      ['absent', 'unverified · not judged'],
+    ])
+    // The mark explains itself, with its clock.
+    expect(marks[0].getAttribute('title')).toContain('within 15 minutes')
+    expect(marks[1].getAttribute('title')).toContain('Nothing will grade this finding')
+    for (const m of marks) expect(m.textContent).not.toMatch(/\b0(\.0+)?\b/)
   })
 
   it('says when the window held MORE findings than the page it read', async () => {
@@ -434,5 +508,135 @@ describe('DUE', () => {
     const test = within(due).getByTestId('morning-read-due-test')
     expect(test.textContent?.startsWith('retro: ')).toBe(true)
     expect(test.textContent).toContain('o=1 iff >=1 signal')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// X1/D1 — nothing prints before it is read
+// ---------------------------------------------------------------------------
+
+describe('a count before its band has been read (X1/D1)', () => {
+  it('prints — on every band head and the rail while the routes are in flight, never 0', async () => {
+    // Every route hangs: the landing's first seconds, frozen.
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})))
+    render(wrap(<JudgmentBands />))
+    await screen.findByTestId('morning-read-judgment')
+
+    for (const id of ['changed', 'checked', 'gaps', 'due'] as const) {
+      const band = screen.getByTestId(bandTestId(id))
+      expect(band.getAttribute('data-count')).toBeNull()
+      expect(band.getAttribute('data-count-state')).toBe('pending')
+      const note = screen.getByTestId(`${bandTestId(id)}-note`)
+      expect(note.textContent).toBe('—')
+      expect(note.textContent).not.toMatch(/\b0\b/)
+      expect(screen.getByTestId(`morning-read-rail-count-${id}`).textContent).toBe('—')
+    }
+    // The band bodies say what they are doing; no head claims a number.
+    expect(screen.getByTestId('morning-read-changed-loading')).toBeTruthy()
+    expect(screen.getByTestId('morning-read-checked-loading')).toBeTruthy()
+  })
+
+  it('prints "unavailable", not 0, for a band whose route failed', async () => {
+    await renderBands({ fail: ['since'] })
+    for (const id of ['changed', 'due'] as const) {
+      expect(screen.getByTestId(bandTestId(id)).getAttribute('data-count-state')).toBe('unavailable')
+      expect(screen.getByTestId(`${bandTestId(id)}-note`).textContent).toBe('unavailable')
+      expect(screen.getByTestId(`morning-read-rail-count-${id}`).textContent).toBe('unavailable')
+    }
+    // The band that answered prints its measured zero.
+    expect(screen.getByTestId('morning-read-rail-count-checked').textContent).toBe('0')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// X3/D3 — a SUBJECT scope narrows every band (review D §C5: a rail click on
+// Brazil scoped the feed while the bands kept listing Ukraine and Iran)
+// ---------------------------------------------------------------------------
+
+describe('a subject scope (X3/D3)', () => {
+  afterEach(() => resetScope())
+
+  const twoDesks = () => ({
+    since: {
+      ...emptySince(),
+      new_findings: sect([
+        { id: 'f-br', analyst_id: 'security_desk', target_id: 'country_g20_br', title: 'Border incident', severity: 'high', confidence: 0.8, faithfulness_score: 0.9, effective_confidence: 0.8, produced_at: '2026-09-24T07:00:00Z' },
+        { id: 'f-sd', analyst_id: 'security_desk', target_id: 'country_watch_sd', title: 'Khartoum shelling', severity: 'high', confidence: 0.8, faithfulness_score: 0.9, effective_confidence: 0.8, produced_at: '2026-09-24T07:30:00Z' },
+      ]),
+    },
+  })
+
+  it('narrows CHANGED (and its rail count) to the scoped subject, says so, and clears back to every subject', async () => {
+    useScope.getState().setScope(scopeFromTarget('country_g20_br', 'Brazil', 'operator'))
+    await renderBands(twoDesks())
+    const changed = screen.getByTestId('morning-read-changed')
+    await waitFor(() => expect(changed.getAttribute('data-count')).toBe('1'))
+    expect(changed.textContent).toContain('Border incident')
+    expect(changed.textContent).not.toContain('Khartoum shelling')
+    expect(screen.getByTestId('morning-read-rail-changed').textContent).toBe('1. Changed1')
+    expect(screen.getByTestId('morning-read-scoped').textContent).toContain('Brazil')
+
+    fireEvent.click(screen.getByTestId('morning-read-scope-clear'))
+    await waitFor(() => expect(screen.getByTestId('morning-read-changed').getAttribute('data-count')).toBe('2'))
+    expect(screen.queryByTestId('morning-read-scoped')).toBeNull()
+  })
+
+  it('with no subject scope, every subject is listed (unchanged)', async () => {
+    await renderBands(twoDesks())
+    await waitFor(() => expect(screen.getByTestId('morning-read-changed').getAttribute('data-count')).toBe('2'))
+    expect(screen.queryByTestId('morning-read-scoped')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// UI 2026-11-13 — "changed" de-duplicated and ranked: an alert collapses into
+// the item it alerts on, `x -> x` is not a change, and the list is ranked
+// worst-first across desks instead of grouped by desk.
+// ---------------------------------------------------------------------------
+
+describe('CHANGED — de-duplicated and ranked', () => {
+  const fnd = (id: string, target_id: string, title: string, severity: string, produced_at: string) => ({
+    id,
+    analyst_id: 'security_desk',
+    target_id,
+    title,
+    severity,
+    confidence: 0.8,
+    faithfulness_score: 0.9,
+    effective_confidence: 0.8,
+    produced_at,
+  })
+
+  it('one row per item, the alert as a mark on it, no x -> x row, worst first across desks', async () => {
+    await renderBands({
+      since: {
+        ...emptySince(),
+        new_findings: sect([
+          fnd('f-lo', 'desk_alpha', 'Minor note', 'low', '2026-09-24T08:50:00Z'),
+          fnd('f-hi', 'desk_beta', 'Bridge down', 'medium', '2026-09-24T07:00:00Z'),
+          fnd('f-md', 'desk_alpha', 'Road shut', 'medium', '2026-09-24T08:00:00Z'),
+        ]),
+        alerts: sect([
+          { id: 'al-1', severity: 'high', channel: 'verified_finding', summary: 'Verified high-severity finding: Bridge down', target_id: 'desk_beta', produced_at: '2026-09-24T07:05:00Z', finding_id: 'f-hi' },
+          { id: 'al-2', severity: 'medium', channel: 'situation_escalation', summary: 'Situation escalated: Strikes (escalating -> escalating)', target_id: 'desk_alpha', produced_at: '2026-09-24T08:40:00Z' },
+        ]),
+      },
+    })
+    const changed = screen.getByTestId('morning-read-changed')
+    await waitFor(() => expect(changed.getAttribute('data-count')).toBe('3'))
+    const rows = within(changed).getAllByTestId('morning-read-changed-row')
+    expect(rows).toHaveLength(3)
+    // Ranked: the alerted item first (raised to high), then medium, then low.
+    expect(rows[0].textContent).toContain('Bridge down')
+    expect(rows[1].textContent).toContain('Road shut')
+    expect(rows[2].textContent).toContain('Minor note')
+    // The alert is a mark on its item, never a row of its own.
+    expect(within(rows[0]).getByTestId('morning-read-changed-alert-mark').textContent).toBe('alerted: verified')
+    expect(changed.textContent).not.toContain('Verified high-severity finding')
+    // A state to the same state is not a change.
+    expect(changed.textContent).not.toContain('escalating -> escalating')
+    // No per-desk grouping heads: the desk is named on each row.
+    expect(within(rows[0]).getByTestId('morning-read-changed-desk').textContent).toBe('Desk Beta')
+    expect(screen.getByTestId('morning-read-rail-changed').textContent).toBe('1. Changed3')
   })
 })

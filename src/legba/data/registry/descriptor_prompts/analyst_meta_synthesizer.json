@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:meta_synthesizer": {
+      "source": "analyst_meta_synthesizer.yaml",
+      "state": "retired"
+    }
+  }
+}

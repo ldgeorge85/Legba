@@ -55,15 +55,20 @@ from typing import Any, Mapping, MutableMapping, Sequence
 import asyncpg
 from pydantic import ValidationError
 
+from ..principals import rule_handle
 from ..provenance import canonical_json
 from ..schemas import content_hash
 from ..schemas.source import SourceDescriptor
+from ..source_classification import source_classification
 from ._contract import RelabelRule
 from .relabel import RelabelResult, evaluate_relabel_chain
 from .source_contract import CandidateSource, SourceCandidateValidation
 from .source_validate import validate_candidate_source
 
 logger = logging.getLogger(__name__)
+
+#: Who writes the discovered source rows (lane 9): this code path.
+_WRITTEN_BY = rule_handle("source_materializer")
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +307,7 @@ async def materialize_discovered_source(
             secrets_resolve=secrets_resolve,
             source_registry=source_registry,
             handler=probe_handler,
+            classification=await source_classification(discovery_descriptor.scope),
         )
         if not validation.valid:
             logger.info(
@@ -420,9 +426,10 @@ async def materialize_discovered_source(
             """
             INSERT INTO source_descriptors
               (descriptor_id, version, schema_uri, is_head, abstraction_level,
-               kind, state, owner, name, body, inherits, created_at)
-            VALUES ($1, $2, $3, TRUE, $4, $5, $6, $7, $8, $9::jsonb, $10, NOW())
-            """,
+               kind, state, owner, name, body, inherits, created_at, written_by)
+            VALUES ($1, $2, $3, TRUE, $4, $5, $6, $7, $8, $9::jsonb, $10, NOW(),
+                    legba_principal('{_WRITTEN_BY}'))
+            """.format(_WRITTEN_BY=_WRITTEN_BY),
             descriptor.identity.id,
             hash_hex,
             descriptor.identity.schema_uri,

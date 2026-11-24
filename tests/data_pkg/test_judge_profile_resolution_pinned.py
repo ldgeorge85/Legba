@@ -168,6 +168,8 @@ _EXPECTED_FAIL_CLASSES = {
     "stale_leader": "hard_fail",
     "stale_leader_vs_facts": "hard_fail",
     "cross_target_leak": "hard_fail",
+    # B6 (W11-F13) — a desk claim naming only a HOMONYM of its subject.
+    "off_subject": "hard_fail",
     "no_citation": "soft_fail",
     "judge_unsupported": "soft_fail",
     "hedge_laundering": "soft_fail",
@@ -252,6 +254,16 @@ _EXPECTED_FAIL_CLASSES = {
     # inert on any finding not citing the register. (Pinned late — the H1 train
     # updated the module table but missed this pin; caught by the drift guard.)
     "register_self_corroboration": "soft_fail",
+    # Q4 (2026-09-28) — a DATED or NUMERIC claim whose only resolved citations
+    # are MEMORY blocks (the prior read, the window ledger). The block is real
+    # and the model was shown it; what the sentence claims is that a date or a
+    # figure is ESTABLISHED, which memory cannot say — it says what this desk
+    # SAID. Same overclaim family as H1, SOFT for the same reason, and inert on
+    # any finding that cites no memory block.
+    "carried_unsupported": "soft_fail",
+    # C-1: a clause resting only on CLAIM rows that states the claimed event
+    # rather than the claim. Same overclaim family as H1/Q4: SOFT, counted.
+    "claim_as_fact": "soft_fail",
     # The one HARD class in the brick, and it is the house definition verbatim —
     # a claim its own cited source contradicts — with the aggravator that the
     # composition NAMED that source as its authority ("the military-posture read
@@ -304,6 +316,9 @@ _EXPECTED_FAIL_CLASSES = {
     "drop_count_mismatch": "hard_fail",
     "drop_why_unknown": "hard_fail",
     "drop_order_violation": "hard_fail",
+    # (c) W4 F-3 — the world read's subject-group floor: its group arithmetic,
+    # its honoured claim, the prefix modulo the floor, and its stamps.
+    "drop_floor_violation": "hard_fail",
 }
 
 
@@ -330,54 +345,21 @@ def test_fail_class_constant_values_pinned() -> None:
 # ---------------------------------------------------------------------------
 # 3. Verify EXEMPTIONS
 # ---------------------------------------------------------------------------
-def test_structural_exempt_set_pinned() -> None:
-    assert K.STRUCTURAL_VERIFY_EXEMPT_ANALYSTS == frozenset({
-        "graph_mining",
-        "anomaly_detection",
-        "band_calibration_tracker",
-        "calibration_tracking",
-        "unit_correctness_scorer",
-        "composition_lineage_sweep",
-        "adversarial_signals",
-        "situation_clustering",
-        "thematic_proposal",
-        "indicator_tracker",
-        "collection_gap",
-        "hypothesis_lifecycle",
-        "signals_retention",
-        "analyst_traces_retention",
-        "geo_convergence_scan",
-        "fact_decay_scan",
-        "source_track_record",
-        "narrative_mapper",
-        "desk_baseline",
-        # R-D research measurement (RESEARCH_PROGRAM_SPEC §4) — a FINDING
-        # emitter of pure SQL arithmetic, so it joins the structural exemption
-        # the way every other deterministic counter did.
-        "research_measurement",
-        # A-1 attention desk_reference (ATTENTION_MEASUREMENT_DESIGN §3.1) — an
-        # INSTRUMENT, never a claim about the world, so it is verify-exempt for
-        # the same reason and must never enter the judge population.
-        "desk_reference",
-        # G1 correctness_grader (LEDGER_RESET_2026-09-16 §3, Program 2). Its
-        # receipt reports what the instrument DID — which units it graded,
-        # against which reference, under which calibration, at what cost — and
-        # asserts nothing about the world a faithfulness judge could grade.
-        # Routing it into the verify population would also be circular in the
-        # worst way: the pass that measures groundedness scoring the output of
-        # the pass that exists because groundedness is not truth.
-        "correctness_grader",
-        # R2 reference_builder — the grader's other half, same argument. Its
-        # receipt counts what each fence dropped and which dimensions came out
-        # thin; the REFERENCE it writes is not a finding at all but an INPUT to
-        # a measurement, and grading our own prose against our own citations is
-        # exactly the circularity a blind reference exists to escape.
-        "reference_builder",
-            # H12 Program 5 lane 1 (2026-09-24): the weekly ledger-yield instrument, pure SQL arithmetic.
-        "inquiry_yield",
-        # Program 6 L2 (2026-09-24): the divergence-baseline unit, deterministic counts and baselines.
-        "layer_divergence",
-})
+def test_structural_exempt_set_is_the_declared_finding_emitters() -> None:
+    """R-1: the exempt set is no longer a pinned literal every lane bumps. It
+    is DERIVED from the type registry, and the rule it must keep is this:
+    exactly the declared deterministic handlers whose one run writes a
+    finding — each declaration module carries the reason it does."""
+    from legba.data.type_registry import types
+
+    declared = {d.id: d.output for d in types("deterministic_handler")}
+    assert K.STRUCTURAL_VERIFY_EXEMPT_ANALYSTS == frozenset(
+        i for i, out in declared.items() if out == "finding")
+    # never an LLM-bearing kind, whatever a declaration says
+    assert not K.STRUCTURAL_VERIFY_EXEMPT_ANALYSTS & {
+        "inline_target", "meta_findings_synthesizer", "cross_analyst_correlator",
+        "consult_on_demand", "region_composition",
+    }
 
 
 @pytest.mark.parametrize("analyst", sorted(K.STRUCTURAL_VERIFY_EXEMPT_ANALYSTS))
@@ -506,9 +488,16 @@ def _verification_gate_source() -> str:
         / "dapr_actors.py"
     )
     src = path.read_text(encoding="utf-8")
-    start = src.index("verification_block: dict[str, Any] | None = None")
+    start = src.index("verification_block: dict[str, Any] | None = (")
     end = src.index("verify_inline_target_finding(", start)
-    return src[start:end]
+    # Lane N-D (2026-11-11): the JOURNAL arm of the gate MOVED in front of the
+    # write — ``actor_critic.verify_journal_before_publish`` — so the gate is
+    # the post-write expression PLUS that function's eligibility test. Same
+    # kinds admitted; the journal is verified before it publishes, not after.
+    critic = (path.parent / "actor_critic.py").read_text(encoding="utf-8")
+    c_start = critic.index("async def verify_journal_before_publish(")
+    c_end = critic.index("return None, None, payload", c_start)
+    return src[start:end] + "\n" + critic[c_start:c_end]
 
 
 def test_only_finding_and_journal_are_verify_capable() -> None:

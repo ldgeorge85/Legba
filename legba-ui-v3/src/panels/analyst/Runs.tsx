@@ -103,7 +103,7 @@ export default function AnalystDetailPanel({ registration, scope }: PanelProps) 
     queryFn: async () => {
       try {
         return await apiGet<{ items: AnalystOutput[]; next_cursor: string | null }>(
-          `/analysts/${encodeURIComponent(analyst_id)}/outputs?limit=50`,
+          `/analysts/${encodeURIComponent(analyst_id)}/outputs?limit=50&fields=full`, // reads body (P-8: light by default)
         )
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) return { items: [], next_cursor: null }

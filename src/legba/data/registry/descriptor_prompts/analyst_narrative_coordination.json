@@ -1,0 +1,15 @@
+{
+  "prompts": {
+    "narrative_coordination": {
+      "chars": 17472,
+      "sha256": "81e125be70d8ca22dc7cc472e1bac89809697fcae0dd962e9c4314a00d274210",
+      "source": "analyst_narrative_coordination.yaml"
+    }
+  },
+  "states": {
+    "analyst:narrative_coordination": {
+      "source": "analyst_narrative_coordination.yaml",
+      "state": "active"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.nhk.world_news": {
+      "source": "source_nhk_world.yaml",
+      "state": "draft"
+    }
+  }
+}

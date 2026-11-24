@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.discord.default": {
+      "source": "source_discord_webhook.yaml",
+      "state": "draft"
+    }
+  }
+}

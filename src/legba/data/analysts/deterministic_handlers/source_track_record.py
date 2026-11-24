@@ -86,6 +86,7 @@ from uuid import UUID, uuid4
 
 from ....runtime.analyst_method import AnalystMethodResult
 from ...provenance.models import FindingPayload
+from ...claim_support import NOT_CLAIM_SIGNAL_SQL
 from ...provenance.origin import origin_class_clause
 
 logger = logging.getLogger(__name__)
@@ -296,6 +297,8 @@ cluster_sources AS (
      WHERE ($3::text[] IS NULL OR s.source_id = ANY($3::text[]))
        AND {live_facts}
        AND {live_signals}
+       -- C-1: a claim row is never a track-record (corroboration) input.
+       AND {not_claim}
 ),
 per_contention_source AS (
     SELECT contention_id, source_id,
@@ -329,7 +332,8 @@ SELECT COALESCE(o.source_id, c.source_id) AS source_id,
  ORDER BY (COALESCE(o.wins, 0) + COALESCE(o.losses, 0)) DESC, source_id
  LIMIT {limit}
 """.format(
-    limit=_MAX_RECORDS, live_facts=_LIVE_FACTS, live_signals=_LIVE_SIGNALS
+    limit=_MAX_RECORDS, live_facts=_LIVE_FACTS, live_signals=_LIVE_SIGNALS,
+    not_claim=NOT_CLAIM_SIGNAL_SQL.format(alias="s"),
 )
 
 

@@ -72,3 +72,34 @@ def requires_isolated_nats(overlap: str) -> pytest.MarkDecorator:
         not isolated_nats_opted_in(),
         reason=isolated_nats_skip_reason(overlap),
     )
+
+
+async def clear_streams_capturing(js, subject: str) -> list[str]:
+    """Delete every stream on the ISOLATED NATS whose subjects capture ``subject``.
+
+    X1-A4: on the disposable test NATS (deploy/compose.test.yml) the opt-in
+    tests above run for real — and meet the same overlap they were gated off
+    production for, because any earlier test that boots the registry
+    provisions ``LEGBA_DLQ_EVENTS`` (``legba.dlq.>``) and leaves it, so the
+    test's own ``legba.dlq.<x>`` stream is refused "subjects overlap with an
+    existing stream". On a bus whose only clients are tests that stream is
+    another test's leftover, and the test clears it before it provisions.
+
+    Refuses outright unless the caller has asserted the bus is disposable
+    (``LEGBA_TEST_ISOLATED_NATS=1``): this must never run against production.
+    """
+    from nats.js.errors import NotFoundError
+
+    if not isolated_nats_opted_in():
+        raise RuntimeError(
+            f"clear_streams_capturing({subject!r}) refused: {ISOLATED_NATS_ENV}=1 "
+            "is not set, so the bus is not declared disposable"
+        )
+    removed: list[str] = []
+    while True:
+        try:
+            name = await js.find_stream_name_by_subject(subject)
+        except NotFoundError:
+            return removed
+        await js.delete_stream(name)
+        removed.append(name)

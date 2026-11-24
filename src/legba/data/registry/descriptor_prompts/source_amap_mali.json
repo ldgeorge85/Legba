@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.amap.news": {
+      "source": "source_amap_mali.yaml",
+      "state": "draft"
+    }
+  }
+}

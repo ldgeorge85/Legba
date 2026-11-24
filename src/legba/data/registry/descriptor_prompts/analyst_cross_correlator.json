@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:cross_correlator": {
+      "source": "analyst_cross_correlator.yaml",
+      "state": "retired"
+    }
+  }
+}

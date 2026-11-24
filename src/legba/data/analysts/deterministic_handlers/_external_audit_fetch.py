@@ -308,7 +308,11 @@ async def fetch_decisive_page(
         )
         return None, UNCHECKED_SPAN_FETCH_FAILED
 
-    text, published, extracted = page_text_and_date(output.get("body"), target)
+    # N-V: Trafilatura (favor_recall, tables) over a whole page is CPU work —
+    # off the event loop every other actor turn and /healthz share.
+    text, published, extracted = await asyncio.to_thread(
+        page_text_and_date, output.get("body"), target
+    )
     if not text:
         logger.warning("external_audit.span_fetch_empty url=%s", target)
         return None, UNCHECKED_SPAN_FETCH_FAILED

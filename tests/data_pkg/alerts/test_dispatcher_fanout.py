@@ -178,9 +178,10 @@ async def test_failed_post_writes_failed_row_with_error() -> None:
     assert args[10] is None                    # no delivered_at
 
 
-async def test_below_severity_writes_no_row() -> None:
-    """A configured min-severity filter working as designed is not a
-    delivery event — no ledger noise."""
+async def test_below_severity_writes_a_reasoned_row() -> None:
+    """N-M (11-13): below the floor is a dispatch decision — never POSTed, but
+    ledgered with its reason (it used to write nothing, which hid 371
+    escalations in 30 days)."""
     http = _Http()
     pool = _RecordingPool()
     d = AlertSinkDispatcher(pg_pool=pool, sinks=[_sink(http)])  # floor: high
@@ -188,7 +189,10 @@ async def test_below_severity_writes_no_row() -> None:
         await _finding_payload(d, alert_row_id=str(uuid4()), severity="medium")
     )
     assert results[0].outcome == "skipped_below_severity"
-    assert pool.webhook_rows() == [] and http.calls == []
+    assert http.calls == []
+    (row,) = pool.webhook_rows()
+    assert row[8] == "skipped_below_severity"
+    assert "below" in row[9] and row[10] is None
 
 
 # ---------------------------------------------------------------------------
@@ -197,8 +201,8 @@ async def test_below_severity_writes_no_row() -> None:
 
 
 async def test_one_attempt_series_per_alert_row_id() -> None:
-    """A finding escalated on two channels reaches fan_out twice — ONE POST,
-    ONE ledger row; the duplicate is suppressed without a row."""
+    """A finding escalated on two channels reaches fan_out twice — ONE POST;
+    the duplicate is suppressed and ledgered as ``skipped_duplicate``."""
     http = _Http([_Resp(200)])
     pool = _RecordingPool()
     d = AlertSinkDispatcher(pg_pool=pool, sinks=[_sink(http)])
@@ -210,7 +214,8 @@ async def test_one_attempt_series_per_alert_row_id() -> None:
     assert first[0].delivered
     assert second[0].outcome == "skipped_duplicate"
     assert len(http.calls) == 1
-    assert len(pool.webhook_rows()) == 1
+    statuses = [args[8] for args in pool.webhook_rows()]
+    assert statuses == ["delivered", "skipped_duplicate"]
 
 
 async def test_global_cooldown_suppresses_and_audits() -> None:

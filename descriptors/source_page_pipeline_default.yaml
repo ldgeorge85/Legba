@@ -1,0 +1,84 @@
+# Lane I-2 — the instance's DEFAULT PAGE PIPELINE (kind `page`,
+# src/legba/data/sources/page.py). Ships DRAFT, like every descriptor.
+#
+# What it is: not a publisher. It is the pipeline the ingestion intake runs an
+# ADDRESS request under (an operator's request, an agent's
+# `request_ingestion` tool call, a source's follow policy, the archiver's
+# routed re-fetch): the intake's address adapter puts the request's URL in
+# `config.url`, the `page` kind fetches that one page through the guarded
+# egress client, extracts it with the evidence archiver's extraction, applies
+# the quality gates, and yields ONE document shaped like a feed entry.
+#
+# No schedule of its own: it has no `cadence`, so it can never be `active`
+# (an active poll source must declare one) and is never polled. On the host
+# it sits at `configured` (descriptors/LIFECYCLE.md): validated, no actor, no
+# reminder — and the intake admits ADDRESS requests under a `configured`
+# pipeline (data/intake_contract.ADDRESS_RUNNABLE_STATES). Registering and
+# walking it to `configured` is the orchestrator's step at the roll.
+#
+# Provenance on what it lands: `source_id` is this pipeline; the publisher is
+# in `payload.publisher` (host, site name, and the registered source sharing
+# the host when there is one — whose `scope.geo` becomes
+# `payload.publisher_origin`, the geo fallback a feed item carries); the
+# request in `payload.intake` (request id, reason, requester, parent signal
+# and parent request). Host credibility comes from the `source_credibility`
+# ledger by the PAGE's host; an unknown host gets `unknown_host_credibility`
+# below and is flagged (`payload.page.credibility.basis: declared_default`).
+#
+# scope.geo is empty on purpose: a page's subject comes from its content
+# (the geocoder), and its publisher's home from the matched source — never
+# from this pipeline.
+
+identity:
+  id: source.page.default
+  name: Page pipeline — one page per intake request
+  kind: page
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: i2_page_pipeline
+  created: "2026-11-13T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: []
+  tags: [page, on_request, intake]
+  source_class: reporting           # most requested pages are news articles (followed from feeds); the publisher's own class rides payload.publisher
+  access_class: restricted          # Wave-E — a generic adapter with no concrete editorial source to review terms for — fail-closed, like the other generic adapters
+
+acquisition: poll
+
+config:
+  respect_robots: true
+  timeout_seconds: 30
+  max_redirects: 5
+  max_bytes: 5242880                # 5 MiB; above it the page is refused `too_large`
+  min_text_chars: 400               # page_quality.DEFAULT_MIN_TEXT_CHARS (the threshold's reasoning is there)
+  max_link_density: 0.5             # page_quality.DEFAULT_MAX_LINK_DENSITY
+  unknown_host_credibility: 0.3     # the source_credibility filter's seeded mid-low band; flagged when applied
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash (a syndicated copy at another URL)
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

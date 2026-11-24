@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:series_change": {
+      "source": "analyst_series_change.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:standing_auditor": {
+      "source": "analyst_standing_auditor.yaml",
+      "state": "draft"
+    }
+  }
+}

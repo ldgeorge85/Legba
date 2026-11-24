@@ -11,6 +11,13 @@ order, and is fail-closed at every step:
                    never runs. (:mod:`.resolution`)
     2. TOOL KNOWN — the requested tool must be named in the pack AND have a
                     registered handler. Unknown → BLOCK event, return.
+    2.5 ARGS     — the call's arguments must match the grammar the model was
+                   shown (:func:`~legba.data.stack.llm.tool_rounds.validate_args`).
+                   A result written into the input, an argument that does not
+                   exist, a missing required one, a coarse type or enum
+                   mismatch → BLOCK event, return; the tool never runs and the
+                   model is told what to fix. Tools with no declared schema are
+                   not validated. (:mod:`legba.data.stack.llm.tool_rounds`)
     3. GOVERN    — the per-pack governor's rate/budget/source caps + the global
                    token envelope. A breach → BLOCK event, return; the tool
                    never runs. (:mod:`.governor`)
@@ -41,6 +48,11 @@ import asyncpg
 
 from ...run_accounting import record_tool_call, redact_tool_args
 from ...schemas.action_pack import ActionPack
+from ...stack.llm.tool_rounds import (
+    TOOL_SCHEMAS,
+    split_arg_problem,
+    validate_args,
+)
 from .events import GovernorEvent, NatsPublish, record_governor_event
 from .governor import PackGovernorEnforcer, pack_tool_timeout_seconds
 from .resolution import (
@@ -262,6 +274,30 @@ class Agency:
             return AgencyOutcome(
                 admitted=False, pack_id=pack_id, tool_name=tool_name,
                 block_cause="unknown_tool", detail=detail, resolution=res,
+            )
+
+        # --- 2.5) ARGUMENTS match the grammar the model was shown ---------
+        # The tool schemas were rendered TO the model and never checked ON the
+        # reply, so a call could carry anything and the dispatchers' `args.get`
+        # reads would take what they recognized and drop the rest in silence.
+        # Live, 2026-09-28 00:58Z: `list_situations` arrived carrying the
+        # RESULT the model expected — six fabricated situation rows under
+        # `result`, plus `status: "ok"` — and `status` ran as a SQL predicate
+        # no row can match. Count 0, round marked ok, and the answer cited the
+        # six ids the model had invented.
+        #
+        # It sits HERE, after the tool is known and before the governor, for
+        # two reasons: a malformed call must not spend the pack's rate or
+        # budget, and a block is the one outcome the loops already know how to
+        # hand back to the model (`tool_blocked: <cause>: <detail>` in the tool
+        # message) and the ledger already records with its arguments.
+        problem = validate_args(TOOL_SCHEMAS.get(tool_name), call.args)
+        if problem is not None:
+            cause, detail = split_arg_problem(problem)
+            await self._block(conn, call, cause=cause, detail=detail)
+            return AgencyOutcome(
+                admitted=False, pack_id=pack_id, tool_name=tool_name,
+                block_cause=cause, detail=detail, resolution=res,
             )
 
         # --- 3) GOVERN (per-pack caps + global envelope) -----------------

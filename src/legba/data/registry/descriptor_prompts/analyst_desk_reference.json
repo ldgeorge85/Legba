@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:desk_reference": {
+      "source": "analyst_desk_reference.yaml",
+      "state": "draft"
+    }
+  }
+}

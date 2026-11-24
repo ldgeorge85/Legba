@@ -430,6 +430,68 @@ async def test_the_tool_answer_states_the_as_of_rule_it_applied(pg_pool):
 
 
 # ---------------------------------------------------------------------------
+# The holdings CATALOGUE — what the consult prompt renders at a run's start
+# ---------------------------------------------------------------------------
+
+
+async def test_holdings_lists_one_line_per_series_with_its_subjects(pg_pool):
+    """The read behind the consult prompt's `Curated series held:` line.
+
+    CONSULT_REVIEW_2026-09-28: ``series_history`` / ``series_compare`` had
+    been invoked zero times ever, because nothing told the model the holdings
+    existed. This is what tells it — so what it says has to be what the table
+    holds, read on the real driver.
+    """
+    async with pg_pool.acquire() as conn:
+        await _seed(conn)
+        rows = await obs.series_holdings(conn)
+    held = {r["series_id"]: r for r in rows}
+    assert held["wb.gdp"]["subjects"] == ["IR", "US"]
+    assert held["wb.cpi"]["subjects"] == ["IR"]
+    # Eleven gdp rows for IR (2016 is stored twice) plus two for US; one cpi.
+    assert held["wb.gdp"]["rows_held"] == 13
+    assert held["wb.cpi"]["rows_held"] == 1
+
+
+async def test_holdings_never_names_a_series_from_an_UNLOADED_collection(pg_pool):
+    """The approval gate is in the SQL, not in the caller.
+
+    A holding still in ``reviewed`` has its rows in ``observations`` and must
+    not reach the catalogue the prompt prints: advertising a series the
+    planner is not allowed to read is worse than advertising none.
+    """
+    async with pg_pool.acquire() as conn:
+        await _seed(conn, state="reviewed")
+        in_table = await conn.fetchval(
+            "SELECT count(*) FROM observations WHERE collection_id = $1",
+            _COLLECTION,
+        )
+        rows = await obs.series_holdings(conn)
+    assert in_table > 0, "the rows ARE in the table"
+    held = {r["series_id"]: r for r in rows}
+    # Another suite's loaded holding may legitimately carry a `wb.gdp`; what
+    # must never appear is THIS collection's subject pair behind it.
+    assert "wb.cpi" not in held
+    assert held.get("wb.gdp", {}).get("subjects") != ["IR", "US"]
+
+
+async def test_the_port_folds_the_catalogue_into_counts_and_subjects(pg_pool):
+    """The shape the prompt renderer reads: a count, the subject union and
+    the series ids. ``series_count: 0`` is a real answer and means no
+    collection is loaded — the renderer prints that as the honest absence,
+    never as "0 series held"."""
+    from legba.runtime.substrate_query_port import PostgresQdrantSubstrateQueryPort
+
+    async with pg_pool.acquire() as conn:
+        await _seed(conn)
+    port = PostgresQdrantSubstrateQueryPort(pg_pool=pg_pool, qdrant_client=None)
+    out = await port.series_holdings()
+    assert out["series_count"] == len(out["series"]) >= 2
+    assert {"IR", "US"} <= set(out["subjects"])
+    assert "wb.gdp" in {r["series_id"] for r in out["series"]}
+
+
+# ---------------------------------------------------------------------------
 # The census read
 # ---------------------------------------------------------------------------
 
@@ -450,7 +512,69 @@ async def test_classify_cited_refs_reads_the_rows_OWN_origin_class(pg_pool):
     out = await port.classify_cited_refs(refs=ids + ["not-a-uuid", str(uuid4())])
     assert out["by_origin_class"] == {"archive": 3}
     assert out["resolved"] == 3
-    # The unknown uuid is UNRESOLVED, never folded into a class it might not
-    # belong to — a census that absorbs what it cannot resolve overstates
-    # whichever bucket took it.
-    assert out["unresolved"] == 1
+    assert out["by_kind"] == {"observation": 3}
+    # 2026-09-28 §B.3 — the unknown uuid is FABRICATED, not "unresolved". It
+    # matches no substrate table at all, which is a different fact from an id
+    # that matched a row whose origin class this census does not read, and the
+    # two used to arrive in the same bucket. Neither is ever folded into a
+    # CLASS it might not belong to: a census that absorbs what it cannot
+    # resolve overstates whichever bucket took it.
+    assert out["fabricated"] == 1
+    assert out["unresolved"] == 0
+    # And the token that was never a uuid comes back rather than vanishing at
+    # the constructor.
+    assert out["malformed"] == ["not-a-uuid"]
+
+
+async def test_classify_cited_refs_NAMES_the_kinds_beyond_signals(pg_pool):
+    """The 2026-09-28 defect, on the real driver.
+
+    The Opus run of that date cited 80 real ids — 51 signals, 15 findings, 8
+    situations, 5 hypotheses, 1 event — and the census, probing ``signals`` and
+    ``observations`` alone, reported "52 live" and filed the other 29 as
+    unresolved where nobody ever saw them. Each of those tables is one the
+    consult tools return ids FROM, so a citation landing there is the planner
+    doing what it was asked to do.
+    """
+    from legba.runtime.substrate_query_port import PostgresQdrantSubstrateQueryPort
+
+    finding_id, situation_id, hypothesis_id = uuid4(), uuid4(), uuid4()
+    async with pg_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO analyst_outputs (id, kind, title, schema_uri) "
+            "VALUES ($1, 'finding', $2, 'iglu:legba/finding/jsonschema/2-0-0')",
+            finding_id, f"finding {_TAG}",
+        )
+        await conn.execute(
+            "INSERT INTO situations (id, name, data) "
+            "VALUES ($1, $2, '{}'::jsonb)",
+            situation_id, f"situation {_TAG}",
+        )
+        await conn.execute(
+            "INSERT INTO hypotheses (id, thesis) VALUES ($1, $2)",
+            hypothesis_id, f"hypothesis {_TAG}",
+        )
+    try:
+        port = PostgresQdrantSubstrateQueryPort(pg_pool=pg_pool, qdrant_client=None)
+        out = await port.classify_cited_refs(
+            refs=[str(finding_id), str(situation_id), str(hypothesis_id),
+                  str(uuid4()), "sit-001"],
+        )
+        assert out["by_kind"] == {"finding": 1, "situation": 1, "hypothesis": 1}
+        # They matched a real row, so they are UNRESOLVED (no origin class this
+        # census reads), never FABRICATED.
+        assert out["unresolved"] == 3
+        assert out["fabricated"] == 1
+        assert out["malformed"] == ["sit-001"]
+        # The four origin-class buckets keep meaning "signals and observations"
+        # and nothing else — a census must not quietly reclassify anything.
+        assert out["by_origin_class"] == {}
+        assert out["resolved"] == 0
+    finally:
+        async with pg_pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM analyst_outputs WHERE id = $1", finding_id)
+            await conn.execute(
+                "DELETE FROM situations WHERE id = $1", situation_id)
+            await conn.execute(
+                "DELETE FROM hypotheses WHERE id = $1", hypothesis_id)

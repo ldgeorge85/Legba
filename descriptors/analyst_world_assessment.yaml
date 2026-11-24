@@ -154,6 +154,7 @@ method:
   # the same binding the four composition variants use, so a voice change is a
   # deploy and a diff rather than a descriptor PUT that no test can see.
   llm:
+    thinking: "on"   # T-2: low-volume synthesis seat thinks on every call
     # Fleet-wide 1.0 per the 2026-07-24 sampling audit.
     temperature: 1.0
     # MODEL POLICY (operator): the CORE plane via a stack_ref ($0). NEVER a

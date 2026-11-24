@@ -55,6 +55,7 @@ misattribution the layer exists to prevent.
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import json
 import logging
@@ -156,7 +157,7 @@ MAX_SITUATIONS_CEILING = 500
 DEFAULT_MAX_EVIDENCE = 6        # new items shown per situation
 DEFAULT_BATCH = 4               # situations per LLM call
 DEFAULT_MAX_TOKENS = 1600
-DEFAULT_TEMPERATURE = 0.0
+DEFAULT_TEMPERATURE = HOUSE_TEMPERATURE
 DEFAULT_WINDOW_HOURS = 168      # backstop lookback for a situation with no watermark
 DEFAULT_FLOOR = 0.50            # the house consumption floor: min(conf, faithfulness)
 DEFAULT_SNIPPET_CHARS = 700

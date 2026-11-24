@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.rsshub.rfi.ameriques": {
+      "source": "source_rsshub_rfi_ameriques.yaml",
+      "state": "draft"
+    }
+  }
+}

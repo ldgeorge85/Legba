@@ -1,0 +1,74 @@
+# WORKED EXAMPLE (machinery only — not registered by any script, no live feed).
+#
+# The `keyword_gate` filter kind, PER-FEED SUGAR form: an RSS source narrowed
+# in its own `config` with `keyword_include` / `keyword_exclude` — no pipeline
+# stage to compose. The RSS handler builds the SAME matcher the stage uses
+# (legba.data.filters.keyword_gate.KeywordGate) with the default knobs
+# (whole-word, case-insensitive, include mode `any`, fields title/text/raw_body)
+# and SourceCore applies it at the same point as the stage: after the entry is
+# counted toward cursor progress, before the baseline and the enrichment chain.
+# For `mode: all`, other `fields`, or case-sensitive matching use the stage form
+# (source_example_keyword_gate_stage.yaml). Both forms may be combined; an entry
+# must pass every gate.
+#
+# Here a broad feed sheds off-topic items before they cost NER / geocode /
+# embedding: exclude-only (include empty = everything not excluded passes).
+
+identity:
+  id: source.example.keyword_rss_sugar
+  name: Example — broad news feed, RSS keyword sugar
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"
+  abstraction_level: L1
+  state: active
+  owner: example
+  created: "2026-10-03T00:00:00Z"
+
+scope:
+  owner_tenant: default
+  geo: []
+  languages: [en]
+  tags: [example, news]
+  source_class: reporting
+  access_class: public
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "*/15 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://news.example.org/world/rss.xml"
+  keyword_exclude: [football, cricket, horoscope, recipe, celebrity]
+  keyword_include: []
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1
+      config: {}
+    - kind: dedupe_tier_2
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

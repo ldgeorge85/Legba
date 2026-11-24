@@ -41,13 +41,14 @@ import re
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime, parsedate_to_datetime
 from time import struct_time
-from typing import Any, AsyncIterator, ClassVar
+from typing import Any, AsyncIterator, ClassVar, Literal
 from urllib.parse import urlparse
 
 import feedparser
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
+from ..filters.keyword_gate import KeywordGate, _clean_terms
 from ._contract import Signal, SourceContext, SourceHealth
 from ._egress import guarded_async_client
 
@@ -74,6 +75,45 @@ class RSSConfig(BaseModel):
     parser: str = Field(default="auto", pattern=r"^(auto|rss|atom)$")
     user_agent: str = Field(default="Legba/2.0", max_length=256)
     timeout_seconds: int = Field(default=30, ge=1, le=300)
+    # W3 SRC-3 per-feed sugar for the ``keyword_gate`` filter kind: narrow a
+    # feed in its descriptor without composing a pipeline stage. Same matcher
+    # (:class:`legba.data.filters.keyword_gate.KeywordGate`), default knobs
+    # (whole-word, case-insensitive, include mode ``any``, fields title / text
+    # / raw_body). Empty (default) = not gated. The handler only DECLARES the
+    # gate (``RSSSourceHandler.keyword_gate``); SourceCore applies it to each
+    # yielded entry pre-baseline, AFTER counting the entry toward cursor
+    # progress — so a dropped entry advances ``since`` and is judged (and
+    # counted) once, never re-judged on every poll.
+    # N-R: a term may carry a leading and/or trailing ``*`` (prefix / suffix /
+    # substring match, for compounding languages); validated HERE so a bad
+    # term fails the config parse, not the first poll.
+    keyword_include: list[str] = Field(default_factory=list)
+    keyword_exclude: list[str] = Field(default_factory=list)
+
+    @field_validator("keyword_include", "keyword_exclude")
+    @classmethod
+    def _keyword_terms(cls, v: list[str]) -> list[str]:
+        _clean_terms(v)  # raises ValueError on an empty or mis-starred term
+        return v
+    # W11-F151 — the pull cursor (runtime/source_cursor.py). The source actor
+    # hands this handler ``since - lookback`` so an item that surfaces in the
+    # feed after the cursor passed its date is still considered; entries
+    # already judged are skipped by the actor's ledger. None = the default
+    # (DEFAULT_LOOKBACK_HOURS); 0 = the historical strict ``since`` filter.
+    cursor_lookback_hours: float | None = Field(default=None, ge=0, le=168)
+    # Which feed timestamp the ``since`` filter and the cursor follow:
+    # ``published`` (pubDate / Atom published), or ``latest`` = the later of
+    # published and updated — for a feed whose ``published`` is an EVENT time
+    # and whose items are posted afterwards (en.kremlin.ru). The persisted
+    # ``published_at`` is the feed's published date either way.
+    cursor_timestamp: Literal["published", "latest"] = "published"
+    # W11-F265 — the FIRST poll's maximum entry age, in days. A poll with no
+    # cursor (a new source, or a new descriptor head) skips entries whose own
+    # feed date is older than this; the source actor counts them on the poll
+    # row (``age_skipped``) instead of ingesting a feed's whole archive. None
+    # = the default (runtime/source_first_poll_age.DEFAULT_FIRST_POLL_MAX_AGE,
+    # 30 days); 0 = no cap, for an archive feed that is wanted whole.
+    first_poll_max_entry_age_days: float | None = Field(default=None, ge=0, le=36_500)
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +148,43 @@ _MAX_CONSECUTIVE_304 = 12
 # future than this skew are junk (the B0-11 stategov year-typo class) and are
 # excluded so one bad date can't poison the evidence.
 _NEWEST_ENTRY_MAX_FUTURE_SKEW = timedelta(hours=26)
+
+# W11-F135 ingestion caps. A feed ``<description>`` is copied into BOTH
+# ``summary`` and ``raw_body``; with no cap, one armscontrol.org entry whose
+# description was HTML with four inline ``data:image/png;base64`` pictures
+# became an 11 MB summary (22 MB payload), and 518 stored summaries carry such
+# a payload. A summary is the short, searchable gist, so it is capped hard;
+# ``raw_body`` is the evidence copy, so it only loses the embedded images and
+# is cut at a generous ceiling. Both cuts are logged with the source id and
+# the original length, and the summary cut is stamped on the payload.
+RSS_SUMMARY_MAX_CHARS = 16_000
+RSS_RAW_BODY_MAX_CHARS = 512_000
+# ``data:image/<subtype>;base64,<payload>`` wherever it sits (a bare attribute
+# value, or inside HTML that was escaped once or twice - ``&quot;`` and
+# ``&amp;quot;`` end the run because ``&``/``;`` are not base64 characters).
+_INLINE_DATA_IMAGE_RE = re.compile(
+    r"data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=_-]+"
+)
+_INLINE_IMAGE_PLACEHOLDER = "[inline image removed]"
+
+
+def strip_inline_data_images(text: str) -> str:
+    """Replace every inline ``data:image/...;base64,...`` payload in ``text``
+    with a short placeholder. Cheap no-op when the marker is absent."""
+    if not text or "data:image/" not in text:
+        return text
+    return _INLINE_DATA_IMAGE_RE.sub(_INLINE_IMAGE_PLACEHOLDER, text)
+
+
+#: W11-F151 — default cursor look-back (hours) for dated feeds; mirrors
+#: ``runtime.source_cursor.DEFAULT_LOOKBACK`` (this module never imports the
+#: runtime). Shared with the json_api handler.
+DEFAULT_LOOKBACK_HOURS = 72.0
+
+#: W11-F265 — default first-poll maximum entry age (days); mirrors
+#: ``runtime.source_first_poll_age.DEFAULT_FIRST_POLL_MAX_AGE`` (a test pins
+#: the two together; this module never imports the runtime).
+DEFAULT_FIRST_POLL_MAX_AGE_DAYS = 30.0
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +239,27 @@ class RSSSourceHandler:
         self._config = config
         self._client = http_client
         self._feedparser = feed_parser
+        # The keyword_include/keyword_exclude sugar — the ONE keyword_gate
+        # matcher; None when the feed is not gated. SourceCore applies it
+        # (pre-baseline, with the ingestion_filters stages) and drains its
+        # drop counts into the source's per-poll counter.
+        self.keyword_gate: KeywordGate | None = KeywordGate.from_lists(
+            config.keyword_include, config.keyword_exclude,
+        )
+
+    @property
+    def cursor_lookback_seconds(self) -> float:
+        """W11-F151 — the look-back this feed's cursor gets (actor reads it)."""
+        hours = self._config.cursor_lookback_hours
+        return (DEFAULT_LOOKBACK_HOURS if hours is None else hours) * 3600.0
+
+    @property
+    def first_poll_max_entry_age_seconds(self) -> float:
+        """W11-F265 — the first poll's entry-age cap (actor reads it; 0 = none)."""
+        days = self._config.first_poll_max_entry_age_days
+        if days is None:
+            return DEFAULT_FIRST_POLL_MAX_AGE_DAYS * 86400.0
+        return float(days) * 86400.0
 
     # ------------------------------------------------------------------ pull
 
@@ -571,6 +669,36 @@ class RSSSourceHandler:
             or summary
             or ""
         )
+        # ``content_hash`` is taken over the body AS FETCHED (below), so a
+        # byte-identical re-serve of an entry we already hold, uncapped, is
+        # still recognised as the same observation after the caps start.
+        hash_body = raw_body
+        original_summary_len = len(summary)
+        original_raw_body_len = len(raw_body)
+        summary = strip_inline_data_images(summary)
+        raw_body = strip_inline_data_images(raw_body)
+        summary_stripped_len = len(summary)
+        raw_body_stripped_len = len(raw_body)
+        summary_cut = len(summary) > RSS_SUMMARY_MAX_CHARS
+        if summary_cut:
+            summary = summary[:RSS_SUMMARY_MAX_CHARS]
+        if len(raw_body) > RSS_RAW_BODY_MAX_CHARS:
+            raw_body = raw_body[:RSS_RAW_BODY_MAX_CHARS]
+        if (
+            summary_stripped_len != original_summary_len
+            or raw_body_stripped_len != original_raw_body_len
+            or summary_cut
+            or len(raw_body) != raw_body_stripped_len
+        ):
+            logger.warning(
+                "rss.entry.capped source_id=%s link=%s "
+                "summary_chars %d->%d raw_body_chars %d->%d "
+                "(inline images stripped, summary cap %d, raw_body cap %d)",
+                ctx.source_id, link or external_id or "-",
+                original_summary_len, len(summary),
+                original_raw_body_len, len(raw_body),
+                RSS_SUMMARY_MAX_CHARS, RSS_RAW_BODY_MAX_CHARS,
+            )
 
         # Skip entries that have NOTHING usable (no id, no link, no title)
         # — these are usually parse-junk artifacts.
@@ -593,10 +721,20 @@ class RSSSourceHandler:
             "source_url": self._config.url,
         }
 
+        if len(summary) != original_summary_len:
+            payload["summary_original_chars"] = original_summary_len
+
         # Stash the parsed datetime on the signal itself so downstream
         # filtering by `since` doesn't have to re-parse the iso string.
         if published_at is not None:
             payload["_published_at_dt"] = published_at
+        # W11-F151 ``cursor_timestamp: latest``: the since-filter and the
+        # cursor follow the later of published / updated (stamped only when it
+        # differs, so the persisted payload is unchanged for every other feed).
+        if self._config.cursor_timestamp == "latest":
+            updated = _extract_updated(entry)
+            if updated is not None and (published_at is None or updated > published_at):
+                payload["_cursor_dt"] = updated
 
         canonical = link or external_id or None
         content_hash = hashlib.sha256(
@@ -605,7 +743,7 @@ class RSSSourceHandler:
                 + "\x1f"
                 + (title or "")
                 + "\x1f"
-                + (raw_body or "")
+                + (hash_body or "")
             ).encode("utf-8")
         ).hexdigest()
 
@@ -658,8 +796,13 @@ class RSSSourceHandler:
 
 
 def _is_not_after(signal: Signal, since: datetime) -> bool:
-    """Return True iff signal's parsed published_at is <= ``since``."""
-    payload_dt = signal.payload.get("_published_at_dt")
+    """Return True iff signal's cursor timestamp is <= ``since``.
+
+    The cursor timestamp is ``_cursor_dt`` (the ``cursor_timestamp: latest``
+    knob) when stamped, else the parsed published_at — the same precedence the
+    source actor advances the cursor along.
+    """
+    payload_dt = signal.payload.get("_cursor_dt") or signal.payload.get("_published_at_dt")
     if isinstance(payload_dt, datetime):
         # Both must be aware/naive consistently — normalize to aware UTC.
         a = payload_dt if payload_dt.tzinfo else payload_dt.replace(tzinfo=timezone.utc)
@@ -740,11 +883,16 @@ _HHMM_RE = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?\b")
 # 15:54" (tr). The weekday is decorative and is skipped WITHOUT being checked
 # against the date (RFC 5322 parsers ignore the day-name too, and validating
 # it would only reject feeds over a field that carries no information). The
-# month name is load-bearing, and we decode ENGLISH ONLY: that is the exact,
-# closed set we can be certain of. A month word we do not know yields None —
-# no date, exactly the status quo — rather than a guess. Understating the
-# feed's newest entry is also the SAFE direction for the gauge: it biases
-# toward "upstream quiet", never toward a false deficit.
+# month name is load-bearing, and we decode it from CLOSED per-language tables
+# (below): English first, then the languages Drupal sites we poll render in.
+# A month word in no table yields None — no date — rather than a guess.
+#
+# W11-F151: English-only cost ICG every dated item that surfaced after a
+# French or Arabic one — "Jeudi, octobre 29, 2026 - 11:01" read as undated,
+# and an undated entry used to advance the cursor to the poll time, so the
+# English items dated before it were dropped. Both halves are fixed: the
+# tables below, and (runtime/source_cursor.py) an undated entry of a dated
+# feed no longer moves the cursor at all.
 _MONTHS_EN = {
     "january": 1, "jan": 1,
     "february": 2, "feb": 2,
@@ -760,14 +908,77 @@ _MONTHS_EN = {
     "december": 12, "dec": 12,
 }
 
+# W11-F151 — the other languages, as Drupal's core translations render the
+# long month name ``F`` (Russian in both the nominative and the genitive form;
+# Arabic in the Egyptian/Gulf and the Levantine series). Accent-free and
+# dotless-i spellings are looked up through :func:`_month_number`.
+_MONTHS_INTL: dict[str, int] = {
+    # fr
+    "janvier": 1, "février": 2, "mars": 3, "avril": 4, "mai": 5, "juin": 6,
+    "juillet": 7, "août": 8, "septembre": 9, "octobre": 10, "novembre": 11,
+    "décembre": 12,
+    # es
+    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
+    "julio": 7, "agosto": 8, "septiembre": 9, "setiembre": 9, "octubre": 10,
+    "noviembre": 11, "diciembre": 12,
+    # pt
+    "janeiro": 1, "fevereiro": 2, "março": 3, "maio": 5, "junho": 6,
+    "julho": 7, "setembro": 9, "outubro": 10, "novembro": 11, "dezembro": 12,
+    # de
+    "januar": 1, "februar": 2, "märz": 3, "juni": 6, "juli": 7,
+    "oktober": 10, "dezember": 12,
+    # it
+    "gennaio": 1, "febbraio": 2, "aprile": 4, "maggio": 5, "giugno": 6,
+    "luglio": 7, "settembre": 9, "ottobre": 10, "dicembre": 12,
+    # tr
+    "ocak": 1, "şubat": 2, "mart": 3, "nisan": 4, "mayıs": 5, "haziran": 6,
+    "temmuz": 7, "ağustos": 8, "eylül": 9, "ekim": 10, "kasım": 11,
+    "aralık": 12,
+    # ru (nominative, genitive)
+    "январь": 1, "февраль": 2, "март": 3, "апрель": 4, "май": 5, "июнь": 6,
+    "июль": 7, "август": 8, "сентябрь": 9, "октябрь": 10, "ноябрь": 11,
+    "декабрь": 12,
+    "января": 1, "февраля": 2, "марта": 3, "апреля": 4, "мая": 5, "июня": 6,
+    "июля": 7, "августа": 8, "сентября": 9, "октября": 10, "ноября": 11,
+    "декабря": 12,
+    # ar (Egyptian/Gulf)
+    "يناير": 1, "فبراير": 2, "مارس": 3, "أبريل": 4, "ابريل": 4, "إبريل": 4,
+    "مايو": 5, "يونيو": 6, "يوليو": 7, "أغسطس": 8, "اغسطس": 8,
+    "سبتمبر": 9, "أكتوبر": 10, "اكتوبر": 10, "نوفمبر": 11, "ديسمبر": 12,
+    # ar (Levantine)
+    "كانون الثاني": 1, "شباط": 2, "آذار": 3, "نيسان": 4, "أيار": 5,
+    "حزيران": 6, "تموز": 7, "آب": 8, "أيلول": 9, "تشرين الأول": 10,
+    "تشرين الثاني": 11, "كانون الأول": 12,
+}
+
+
+def _fold(word: str) -> str:
+    """Lower-case and strip Latin diacritics (``Août`` -> ``aout``,
+    ``KASIM`` / ``kasım`` -> ``kasim``)."""
+    import unicodedata
+
+    decomposed = unicodedata.normalize("NFKD", word.lower().replace("ı", "i"))
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
+_MONTHS_FOLDED: dict[str, int] = {
+    _fold(k): v for table in (_MONTHS_EN, _MONTHS_INTL) for k, v in table.items()
+}
+
+
+def _month_number(word: str) -> int | None:
+    """The month a (possibly localized) month word names, or None."""
+    low = word.lower()
+    return _MONTHS_EN.get(low) or _MONTHS_INTL.get(low) or _MONTHS_FOLDED.get(_fold(word))
+
 # Fully anchored: the WHOLE string must be this shape, so a partial match on
 # junk cannot slip through. The month table and the ``datetime`` construction
 # below do the rest of the rejecting (an unknown month word, or an impossible
 # day like February 30, both yield None).
 _LONG_FORM_DATE_RE = re.compile(
     r"""^
-    (?:[^\s,]+,\s+)?            # optional weekday name + comma — ignored
-    ([A-Za-z]+)\s+              # month name (English decoded; else reject)
+    (?:[^\s,\u060c]+[,\u060c]\s*)?  # optional weekday name + comma (or Arabic comma) — ignored
+    ([^\W\d_]+(?:\s[^\W\d_]+)?)\s+  # month name, one or two words (table-decoded; else reject)
     (\d{1,2}),\s+               # day of month
     (\d{4})                     # 4-digit year
     \s*-\s*                     # Drupal's literal " - " separator
@@ -783,7 +994,7 @@ def _parse_long_form_datetime(norm: str) -> datetime | None:
 
     ``norm`` must already be whitespace-normalized. Returns a UTC-aware
     datetime, or ``None`` when the string is not exactly this shape or its
-    month word is not English.
+    month word is in none of the month tables.
 
     The wire format carries NO timezone, so the instant is stamped UTC in
     keeping with every other naive-datetime path in this module. Where the
@@ -795,7 +1006,7 @@ def _parse_long_form_datetime(norm: str) -> datetime | None:
     m = _LONG_FORM_DATE_RE.match(norm)
     if m is None:
         return None
-    month = _MONTHS_EN.get(m.group(1).lower())
+    month = _month_number(m.group(1))
     if month is None:
         return None
     try:
@@ -849,8 +1060,9 @@ def _parse_tolerant_datetime(raw: str) -> datetime | None:
     """
     if not raw:
         return None
-    # Collapse runs of whitespace (the iaea shape is double-spaced) and trim.
-    norm = re.sub(r"\s+", " ", raw).strip()
+    # Collapse runs of whitespace (the iaea shape is double-spaced) and trim;
+    # drop bidi marks an RTL (Arabic) date may carry.
+    norm = re.sub(r"\s+", " ", re.sub(r"[\u200e\u200f\u202a-\u202e]", "", raw)).strip()
     if not norm:
         return None
 
@@ -942,6 +1154,26 @@ def _extract_published(entry: Any) -> datetime | None:
         if recovered is not None:
             return recovered.astimezone(timezone.utc)
     return None
+
+
+def _extract_updated(entry: Any) -> datetime | None:
+    """The entry's own ``updated`` instant (Atom ``<updated>``), UTC, or None."""
+    st = getattr(entry, "updated_parsed", None)
+    if not isinstance(st, struct_time) and isinstance(entry, dict):
+        cand = entry.get("updated_parsed")
+        st = cand if isinstance(cand, struct_time) else None
+    if isinstance(st, struct_time):
+        return datetime.fromtimestamp(calendar.timegm(st), tz=timezone.utc)
+    raw = _safe_str(entry, "updated")
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        dt = _parse_tolerant_datetime(raw)
+    if dt is None:
+        return None
+    return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
 
 
 def _extract_tags(entry: Any) -> list[str]:

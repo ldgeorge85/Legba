@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:nexus_decay": {
+      "source": "analyst_nexus_decay.yaml",
+      "state": "active"
+    }
+  }
+}

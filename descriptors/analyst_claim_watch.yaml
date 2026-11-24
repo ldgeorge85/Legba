@@ -161,9 +161,30 @@ method:
   kind: deterministic
   impl: legba.data.analysts.deterministic:run_method
   sub_handler: claim_watch
-  # Deterministic kinds carry no LLM block and no per-day token budget — the
-  # question-text embeds ride the self-hosted embed plane ($0), bounded per
-  # run.
+  # Deterministic kinds carry no per-day token budget — the question-text
+  # embeds ride the self-hosted embed plane ($0), bounded per run.
+  # W6 SPLIT-1 fold, 2026-10-04: the live head carries this; the tree now does too:
+  # the core-plane model ref and the two F5/CW gates were set ON live by PUT.
+  llm:
+    primary:
+      factory_kind: stack_ref
+      expected_family: llm_provider
+      raw: llm.primary.openai_compat
+  options:
+    bearing_gate: "on"
+    question_flags: "on"
+    # Cutover 2026-10-23: the gate asked Gemma on the box (the 8B is retired)
+    # and the decision model shadowed every gate call (W11-F108).
+    # ROLE SWAP 2026-11-05 (operator decision, W11-F148): clef-flash DECIDES
+    # (the gate asks it the one /decide choice question) and the Gemma chat
+    # judge becomes the SHADOW for one week (its rows in decision_shadow_ledger
+    # carry NULL p_yes). Basis: the 197-row adjudication of gate/shadow
+    # disagreements (planning/reviews/CLEF_ADJUDICATION_2026-10-25_prelabelled
+    # .csv) — Clef right 109 / gate 88, and where the gate REFUSED a signal
+    # Clef was right 2:1 (the chat gate under-admits); agreement had drifted
+    # 93.5 -> 88.4 % over the prior week.
+    bearing_gate_ref: llm.decide.innoai_clef_flash
+    bearing_shadow_ref: llm.verify.innoai_gemma.openai_compat
 
 cadence:
   fallback_schedule: "7-59/30 * * * *"

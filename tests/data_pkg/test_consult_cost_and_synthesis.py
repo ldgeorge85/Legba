@@ -39,6 +39,7 @@ import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
@@ -369,6 +370,36 @@ async def test_the_cost_ceiling_uses_the_handlers_price_table(
     assert hit["est_cost_usd"] >= 2.50
 
 
+@pytest.mark.asyncio
+async def test_the_runs_cost_estimate_rides_on_the_result_for_the_ledger_carry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CONSULT_REVIEW_2026-09-28 B.10 — the run's own summed cost (the SAME
+    total every step's ``est_cost_usd`` already carried) rides on the
+    returned ``AnalystMethodResult`` too, so the runtime's budget_ledger
+    write (``dapr_actors.py``) can carry THIS number into
+    ``cost_estimate_usd`` instead of recomputing from
+    (provider, model, aggregate tokens) — the recomputation that, on the
+    09-28 Opus run, landed the ledger row at cost 0.000 while the steps
+    themselves said est_cost_usd=11.10.
+
+    See ``test_record_budget_cost_override_replaces_recomputation`` in
+    test_cost_model.py for the write-side half of this proof.
+    """
+    monkeypatch.setenv("LEGBA_CONSULT_MAX_COST_USD_PER_RUN", "2.50")
+    llm = _NativeLLM([_tool_turn(SEARCH)] * 6)
+    for turn in llm._turns:
+        turn.usage = _Usage(cost_estimate_usd=1.00)
+
+    result, steps = await _run(llm, inputs={"max_tool_rounds": 6})
+
+    hit = _first(steps, "spend_ceiling_reached")
+    assert hit is not None
+    assert result.cost_estimate_usd is not None
+    assert result.cost_estimate_usd == pytest.approx(hit["est_cost_usd"])
+    assert result.cost_estimate_usd >= 2.50
+
+
 def test_the_spend_guard_reads_the_real_anthropic_price_table() -> None:
     """A wiring check against the SHIPPED table, not a fixture of it.
 
@@ -389,8 +420,8 @@ def test_the_spend_guard_reads_the_real_anthropic_price_table() -> None:
         model="claude-fable-5-1",
     )
     cost = estimate_call_cost(_Handler(), _Response(usage=usage))
-    # 100k in at $15/M + 10k out at $75/M = $1.50 + $0.75.
-    assert cost == pytest.approx(2.25, rel=1e-6)
+    # 100k in at $10/M + 10k out at $50/M = $1.00 + $0.50 (list, 2026-11-05).
+    assert cost == pytest.approx(1.50, rel=1e-6)
     assert "claude-fable-5" in AnthropicProviderHandler.PRICE_TABLE
 
 
@@ -733,3 +764,48 @@ async def test_a_turn_with_no_evidence_refuses_rather_than_inventing() -> None:
     data = replayed.consult_response.data
     assert data["replay_fidelity"] == "unavailable"
     assert "cannot be re-synthesised" in replayed.consult_response.answer
+
+
+@pytest.mark.asyncio
+async def test_a_recovery_composes_its_OWN_census(monkeypatch) -> None:
+    """2026-09-28 §B.3. The recovery writes a NEW answer over the same
+    evidence and carried no census at all, so the panel kept printing the
+    original run's counts beside prose that no longer existed. Same composer
+    as the loop's — a second copy of that arithmetic beside the recovery would
+    be the same bug with extra steps.
+    """
+    ref = uuid4()
+
+    class _ClassifyingSubstrate(_BigSubstrate):
+        async def classify_cited_refs(self, **kwargs: Any) -> dict[str, Any]:
+            refs = kwargs.get("refs") or []
+            return {
+                "by_origin_class": {"live": len(refs)},
+                "by_kind": {"signal": len(refs)},
+                "resolved": len(refs),
+                "unresolved": 0,
+                "fabricated": 0,
+                "malformed": [],
+                "asked": len(refs),
+            }
+
+    original = _NativeLLM([_tool_turn(SEARCH)])
+    result, _ = await _run(original, _ClassifyingSubstrate(), inputs={"max_tool_rounds": 1})
+
+    replay = _NativeLLM([])
+    replayed, _steps = await _run(
+        replay,
+        _ClassifyingSubstrate(),
+        inputs={
+            "synthesize_from": {
+                "question": "what is happening?",
+                "steps": result.intermediate_steps,
+                "cited_refs": [str(ref)],
+            },
+        },
+    )
+    census = replayed.consult_response.data["provenance_census"]
+    assert census["live"] == 1
+    assert census["by_kind"] == {"signal": 1}
+    # Grounded, so nothing is held.
+    assert "hold_reason" not in replayed.consult_response.data

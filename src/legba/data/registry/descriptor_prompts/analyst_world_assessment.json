@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:world_assessment": {
+      "source": "analyst_world_assessment.yaml",
+      "state": "draft"
+    }
+  }
+}

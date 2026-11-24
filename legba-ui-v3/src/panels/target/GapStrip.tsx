@@ -120,7 +120,7 @@ export function GapStrip({ targetId }: { targetId: string | undefined }) {
     queryFn: async () => {
       try {
         return await apiGet<FindingsResponse>(
-          `/findings?analyst_id_in=${UNIT_IDS}&target_id=${encodeURIComponent(targetId!)}&limit=100`,
+          `/findings?analyst_id_in=${UNIT_IDS}&target_id=${encodeURIComponent(targetId!)}&limit=100&fields=summary`,
         )
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) return { data: [] }

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.page.default": {
+      "source": "source_page_pipeline_default.yaml",
+      "state": "draft"
+    }
+  }
+}

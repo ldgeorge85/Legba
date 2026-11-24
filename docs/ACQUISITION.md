@@ -32,7 +32,8 @@ wrapper delegates to it, so the production path and the tested path are the same
 provisioning state live in a crash-safe `FilterStateStore` (the Postgres `actor_filter_state` table)
 rather than in Dapr actor state, so a pull is idempotent across sidecar restarts.
 
-The descriptor's `acquisition` field selects one of two modes.
+The descriptor's `acquisition` field selects one of three modes: poll, push or subscribe. A fourth
+way in, the on-request intake (§1.2b), runs a single fetch through a named source's pipeline.
 
 ### 1.1 Poll
 
@@ -76,6 +77,33 @@ wakes the handler, which emits each raw signal through an `emit_signal` callback
 That callback runs the same baseline → write → publish path as the poll branch, so one POST is one
 short transaction. A push source is never polled.
 
+### 1.2a Subscribe
+
+For `acquisition: "subscribe"` Legba holds a connection open to the upstream. The mode is built and
+off by default. The actor
+registers no reminder; a supervisor in the runtime host (`runtime/stream_supervisor.py`, behind
+`LEGBA_SUBSCRIBE_SUPERVISOR`) runs one connector per active subscribed head
+(`runtime/stream_connector.py`), holding the stream under a per-source Postgres advisory lease. The
+connector's transport (`subscribe.transport`; built: Server-Sent Events) hands it events; a bounded
+queue and a rate bound sit between the connection and `StreamCore` (`runtime/stream_ingest.py`), a
+`SourceCore` that lands each batch through the same gate → baseline → sink → publish path as a poll,
+keeps each event's bytes as a fetch receipt, persists the last landed event id as the cursor and
+writes one `source_poll_outcomes` row per window. Reconnects resume by event id; what cannot be
+resumed, and every queue overflow, is a declared gap (`source_stream_gaps`). See
+[DATA_SOURCES.md](DATA_SOURCES.md#subscribed-sources).
+
+### 1.2b On request
+
+Not every fetch is a scheduled poll. An analyst tool, a source's follow policy, the evidence archiver
+or the drift check can ask for one address, one re-poll of a source window, or a re-check of a stored
+page version. Every such ask is one row in `ingestion_requests` (`data/intake_store.py` submits and
+admits it, naming the source descriptor whose pipeline and sink the result lands under, why it was
+asked, and who asked). The drain (`runtime/intake_drain.py`) claims queued requests and runs each
+through the same acquisition code and sinks a poll uses, so the result carries the same receipts and
+provenance; `ingestion_request_records` links the records it wrote. A request a stored copy already
+satisfies is answered without a fetch. The procedure and the page pipeline are in
+[operations/on-request-fetching.md](operations/on-request-fetching.md).
+
 ### 1.3 Source handlers
 
 Every source kind is a handler satisfying the structural-typing contract in `data/sources/_contract.py`:
@@ -91,9 +119,10 @@ unhealthy, a parse failure is degraded, and a single bad pull never loses cursor
 `generic_webhook` is the reference push kind.
 
 Handlers ship for feeds and APIs (`rss`, `json_api`, `geojson`), bulk and event archives (`gdelt_files`,
-`gdelt_query`, `acled`, `ucdp`, `common_crawl_news`), curated data (`mediacloud`, `opensanctions`),
-messaging (`telegram_channel`, `discord_webhook`), crawling (`firecrawl`, `scraper`), and the
-`intelmq_collector_bridge`. `DATA_SOURCES.md` carries the per-source catalogue; `RELEASE_STATE.md`
+`gdelt_query`, `acled`, `ucdp`, `common_crawl_news`), curated data (`mediacloud`, `opensanctions`), published instruments diffed snapshot to snapshot (`instrument_snapshot`),
+messaging (`telegram_channel`, `discord_webhook`, `email_imap`), crawling (`firecrawl`, `scraper`),
+numeric series (`series_api`), held streams (`stream_json`), single pages (`page`, the on-request
+page pipeline), and the `intelmq_collector_bridge`. `DATA_SOURCES.md` carries the per-source catalogue; `RELEASE_STATE.md`
 carries the live registered count, which is generated rather than hand-typed.
 
 The Telegram poller carries five bounded guards, each logging when it trips, because one slow or
@@ -107,7 +136,7 @@ without a second Telegram session.
 
 ### 1.4 Poll liveness — quiet against broken
 
-Two mechanisms let the watchdog and the operator tell a quiet feed from a broken cursor rather than
+Two mechanisms let the watchdog and an admin tell a quiet feed from a broken cursor rather than
 one undifferentiated silence.
 
 `source_poll_outcomes` takes exactly one row per poll, with productivity deciding the outcome: a poll
@@ -209,7 +238,7 @@ title or body text, or in the NER country entities — so a Singapore outlet's w
 tag `SG`. And an NER location is treated as the story's subject only when it appears in the title;
 body-only locations (datelines, "reported from…") are demoted below the in-body country sweep, so a
 wire item datelined in one capital about another country does not tag the dateline. Both apply
-forward; re-geocoding historical rows is a separate operator-gated backfill.
+forward; re-geocoding historical rows is a separate backfill a person runs.
 
 ---
 
@@ -338,6 +367,16 @@ dedup only changes which rows *deliver* and how they *coalesce*.
 
 ## 6. The evidence archive
 
+**Fetch receipts come first.** Every poll's response bodies, every pushed envelope and every received
+stream event are kept as a version per canonical address (`fetch_versions`), content-addressed and
+compressed in the evidence store, with each record linked to the version it was parsed from
+(`fetch_version_records`). An identical re-fetch stores nothing new. When a second fetch of a page
+yields different extracted text, or the page is gone, a drift observation is written; the drift
+pipeline classifies the change and flags what relied on the earlier version, and never rewrites the
+dependant (`DATA_MODEL.md`, measurement plane). Older stored objects can be moved to an S3-compatible
+cold tier in verified monthly bundles (`scripts/archive_tier.py`,
+[operations/archive-tiering.md](operations/archive-tiering.md)).
+
 At ingest the signal carries the source's declared `license_class` in its payload and a
 `retention_class` that defaults to reference-only — bytes are not fetched at ingest. Archival is a
 separate deterministic analyst, `evidence_archiver`, sweeping on its own cadence.
@@ -379,6 +418,22 @@ still fetched with the plain guarded client. It stays off because it was measure
 the blocks in question are IP-reputation or genuine challenges, not TLS fingerprinting. Publishers
 that close themselves in robots.txt are never fetched by any option here.
 
+**Per-host fetch policy** aims the impersonation leg at named hosts instead of the fleet.
+`legba.data.sources._fetch_policy` holds a typed registry — host (exact or suffix) →
+`{impersonate: on|off|auto, http2, max_retries, backoff_s}` — consulted by the evidence archiver and
+`web_fetch` before a client is built; a host absent from the registry sees byte-identical client
+construction to before. The global `LEGBA_FETCH_IMPERSONATE` keeps its meaning and an explicit value
+always wins: `on`/`fallback` impersonates everywhere (no row may weaken it), `off` is the fleet-wide
+kill switch (no host is impersonated, whatever its row says), and only an unset flag lets a per-host
+`impersonate: on` row turn the leg on for that host. The archiver's version is an *escalation*: the plain client fetches first, a counted edge block
+(401/403/429) on a registered `impersonate: on` host is re-issued through the impersonated leg, and
+the block still counts — the refusal happened. The example instance seeds two news hosts after a month of measured 403s left
+many signals with summaries and no bodies; `get_source_health` rows
+carry `body_extraction` `{fetched, challenge_blocked, boilerplate_rejected, body_stored,
+body_extraction_rate}` per feed, computed off the same `evidence_archive` sidecar, and a DRAFT
+`evidence_refetch` deterministic sweep re-runs the archiver's fetch leg on the textless backlog
+(newest `refetch_max_per_tick`, oldest first within `refetch_window_days`).
+
 ---
 
 ## 7. Discovery
@@ -388,8 +443,8 @@ carrying a `discovery` block expands into concrete instances. Both flavours run 
 machinery.
 
 **Target discovery** emits candidate targets; the registry applies the template's deterministic relabel
-chain to each candidate and materialises a target instance. This is how the country desks are produced
-from one template. **Source discovery** emits candidate sources that become source descriptors.
+chain to each candidate and materialises a target instance. This is how the example instance produces its
+country desks from one template. **Source discovery** emits candidate sources that become source descriptors.
 
 The relabel chain is a closed set of rewrite actions applied by the registry, never by the handler, so
 a discovery kind cannot invent a label shape. Each candidate carries a stable natural key, its raw
@@ -418,7 +473,7 @@ current holder per `(country, office)` — the upstream query drops end-dated st
 keeps the latest term-start per office, and head of state and head of government sit on separate
 supersession keys — and stamps an as-of date on every emitted fact so upstream data lag is visible. A
 read-only diagnostic previews the re-seed delta first, because the live upstream can carry vandalism
-the heuristic would import; re-seeding is operator-gated, never automatic.
+the heuristic would import; re-seeding is a person's decision, never automatic.
 
 ---
 
@@ -430,7 +485,7 @@ inside a monthly finding that scrolls away.
 
 `collection_gap` is a deterministic, no-LLM analyst. **It reads** the persisted scorecard rows, finding
 the desk × dimension cells banded `insufficient-evidence`, and a second backlog of `hypotheses` rows
-with `status='source_request'` — the rows the operator-gated `request_source` tool lands when an
+with `status='source_request'` — the rows the human-gated `request_source` tool lands when an
 analyst hits a coverage wall. **It writes** both into `collection_requirements`: the desk and
 dimension, the topic, the rationale, the evidence it came from by id, which source classes would
 plausibly feed it, and up to a few candidate sources. **It is measured** by its own run counters and,
@@ -442,7 +497,7 @@ source descriptors on declared source class and geo overlap, across *any* lifecy
 reuse comes before create — a paused or draft match is a reactivation candidate whose registered URL
 becomes the suggested fetch URL, and an already-active match is an honest quality-gap flag. Where
 nothing matches, the requirement is stamped not fillable with a reason, which is a more useful
-operator artifact than a fabricated suggestion; a paired constraint makes an unfillable requirement
+artifact for a reviewer than a fabricated suggestion; a paired constraint makes an unfillable requirement
 without a reason a database error.
 
 Idempotency is a unique natural key with an insert that does nothing on conflict, so a cell that stays
@@ -454,10 +509,10 @@ The analyst reads the source registry and has no write path to it. The route is 
 get, and a patch that may set only the status, reviewer and note. There is no create and no delete,
 the content columns are write-once, and nothing on the route touches the source registry. The
 disposition vocabulary is closed and validated at both the route and the database; `registered` records
-that the operator *separately* added a source through the normal registration path, and setting it
+that an admin *separately* added a source through the normal registration path, and setting it
 performs no activation. Nothing consumes a requirement: exactly one writer and one dispositioner
 reference the table, and no job, analyst or ingest path watches for a disposition and acts on it. The
-requirement is a note to the operator, and the operator is the loop.
+requirement is a note to the people running the instance, and they are the loop.
 
 ---
 

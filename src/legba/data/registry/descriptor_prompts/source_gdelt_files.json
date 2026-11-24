@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.gdelt.files": {
+      "source": "source_gdelt_files.yaml",
+      "state": "draft"
+    }
+  }
+}

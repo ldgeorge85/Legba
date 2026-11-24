@@ -6,7 +6,7 @@ THE DEFECT THIS MODULE EXISTS TO FIX
 ------------------------------------
 ``relationship_reifier._read_candidates`` chose its per-run window with two
 compounding defects, measured against the live substrate on 2026-08-03 and
-written up in ``docs/TYPING_BAKEOFF_2026-08-03.md`` §1:
+written up in ``docs/history/TYPING_BAKEOFF.md`` §1:
 
 **(a) No ``status`` filter.** The query read the WHOLE ``proposed_edges`` table,
 not the pending queue. Only ``pending`` rows can ever become a new edge, and

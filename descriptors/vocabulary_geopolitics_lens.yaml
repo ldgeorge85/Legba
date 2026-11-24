@@ -1,0 +1,32 @@
+# The `geopolitics.lens` vocabulary family — THIS PROFILE's lean lenses (W9 SPLIT-2).
+#
+# Seeded by the descriptor walker (scripts/bringup_register_descriptors.py,
+# "vocabulary seeds"): every row is upserted into `vocabulary_entries`, the
+# tree's parent / aliases / notes winning on a re-run. Read by
+# src/legba/data/lens_family.py (lean_lens_ids), which drives
+# journal_assessor.LENS_LEAN_ANALYST_IDS with its six-id literal as the
+# documented fallback; tests/data_pkg/test_profile_prompts.py pins this file's
+# values to that literal (the drift guard).
+#
+# One entry per political-lean lens: the value is the analyst id, its descriptor
+# is descriptors/analyst_<value>.yaml, its prose is the profile's
+# legba_geopolitics.<value> module (profiles/geopolitics/prompts/). The five
+# epistemic lenses (trend, baserate, capability, intent, lens_diff) are platform
+# lenses and are not in this family.
+identity:
+  id: geopolitics_lens
+  schema_uri: legba/vocabulary/1.0.0
+family: geopolitics.lens
+entries:
+  - value: lens_left
+    notes: The Structuralist — who pays, who gains (political-lean lens)
+  - value: lens_right
+    notes: The Sovereigntist (political-lean lens)
+  - value: lens_centre
+    notes: The Institutionalist (political-lean lens)
+  - value: lens_pragmatist
+    notes: The Executor (political-lean lens)
+  - value: lens_militarist
+    notes: The Strategist (political-lean lens)
+  - value: lens_isolationist
+    notes: The Retrencher (political-lean lens)

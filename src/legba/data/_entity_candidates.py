@@ -65,6 +65,7 @@ from ._country_aliases import (
     alias_group_key,
     alias_surfaces,
 )
+from . import profile_constants as _profile_constants
 from ._entity_canon import is_junk_entity
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,10 @@ logger = logging.getLogger(__name__)
 _MERGE_COMPATIBLE_PAIRS: frozenset[frozenset[str]] = frozenset(
     {frozenset({"organization", "corporation"})}
 )
+#: The entity class whose CURATED alias pairs merge without the adjudicator:
+#: the instance profile's ``constants.auto_merge_class`` (SPLIT-3; ``None`` =
+#: every alias pair stays gray).
+_AUTO_MERGE_CLASS: str | None = _profile_constants.auto_merge_class()
 #: Specific (non-generic) classes eligible for the deterministic auto_merge band.
 _SPECIFIC_CLASSES: frozenset[str] = frozenset(
     {"country", "organization", "corporation", "location", "person"}
@@ -465,9 +470,9 @@ async def generate_candidates(
                         degree=existing.degree,
                     )
                 continue
-            both_country = (
-                acls.strip().lower() == "country"
-                and bcls.strip().lower() == "country"
+            both_country = _AUTO_MERGE_CLASS is not None and (
+                acls.strip().lower() == _AUTO_MERGE_CLASS
+                and bcls.strip().lower() == _AUTO_MERGE_CLASS
             )
             band = "auto_merge" if both_country else "gray"
             out[pair_key] = CandidatePair(

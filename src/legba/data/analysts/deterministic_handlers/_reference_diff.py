@@ -78,6 +78,7 @@ from uuid import UUID
 
 from ..._entity_canon import canonicalize_entity, identity_fold, is_junk_entity
 from ..._polity_match import home_prose, is_home_country, represented_by
+from ... import subject as SUBJECT
 
 logger = logging.getLogger(__name__)
 
@@ -491,17 +492,10 @@ SELECT id, unit_analyst_id, target_id, items, status, provenance
  ORDER BY target_id, unit_analyst_id
 """
 
-_TARGET_GEO_SQL = """
-SELECT td.descriptor_id AS target_id,
-       ARRAY(SELECT jsonb_array_elements_text(td.body -> 'scope' -> 'geo')) AS geo
-  FROM target_descriptors td
- WHERE td.is_head = TRUE
-   AND td.descriptor_id = ANY($1::text[])
-"""
-
-_ISO_NAMES_SQL = """
-SELECT iso2, name FROM iso_countries WHERE iso2 = ANY($1::text[])
-"""
+#: The targets' declared subject fields — the subject ladder's own statement
+#: (``legba.data.subject``, W10 SUBJECT-1); the geo it returns is the
+#: anchorability rule's home polity.
+_TARGET_GEO_SQL = SUBJECT.HEADS_SQL
 
 #: THE SLICE. ``input_row_refs`` for the latest successful run of each
 #: (target, unit) inside the window, joined to ``signals``. NOT
@@ -681,26 +675,14 @@ async def run_reference_diff(
 
     geo_rows = await conn.fetch(_TARGET_GEO_SQL, targets)
     geo_by_target = {
-        str(r["target_id"]): [
-            str(g) for g in (r["geo"] or []) if isinstance(g, str) and str(g).strip()
-        ]
-        for r in geo_rows
+        str(r["target_id"]): list(SUBJECT.subject_geo(r)) for r in geo_rows
     }
-    iso_codes = sorted({
-        str(g) for r in geo_rows for g in (r["geo"] or []) if isinstance(g, str)
-    })
-    iso_rows = await conn.fetch(_ISO_NAMES_SQL, iso_codes) if iso_codes else []
-    iso_names = {str(r["iso2"]): str(r["name"]) for r in iso_rows}
+    iso_names = await SUBJECT.gazetteer_names(
+        conn, {g for geo in geo_by_target.values() for g in geo}
+    )
     home_by_target = {
-        str(r["target_id"]): home_prose(
-            [str(g) for g in (r["geo"] or []) if isinstance(g, str)],
-            [
-                iso_names[str(g)]
-                for g in (r["geo"] or [])
-                if isinstance(g, str) and str(g) in iso_names
-            ],
-        )
-        for r in geo_rows
+        target_id: home_prose(geo, [iso_names[g] for g in geo if g in iso_names])
+        for target_id, geo in geo_by_target.items()
     }
 
     slice_rows = await conn.fetch(

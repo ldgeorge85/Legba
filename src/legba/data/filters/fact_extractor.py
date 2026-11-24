@@ -40,7 +40,6 @@ STATUS:
 DISCIPLINE (anchor §7): this stage is thin orchestration —
   * triple-quality gate reuses ``ner._is_nonentity_candidate`` (no fork),
   * event-time precedence reuses ``source_actor._entry_logical_ts`` (no fork),
-  * the AGE edge leg reuses ``filters._fact_graph`` over ``PostgresStore.cypher()``,
   * the facts write is the §3 ``ON CONFLICT`` upsert (the same idempotency
     contract the filters honor).
 
@@ -59,7 +58,7 @@ from datetime import datetime, timezone
 from typing import Any, ClassVar, Mapping
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .._entity_canon import (
     _REGION_ADJECTIVE_MAP,
@@ -71,12 +70,14 @@ from .._entity_canon import (
     is_place_surface,
     is_region_surface,
 )
+from ..claim_support import CLAIM_SOURCE_CLASS, is_claim_signal
 from ..provenance.origin import origin_class_clause
 from ..provenance.writes import (
     resolve_fact_source_credibility,
     supersede_prior_facts,
 )
 from ..sources._contract import Signal
+from ..tags import stamp_classifications, tag_vocabulary_index
 from ..vocabulary import normalize_predicate
 from ..stack.nlp_service import (
     NlpServiceAuthError,
@@ -84,7 +85,7 @@ from ..stack.nlp_service import (
     NlpServiceUnavailable,
 )
 from ._contract import FilterContext, FilterHealth
-from ._fact_graph import edge_label_for_predicate, resolve_vertex_id, upsert_fact_edge
+from ._fact_graph import edge_label_for_predicate
 from .ner import (
     _MD_BOLD_RE,
     _MD_LINK_RE,
@@ -1093,8 +1094,22 @@ class FactExtractorConfig(BaseModel):
     )
     emit_graph_edges: bool = Field(
         default=False,
-        description="Emit nexus → AGE edges (facts-first; ship false, flip after proof).",
+        description=(
+            "Retired. The AGE graph was removed (2026-11); the field is kept "
+            "only so existing source descriptors that say false still validate. "
+            "True is refused."
+        ),
     )
+
+    @field_validator("emit_graph_edges")
+    @classmethod
+    def _graph_edges_retired(cls, v: bool) -> bool:
+        if v:
+            raise ValueError(
+                "emit_graph_edges=true is refused: the AGE graph was removed; "
+                "the relational projection is graph_arcs"
+            )
+        return v
     llm_component_id: str | None = Field(
         default=None,
         description="Stack component id for backend='llm' (the 8B model the operator hosts).",
@@ -1202,7 +1217,6 @@ class FactExtractorHandler:
         pg_pool: Any,
         nlp_client: NlpServiceClient | None = None,
         llm_handler_factory: Any | None = None,
-        graph_store: Any | None = None,
         relationship_validator: Any | None = None,
     ) -> None:
         self._config = config
@@ -1229,7 +1243,6 @@ class FactExtractorHandler:
         self._pool = pg_pool
         self._nlp_client = nlp_client
         self._llm_handler_factory = llm_handler_factory
-        self._graph_store = graph_store
         # Opt-in SLM relationship-validation stage (W3). When wired + the flag
         # is on, extracted triples are SLM-validated before the facts write.
         self._relationship_validator = relationship_validator
@@ -1304,6 +1317,14 @@ class FactExtractorHandler:
         health to degraded, and returns the signal.
         """
         self._signals_in += 1
+        # C-1 backstop: a CLAIM source's text is a party's own claim and is
+        # never mined into facts (the stage is refused at save on a claim
+        # source; this guards a body that predates the rule or a stage bound
+        # some other way). The signal passes through unchanged.
+        if (str(getattr(ctx, "source_class", "") or "") == CLAIM_SOURCE_CLASS
+                or is_claim_signal(signal)):
+            self._signals_out += 1
+            return signal
         # Per-call degrade flag: the backend helpers set this on a soft
         # extractor/LLM failure (they return [] rather than raise). The
         # success path below must NOT clobber it back to healthy.
@@ -1846,34 +1867,6 @@ class FactExtractorHandler:
                     source_id=signal.source_id,
                 )
                 written += 1
-                if cfg.emit_graph_edges and self._graph_store is not None:
-                    try:
-                        # The graph keys vertices on entity_profiles.id, so the
-                        # endpoints are resolved on the SAME connection that
-                        # just wrote the fact. An unresolved endpoint yields
-                        # None and upsert_fact_edge skips loudly — a fact whose
-                        # actors are not yet entities has no place in a graph
-                        # whose whole contract is stable identity.
-                        await upsert_fact_edge(
-                            self._graph_store,
-                            subject=t["subject"],
-                            subject_id=await resolve_vertex_id(
-                                conn, t["subject"], t["subject_class"]
-                            ),
-                            subject_class=t["subject_class"],
-                            predicate=t["predicate"],
-                            value=t["value"],
-                            value_id=await resolve_vertex_id(
-                                conn, t["value"], t["value_class"]
-                            ),
-                            value_class=t["value_class"],
-                            fact_id=str(fact_id),
-                        )
-                    except Exception as exc:                 # pragma: no cover
-                        ctx.logger.debug(
-                            "fact_extractor.edge_skip signal_id=%s err=%s",
-                            signal.signal_id, exc,
-                        )
         return written
 
     # ----------------------------------------------------------- health_check
@@ -1897,7 +1890,6 @@ class FactExtractorHandler:
                 "backend": self._config.backend,
                 "facts_written": self._facts_written,
                 "signals_failed": self._signals_failed,
-                "emit_graph_edges": self._config.emit_graph_edges,
                 "slm_validate_relations": self._config.slm_validate_relations,
                 "triples_slm_validated": self._triples_slm_validated,
                 "triples_slm_dropped": self._triples_slm_dropped,
@@ -2156,7 +2148,10 @@ async def _insert_ingestion_fact(
         valid_from,
         geo_lat,
         geo_lon,
-        json.dumps(data),
+        json.dumps(stamp_classifications(
+            "facts", {"predicate": predicate}, data,
+            families=await tag_vocabulary_index(),
+        )),
         json.dumps(evidence_set),
         list(derived_from),
         source_credibility,

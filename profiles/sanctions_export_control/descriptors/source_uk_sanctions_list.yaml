@@ -1,0 +1,81 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Sanctions / export-control profile SKELETON (PROFILE-1; DEC-11) — X2/E2.
+# The UK Sanctions List (FCDO) as the INSTRUMENT itself (kind
+# instrument_snapshot). OFSI's Consolidated List closed 2026-01-28; the UK
+# Sanctions List is the single UK list of record since.
+#
+# Ships DRAFT and UNPROBED: the URL below is the FCDO's published download
+# path and was NOT fetched by this lane (X2/E2 made one real fetch, of the
+# OFAC SDN list). The operator probes it before activating.
+#
+# Read as TEXT (a unified line diff) until the first probe confirms the
+# list's XML entry element and its own identifier; switching to
+# `differ: xml_records` is then a config change (record_tag / key_path /
+# published_date_path), and a record_tag that matches nothing fails loud as a
+# parse_failed receipt — never as an empty list.
+#
+# Crown copyright, published under the Open Government Licence v3.0.
+
+identity:
+  id: source.fcdo.uk_sanctions_list
+  name: "FCDO — UK Sanctions List (the published instrument, diffed)"
+  kind: instrument_snapshot
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: profile_sanctions_export_control
+  created: "2026-10-08T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [GB]
+  languages: [en]
+  tags: [sanctions, designation, gov, instrument, uk]
+  source_class: official
+  access_class: public
+  license_class: open_gov_attribution   # OGL v3.0 — attribution on re-use
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "41 */6 * * *"
+  cooldown_seconds: 600
+  jitter_seconds: 120
+
+config:
+  instrument_name:
+    factory_kind: text
+    raw: "UK Sanctions List"
+  url:
+    factory_kind: text
+    raw: "https://sanctionslist.fcdo.gov.uk/docs/UK-Sanctions-List.xml"
+  license_class:                     # the same class as scope.license_class (a test pins the pair)
+    factory_kind: text
+    raw: "open_gov_attribution"
+  differ:
+    factory_kind: text
+    raw: "text"
+  timeout_seconds:
+    factory_kind: number
+    raw: 180
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_2            # the (previous, current) sha pair; no URL tier (one URL, many changes)
+      config: {}
+  enrichment: []
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

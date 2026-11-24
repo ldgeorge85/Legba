@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.ukmto.incidents": {
+      "source": "source_ukmto_incidents.yaml",
+      "state": "draft"
+    }
+  }
+}

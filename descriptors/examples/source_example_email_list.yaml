@@ -1,0 +1,105 @@
+# WORKED EXAMPLE (machinery only — not registered by any script, no live mailbox).
+#
+# The `email_imap` source kind (W5 SRC-8): one folder of one IMAP mailbox, one
+# signal per message from an allowed sender. For publishers that deliver only
+# by mailing list — agency bulletin services, e-alert lists with no feed, lists
+# whose RSS was retired.
+#
+# The mailbox and the list signups are the OPERATOR'S. Everything below the
+# `config:` key is a placeholder: `imap.example.org` is not a mail server and the
+# vault holds nothing under `source.email.example_list.password`. Registered and
+# activated as-is, this source REFUSES activation with reason
+# `email_mailbox_not_configured` (SEAMS #63) — it never polls an empty mailbox
+# and calls that quiet.
+#
+# OPERATOR FLIP (to go live):
+#   1. Create a dedicated mailbox (an app password where the provider asks for
+#      one) and subscribe it to the lists this source should read; file them
+#      into one folder with a server-side rule, or leave them in INBOX.
+#   2. Store the password in the vault — the descriptor carries only the id:
+#        POST {registry}/api/v1/registry/vault/secrets
+#             {"secret_id": "source.email.example_list.password", "plaintext": "<password>"}
+#   3. Set host / port / security / username / folder, and allow_from to the
+#      list's sending address or domain (a bare domain admits its subdomains).
+#      Only allowed senders become signals; everything else is counted and
+#      skipped. A private-network mail host also needs LEGBA_EGRESS_ALLOW_HOSTS.
+#   4. Copy to descriptors/, give it a real id, register, activate.
+#
+# The handler never modifies the mailbox: the folder is SELECTed read-only and
+# bodies are fetched with BODY.PEEK[], so nothing is marked seen, moved or
+# deleted. The cursor is the last UID per folder (state row
+# `email_imap_cursor`); the Message-ID keys the content hash, so a message read
+# twice collapses rather than landing twice. Attachments are ignored and
+# counted in the poll's health record.
+
+identity:
+  id: source.example.email_list
+  name: Example — mailing-list bulletins over IMAP
+  kind: email_imap
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"
+  abstraction_level: L1
+  state: active
+  owner: example
+  created: "2026-10-03T00:00:00Z"
+
+scope:
+  owner_tenant: default
+  geo: []
+  languages: [en]
+  tags: [example, email, bulletins]
+  source_class: official
+  access_class: public
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "*/15 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  host:
+    factory_kind: text
+    raw: "imap.example.org"
+  port: 993
+  security: ssl
+  username:
+    factory_kind: text
+    raw: "bulletins-reader@example.org"
+  password_ref:
+    factory_kind: secret
+    raw: "source.email.example_list.password"
+  folder: INBOX
+  since_days: 7
+  unseen_only: true
+  allow_from: [lists.example.gov, alerts@example.int]
+  subject_include: []
+  subject_exclude: [subscription confirmation, unsubscribe]
+  max_messages_per_poll: 50
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1
+      config: {}
+    - kind: dedupe_tier_2
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

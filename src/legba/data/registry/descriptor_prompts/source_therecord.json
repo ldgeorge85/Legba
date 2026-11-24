@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.therecord.news": {
+      "source": "source_therecord.yaml",
+      "state": "draft"
+    }
+  }
+}

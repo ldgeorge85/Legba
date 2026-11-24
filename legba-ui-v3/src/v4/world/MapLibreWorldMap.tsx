@@ -37,8 +37,11 @@ import { useMapResize } from '@/lib/useMapResize'
 import { resolveBasemapStyle, WORLD_GEOJSON_PATH } from '@/lib/basemap'
 import { COUNTRY_BY_ISO2, resolveCountry } from '@/lib/countryGeo'
 import { useSelection, selectRow } from '@/state/selection'
-import { useScope } from '@/state/scope'
-import { iso2FromTargetId } from '@/lib/deskNames'
+import { useCasePlayer } from '@/state/casePlayer'
+import { useSubjectCamera } from '@/lib/subjectGeometry'
+import { catalogLayer, layerAvailable, layerCountFigure, layerDefaultOn, type LayerId } from '@/lib/layerCatalog'
+import { figureText, figureValueText } from '@/lib/Figure'
+import { LayerApertureTip } from './LayerPanel'
 import { densityPoints, coMentionArcs } from '@/lib/mapLayers'
 import {
   circleRing,
@@ -118,12 +121,12 @@ function esc(s: string): string {
 }
 
 export default function MapLibreWorldMap() {
-  const { signals } = useWorldSignals()
-  const { findings } = useWorldFindings()
-  const { situations } = useWorldSituations()
-  const { events } = useWorldEvents()
+  const { signals, read: signalsRead } = useWorldSignals()
+  const { findings, read: findingsRead } = useWorldFindings()
+  const { situations, read: situationsRead } = useWorldSituations()
+  const { events, read: eventsRead } = useWorldEvents()
   const { verdicts } = useCountryVerdicts()
-  const { markers: convergence } = useConvergenceMarkers()
+  const { markers: convergence, isLoading: convergenceLoading } = useConvergenceMarkers()
 
   const layers = useWorldState((s) => s.layers)
   const windowStartMs = useWorldState((s) => s.windowStartMs)
@@ -137,10 +140,13 @@ export default function MapLibreWorldMap() {
   // THE CAMERA FOLLOWS THE SELECTION (design §3.1). Before this the map imported
   // only `s.select` — it WROTE the shared selection and never read it, so v2's
   // "the map flies to the selected entity" had no implementation anywhere in the
-  // tree. `useScope` supplies the desk set the camera falls back to when the
-  // focus is a record the map does not itself carry.
+  // tree. The wall scope's single subject is the fallback when the focus is a
+  // record the map does not itself carry (`useSubjectCamera`, below).
   const selection = useSelection((s) => s.selection)
-  const wallScope = useScope((s) => s.scope)
+  // THE SUBJECT GEOMETRY CONTRACT (UI-B4/map): when the selection is a subject
+  // (or a record the map does not hold, under a one-subject scope), the camera
+  // fits that subject's DECLARED geometry — never an ISO code parsed from its id.
+  const { camera: subjectCamera } = useSubjectCamera()
 
   // Watch-locations (P4-3 feature 5).
   const watches = useWatchState((s) => s.watches)
@@ -149,11 +155,14 @@ export default function MapLibreWorldMap() {
   const addWatch = useWatchState((s) => s.add)
 
   // Map-mode layers (not in the world store — specific to the WebGL renderer).
-  const [choropleth, setChoropleth] = useState(true)
+  // Their defaults come from the PROFILE through the layer catalog: a profile
+  // whose subjects declare no ISO codes never opens on a choropleth it cannot
+  // fill (`lib/layerCatalog.ts`).
+  const [choropleth, setChoropleth] = useState(() => layerDefaultOn('choropleth'))
   const [density, setDensity] = useState<DensityMode>('off')
   const [arcs, setArcs] = useState(false)
-  const [showConvergence, setShowConvergence] = useState(true)
-  const [showWatch, setShowWatch] = useState(true)
+  const [showConvergence, setShowConvergence] = useState(() => layerDefaultOn('convergence'))
+  const [showWatch, setShowWatch] = useState(() => layerDefaultOn('watch'))
 
   const [deckLib, setDeckLib] = useState<DeckLib | null>(null)
 
@@ -263,10 +272,12 @@ export default function MapLibreWorldMap() {
     setFilterOptions({ sources: [...sources].sort(), countries: [...countries].sort() })
   }, [signals, findings, situations, events, windowStartMs, windowEndMs, minRank, setFilterOptions])
 
-  useEffect(() => setCount('signals', winSignals.length), [winSignals.length, setCount])
-  useEffect(() => setCount('findings', winFindings.length), [winFindings.length, setCount])
-  useEffect(() => setCount('situations', winSituations.length), [winSituations.length, setCount])
-  useEffect(() => setCount('events', winEvents.length), [winEvents.length, setCount])
+  // A layer whose read has not answered publishes null — *no read yet* on the
+  // switcher, never a 0 (UI-B4/map); an answered read publishes its count.
+  useEffect(() => setCount('signals', signalsRead ? winSignals.length : null), [signalsRead, winSignals.length, setCount])
+  useEffect(() => setCount('findings', findingsRead ? winFindings.length : null), [findingsRead, winFindings.length, setCount])
+  useEffect(() => setCount('situations', situationsRead ? winSituations.length : null), [situationsRead, winSituations.length, setCount])
+  useEffect(() => setCount('events', eventsRead ? winEvents.length : null), [eventsRead, winEvents.length, setCount])
 
   // Aggregate signals to per-coordinate clusters (same keying as Leaflet), plus
   // a `near` flag for the watch-proximity halo.
@@ -721,6 +732,9 @@ export default function MapLibreWorldMap() {
       })
 
       mapRef.current = map
+      // The browser walk reads where the signal layer drew through this
+      // handle, as it does on the globe (roll 86: points at their own place)
+      ;(container as HTMLElement & { __legbaMap?: maplibregl.Map }).__legbaMap = map
     })
     return () => {
       cancelled = true
@@ -750,11 +764,13 @@ export default function MapLibreWorldMap() {
    * Fly to whatever is selected.
    *
    * Resolution order, cheapest first: a record the map already holds (signal /
-   * finding / situation, which carry their own lat/lon), then a desk — via the
-   * verdict roster's `target_id → ISO2` mapping and `countryGeo`'s coarse
-   * centroid — then the scope's single desk. Nothing resolvable ⇒ the camera
-   * does not move, which is the honest outcome: a map that jumps to (0,0)
-   * because it could not place a record is worse than one that stays put.
+   * finding / situation, which carry their own lat/lon), then the SUBJECT
+   * GEOMETRY CONTRACT (`lib/subjectGeometry.ts`): the selected subject — or the
+   * scope's single subject — fitted through what its descriptor declares (a
+   * point, a polygon's bounds, its declared codes). This is also what a case's
+   * `map fit_ref` resolves through. Nothing resolvable ⇒ the camera does not
+   * move, which is the honest outcome: a map that jumps to (0,0) because it
+   * could not place a record is worse than one that stays put.
    */
   useEffect(() => {
     const map = mapRef.current
@@ -767,28 +783,41 @@ export default function MapLibreWorldMap() {
         winSituations.find((x) => x.id === selection.id)
       if (hit && hit.lat != null && hit.lon != null) dest = [hit.lon, hit.lat]
     }
-    if (!dest) {
-      const targetId =
-        selection.kind === 'target'
-          ? selection.id
-          : (wallScope?.members.targetIds.length === 1
-              ? wallScope.members.targetIds[0]
-              : null)
-      if (targetId) {
-        const v = [...verdicts.values()].find((x) => x.targetId === targetId)
-        const iso2 = v?.iso2 ?? iso2FromTargetId(targetId)
-        const fix = iso2 ? COUNTRY_BY_ISO2[iso2] : undefined
-        if (fix) dest = [fix.lon, fix.lat]
-      }
-    }
-    if (!dest) return
     try {
-      map.flyTo({ center: dest, zoom: Math.max(map.getZoom(), 3.5), duration: 700 })
+      if (dest) {
+        map.flyTo({ center: dest, zoom: Math.max(map.getZoom(), 3.5), duration: 700 })
+      } else if (subjectCamera?.kind === 'center') {
+        map.flyTo({ center: [subjectCamera.lon, subjectCamera.lat], zoom: Math.max(map.getZoom(), 3.5), duration: 700 })
+      } else if (subjectCamera?.kind === 'bounds') {
+        map.fitBounds(
+          [
+            [subjectCamera.west, subjectCamera.south],
+            [subjectCamera.east, subjectCamera.north],
+          ],
+          { padding: 40, maxZoom: 5, duration: 700 },
+        )
+      }
     } catch {
       // A camera move is a convenience; a renderer that refuses one must never
       // take the panel down with it.
     }
-  }, [selection, wallScope, winSignals, winFindings, winSituations, verdicts, styleReady])
+  }, [selection, subjectCamera, winSignals, winFindings, winSituations, styleReady])
+
+  // C-1b — a case's `map reset`: back to the opening view. The player bumps a
+  // nonce; the value seen on mount is not a request.
+  const resetNonce = useCasePlayer((s) => s.cameraResetNonce)
+  const resetSeenRef = useRef(resetNonce)
+  useEffect(() => {
+    if (resetNonce === resetSeenRef.current) return
+    resetSeenRef.current = resetNonce
+    const map = mapRef.current
+    if (!map) return
+    try {
+      map.flyTo({ center: [0, 20], zoom: 1.3, duration: 700 })
+    } catch {
+      // Best-effort camera move.
+    }
+  }, [resetNonce])
 
   // Choropleth colour.
   useEffect(() => {
@@ -926,6 +955,9 @@ export default function MapLibreWorldMap() {
         </div>
       )}
       <MapModeControl
+        choroplethBanded={verdicts.size}
+        choroplethAsOfMs={newestVerdictMs(verdicts)}
+        convergenceRead={!convergenceLoading}
         choropleth={choropleth}
         density={density}
         arcs={arcs}
@@ -954,7 +986,42 @@ export default function MapLibreWorldMap() {
 // watch toggles + the choropleth legend, bottom-left. Collapsed to a single
 // icon button by default; the data-layer toggles live in the reused LayerPanel.
 // ---------------------------------------------------------------------------
+/** The newest composition behind the choropleth (its as-of), or null. */
+function newestVerdictMs(verdicts: Map<string, { producedAt: string }>): number | null {
+  let best: number | null = null
+  for (const v of verdicts.values()) {
+    const t = Date.parse(v.producedAt)
+    if (Number.isFinite(t) && (best === null || t > best)) best = t
+  }
+  return best
+}
+
+/** A mode row's `i` + its count, from the layer catalog (UI-B4/map). */
+function ModeFigure({ id, count, asOfMs }: { id: LayerId; count?: number | null; asOfMs?: number | null }) {
+  const layer = catalogLayer(id)
+  const fig = count === undefined ? undefined : layerCountFigure(layer, count, asOfMs ?? null)
+  return (
+    <>
+      {fig && (
+        <span
+          className={cn('tabular-nums text-[10px]', fig.state === 'measured' ? 'font-mono text-ink-2' : 'text-ink-3')}
+          data-testid={`map-mode-count-${id}`}
+          data-state={fig.state}
+          aria-label={figureText(fig)}
+          title={figureText(fig)}
+        >
+          {fig.state === 'measured' ? fig.value : figureValueText(fig)}
+        </span>
+      )}
+      <LayerApertureTip layer={layer} figure={fig} />
+    </>
+  )
+}
+
 function MapModeControl({
+  choroplethBanded,
+  choroplethAsOfMs,
+  convergenceRead,
   choropleth,
   density,
   arcs,
@@ -967,6 +1034,10 @@ function MapModeControl({
   onToggleConvergence,
   onToggleWatch,
 }: {
+  /** Subjects the choropleth bands — 0 means the tier holds no read. */
+  choroplethBanded: number
+  choroplethAsOfMs: number | null
+  convergenceRead: boolean
   choropleth: boolean
   density: DensityMode
   arcs: boolean
@@ -995,6 +1066,9 @@ function MapModeControl({
         >
           <Layers className="h-3.5 w-3.5" />
           Map layers
+          {choropleth && choroplethBanded === 0 && (
+            <span className="text-ink-3" data-testid="choropleth-no-read">· choropleth: no read yet</span>
+          )}
         </button>
       ) : (
         <div className="w-[210px] rounded-lg border border-slate-800 bg-surface-200/95 p-2 shadow-lg backdrop-blur-sm">
@@ -1005,13 +1079,21 @@ function MapModeControl({
             </button>
           </div>
 
-          <label className="flex cursor-pointer items-center gap-2 py-0.5 text-xs text-slate-300">
-            <input type="checkbox" checked={choropleth} onChange={onToggleChoropleth} className={checkbox} />
-            Verdict choropleth
-          </label>
+          {layerAvailable('choropleth') && (
+            <div className="flex items-center gap-2 py-0.5 text-xs text-ink-2">
+              <label className="flex flex-1 cursor-pointer items-center gap-2">
+                <input type="checkbox" checked={choropleth} onChange={onToggleChoropleth} className={checkbox} />
+                Verdict choropleth
+              </label>
+              <ModeFigure id="choropleth" count={choroplethBanded > 0 ? choroplethBanded : null} asOfMs={choroplethAsOfMs} />
+            </div>
+          )}
 
           <div className="mt-1.5 flex items-center justify-between gap-2 py-0.5 text-xs text-slate-300">
-            <span>Signal density</span>
+            <span className="flex flex-1 items-center gap-1">
+              Signal density
+              <ModeFigure id="density" />
+            </span>
             <div className="flex overflow-hidden rounded border border-slate-800">
               {(['off', 'heat', 'hex'] as DensityMode[]).map((m) => (
                 <button
@@ -1030,21 +1112,31 @@ function MapModeControl({
             </div>
           </div>
 
-          <label className="mt-1 flex cursor-pointer items-center gap-2 py-0.5 text-xs text-slate-300">
-            <input type="checkbox" checked={arcs} onChange={onToggleArcs} className={checkbox} />
-            Co-mention arcs
-          </label>
+          {layerAvailable('arcs') && (
+            <div className="mt-1 flex items-center gap-2 py-0.5 text-xs text-ink-2">
+              <label className="flex flex-1 cursor-pointer items-center gap-2">
+                <input type="checkbox" checked={arcs} onChange={onToggleArcs} className={checkbox} />
+                Co-mention arcs
+              </label>
+              <ModeFigure id="arcs" />
+            </div>
+          )}
 
-          <label className="flex cursor-pointer items-center gap-2 py-0.5 text-xs text-slate-300">
-            <input type="checkbox" checked={showConvergence} onChange={onToggleConvergence} className={checkbox} />
-            <span className="flex-1">Geo convergence</span>
-            <span className="tabular-nums text-[10px] text-slate-500">{convergenceCount}</span>
-          </label>
+          <div className="flex items-center gap-2 py-0.5 text-xs text-ink-2">
+            <label className="flex flex-1 cursor-pointer items-center gap-2">
+              <input type="checkbox" checked={showConvergence} onChange={onToggleConvergence} className={checkbox} />
+              <span className="flex-1">Geo convergence</span>
+            </label>
+            <ModeFigure id="convergence" count={convergenceRead ? convergenceCount : null} asOfMs={null} />
+          </div>
 
-          <label className="flex cursor-pointer items-center gap-2 py-0.5 text-xs text-slate-300">
-            <input type="checkbox" checked={showWatch} onChange={onToggleWatch} className={checkbox} />
-            Watch-locations
-          </label>
+          <div className="flex items-center gap-2 py-0.5 text-xs text-ink-2">
+            <label className="flex flex-1 cursor-pointer items-center gap-2">
+              <input type="checkbox" checked={showWatch} onChange={onToggleWatch} className={checkbox} />
+              Watch-locations
+            </label>
+            <ModeFigure id="watch" />
+          </div>
 
           {choropleth && (
             <ul className="mt-1.5 space-y-0.5 border-t border-slate-800 pt-1.5">

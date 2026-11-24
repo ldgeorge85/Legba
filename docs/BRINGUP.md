@@ -1,0 +1,316 @@
+# Bring-up — how a fresh instance gets its descriptors
+
+One registrar owns every registry descriptor head: `scripts/bringup_register_descriptors.py`
+(the walker). `deploy/deploy.sh` runs it once, between the stack components and
+the budget envelope. Its rule:
+
+    every descriptors/*.yaml of the families action_pack, source, target, analyst
+      (the family is read from identity.schema_uri, never from the filename)
+    + every entry of the profile's source catalog (profiles/<id>/rosters/source_catalog.yaml)
+    − every row of descriptors/RETIRED.md
+    = what the instance registers,
+      each at the state the lifecycle overlay records (else the state its file ships).
+
+The directory, the overlay, the catalog and the credibility seeds are the
+selected **instance profile**'s ([PROFILES.md](PROFILES.md)): `--profile <dir>`,
+else `LEGBA_PROFILE`, else `profiles/geopolitics`, whose manifest names exactly
+the paths above. A profile with no `RETIRED.md`, no `lifecycle` and no
+`source_catalog` registers its descriptors directory at the shipped states and
+nothing else.
+
+Two manifests sit beside the descriptor files:
+
+- **`descriptors/RETIRED.md`** — the descriptors the walker does not register.
+  `retired` rows are retired on the reference host (terminal; a live head that is
+  not retired is reported `would-retire`). `parked` rows are in the tree but were
+  never registered there: drafts waiting on an admin's activation, early
+  examples, templates.
+- **The lifecycle overlay** — `descriptors/LIFECYCLE.d/`, one file per row
+  (`<family>__<id>.md`), plus any row still left in `descriptors/LIFECYCLE.md`:
+  the lifecycle state the reference host holds where it differs from what the
+  file ships. Files ship `draft` by convention (registering a file must never
+  schedule it; activation is an admin's flip), so the overlay is where the
+  reference host's activations and pauses are recorded. It is an overlay for one
+  instance; another instance carries its own.
+
+The walker is idempotent **by content**. A head whose stored body, re-validated
+under the current schema, hashes the same as the tree's descriptor is reported
+`unchanged` and never written. That holds even when the head was registered
+before a schema field was added. The head's lifecycle `state` column wins over
+its body, because the source circuit-breaker pauses by column.
+
+It also runs what the per-family scripts used to run:
+
+- the P2-T7 bounded-unit drift guard;
+- the non-builtin `analyst_kind` vocabulary rows;
+- the four TAXON vocabulary families (`salience_class`, `collection_gap_kind`, `band`, `source_layer`) from their literals in `src/legba/data/taxon_families.py`;
+- every vocabulary seed file's rows (`descriptors/vocabulary_<family>.yaml`, schema
+  `legba/vocabulary/x.y.z`; today the `frame`, `event_type` and `crosswalk` families and the geopolitics profile's
+  `geopolitics.lens` family): an absent row is inserted, a row whose
+  parent, aliases or notes differ from the file is updated, and a row an admin deprecated
+  is left deprecated;
+- every source batch's `source_credibility` seeds (each `ON CONFLICT DO NOTHING`).
+
+```bash
+# what a deploy would do, writing nothing (prints one line per head + a summary)
+docker compose -p legba run --rm --no-deps -v "$PWD:$PWD" -w "$PWD" \
+  -e LEGBA_DATA_PG_DB=legba --entrypoint python legba-registry \
+  scripts/bringup_register_descriptors.py --dry-run
+
+# one family only (repeatable)
+... scripts/bringup_register_descriptors.py --dry-run --family analyst
+```
+
+**No descriptor event.** The walker registers direct-DB through a registry that
+has no bus connection (`scripts/_p17_registrar.py`), so a head it registers or
+updates emits no `descriptor.*` NATS event and the runtime does not hear of it
+at once: the reconcile loop's periodic resync (every 5 minutes,
+`runtime/reconcile.py`) creates or re-versions the actor. Allow up to about five
+minutes between the walker's `register` / `update` line and the runtime's
+`reconcile.action ... create_actor`. A registration through the registry server
+(REST) does emit the event and reconciles within seconds.
+
+Each line of the output reads `unchanged`, `register`, `would-update` (with the
+changed keys), `would-retire`, `retired`, `parked` or `failed`. A `failed` line
+exits non-zero, and deploy.sh aborts on it.
+
+The walker plans `descriptors/analyst_profile_projector.yaml` like any analyst
+file: it registers `draft` and has no overlay row. It rebuilds the
+per-profile projection planes ([PROFILES.md](PROFILES.md) "The projection") once
+it is activated and `LEGBA_PROFILE_PROJECTION` is on; until then the projection
+routes refuse `projection_disabled` or `projection_empty`. Its first build is
+an admin's act after the roll: activate it through `/transition`, record the
+state in the overlay, and check that
+`GET /api/v1/registry/projection/geopolitics` answers 200. The view it builds
+from ships inside the package (`src/legba/data/profile_projection.json`,
+regenerated by `scripts/gen_profile_projection.py`).
+
+`tests/test_bringup_accounts_for_live_heads.py` holds the tree to a committed
+roster of the reference host's live heads
+(`tests/fixtures/bringup/live_head_roster_2026-10-04.json`: family, id, kind,
+state; no bodies). Every non-retired head must have a registrar that deploy.sh
+runs, and no head retired there may be re-registrable. When the host changes,
+regenerate the roster from a fresh export.
+
+## The profile's prompt package
+
+A descriptor may name a module in the profile's prompt package
+(`prompt_module: legba_<id>.<module>:ATTR`; the geopolitics profile's six lean
+lenses do), and registration resolves every `prompt_module`, refusing a dead one
+on an active descriptor. So the registrar must be able to import the package.
+The registry and runtime images carry it: their builds copy the profile's
+`prompts/` directory into site-packages (build arg `LEGBA_PROFILE`, default
+`profiles/geopolitics`) and import every module in it. deploy.sh also exports
+the checkout's `<profile>/prompts` onto the registrar's `PYTHONPATH`, after the
+image's own site-packages, so an image built before the package existed still
+registers. The runtime has no checkout mounted; deploy.sh's boot check imports
+the package there and fails the verify when it cannot. A roll proves it with
+`--verify-import`:
+
+```bash
+scripts/rolling_deploy.sh --verify-import legba_geopolitics.lens_left
+
+# a script run by hand against a checkout needs both directories
+PYTHONPATH=src:profiles/geopolitics/prompts python3 scripts/<script>.py
+```
+
+## Adding, activating, retiring
+
+- **A new descriptor:** add its file under `descriptors/`, shipping `draft`.
+  The next deploy (or an apply run of the walker) registers it. There is no
+  registrar script to write.
+- **Activating it on the reference host:** take the lifecycle route
+  (docs/RUNBOOK.md §4), then add its overlay row under `descriptors/LIFECYCLE.d/`
+  so a fresh instance comes up the same way.
+- **Retiring:** retire through the route, then add its `retired` row to
+  RETIRED.md (the file can stay). A row is the owner's word: the walker
+  retires a live head that a row names.
+- **A source catalog feed:** add an entry to the profile's catalog file
+  (`profiles/geopolitics/rosters/source_catalog.yaml`). Its credibility seed
+  rides on the entry. `scripts/bringup_register_source_catalog.py` is the
+  loader over that file (an unknown key is refused) and keeps `--verify`, the
+  live probe; under `--profile` the walker registers and seeds that profile's
+  own catalog file.
+
+## Staged activation: two worked examples
+
+A new analyst that ships `draft` is switched on in four steps: the code first,
+then a registration limited to its ids, then the lifecycle route, then its
+overlay row. The two examples below are from the geopolitics example instance;
+the steps are the same for any instance.
+
+**Registering by id.** `--id <descriptor_id>` (repeatable) restricts the
+walker to the named heads; an id the walk does not plan is refused. Dry first:
+
+```bash
+docker compose -p legba run --rm --no-deps -v "$PWD:$PWD" -w "$PWD" \
+  -e LEGBA_DATA_PG_DB=legba --entrypoint python legba-registry \
+  scripts/bringup_register_descriptors.py --dry-run --id kev_digest --id cyber_watch
+# expect one `register` line per id, at the state the overlay records; then drop --dry-run
+```
+
+### The cyber desk reader
+
+The example instance's cyber desk (`target/theme_cyber`) and its feeds are
+read by two analysts. Both ship `draft`:
+
+| family | id | what it is | runs |
+|---|---|---|---|
+| analyst | `kev_digest` | deterministic, no model: the CISA KEV catalogue entries new since the last digest, one line each, copied from the record (CVE id, vendor / product, name, date added, due date, known-ransomware-use flag); read at `GET /api/v1/findings?analyst_id=kev_digest` | `45 2,14 * * *` |
+| analyst | `cyber_watch` | the bounded unit on the core plane (`has_tag("cyber")`, so `theme_cyber` only); reads everything collected since its last run, with the FEED ROSTER block naming each feed's kind (agency advisory, trade press, provider status, vendor research) and its silent feeds | `40 3,15 * * *` |
+
+1. **Code first.** The registry image and then the runtime image (and the
+   worker image built from it) must carry the `kev_digest` sub-handler, the
+   `feed_roster` block and both option-catalog entries. On an older image the
+   walker's registration only warns about the options, and the runtime drops
+   `feed_roster` and the digest's knobs as undeclared.
+2. **Register by id** as above.
+3. **Activate** through the lifecycle route ([RUNBOOK.md](RUNBOOK.md) §4,
+   `POST $REG/api/v1/registry/descriptors/<family>/<id>/transition` with
+   `{"to_state":"active","reason":"..."}`), in this order:
+   1. `analyst/kev_digest` (it reads only `source.cisa.kev`);
+   2. `target/theme_cyber` — a target is boot-wired only when `active`. No
+      other analyst in the tree binds to it (pinned by
+      `tests/data_pkg/test_cyber_reader_k2.py`), so this wakes nothing else;
+   3. `analyst/cyber_watch`.
+
+   Then record each as `active` in the overlay
+   (`descriptors/LIFECYCLE.d/<family>__<id>.md`), so a fresh instance comes up
+   the same way. The reconcile loop creates the actors within about five
+   minutes.
+4. **What to expect.** The first digest has no watermark and reaches back 72
+   hours, so it lists the catalogue's first-poll backfill. The unit's first
+   window reaches back 24 hours and can hold more than its row cap: the
+   watermark reader then selects by salience, and the finding's
+   `data.slice_coverage` declares what it did not read.
+
+### The due-and-absent check
+
+One deterministic analyst, no model: `due_and_absent` reads the rows of the
+record that carry an explicit date (sealed forecast questions, acute
+forecasts, the calendar, the inquiry ledger's resolves-by, live series'
+declared periods and lags) and reports the ones past their date with no
+matching record collected, once per state change. It ships `draft`:
+
+| family | id | what it is | runs |
+|---|---|---|---|
+| analyst | `due_and_absent` | deterministic, no model: what was expected by a date and has no matching record in this collection (newly overdue / resolved late / voided), each line naming what was looked for and how the sources that would carry it fared; one logged `due_and_absent` alert per change; read at `GET /api/v1/findings?analyst_id=due_and_absent` | `48 7 * * *` |
+
+1. **Code first.** The registry image, then the runtime image (and the worker
+   image built from it), must carry the `due_and_absent` sub-handler, its
+   option-catalog entry, and the `due_and_absent` alert kind (on an older
+   runtime `raise_alert` refuses the kind; the handler logs and carries on, but
+   nothing reaches the alert log).
+2. **Register by id**: `--id due_and_absent`.
+3. **Activate** `analyst/due_and_absent` through the lifecycle route, then
+   record it `active` in the overlay.
+4. **What to expect.** The first run has no ledger, so every expectation
+   already due and absent is reported once as newly overdue. Later runs write a
+   finding only when a state changes; a quiet run is trace-only.
+
+## Triage of the bring-up scripts the walker replaced
+
+Before the walker, deploy.sh ran 17 of the 56 `scripts/bringup_*.py`: 11
+registrars named one by one, plus the six deterministic-analyst scripts it
+called in a loop. Thirty-eight live analysts were named by no bring-up script at all. Each
+script is now one of four things:
+
+- **absorbed** — its descriptors are walker input. The script stays in place
+  because tests import or read it, or because it still has a mode the walker
+  lacks, such as the catalog's `--verify`. It is no longer part of a deploy.
+- **called** — deploy.sh still runs it, because it registers something that is
+  not a descriptor head.
+- **attic** — obsolete, moved to `scripts/attic/` with a line why.
+- **not a registrar** — out of scope for this triage.
+
+| script | verdict | what it did / why |
+|---|---|---|
+| `bringup_vault_load.py` | **called** [1] | vault secrets from `.env` — not a descriptor family |
+| `bringup_register_stack.py` | **called** [2] | stack components (+ the three `stack_component_*.yaml`) and their healthchecks — not a descriptor family |
+| `bringup_set_budget_envelope.py` | **called** [4] | `global_budget_envelope` buckets — not a descriptor family |
+| `bringup_register_action_packs.py` | absorbed | the 11 `action_pack_*.yaml` (REST, create-only) |
+| `bringup_register_action_packs_db.py` | absorbed | 4 packs, direct — a subset of the above |
+| `bringup_register_sources.py` | absorbed | 7 pinned source files (3 shared wires, 3 state media, UCDP — UCDP is a RETIRED.md row) |
+| `bringup_register_source_catalog.py` | absorbed (registration + credibility seeds); `--verify` still useful | the loader over the profile's catalog YAML: the walker imports `load_catalog` / `build_descriptor` and its `seed_credibility` |
+| `bringup_register_wave_a_sources.py` | absorbed (files + `seed_credibility`) | 41 source files |
+| `bringup_register_rsshub_sources.py` | absorbed (files + `seed_credibility`) | 10 RSSHub source files |
+| `bringup_register_source_batch_2026_08.py` | absorbed (files + `seed_credibility`) | 6 source files |
+| `bringup_register_source_batch_2026_09.py` | absorbed (files + `seed_credibility`) | 6 source files |
+| `bringup_register_supply_chain_sources.py` | absorbed (files + `seed_credibility`) | 7 source files |
+| `bringup_register_gdelt_files.py` | absorbed | `source.gdelt.files` (REST, create-only; printed its transitions instead of running them) |
+| `bringup_register_g20_country_targets.py` | absorbed — **do not run standalone** | synthesised the 19 `country_g20_*` bodies from `iso_countries`; the live bodies are now `target_country_g20_<iso>.yaml`. A standalone run rebuilds the body without the region/applicability tags and strips them |
+| `bringup_register_watch_country_targets.py` | absorbed — **do not run standalone** | the 13 `country_watch_*` desks, same synthesis and the same tag-stripping hazard; now `target_country_watch_<iso>.yaml` |
+| `bringup_register_region_targets.py` | absorbed | the 5 `region_*` frames (REST, create-only); now `target_region_*.yaml` |
+| `bringup_tag_targets.py` | absorbed | PUT-merged region/applicability tags onto the 32 desks; the tags are in the target files now |
+| `bringup_register_situation_targets.py` | absorbed | `target_situation_iran_war.yaml` |
+| `bringup_register_supply_chain_pack.py` | absorbed | the 10 lane/flow targets + `disruption_status`; the walker re-runs its unit drift guard |
+| `bringup_register_analysts.py` | absorbed (the walker reuses its drift guard) | 40 analyst files + 3 `analyst_kind` vocabulary rows (the walker upserts 5) |
+| `bringup_register_lenses.py` | absorbed | the 5 function-typed lenses (the six stance lenses had no registrar) |
+| `bringup_register_chronicle.py` | absorbed | `chronicle_assessor` |
+| `bringup_register_alert_trigger_scan.py` | absorbed | one analyst, REST create-only |
+| `bringup_register_analyst_traces_retention.py` | absorbed | one analyst, REST create-only |
+| `bringup_register_band_calibration_tracker.py` | absorbed | one analyst, REST create-only |
+| `bringup_register_claim_watch.py` | absorbed | one analyst, REST create-only |
+| `bringup_register_composition_lineage_sweep.py` | absorbed | one analyst, REST create-only (also in the analysts list) |
+| `bringup_register_corpus_indexer.py` | absorbed | one analyst, REST create-only |
+| `bringup_register_corpus_researcher.py` | absorbed | one analyst, REST create-only |
+| `bringup_register_corpus_retention.py` | absorbed | one analyst, REST create-only |
+| `bringup_register_correctness_grader.py` | absorbed | one analyst, REST create-only |
+| `bringup_register_country_assessment.py` | absorbed | one analyst, REST create-only (also in the analysts list) |
+| `bringup_register_cross_doc_corroborator.py` | absorbed | one analyst, REST create-only |
+| `bringup_register_cross_source_coalesce.py` | absorbed (was deploy [7]) | one analyst, REST create-only |
+| `bringup_register_cross_source_dedup.py` | absorbed (was deploy [7]) | one analyst, REST create-only |
+| `bringup_register_desk_baseline.py` | absorbed | one analyst, REST create-only |
+| `bringup_register_entity_resolution.py` | absorbed (was deploy [7]) | one analyst, REST create-only |
+| `bringup_register_evidence_archiver.py` | absorbed | one analyst, REST create-only |
+| `bringup_register_fact_decay_scan.py` | absorbed | one analyst, REST create-only |
+| `bringup_register_finding_supersession.py` | absorbed (was deploy [7]) | one analyst, REST create-only |
+| `bringup_register_geo_convergence_scan.py` | absorbed (its analyst is a RETIRED.md row) | one analyst, REST create-only |
+| `bringup_register_integrity_sweep.py` | absorbed (was deploy [7]) | one analyst, REST create-only |
+| `bringup_register_narrative_mapper.py` | absorbed | one analyst, REST create-only |
+| `bringup_register_reenrich_ner.py` | absorbed | one analyst, REST create-only |
+| `bringup_register_reenrich_translation.py` | absorbed | one analyst, REST create-only |
+| `bringup_register_reference_builder.py` | absorbed | one analyst, REST create-only |
+| `bringup_register_signal_embedder.py` | absorbed | one analyst, REST create-only |
+| `bringup_register_signal_summarizer.py` | absorbed | one analyst, REST create-only |
+| `bringup_register_situation_clustering.py` | absorbed (was deploy [7]) | one analyst, REST create-only |
+| `bringup_register_source_track_record.py` | absorbed | one analyst, REST create-only |
+| `bringup_register_standing_auditor.py` | absorbed | one analyst, REST create-only |
+| `bringup_register_p17_workingset.py` | obsolete, kept in place | already refuses to run (exit 2); `tests/data_pkg/test_consult_target_seed_crosscheck.py` reads its `ANALYST_FILES` |
+| `bringup_register_discovery.py` | **attic** | L2 template + discovery pair from a hard-coded main-checkout path; both descriptors `parked` |
+| `bringup_register_g20_discovery.py` | **attic** | hard-coded registry URL, points at a script that does not exist; both descriptors `parked` |
+| `bringup_register_multi_country_targets.py` | **attic** | the five pre-pivot `*_news` targets; all `parked` |
+| `bringup_source_first_host.py` | not a registrar | a boot-and-teardown harness for the job plane; registers nothing |
+
+Before the walker, these live analysts had no bring-up script naming them;
+their files had always been in the tree:
+
+- `contrary_evidence_pass`, `crossroads`, `desk_reference`, `event_clustering`,
+  `event_reconciler`, `graph_projector`;
+- `inquiry_pilot`, `inquiry_yield`, `layer_divergence`, `receipt_anchor`,
+  `research_measurement`, `situation_tracker`;
+- the six stance lenses.
+
+The `inquiry_state` pack is in the same position.
+
+**The target registrars are frame-kind aware (W10 TAX-2).** The four absorbed
+target registrars (`bringup_register_{g20_country,watch_country,region,situation}_targets.py`)
+read the topology through `scripts/_frame_kind.py` instead of literals:
+
+- the desk registrars check their roster tag (`g20`, `watch`) against the
+  selected profile's `rosters.subject_tags` and refuse, by name, a tag the
+  profile's composition would never count;
+- with `LEGBA_FRAME_FAMILY` on AND the `frame` family loaded (the registry's
+  `GET /vocabulary/frame` for the REST registrar, `vocabulary_entries` for the
+  direct-DB ones, `descriptors/vocabulary_frame.yaml` on `--dry-run`), the
+  region registrar's frame list is the family's `region` groups, and any head
+  that IS a registered frame is also tagged `frame:<kind>` (the region heads:
+  `frame:region`); a desk or situation head that is not a frame is unchanged;
+- with the flag off (the default), an unloaded family, or a target that is no
+  frame, every body is byte-identical to the pre-TAX-2 registrars — pinned by
+  `tests/fixtures/bringup/registrar_bodies_flag_off_2026-10-04.json`.
+
+The walker does not run them and plans the `descriptors/target_*.yaml` heads
+unchanged. The source catalog registrar takes a per-feed `classifications:` key
+(see [DATA_SOURCES.md](DATA_SOURCES.md)); empty, the built descriptor and its
+content hash are unchanged.

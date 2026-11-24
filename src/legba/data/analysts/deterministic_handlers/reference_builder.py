@@ -58,6 +58,7 @@ header, so the cost of every reference travels with it.
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import logging
 import os
@@ -65,6 +66,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Sequence
 
 from ....runtime.analyst_method import AnalystMethodResult
+from ... import subject as SUBJECT
 from ...provenance.models import FindingPayload
 from . import _reference_store as STORE
 from ._reference_fences import (
@@ -142,7 +144,7 @@ DEFAULT_ROSTER_WINDOW_DAYS = 30
 #: measured both runs at 1.0 (the fleet default) and this is that value. Note
 #: what is NEVER sent alongside it: ``max_tokens``. That is a HARD house rule for
 #: the core plane, and the loop honours it by never passing one.
-DEFAULT_TEMPERATURE = 1.0
+DEFAULT_TEMPERATURE = HOUSE_TEMPERATURE
 
 # ---------------------------------------------------------------------------
 # R2-FIX(1) — THE BUILDER'S OWN WEB BUCKET (ops 2026-09-17)
@@ -426,7 +428,7 @@ async def build_reference(
     build_max_seconds: float = BUILD_MAX_SECONDS_DEFAULT,
     build_max_tokens: int = BUILD_MAX_TOKENS_DEFAULT,
 ) -> dict[str, Any]:
-    """Build, fence and (optionally) persist ONE country reference.
+    """Build, fence and (optionally) persist ONE subject's reference.
 
     Returns an OUTCOME dict — never raises for a build failure. Every failure
     mode gets a named ``status`` and reaches the receipt: ``no_model``,
@@ -449,11 +451,20 @@ async def build_reference(
     window_start = t0 - timedelta(days=int(window_days))
     code = str(identity.get("code") or "")
     name = str(identity.get("name") or target_id)
-    prefix = f"RD-{code or target_id.upper()}-C"
+    prefix = f"RD-{SUBJECT.item_code(code or target_id)}-C"
+    # INST-1 — the subject the reference is ABOUT, carried on the outcome and
+    # the reference header: a lane is named and searched as a lane.
+    subject = {
+        "id": target_id, "code": code, "name": name,
+        "kind": str(identity.get("kind") or ""),
+        "noun": str(identity.get("noun") or "country"),
+        "query_name": str(identity.get("query_name") or name),
+    }
     outcome: dict[str, Any] = {
         "target_id": target_id,
         "country": name,
         "country_code": code,
+        "subject": subject,
         "window_start": window_start.isoformat(),
         "window_end": t0.isoformat(),
         "dimensions": list(dimensions),
@@ -499,6 +510,8 @@ async def build_reference(
         model_name=model_name,
         tool_call_cap=tool_call_cap,
         min_developments=min_developments,
+        subject_noun=subject["noun"],
+        query_subject=subject["query_name"],
     )
     first_user = build_first_user(
         country_name=name, country_code=code or target_id,
@@ -618,6 +631,7 @@ async def build_reference(
         stats=stats, plane=plane, thin=thin, counts=counts,
         tool_call_cap=tool_call_cap,
     )
+    reference["header"]["subject"] = dict(subject)
     outcome["fences"] = stats.as_record()
     snippet_sourced = sum(
         1 for d in survivors if d.get("span_source") == "snippet"
@@ -918,7 +932,7 @@ def build_receipt(
     elif not per_target:
         headline = (
             f"no target due (roster {roster_size}, cadence {cadence_days}d)"
-            if roster_size else "no roster — no country desk has produced recently"
+            if roster_size else "no roster — no subject desk has produced recently"
         )
     elif written:
         total = sum(int(t.get("n_developments") or 0) for t in written)
@@ -1257,10 +1271,10 @@ async def handle(
             usage=_zero_usage(),
         )
 
-    from . import scorecard_banding as banding
-    from .correctness_grader import PROLIFERATION
-
-    dimensions = tuple(banding.DIMENSIONS) + (PROLIFERATION,)
+    # The scored dimensions + the units narrowed within the scored legs
+    # (ROSTER-2; the exemplar's proliferation desk) + INST-1's reference legs
+    # (the units scoped to ``constants.reference_subject_tags``), roster order.
+    dimensions = ROSTER.reference_units()
 
     extras = dict(getattr(deps, "extras", None) or {})
     llm = extras.get(LLM_DEPS_EXTRA_KEY)
@@ -1309,7 +1323,7 @@ async def handle(
             # why it was passed over; what it does not get is the hour.
             selected = [d for d in due if d.get("eligible", True)][:max_targets]
         identities = await target_identity(
-            conn, [t["target_id"] for t in selected] or ["-"]
+            conn, [t["target_id"] for t in selected] or ["-"], detail=True
         )
 
     per_target: list[dict[str, Any]] = []

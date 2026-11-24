@@ -64,6 +64,8 @@ class _StubPool:
 
 # The frozen pre-C4 fact SQL — the exact string _query_facts must emit when the
 # flag is unset. If C4 ever changes this branch, THIS assertion fails loud.
+# W11 C-2b-2/facts (D6): the operator tier joins the trusted set in the ORDER BY —
+# the pin moves with it; everything else is byte-identical to pre-c4.
 _BASELINE_FACTS_SQL = """
             SELECT f.subject, f.predicate, f.value, f.valid_from,
                    f.source_type, f.confidence,
@@ -79,7 +81,7 @@ _BASELINE_FACTS_SQL = """
               AND (f.valid_until IS NULL OR f.valid_until > now())
               AND f.value !~ '^Q[0-9]+$'
             ORDER BY
-              (f.source_type IN ('seed','curated')) DESC,
+              (f.source_type IN ('seed','curated','operator')) DESC,
               f.confidence DESC NULLS LAST,
               f.valid_from DESC NULLS LAST
             LIMIT $3

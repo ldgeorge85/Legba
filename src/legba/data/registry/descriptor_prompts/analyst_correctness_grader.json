@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:correctness_grader": {
+      "source": "analyst_correctness_grader.yaml",
+      "state": "draft"
+    }
+  }
+}

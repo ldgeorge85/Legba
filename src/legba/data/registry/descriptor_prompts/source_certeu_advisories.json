@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.certeu.advisories": {
+      "source": "source_certeu_advisories.yaml",
+      "state": "draft"
+    }
+  }
+}

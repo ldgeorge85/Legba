@@ -868,3 +868,66 @@ async def test_malformed_divergences_do_not_take_the_route_down(
     res = await client.get(_ROUTE)
     assert res.status_code == 200
     assert res.json()["measured"] is True
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_target_id_narrows_the_map_to_one_desk(client, layers_app) -> None:
+    """W2 S-batch — ``?target_id`` keeps the newest receipt's frame whole and
+    narrows ``desks`` (with its fire) and ``desks_unresolved`` to that desk; a
+    desk the run did not measure comes back empty with the filter echoed, which
+    is not the "no run yet" answer (the receipt id is still there)."""
+    _, _, pg_store = layers_app
+    now = datetime.now(timezone.utc)
+    payload = _receipt_payload()
+    payload["data"]["targets_unresolved"] = [
+        {"target_id": "country_g20_zz", "reason": "no map"},
+        {"target_id": "country_g20_yy", "reason": "no map"},
+    ]
+    run = await _insert_trace(pg_store, payload=payload, run_started_at=now)
+    await _insert_summary_finding(
+        pg_store, divergences=[_divergence()], produced_at=now - timedelta(hours=1),
+    )
+
+    whole = (await client.get(_ROUTE)).json()
+    assert whole["target_id"] is None
+    assert len(whole["desks"]) == 2
+
+    ru = (await client.get(_ROUTE, params={"target_id": "country_g20_ru"})).json()
+    assert ru["target_id"] == "country_g20_ru"
+    assert ru["receipt_run_id"] == str(run)
+    assert [d["target_id"] for d in ru["desks"]] == ["country_g20_ru"]
+    assert ru["desks"][0]["fired"] is not None
+    assert ru["desks_unresolved"] == []
+    # The frame is the same receipt's, untouched by the filter.
+    assert ru["as_of"] == whole["as_of"]
+    assert ru["classification_audit"] == whole["classification_audit"]
+    assert ru["pairs_declared"] == whole["pairs_declared"]
+
+    zz = (await client.get(_ROUTE, params={"target_id": "country_g20_zz"})).json()
+    assert zz["desks"] == []
+    assert zz["desks_unresolved"] == [
+        {"target_id": "country_g20_zz", "reason": "no map"},
+    ]
+
+    absent = (await client.get(_ROUTE, params={"target_id": "country_nowhere"})).json()
+    assert absent["desks"] == [] and absent["desks_unresolved"] == []
+    assert absent["receipt_run_id"] == str(run)
+    assert absent["target_id"] == "country_nowhere"
+
+    assert (await client.get(_ROUTE, params={"target_id": ""})).status_code == 422
+
+
+def test_narrow_to_target_is_a_pure_filter() -> None:
+    """``None`` is a no-op; a named desk filters both per-desk lists only."""
+    from legba.data.registry.layers_api import narrow_to_target
+
+    payload = _receipt_payload()
+    payload["data"]["targets_unresolved"] = [{"target_id": "country_g20_ar"}]
+    out = project_receipt(payload, run_id="r", run_started_at=None, fired={})
+    assert narrow_to_target(out, None) is out
+    ar = narrow_to_target(out, "country_g20_ar")
+    assert [d.target_id for d in ar.desks] == ["country_g20_ar"]
+    assert ar.desks_unresolved == [{"target_id": "country_g20_ar"}]
+    assert ar.method_version == out.method_version
+    assert len(out.desks) == 2  # the original is not mutated

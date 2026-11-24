@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:evidence_refetch": {
+      "source": "analyst_evidence_refetch.yaml",
+      "state": "draft"
+    }
+  }
+}

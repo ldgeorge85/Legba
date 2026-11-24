@@ -118,15 +118,16 @@ def _enrichment_kinds(entry):
 
 def test_nws_geojson_feed_gets_text_enrichment():
     """The NWS Severe/Extreme alert feed carries rich English headlines; it
-    opts into language + entity enrichment (enrich_text=True) so it stops
-    dragging language/entity coverage (the live audit's 0%-enriched 400
-    signals). Other geojson feeds stay geocode-only."""
+    opts into language + entity enrichment (enrich_text=True). It is a
+    snapshot-shaped feed but is deliberately NOT tagged snapshot (SRC-5,
+    2026-10-03): ~20% of its signals get geo only from NER place entities and
+    NER is its sole entity source — see
+    test_source_catalog_snapshot_feeds_no_ner.py. Other geojson feeds stay
+    geocode-only."""
     nws = next(e for e in CATALOG if e.id == "source.nws.active_alerts")
     assert nws.enrich_text is True
-    kinds = _enrichment_kinds(nws)
-    # language_detect must precede ner_multilingual (ner uses detected lang).
-    assert kinds.index("language_detect") < kinds.index("ner_multilingual")
-    assert "geocode" in kinds
+    assert nws.snapshot is False
+    assert _enrichment_kinds(nws) == ["language_detect", "ner_multilingual", "geocode"]
 
 
 def test_default_geojson_feed_is_geocode_only():

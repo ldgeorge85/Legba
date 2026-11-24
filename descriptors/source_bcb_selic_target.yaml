@@ -1,0 +1,123 @@
+# I-5 series-kind capabilities (2026-11-14) — Banco Central do Brasil's Selic
+# target rate (SGS series 432, the rate set by the Copom), daily, as a SERIES.
+# Ships DRAFT; the reference host walks it to CONFIGURED
+# (descriptors/LIFECYCLE.md), never active — activation is the owner's call.
+# Kind: series_api.
+#
+# WHY: the first Latin American central-bank series (the review's row 6,
+# "add"). X-1 could not write it: the body is a TOP-LEVEL JSON ARRAY (I-5:
+# `rows_path: "$"`) and its dates are DD/MM/YYYY (I-5: date format
+# `dmy_slashed`, matched exactly — never read month-first).
+#
+# THE ENDPOINT. BCB SGS open-data API,
+# /dados/serie/bcdata.sgs.432/dados/ultimos/N?formato=json. Checked
+# 2026-11-14 by the source-expansion review (one GET, generic client
+# identity, N=3): 200, application/json, a top-level array of 3 rows, 115
+# bytes — exactly three rows of the documented shape
+# {"data":"DD/MM/YYYY","valor":"NN.NN"} (37 bytes each, plus brackets and
+# commas). `valor` is a STRING with a dot decimal (the reader takes it as a
+# decimal; an empty or non-numeric value is absent, never zero). Each poll
+# asks for the last 20 values (the path the review checked, with N=20: kept
+# small because this form of the API is documented with a cap on N — not
+# re-checked by this lane, so the first poll is the check); the series
+# carries one value per calendar day, so 20 values cover the 1 + 7-day
+# re-read window with room. No since parameter: the dated form of this API
+# needs both ends of a range, which a since parameter cannot express.
+#
+# SUBJECT. Brazil (`BR`, subject_kind country). UNIT: percent (per year).
+# READER: series_change/2026-11.3 proposes `bcb.sgs.*=policy_rate` (every
+# change is an event); registering it is a roll step.
+#
+# robots.txt: none (404).
+# Class: official (a central bank).
+
+identity:
+  id: source.bcb.selic_target
+  name: Banco Central do Brasil — Selic target rate, daily (SGS 432, series)
+  kind: series_api
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: i5_series_kind_capabilities
+  created: "2026-11-14T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [BR]
+  languages: [pt]
+  tags: [central_banks, monetary_policy, interest_rates, markets, series, brazil, latin_america]
+  source_class: official
+  license_class: open_data_sharealike   # ODbL
+  attribution: "Source: Banco Central do Brasil, SGS series 432 (Meta Selic definida pelo Copom), ODbL"
+  access_class: public
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "13 22 * * *"            # daily, after a Copom evening announcement
+  cooldown_seconds: 3600
+  jitter_seconds: 120
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://api.bcb.gov.br/dados/serie/bcdata.sgs.432/dados/ultimos/20"
+  params:
+    factory_kind: list
+    raw:
+      - ["formato", "json"]
+  format:
+    factory_kind: text
+    raw: json
+  rows_path:
+    factory_kind: text
+    raw: "$"                      # the document root is the row array
+  date_field:
+    factory_kind: text
+    raw: data
+  date_format:
+    factory_kind: text
+    raw: dmy_slashed
+  outputs:
+    factory_kind: list
+    raw:
+      - series: bcb.sgs.selic_target
+        value_field: valor
+        subject: BR
+        unit: percent
+        period: day
+        subject_kind: country
+        methodology_version: bcb-sgs-432/1
+  lag_days:
+    factory_kind: number
+    raw: 1
+  revision_days:
+    factory_kind: number
+    raw: 7
+  backfill_days:
+    factory_kind: number
+    raw: 20
+
+sink:
+  family: observation
+  config:
+    series:
+      - id: bcb.sgs.selic_target
+        field: valor
+        unit: percent
+        period: day
+        subject_kind: country
+        methodology_version: bcb-sgs-432/1
+        description: "Selic target rate set by the Copom, per cent per year, in force on the day (subject BR)"
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  media: reference
+
+deps: {}
+
+subscription_policy: open

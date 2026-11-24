@@ -8,7 +8,9 @@
  *   * the SINCE-CURSOR lifecycle — the client owns the cursor (the server is
  *     stateless, P1-6): `localStorage.legba_wall_cursor` holds the
  *     `server_now` of the last successful look; on open the panel fetches
- *     `/v3/since?cursor=<stored>` and stores the response's `server_now` back.
+ *     `/v3/since?cursor=<stored>`; the response's `server_now` is stored back
+ *     only when the movers were actually shown (`markWallRead`, X1/D1) — the
+ *     anchor is fixed once per page load (`wallVisitForPage`).
  *     First-ever open = a 24h default lookback. A cursor older than the
  *     server's 90d hard bound is clamped (the route 400s beyond it).
  *   * movers grouping/sorting — band changes first (worst direction first),
@@ -94,6 +96,13 @@ export interface SinceAlert {
   summary: string
   target_id: string | null
   produced_at: string
+  /** What the alert points at, from its own payload (additive; absent on an
+   *  older registry): the finding a `verified_finding` page is about, the
+   *  situation and the transition a `situation_escalation` page is about. */
+  finding_id?: string | null
+  situation_id?: string | null
+  state_from?: string | null
+  state_to?: string | null
 }
 
 export interface SinceSection<T> {
@@ -211,6 +220,60 @@ function defaultStorage(): Storage | null {
   }
 }
 
+// ---------------------------------------------------------------------------
+// X1/D1 — one anchor per page load; the cursor moves only on a real read
+// ---------------------------------------------------------------------------
+
+/**
+ * Review D (2026-10-08): the Wall's Overview said "MOVERS SINCE LAST VISIT ·
+ * band changes 31", and four seconds later its Movers tab said "nothing
+ * changed since <the moment the page loaded>". Two faults stacked:
+ *
+ *   1. every `/v3/since` RESPONSE advanced the stored cursor — including the
+ *      one fetched by a tile mounted in a background tab nobody had looked
+ *      at (Dockview keeps inactive tab content mounted) — so the page's own
+ *      load stamped "read";
+ *   2. each mount re-resolved the anchor from storage, so the Movers tab,
+ *      mounting after the Overview had stamped, diffed from that stamp.
+ *
+ * The anchor is now resolved ONCE per page load and shared by every Wall
+ * surface (the Overview quadrant, the Movers tab, the standalone tile) — one
+ * `?cursor=`, one query key, one answer. The stored cursor advances only
+ * through {@link markWallRead}, which the movers list calls when it has
+ * actually been shown to the reader (its tile visible, the document visible).
+ */
+let pageVisit: WallCursor | null = null
+
+/** This page load's anchor — resolved on first use, then fixed. */
+export function wallVisitForPage(
+  storage: Pick<Storage, 'getItem'> | null = defaultStorage(),
+  nowMs: number = Date.now(),
+): WallCursor {
+  if (!pageVisit) pageVisit = resolveWallCursor(loadWallCursor(storage), nowMs)
+  return pageVisit
+}
+
+/** Tests only: forget this page load's anchor. */
+export function __resetWallVisit(): void {
+  pageVisit = null
+}
+
+/**
+ * Record that the reader has SEEN the movers as of `serverNow` — the next
+ * page load diffs from here. Refused (returns false) when the surface was
+ * not on screen: a background tile's fetch is not a read. Never moves the
+ * stored cursor backwards ({@link storeWallCursor}).
+ */
+export function markWallRead(
+  serverNow: string | null | undefined,
+  seen: { tileVisible: boolean; documentVisible: boolean },
+  storage: Pick<Storage, 'getItem' | 'setItem'> | null = defaultStorage(),
+): boolean {
+  if (!serverNow || !seen.tileVisible || !seen.documentVisible) return false
+  storeWallCursor(serverNow, storage)
+  return true
+}
+
 /** The `/v3/since` request path for a cursor (relative to the api client's
  *  `/api/v1` base). */
 export function sincePath(cursor: string): string {
@@ -233,10 +296,11 @@ export function bandDirectionTone(direction: string): MoverTone {
 }
 
 /** U-2 — the movers list must read as prose, not plumbing: a band change's
- *  `target_id` (`country_g20_br`) humanizes to its country name (`Brazil`)
- *  via the shared `lib/deskNames.ts` resolver, same one the Desks nav group
- *  and the Scorecard use, so a desk never disagrees with itself across
- *  surfaces. Total over any target id (never renders raw snake_case). */
+ *  `target_id` reads as the subject's DECLARED name via the shared
+ *  `lib/deskNames.ts` resolver (UI-B2: off the subject's descriptor, never a
+ *  regex over the id), the same one the rail and the Scorecard use, so a
+ *  subject never disagrees with itself across surfaces. Total over any target
+ *  id (never renders raw snake_case). */
 export function bandChangeDeskLabel(targetId: string): string {
   return humanizeId(targetId)
 }

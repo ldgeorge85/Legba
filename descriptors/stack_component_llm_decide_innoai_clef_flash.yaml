@@ -1,0 +1,52 @@
+# THE DECISION MODEL ON THE BOX — clef-flash behind the innoai gateway
+# (kind: llm_provider, wire: POST {api_endpoint}/decide).
+#
+# W11-F108. clef-flash is not a chat model: it answers TYPED questions about a
+# free-text state ({"state", "questions": {id: {type: choice, instructions,
+# criteria}}} → {"answers": {id: {choice, confidence, probabilities}}}), in
+# ≈ 0.3 s, contract verified live 2026-10-23. Its first job is a SHADOW: the
+# claim_watch bearing gate (`bearing_shadow_ref`) asks it the same per-edge
+# yes/no the gate asks its chat judge, and the pair lands in
+# `decision_shadow_ledger` (migration 0238) so agreement and calibration can be
+# measured before it decides anything. It moves no edge.
+#
+# NAMING IS LOAD-BEARING: the id contains `.decide.` so `infer_llm_subprovider`
+# routes it to the decision client (src/legba/data/stack/llm/decide.py — Bearer
+# auth, /v1/decide, typed errors, max_concurrent), never to the chat handler.
+# FAMILY: `cloudflare_clef`, declared in GRADER_FAMILY_BY_COMPONENT
+# (src/legba/runtime/external_grader_route.py); the schema is extra=forbid.
+# PRICE: our own box behind the gateway — $0 per token.
+id: llm.decide.innoai_clef_flash
+name: clef-flash via the innoai gateway (decision model; bearing-gate shadow)
+schema_uri: legba/stack/llm_provider/1.0.0
+version: "0000000000000000"
+state: draft
+owner: lewis@local
+config:
+  api_endpoint:
+    factory_kind: text
+    raw: https://api.innoai.net/v1
+  # VAULT REF — the same gateway token every innoai component uses (registered
+  # once by scripts/cutover_innoai.py); never the plaintext.
+  api_key:
+    factory_kind: secret
+    raw: llm.innoai.api_key
+  model_name:
+    factory_kind: text
+    raw: clef-flash
+  # Required by the schema; NEVER sent — a decision call generates no tokens.
+  max_tokens:
+    factory_kind: number
+    raw: 1
+  timeout_seconds:
+    factory_kind: number
+    raw: 30
+  tier:
+    factory_kind: dropdown_static
+    raw: cheap
+    options: [primary, fallback, cheap]
+  # Client-side cap on in-flight calls from ONE process — the gate's own cap,
+  # since the shadow mirrors the gate's ≈ 32k calls a week.
+  max_concurrent:
+    factory_kind: number
+    raw: 8

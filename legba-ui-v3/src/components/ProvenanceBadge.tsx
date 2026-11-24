@@ -46,7 +46,7 @@ export function ProvenanceStateBadge({
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-0.5 rounded px-1 text-[10px] font-medium uppercase tracking-wide',
+        'inline-flex items-center gap-0.5 rounded px-1 text-label font-medium uppercase tracking-wide',
         'border border-line bg-surf-1',
         TONE_CLASS[meta.tone],
         className,

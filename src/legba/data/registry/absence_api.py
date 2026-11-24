@@ -25,14 +25,21 @@ THE CLOSED VOCABULARY (:data:`ABSENCE_KINDS`, one line each on the wire under
     cadence budget or failing. Two producers reach this: a roster source whose
     in-scope production is over budget AND whose polling is unhealthy, and a
     bounded unit whose latest read is older than its own cadence with grace.
-  * ``searched_found_nothing`` — the external audit searched and nothing in the
-    results decided the claim (``external_grades.verdict = 'NOT_FOUND'``). The
-    proof carries WHAT was searched: provider, status, liveness, result count.
+  * ``searched_found_nothing`` — the external audit searched, the search plane
+    ANSWERED (not degraded by :func:`.search_health.read_search_health`), and
+    nothing in the results decided the claim (``external_grades.verdict =
+    'NOT_FOUND'``). The proof carries WHAT was searched: provider, status,
+    liveness, result count, and the engines that answered and failed.
   * ``search_failed`` — the search itself did not answer: the rung was
-    unreachable, blocked by robots, or over budget
-    (``verdict = 'UNCHECKED'`` with its recorded ``unchecked_reason``). NEVER
-    conflated with "nothing found" — "we looked and saw nothing" and "we could
-    not look" are different facts about the world and about us.
+    unreachable, blocked by robots, or over budget (``verdict = 'UNCHECKED'``
+    with its recorded ``unchecked_reason``) — OR (X1/B5, W11-F15) it ran
+    DEGRADED: a NOT_FOUND whose recorded search health fails the rule (engines
+    lost at or above the threshold, or zero results with an engine error, or a
+    pre-health row the provider flagged degraded) is a search that could not
+    look properly, never "nothing found". NEVER conflated with "nothing found"
+    — "we looked and saw nothing" and "we could not look" are different facts
+    about the world and about us. Applied at READ time, so every stored grade
+    is typed by the current rule with no retrofit.
   * ``below_floor`` — evidence exists and did not clear the floor: the banded
     scorecard SAW this dimension and refused to band it
     (``band = 'insufficient-evidence'``). ``reason = 'no-finding'`` is
@@ -56,6 +63,15 @@ THE CLOSED VOCABULARY (:data:`ABSENCE_KINDS`, one line each on the wire under
     names is not this kind either: it goes to ``not_measured`` naming which
     desks the holdings do cover, because a gap in a holding that does not
     exist is not an absence this platform can type.
+  * ``carried_unsupported`` (W11-F14) — the unit HAS a current read, and the
+    status it states is carried rather than evidenced: none of the read's own
+    indicators triggered (or, for a level-shaped one, was observed at its level
+    on a citation — X4 LEVEL), and the newest read of that unit on this desk
+    whose indicators did is older than N of the unit's cadence windows
+    (``legba.data.carried_state``, ``LEGBA_CARRY_EXPIRY_WINDOWS``). Its proof
+    is that last evidencing read and its age; a unit with no indicators or no
+    declared cooldown is not measured. The composition's coverage ledger names
+    the same verdict off the same rule.
 
 EVERY ABSENCE IS STAMPED IN TIME
 --------------------------------
@@ -117,9 +133,13 @@ from typing import Any, Iterable, Mapping, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
+from .. import carried_state as _carried
+from .. import profile_projection as _projection
+from .. import rosters as _rosters
 from . import source_freshness
 from .api import RegistryAPIDeps, require_bearer
 from .collections_coverage import history_gap_items, read_coverage
+from .search_health import read_search_health
 
 logger = logging.getLogger(__name__)
 
@@ -144,12 +164,13 @@ ABSENCE_KINDS: dict[str, str] = {
         "budget or failing"
     ),
     "searched_found_nothing": (
-        "the external audit searched and nothing in the results decided the "
-        "claim; the proof carries what was searched"
+        "the external audit searched, the search plane answered without "
+        "degradation, and nothing in the results decided the claim; the proof "
+        "carries what was searched"
     ),
     "search_failed": (
-        "the search itself did not answer — unreachable, blocked, or over "
-        "budget; never the same as finding nothing"
+        "the search itself did not answer — unreachable, blocked, over "
+        "budget, or degraded (engines lost); never the same as finding nothing"
     ),
     "below_floor": (
         "evidence exists and did not clear the floor: the banded scorecard saw "
@@ -177,6 +198,14 @@ ABSENCE_KINDS: dict[str, str] = {
         "and the observations table does not hold it; the proof is the load "
         "that should have written it"
     ),
+    # W11-F14 — the NINTH kind, and the only one about a read that EXISTS: the
+    # unit spoke, but the status it states has not been re-evidenced inside N
+    # of its own windows. Never a band (`legba.data.carried_state`).
+    "carried_unsupported": (
+        "the unit's latest read still states a status none of its indicators "
+        "re-evidenced, and its last read that did is older than N of its own "
+        "cadence windows; the proof is that last evidencing read"
+    ),
 }
 
 #: The nine bounded reasoning units (docs/ANALYSIS.md §4.1), in the display
@@ -187,17 +216,10 @@ ABSENCE_KINDS: dict[str, str] = {
 #: two lists live in two languages and cannot share a literal, so
 #: ``tests/data_pkg/test_absence_api.py`` PARSES the TypeScript and fails on
 #: drift in either direction — the unit ids, and the grace multiple below.
-BOUNDED_UNITS: tuple[str, ...] = (
-    "leadership_transition",
-    "energy_security",
-    "escalation",
-    "narrative_coordination",
-    "internal_stability",
-    "military_posture",
-    "economic_coercion",
-    "proliferation_watch",
-    "disruption_status",
-)
+#:
+#: ROSTER-1: the profile's ``rosters.units`` (``rosters.unit_roster()``), read
+#: once at import; the strip reads the same roster from ``profile_ui.json``.
+BOUNDED_UNITS: tuple[str, ...] = _rosters.unit_roster()
 
 #: Grace over a unit's cadence interval before its latest read reads silent.
 #: Equal to ``GAP_STRIP_GRACE_MULTIPLE`` in ``gapStripModel.ts`` (pinned by the
@@ -212,6 +234,18 @@ BANDING_ANALYST_ID = "scorecard_producer"
 #: The analyst whose run produces the external grades — the measurer behind
 #: ``searched_found_nothing`` and ``search_failed``.
 AUDIT_ANALYST_ID = "standing_auditor"
+
+#: VIEW-1 — the scope resolution as today's constants. With
+#: ``LEGBA_PROFILE_PROJECTION`` on and the profile's plane fresh, the route
+#: reads the same four from the projection's ``scope`` table instead
+#: (``profile_projection.scope_resolution``); off, stale, empty or unreadable,
+#: these — and off issues no query at all.
+_SCOPE_CONSTANTS = _projection.ScopeTable(
+    units=BOUNDED_UNITS,
+    banding_analyst=BANDING_ANALYST_ID,
+    audit_analyst=AUDIT_ANALYST_ID,
+    unit_grace_multiple=UNIT_GRACE_MULTIPLE,
+)
 
 #: The scorecard reason that is NOT a floor failure (see the banner): the
 #: card's own window saw no finding, which the unit kinds answer properly.
@@ -248,6 +282,7 @@ _AUDIT_SQL = """
 SELECT claim_key, claim_text, analyst_id, verdict, unchecked_reason, graded_at,
        graded_output_id::text AS graded_output_id,
        search_provider, search_status, search_liveness, search_degraded,
+       search_health,
        coalesce(array_length(source_urls, 1), 0) AS n_urls
   FROM public.external_grades
  WHERE target_id = $1
@@ -478,18 +513,34 @@ def schedule_stamp(
 
 def audit_item(row: Any, *, cadence_raw: Optional[str], now: datetime) -> AbsenceItem:
     """One external grade as an absence — ``searched_found_nothing`` when the
-    search answered and decided nothing, ``search_failed`` when it did not
-    answer at all. The proof names the search plane's own self-report, because
-    a degraded search and a live one that found nothing are different facts.
+    search ANSWERED and decided nothing, ``search_failed`` when it did not
+    answer at all OR answered degraded.
+
+    THE KIND RULE (X1/B5, W11-F15): a NOT_FOUND is "found nothing" only when the
+    search that produced it passes :func:`.search_health.read_search_health` —
+    the one rule the search-health route and the watchdog page read too. A
+    degraded NOT_FOUND is a failed search, and its proof names the engines that
+    were lost; ``DEGRADED`` appears in a proof only when the rule says so.
     """
     provider = row["search_provider"] or "unrecorded provider"
     liveness = row["search_liveness"] or "unverified"
     search_status = row["search_status"] or "unrecorded"
-    degraded = " DEGRADED;" if row["search_degraded"] else ""
+    health = read_search_health(
+        search_degraded=row["search_degraded"], health=row["search_health"],
+    )
     n_urls = int(row["n_urls"] or 0)
     graded_at = _parse(row["graded_at"])
-    found_nothing = row["verdict"] == "NOT_FOUND"
-    failure = str(row["unchecked_reason"] or "").strip() or "reason not recorded"
+    found_nothing = row["verdict"] == "NOT_FOUND" and not health.degraded
+    unchecked = str(row["unchecked_reason"] or "").strip()
+    failure = unchecked or (
+        health.describe() if health.degraded else "reason not recorded"
+    )
+    if found_nothing:
+        tail = ", none decisive"
+    elif unchecked or not health.degraded:
+        tail = f"; {failure}"
+    else:  # a degraded NOT_FOUND — the health fragment above already says why
+        tail = ", none decisive, on a degraded search: not an absence of evidence"
     expires_at, stale = schedule_stamp(
         cadence_raw=cadence_raw, as_of=graded_at, now=now
     )
@@ -513,9 +564,8 @@ def audit_item(row: Any, *, cadence_raw: Optional[str], now: datetime) -> Absenc
         proof=AbsenceProof(
             what_was_checked=(
                 f"open-web search via {provider} (status={search_status}, "
-                f"liveness={liveness};{degraded} {n_urls} result(s) returned"
-                + (", none decisive" if found_nothing else f"; {failure}")
-                + f") against the {row['analyst_id']} read"
+                f"liveness={liveness}; {health.describe()}; {n_urls} "
+                f"result(s) returned{tail}) against the {row['analyst_id']} read"
             ),
             checked_at=_iso(graded_at),
             ref=row["graded_output_id"],
@@ -632,6 +682,7 @@ def unit_item(
     card_id: Optional[str],
     card_produced_at: Optional[datetime],
     now: datetime,
+    grace_multiple: float = UNIT_GRACE_MULTIPLE,
 ) -> Optional[AbsenceItem]:
     """One unit's absence, or ``None`` when the unit is current.
 
@@ -677,7 +728,7 @@ def unit_item(
         # either. The unit is not reported silent against a guessed budget.
         return None
     age_minutes = (now - latest_at).total_seconds() / 60.0
-    threshold = interval_minutes * UNIT_GRACE_MULTIPLE
+    threshold = interval_minutes * grace_multiple
     if age_minutes <= threshold:
         return None
     expires_at, stale = schedule_stamp(
@@ -690,7 +741,7 @@ def unit_item(
         reason=(
             f"the latest read is {age_minutes / 60.0:.1f}h old, past this "
             f"unit's own {interval_minutes / 60.0:.1f}h cadence "
-            f"(×{UNIT_GRACE_MULTIPLE} grace = {threshold / 60.0:.1f}h)"
+            f"(×{grace_multiple} grace = {threshold / 60.0:.1f}h)"
         ),
         as_of=_iso(latest_at),
         as_of_basis="this unit's last run for this desk",
@@ -704,6 +755,39 @@ def unit_item(
             ),
             checked_at=_iso(latest_at),
             ref=latest_id,
+            ref_kind="finding",
+        ),
+    )
+
+
+def carried_item(
+    verdict: Mapping[str, Any], *, cadence_raw: Optional[str], now: datetime
+) -> AbsenceItem:
+    """One ``carried_unsupported`` verdict (``carried_state.carry_verdict``)
+    as an absence. ``as_of`` is the unit's latest read — the run that carried
+    the status — and it expires at that unit's next scheduled run."""
+    head_at = _parse(verdict.get("head_produced_at"))
+    expires_at, stale = schedule_stamp(cadence_raw=cadence_raw, as_of=head_at, now=now)
+    ev_id = verdict.get("last_evidence_id")
+    return AbsenceItem(
+        kind=_carried.CARRIED_UNSUPPORTED,
+        subject=str(verdict.get("unit") or ""),
+        since=verdict.get("last_evidence_at"),
+        window=None if ev_id else f"no evidencing read in {verdict.get('lookback_days')}d",
+        reason=_carried.verdict_sentence(verdict),
+        as_of=_iso(head_at),
+        as_of_basis="this unit's latest read for this desk",
+        expires_at=expires_at,
+        stale=stale,
+        proof=AbsenceProof(
+            what_was_checked=(
+                f"the indicators of the latest read of '{verdict.get('unit')}' on "
+                "this desk (none triggered or observed at its level) and the newest "
+                f"read of it here whose indicators did, against {verdict.get('windows'):g} × its "
+                f"{verdict.get('cadence_h')} h cooldown"
+            ),
+            checked_at=_iso(head_at),
+            ref=str(ev_id) if ev_id else verdict.get("head_id"),
             ref_kind="finding",
         ),
     )
@@ -848,9 +932,10 @@ async def _audit_kinds(
     cap: int,
     cadence: Mapping[str, Optional[str]],
     now: datetime,
+    audit_analyst: str = AUDIT_ANALYST_ID,
 ) -> list[AbsenceItem]:
     rows = await conn.fetch(_AUDIT_SQL, target, cutoff, cap)
-    schedule = cadence.get(AUDIT_ANALYST_ID)
+    schedule = cadence.get(audit_analyst)
     return [audit_item(r, cadence_raw=schedule, now=now) for r in rows]
 
 
@@ -860,6 +945,7 @@ async def _below_floor(
     cadence: Mapping[str, Optional[str]],
     now: datetime,
     not_measured: list[str],
+    banding_analyst: str = BANDING_ANALYST_ID,
 ) -> list[AbsenceItem]:
     if card is None:
         not_measured.append(
@@ -875,7 +961,7 @@ async def _below_floor(
         card_id=card["id"],
         card_produced_at=_parse(card["produced_at"]),
         dimensions=bands.get("dimensions"),
-        cadence_raw=cadence.get(BANDING_ANALYST_ID),
+        cadence_raw=cadence.get(banding_analyst),
         now=now,
     )[:cap]
 
@@ -892,15 +978,17 @@ async def _unit_kinds(
     card: Optional[Any],
     cadence: Mapping[str, Optional[str]],
     now: datetime,
+    scope_table: _projection.ScopeTable = _SCOPE_CONSTANTS,
 ) -> list[AbsenceItem]:
+    units = scope_table.units
     latest = {
         r["analyst_id"]: r
-        for r in await conn.fetch(_UNIT_LATEST_SQL, target, list(BOUNDED_UNITS))
+        for r in await conn.fetch(_UNIT_LATEST_SQL, target, list(units))
     }
     card_id = card["id"] if card is not None else None
     card_at = _parse(card["produced_at"]) if card is not None else None
     out: list[AbsenceItem] = []
-    for unit in BOUNDED_UNITS:
+    for unit in units:
         row = latest.get(unit)
         cadence_raw = cadence.get(unit)
         item = unit_item(
@@ -912,10 +1000,28 @@ async def _unit_kinds(
             card_id=card_id,
             card_produced_at=card_at,
             now=now,
+            grace_multiple=scope_table.unit_grace_multiple,
         )
         if item is not None:
             out.append(item)
     return out[:cap]
+
+
+async def _carried_kinds(
+    conn: Any,
+    target: str,
+    cap: int,
+    cadence: Mapping[str, Optional[str]],
+    now: datetime,
+    scope_table: _projection.ScopeTable = _SCOPE_CONSTANTS,
+) -> list[AbsenceItem]:
+    verdicts = await _carried.unit_carried_verdicts(
+        conn, target=target, units=list(scope_table.units), now=now
+    )
+    return [
+        carried_item(v, cadence_raw=cadence.get(str(v.get("unit"))), now=now)
+        for v in verdicts
+    ][:cap]
 
 
 async def _source_kinds(
@@ -1018,6 +1124,12 @@ async def read_absences(
     absences: list[AbsenceItem] = []
     not_measured: list[str] = []
 
+    # VIEW-1 — the ONE flag-guarded read: the scope resolution (the units this
+    # route checks, the banding and audit analysts, the unit grace) from the
+    # profile projection's `scope` table when LEGBA_PROFILE_PROJECTION is on
+    # and the plane is fresh; otherwise `_SCOPE_CONSTANTS`. Never raises.
+    scope_table = await _projection.scope_resolution(conn, default=_SCOPE_CONSTANTS, now=now)
+
     # The measuring analysts' own cadences — one read, shared by every kind
     # that stamps an `expires_at`. A failure here degrades the STAMPS (no
     # schedule ⇒ no expiry, never a guessed one), not the absences, so it is
@@ -1028,7 +1140,8 @@ async def read_absences(
             r["descriptor_id"]: r["schedule"]
             for r in await conn.fetch(
                 _ANALYST_CADENCE_SQL,
-                list(BOUNDED_UNITS) + [BANDING_ANALYST_ID, AUDIT_ANALYST_ID],
+                list(scope_table.units)
+                + [scope_table.banding_analyst, scope_table.audit_analyst],
             )
         }
     except Exception as exc:  # noqa: BLE001
@@ -1046,7 +1159,10 @@ async def read_absences(
 
     try:
         absences.extend(
-            await _audit_kinds(conn, target, cutoff, limit_per_kind, cadence, now)
+            await _audit_kinds(
+                conn, target, cutoff, limit_per_kind, cadence, now,
+                audit_analyst=scope_table.audit_analyst,
+            )
         )
     except Exception as exc:  # noqa: BLE001 — name it, never fake it
         not_measured.append(
@@ -1057,7 +1173,10 @@ async def read_absences(
     if card_readable:
         try:
             absences.extend(
-                await _below_floor(card, limit_per_kind, cadence, now, not_measured)
+                await _below_floor(
+                    card, limit_per_kind, cadence, now, not_measured,
+                    banding_analyst=scope_table.banding_analyst,
+                )
             )
         except Exception as exc:  # noqa: BLE001
             not_measured.append(
@@ -1071,7 +1190,10 @@ async def read_absences(
         )
     try:
         absences.extend(
-            await _unit_kinds(conn, target, limit_per_kind, card, cadence, now)
+            await _unit_kinds(
+                conn, target, limit_per_kind, card, cadence, now,
+                scope_table=scope_table,
+            )
         )
     except Exception as exc:  # noqa: BLE001
         not_measured.append(
@@ -1080,6 +1202,16 @@ async def read_absences(
                 "the unit reads for this desk",
                 exc,
             )
+        )
+    try:
+        absences.extend(
+            await _carried_kinds(
+                conn, target, limit_per_kind, cadence, now, scope_table=scope_table
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        not_measured.append(
+            _unreadable(_carried.CARRIED_UNSUPPORTED, "the unit reads' indicators", exc)
         )
     try:
         # 7g-2 — HISTORY_GAP. Composed off the SAME reader the era coverage
@@ -1211,6 +1343,7 @@ __all__ = [
     "audit_item",
     "below_floor_items",
     "build_absence_router",
+    "carried_item",
     "poll_health",
     "read_absences",
     "schedule_stamp",

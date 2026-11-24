@@ -31,6 +31,8 @@ import {
 } from 'recharts'
 import { PanelChrome } from '@/components/PanelChrome'
 import { apiGet, apiPost } from '@/lib/api'
+import { drive } from '@/lib/applyAction'
+import { bridgeActions } from '@/lib/commands'
 import type { PanelProps } from '@/types'
 
 // The backend derives candidate `state` from `promotion_gate`; a promoted
@@ -76,31 +78,14 @@ interface OptimizerReviewResult {
 type StateFilter = 'pending' | 'rejected' | 'all'
 
 /**
- * Cross-panel deep-link contract for the Prompt-Module Diff panel.
- *
- * `dispatchEvent` alone is fire-and-forget: if the diff panel is NOT already
- * mounted (the common case — an operator clicks "view diff" before that panel
- * has ever been opened) the event lands with no listener and the request is
- * silently lost, so the panel opens empty. We therefore ALSO stash the
- * requested candidate on `window` as a durable, replayable "pending" slot,
- * which `OptimizerDiff` drains on mount — the first open then loads the right
- * candidate even though it missed the live event. Both sides share this event
- * name + window key (kept in sync by string literal; the central panel-open
- * bridge that actually materialises the panel is the integrator's — see the
- * central-changes note).
- */
-const OPEN_DIFF_EVENT = 'legba:open-optimizer-diff'
-const PENDING_DIFF_KEY = '__legbaPendingOptimizerDiff'
-
-/**
- * Fire the cross-panel deep-link AND record it as the pending request so the
- * diff panel can pick it up on first mount (see {@link OPEN_DIFF_EVENT}).
+ * Open the Prompt-Module Diff drill on one candidate — an `open_panel` drive
+ * action carrying the candidate id (UI-B1/shell). The DOM event and the
+ * `window` park it replaced are retired: the executor writes the id to
+ * `state/panelParams` before it opens the tile, so the FIRST open (no diff tile
+ * mounted yet) and the already-open case both land on this candidate.
  */
 function requestOptimizerDiff(candidateId: string) {
-  ;(window as unknown as Record<string, string>)[PENDING_DIFF_KEY] = candidateId
-  window.dispatchEvent(
-    new CustomEvent(OPEN_DIFF_EVENT, { detail: { candidate_id: candidateId } }),
-  )
+  drive(bridgeActions.optimizerDiff(candidateId))
 }
 
 /**

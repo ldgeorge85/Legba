@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.aawsat.english": {
+      "source": "source_aawsat.yaml",
+      "state": "draft"
+    }
+  }
+}

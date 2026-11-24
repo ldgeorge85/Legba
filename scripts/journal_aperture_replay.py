@@ -564,7 +564,7 @@ class JudgeLLM:
         self.calls = 0
 
     async def chat_complete(
-        self, messages, *, max_tokens=16384, temperature=0.0, system=None, **kw
+        self, messages, *, max_tokens=16384, temperature=1.0, system=None, **kw
     ):
         self.calls += 1
         wire = ([{"role": "system", "content": system}] if system else []) + [

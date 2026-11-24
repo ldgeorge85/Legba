@@ -29,6 +29,28 @@ export function stateOf(q: { isLoading: boolean; isError: boolean }): QueryState
   return 'ready'
 }
 
+/** X1/D1 — what a band's count reads as before its routes have answered:
+ *  `—` while reading, `unavailable` when the read failed (docs/UI.md, the
+ *  shell's rule: "a count not read yet is `—` … neither is ever `0`"). */
+export const COUNT_PENDING = '—'
+export const COUNT_UNAVAILABLE = 'unavailable'
+
+/**
+ * A band's headline count, or null when it has not been read. The Morning
+ * Read printed "0 across 0 desks · 0 verified · 0 claims flagged" for eleven
+ * seconds on every landing (review D, 2026-10-08) because each band reduced
+ * over an empty list while its query was still in flight. A zero is only a
+ * zero once the band is READY.
+ */
+export function bandCount(state: QueryState, n: number): number | null {
+  return state === 'ready' ? n : null
+}
+
+/** The words a band head and the rail print for a count that is not a number yet. */
+export function pendingCountText(state: QueryState): string {
+  return state === 'error' ? COUNT_UNAVAILABLE : COUNT_PENDING
+}
+
 /** An honest state line — loading, failed, or nothing to report. */
 export function StateLine({
   children,
@@ -59,25 +81,34 @@ export interface BandFrameProps {
   id: BandId
   label: string
   question: string
-  /** The band's own headline count — rendered in the head and on the rail. */
-  count: number
+  /** The band's own headline count — rendered in the head and on the rail.
+   *  Null until the band's routes have answered ({@link bandCount}). */
+  count: number | null
+  /** The head's note. Read only when `count` is a number: a band that has
+   *  not been read prints {@link pendingCountText} instead, never a sentence
+   *  of zeros. */
   note: string
+  /** The band's read state — decides `—` (reading) vs `unavailable`. */
+  state: QueryState
   children: React.ReactNode
 }
 
-export function BandFrame({ id, label, question, count, note, children }: BandFrameProps) {
+export function BandFrame({ id, label, question, count, note, state, children }: BandFrameProps) {
   return (
     <section
       id={bandTestId(id)}
       className="read-col mb-7"
       data-band={id}
-      data-count={count}
+      data-count={count ?? undefined}
+      data-count-state={count === null ? (state === 'error' ? 'unavailable' : 'pending') : 'read'}
       data-testid={bandTestId(id)}
     >
       <div className="read-band-head">
         <h2>{label}</h2>
         <div className="read-rule" />
-        <span className="read-band-note">{note}</span>
+        <span className="read-band-note" data-testid={`${bandTestId(id)}-note`}>
+          {count === null ? pendingCountText(state) : note}
+        </span>
       </div>
       <p className="mb-2 text-xs italic leading-relaxed text-ink-3">{question}</p>
       {children}

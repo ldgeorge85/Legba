@@ -437,6 +437,14 @@ DEFER_MAX_SECONDS = 3600.0
 #: signal that this is no longer a transient the caller can wait out.
 DEFER_ESCALATE_AFTER = 5
 
+#: How long a provider that failed for a reason only an OPERATOR can fix
+#: (credits exhausted, key rejected) stays out of the ladder. Six hours: far
+#: longer than the backoff ceiling, because waiting an hour cannot add credits,
+#: yet short enough that a topped-up key is picked up inside the working day
+#: without a restart. The window lives on the process-wide cache, so a runtime
+#: restart or ``SearchLivenessCache.reset()`` clears it at once.
+DEFER_OPERATOR_HOLD_SECONDS = 6 * 3600.0
+
 
 @dataclass(frozen=True)
 class DeferralAdvice:
@@ -513,8 +521,15 @@ def compute_deferral(
     cache: SearchLivenessCache | None = None,
     detail: str = "",
     now: datetime | None = None,
+    operator_required: bool = False,
 ) -> DeferralAdvice:
     """Advance the per-provider backoff ladder and return the advice.
+
+    ``operator_required=True`` is for a failure no amount of waiting fixes and
+    only an operator can (a paid provider out of credits, a rejected key): the
+    advice carries ``escalate=True`` from the FIRST failure, and the window
+    held on the cache is :data:`DEFER_OPERATOR_HOLD_SECONDS`, so a laddered
+    run skips the rung instead of re-asking a provider that cannot answer.
 
     Exponential from :data:`DEFER_BASE_SECONDS`, capped at
     :data:`DEFER_MAX_SECONDS`, escalating after
@@ -524,6 +539,8 @@ def compute_deferral(
     cache = cache if cache is not None else DEFAULT_LIVENESS_CACHE
     streak = cache.record_failure(provider_key, reason)
     delay = min(DEFER_BASE_SECONDS * (2 ** (streak - 1)), DEFER_MAX_SECONDS)
+    if operator_required:
+        delay = DEFER_OPERATOR_HOLD_SECONDS
     moment = now or datetime.now(tz=timezone.utc)
     not_before = moment + timedelta(seconds=delay)
     # Hold the window on the cache as well as handing it to the caller, so the
@@ -536,7 +553,7 @@ def compute_deferral(
         retry_after_seconds=delay,
         not_before=not_before,
         consecutive_failures=streak,
-        escalate=streak >= DEFER_ESCALATE_AFTER,
+        escalate=operator_required or streak >= DEFER_ESCALATE_AFTER,
         detail=detail,
     )
 
@@ -583,6 +600,7 @@ __all__ = [
     "DEFER_BASE_SECONDS",
     "DEFER_ESCALATE_AFTER",
     "DEFER_MAX_SECONDS",
+    "DEFER_OPERATOR_HOLD_SECONDS",
     "DeferralAdvice",
     "SearchLivenessCache",
     "apply_liveness",

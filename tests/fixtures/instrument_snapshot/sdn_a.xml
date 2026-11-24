@@ -1,0 +1,58 @@
+<?xml version="1.0" standalone="yes"?>
+<!-- SPDX-FileCopyrightText: 2026 Lewis George -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- FIXTURE: the OFAC SDN XML SHAPE with FICTIONAL entries (no real party). Snapshot A. -->
+<sdnList xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/XML">
+  <publshInformation>
+    <Publish_Date>10/01/2026</Publish_Date>
+    <Record_Count>4</Record_Count>
+  </publshInformation>
+  <sdnEntry>
+    <uid>1001</uid>
+    <lastName>EXAMPLE SHIPPING ONE LTD</lastName>
+    <sdnType>Entity</sdnType>
+    <programList>
+      <program>EXAMPLE-PROGRAM-A</program>
+    </programList>
+    <addressList>
+      <address>
+        <uid>501</uid>
+        <city>Exampletown</city>
+        <country>Exampleland</country>
+      </address>
+    </addressList>
+  </sdnEntry>
+  <sdnEntry>
+    <uid>1002</uid>
+    <lastName>SAMPLE</lastName>
+    <firstName>Alex</firstName>
+    <sdnType>Individual</sdnType>
+    <programList>
+      <program>EXAMPLE-PROGRAM-B</program>
+    </programList>
+  </sdnEntry>
+  <sdnEntry>
+    <uid>1003</uid>
+    <lastName>PLACEHOLDER TRADING CO</lastName>
+    <sdnType>Entity</sdnType>
+    <programList>
+      <program>EXAMPLE-PROGRAM-A</program>
+    </programList>
+    <akaList>
+      <aka>
+        <uid>701</uid>
+        <type>a.k.a.</type>
+        <category>strong</category>
+        <lastName>PTC</lastName>
+      </aka>
+    </akaList>
+  </sdnEntry>
+  <sdnEntry>
+    <uid>1004</uid>
+    <lastName>DEMO VESSEL</lastName>
+    <sdnType>Vessel</sdnType>
+    <programList>
+      <program>EXAMPLE-PROGRAM-C</program>
+    </programList>
+  </sdnEntry>
+</sdnList>

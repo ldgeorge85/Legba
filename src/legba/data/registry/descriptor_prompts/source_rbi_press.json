@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.rbi.press_releases": {
+      "source": "source_rbi_press.yaml",
+      "state": "draft"
+    }
+  }
+}

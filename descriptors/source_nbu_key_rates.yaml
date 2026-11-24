@@ -1,0 +1,159 @@
+# Roll 84 (2026-11-14) — the National Bank of Ukraine's key rates (the policy
+# rate and the overnight loan and deposit-certificate rates), as a SERIES.
+# Written the way lane I-5 wrote its siblings (source_nbu_exchange_daily.yaml).
+# Ships DRAFT; the reference host walks it to CONFIGURED
+# (descriptors/LIFECYCLE.md), never active — activation is the owner's call.
+# Kind: series_api.
+#
+# WHY: war-economy rates (the source-expansion review's row 5, "add"; I-5
+# wrote the FX half and left this one because its field names were never
+# recorded).
+#
+# THE ENDPOINT. NBU open-data API, /NBUStatService/v1/statdirectory/key with
+# the bare `json` switch (the URL the review recorded, kept verbatim). Checked
+# 2026-11-14 for roll 84 by ONE plain GET (generic client): 200,
+# application/json, a TOP-LEVEL array of 23,963 rows, 6.67 MB — the WHOLE
+# history since 1992 of three series, one row per day per series. Every row
+# has exactly the fields dt, txt, txten, id_api, leveli, parent, freq, tzep,
+# value:
+#   * `dt` — the day, YYYYMMDD (date format `ymd_compact`, added for this
+#     source, eight digits matched exactly);
+#   * `id_api` — the series: KEY_PolicyRate (12,562 rows), KEY_RateOvernightLoans
+#     (6,496), KEY_RateOvernightCD (4,905); `txten` its English name;
+#   * `value` — per cent per year, a JSON number;
+#   * `parent` Key_Rates_NBU, `freq` D, `leveli` 1, `tzep` T90 on every row.
+# THE DATE FILTER the review asked for is NOT declared: no since parameter
+# was verified for this endpoint (one GET was allowed and spent on the shape),
+# so each poll reads the whole history (~6.7 MB, once a day) and the reader
+# keeps only the re-read window (lag + revision days); the observation sink
+# writes only what changed. Adding a verified date filter is a follow-up.
+#
+# SUBJECT. Ukraine (`UA`, subject_kind country). UNIT: percent (per year).
+# READER: series_change/2026-11.3 proposes `nbu.key.*=policy_rate` (every
+# change is an event); registering it is a roll step.
+#
+# robots.txt allows the path for `*`. Class: official (a central bank).
+
+identity:
+  id: source.nbu.key_rates
+  name: National Bank of Ukraine — key policy rate and overnight rates, daily (series)
+  kind: series_api
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: roll84_integration
+  created: "2026-11-14T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [UA]
+  languages: [uk, en]
+  tags: [central_banks, monetary_policy, interest_rates, markets, series, ukraine]
+  source_class: official
+  license_class: open_gov_attribution   # open data, commercial use allowed, source reference mandatory
+  attribution: "Source: National Bank of Ukraine open data (bank.gov.ua), key rates"
+  access_class: public
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "41 14 * * *"            # daily, after the NBU's day
+  cooldown_seconds: 3600
+  jitter_seconds: 120
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://bank.gov.ua/NBUStatService/v1/statdirectory/key?json"
+  format:
+    factory_kind: text
+    raw: json
+  rows_path:
+    factory_kind: text
+    raw: "$"                      # the document root is the row array
+  date_field:
+    factory_kind: text
+    raw: dt
+  date_format:
+    factory_kind: text
+    raw: ymd_compact
+  provenance_fields:
+    factory_kind: list
+    raw: [id_api]
+  outputs:
+    factory_kind: list
+    raw:
+      - series: nbu.key.policy_rate
+        value_field: value
+        subject: UA
+        where: [{field: id_api, values: [KEY_PolicyRate]}]
+        unit: percent
+        period: day
+        subject_kind: country
+        methodology_version: nbu-statdirectory-key/1
+      - series: nbu.key.overnight_loan_rate
+        value_field: value
+        subject: UA
+        where: [{field: id_api, values: [KEY_RateOvernightLoans]}]
+        unit: percent
+        period: day
+        subject_kind: country
+        methodology_version: nbu-statdirectory-key/1
+      - series: nbu.key.overnight_cd_rate
+        value_field: value
+        subject: UA
+        where: [{field: id_api, values: [KEY_RateOvernightCD]}]
+        unit: percent
+        period: day
+        subject_kind: country
+        methodology_version: nbu-statdirectory-key/1
+  lag_days:
+    factory_kind: number
+    raw: 1
+  revision_days:
+    factory_kind: number
+    raw: 7
+  backfill_days:
+    factory_kind: number
+    raw: 30
+  timeout_seconds:
+    factory_kind: number
+    raw: 90
+
+sink:
+  family: observation
+  config:
+    series:
+      - id: nbu.key.policy_rate
+        field: value
+        unit: percent
+        period: day
+        subject_kind: country
+        methodology_version: nbu-statdirectory-key/1
+        description: "NBU key policy rate, per cent per year, in force on the day (subject UA)"
+      - id: nbu.key.overnight_loan_rate
+        field: value
+        unit: percent
+        period: day
+        subject_kind: country
+        methodology_version: nbu-statdirectory-key/1
+        description: "NBU rate on overnight loans, per cent per year, in force on the day (subject UA)"
+      - id: nbu.key.overnight_cd_rate
+        field: value
+        unit: percent
+        period: day
+        subject_kind: country
+        methodology_version: nbu-statdirectory-key/1
+        description: "NBU rate on overnight certificates of deposit, per cent per year, in force on the day (subject UA)"
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  media: reference
+
+deps: {}
+
+subscription_policy: open

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.cyberscoop.news": {
+      "source": "source_cyberscoop.yaml",
+      "state": "draft"
+    }
+  }
+}

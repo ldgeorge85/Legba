@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:scorecard_producer": {
+      "source": "analyst_scorecard_producer.yaml",
+      "state": "active"
+    }
+  }
+}

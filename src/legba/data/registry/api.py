@@ -15,9 +15,10 @@ Design notes:
     composed with sibling routers — the `server.py` launcher wires the
     canonical deployment.
 
-  * Auth: a single bearer-token gate via `LEGBA_REGISTRY_API_TOKEN`,
-    FAIL-CLOSED (B-2). Token set → enforced with a constant-time compare.
-    Token unset/empty → every guarded request (HTTP and WS) gets 503
+  * Auth: a bearer-token gate with two principals (X2-B1) — the operator's
+    `LEGBA_REGISTRY_API_TOKEN` and the fleet's `LEGBA_REGISTRY_SERVICE_TOKEN`
+    — FAIL-CLOSED (B-2). A token set → enforced with a constant-time compare.
+    Both unset/empty → every guarded request (HTTP and WS) gets 503
     "service misconfigured", UNLESS `LEGBA_DEV_MODE=1` is explicitly set
     in the environment (development mode: any token, or no token,
     accepted). Real DID-bearer + OAuth2 = Phase 8/10 follow-up per the
@@ -60,9 +61,11 @@ from fastapi import (
     status,
 )
 from fastapi.openapi.docs import get_swagger_ui_html
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
+from ..claim_support import claim_activation_refusal
 from ..nats import NatsStore
+from ..principals import handle_for_actor
 from ..schemas import (
     ActionPack,
     AnalystDescriptor,
@@ -78,6 +81,7 @@ from .descriptor import (
     Family,
 )
 from .descriptor_families import state_machine_for, terminal_state_for
+from .descriptor_list_weight import DescriptorFields, summary_body
 from .errors import (
     AuditChainError,
     DescriptorNotFound,
@@ -87,6 +91,8 @@ from .errors import (
     UnknownVocabularyValue,
     VersionConflict,
 )
+from ..display_policy import display_payload
+from .display_class import class_for_principal
 from .signing import SigningIdentity, verify_audit_payload
 from .stack import StackValidationError, kind_from_schema_uri
 # K-2 (2026-08-03) — the API KERNEL (bearer gate, deprecation stamp, deps
@@ -99,6 +105,7 @@ from .stack import StackValidationError, kind_from_schema_uri
 # changes. Rewriting those call sites onto ``_deps`` is K-5, operator-gated.
 from ._deps import (  # noqa: F401 — re-exported registry-API kernel
     API_TOKEN_ENV,
+    SERVICE_TOKEN_ENV,
     DEPRECATION_SUNSET_HTTP_DATE,
     DEV_MODE_ENV,
     MISCONFIGURED_AUTH_DETAIL,
@@ -107,6 +114,7 @@ from ._deps import (  # noqa: F401 — re-exported registry-API kernel
     _authorize_ws_token,
     _bearer_from_header,
     _bearer_from_subprotocol,
+    _current_service_token,
     _current_token,
     _dev_mode,
     _get_deps,
@@ -506,6 +514,16 @@ class RollbackBody(BaseModel):
     reason: str | None = None
 
 
+class StackRollbackBody(BaseModel):
+    """W11-F105 — `version` names the target (`target_version`, the
+    descriptor rollback's field, is accepted too); omitted = the previous head."""
+
+    version: str | None = Field(
+        default=None, validation_alias=AliasChoices("version", "target_version"),
+    )
+    reason: str | None = None
+
+
 class RetireBody(BaseModel):
     reason: str | None = None
 
@@ -609,6 +627,24 @@ class VocabularyEntryOut(BaseModel):
     notes: str | None
     aliases: list[str]
     parent: str | None
+
+
+class VocabularyFamilyCount(BaseModel):
+    family: str
+    values: int
+
+
+class VocabularyUnloadedFamily(BaseModel):
+    family: str
+    code: str
+    detail: str
+    rows: int
+
+
+class VocabularyIndexOut(BaseModel):
+    families: list[VocabularyFamilyCount]
+    families_unloaded: list[VocabularyUnloadedFamily]
+    rows_skipped: list[dict[str, Any]]
 
 
 class VocabularyEntryUpdate(BaseModel):
@@ -899,6 +935,10 @@ def build_router(deps: RegistryAPIDeps) -> APIRouter:
             )
         except DescriptorNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        # C-1: a CLAIM source goes active only on a recorded sign-off.
+        refusal = claim_activation_refusal(typed, to_state)
+        if refusal is not None:
+            raise HTTPException(status_code=409, detail=refusal)
         new_identity = typed.identity.model_copy(update={"state": to_state})
         restamped = typed.model_copy(update={"identity": new_identity})
         try:
@@ -980,6 +1020,9 @@ def build_router(deps: RegistryAPIDeps) -> APIRouter:
         descriptor_id: str | None = Query(default=None),
         head_only: bool = Query(default=True),
         limit: int | None = Query(default=None, ge=1, le=1000),
+        # Omitted = the whole body (the machine API); the console's rosters
+        # ask fields=summary by name (``descriptor_list_weight``).
+        fields: DescriptorFields | None = Query(default=None),
         _principal: str = Depends(require_bearer),
         deps_: RegistryAPIDeps = Depends(_get_deps),
     ) -> list[DescriptorRowOut]:
@@ -996,7 +1039,11 @@ def build_router(deps: RegistryAPIDeps) -> APIRouter:
             limit=limit,
         )
         rows = await deps_.descriptor_registry.list(pred)
-        return [DescriptorRowOut.from_row(r) for r in rows]
+        out = [DescriptorRowOut.from_row(r) for r in rows]
+        if fields == "summary":
+            for o in out:
+                o.body = summary_body(o.body)
+        return out
 
     # ------------------------------------------------------------------
     # P-05 — `source` read view (registry.sources) the UI needs.
@@ -1232,6 +1279,28 @@ def build_router(deps: RegistryAPIDeps) -> APIRouter:
         except DescriptorNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except IllegalLifecycleTransition as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _stack_row_out(row)
+
+    @router.post(
+        "/stack/{component_id}/rollback", response_model=StackComponentOut,
+    )
+    async def rollback_stack(
+        component_id: str,
+        body: StackRollbackBody | None = None,
+        actor: str = Depends(require_bearer),
+        deps_: RegistryAPIDeps = Depends(_get_deps),
+    ) -> StackComponentOut:
+        """W11-F105 — re-head a prior version (the previous head by default)."""
+        try:
+            row = await deps_.stack_registry.rollback(
+                component_id, actor,
+                target_version=body.version if body else None,
+                reason=body.reason if body else None,
+            )
+        except DescriptorNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (VersionConflict, IllegalLifecycleTransition) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _stack_row_out(row)
 
@@ -1604,6 +1673,26 @@ def build_router(deps: RegistryAPIDeps) -> APIRouter:
     # Vocabulary
     # ------------------------------------------------------------------
 
+    @router.get("/vocabulary", response_model=VocabularyIndexOut)
+    async def vocabulary_index(
+        _principal: str = Depends(require_bearer),
+        deps_: RegistryAPIDeps = Depends(_get_deps),
+    ) -> VocabularyIndexOut:
+        # What the cache holds, and what its last refresh left out: an
+        # unknown / malformed family is `families_unloaded` (never a failed
+        # refresh); a bad row of a loadable family is `rows_skipped`.
+        cache = deps_.vocabulary_cache
+        return VocabularyIndexOut(
+            families=[
+                VocabularyFamilyCount(family=f, values=len(cache.values(f)))
+                for f in cache.families()
+            ],
+            families_unloaded=[
+                VocabularyUnloadedFamily(**u) for u in cache.families_unloaded
+            ],
+            rows_skipped=list(cache.rows_skipped),
+        )
+
     @router.get("/vocabulary/{family}", response_model=list[VocabularyEntryOut])
     async def list_vocabulary(
         family: str,
@@ -1631,12 +1720,23 @@ def build_router(deps: RegistryAPIDeps) -> APIRouter:
     async def register_vocabulary(
         family: str,
         body: VocabularyEntryIn,
+        profile: str | None = Query(default=None),
         _principal: str = Depends(require_bearer),
         deps_: RegistryAPIDeps = Depends(_get_deps),
     ) -> VocabularyEntryOut:
         # Shape validation: piggy-back on the pydantic VocabularyEntry validator.
-        from ..schemas.vocabulary import VocabularyEntry
+        from ..schemas.vocabulary import FamilyError, VocabularyEntry, validate_family
 
+        # The family gate first, so the refusal carries its code: a platform
+        # family is protected from a profile (`family_protected`), a bare new
+        # name is `family_unknown` (namespace it), `<profile>.<axis>` admitted.
+        try:
+            validate_family(family, profile=profile)
+        except FamilyError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": exc.code, "family": exc.family, "hint": exc.hint},
+            ) from exc
         try:
             VocabularyEntry(
                 family=family,  # type: ignore[arg-type]
@@ -1655,8 +1755,9 @@ def build_router(deps: RegistryAPIDeps) -> APIRouter:
                 row = await conn.fetchrow(
                     """
                     INSERT INTO vocabulary_entries
-                        (family, value, schema_uri, notes, aliases, parent)
-                    VALUES ($1, $2, $3, $4, $5, $6)
+                        (family, value, schema_uri, notes, aliases, parent,
+                         written_by)
+                    VALUES ($1, $2, $3, $4, $5, $6, legba_principal($7))
                     RETURNING id, family, value, schema_uri, introduced,
                               deprecated, notes, aliases, parent
                     """,
@@ -1666,6 +1767,7 @@ def build_router(deps: RegistryAPIDeps) -> APIRouter:
                     body.notes,
                     body.aliases,
                     body.parent,
+                    handle_for_actor(_principal),
                 )
             except Exception as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1716,15 +1818,29 @@ def build_router(deps: RegistryAPIDeps) -> APIRouter:
                 else list(existing["aliases"] or [])
             )
             parent = body.parent if body.parent is not None else existing["parent"]
+            if body.parent is not None:
+                # A changed parent is shape-checked like a registered one
+                # (`<family>:<value>`; the parent's family must be admitted).
+                from ..schemas.vocabulary import VocabularyEntry
+
+                try:
+                    VocabularyEntry(
+                        family=existing["family"], value=existing["value"],
+                        schema_uri="legba/vocabulary/1.0.0",
+                        introduced=existing["introduced"], parent=body.parent,
+                    )
+                except Exception as exc:
+                    raise HTTPException(status_code=422, detail=str(exc)) from exc
             row = await conn.fetchrow(
                 """
                 UPDATE vocabulary_entries
-                SET notes = $2, aliases = $3, parent = $4
+                SET notes = $2, aliases = $3, parent = $4,
+                    written_by = legba_principal($5)
                 WHERE id = $1
                 RETURNING id, family, value, schema_uri, introduced,
                           deprecated, notes, aliases, parent
                 """,
-                uid, notes, aliases, parent,
+                uid, notes, aliases, parent, handle_for_actor(_principal),
             )
         if deps_.nats_store is not None:
             try:
@@ -1753,10 +1869,10 @@ def build_router(deps: RegistryAPIDeps) -> APIRouter:
         async with deps_.descriptor_registry.pg.acquire() as conn:
             row = await conn.fetchrow(
                 "UPDATE vocabulary_entries "
-                "SET deprecated = NOW() "
+                "SET deprecated = NOW(), written_by = legba_principal($3) "
                 "WHERE id = $1 AND family = $2 AND deprecated IS NULL "
                 "RETURNING id",
-                uid, family,
+                uid, family, handle_for_actor(_principal),
             )
         if row is None:
             raise HTTPException(
@@ -1862,8 +1978,11 @@ def build_router(deps: RegistryAPIDeps) -> APIRouter:
         # rollout window so a stale SPA build doesn't hard-break, and logs a
         # warning every time it is used.
         try:
+            # X3-B3: a signed-in browser's cookie rides the upgrade; the
+            # session middleware stamped ``websocket.state``.
             principal = _authorize_ws_token(
                 token, authorization, sec_websocket_protocol,
+                state=websocket.state,
             )
         except HTTPException as exc:
             # 503 (gate misconfigured, B-2) maps to 1011 internal-error;
@@ -1894,6 +2013,9 @@ def build_router(deps: RegistryAPIDeps) -> APIRouter:
             else None
         )
         await websocket.accept(subprotocol=negotiated)
+        # X2-B4: every event frame's payload passes the reader display policy
+        # (a signal row → its projection; publisher text withheld).
+        display_class = class_for_principal(principal, websocket.state)
         logger.info(
             "ws connected principal=%s filter=%s auth=%s",
             principal, filter,
@@ -2006,7 +2128,7 @@ def build_router(deps: RegistryAPIDeps) -> APIRouter:
                         {
                             "type": "event",
                             "subject": subject,
-                            "payload": payload,
+                            "payload": display_payload(payload, display_class),
                             "ts": _now_iso(),
                         }
                     )
@@ -2395,7 +2517,16 @@ def _shallow_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any
 # ---------------------------------------------------------------------------
 
 
-if _current_token() is None:
+if _current_token() is not None and _current_service_token() is None:
+    # X2-B1: loud, never silent — the fleet will be presenting the operator
+    # token (its own `principal_fallback` counter counts each one).
+    logger.error(
+        "principal_fallback — %s is unset; the registry knows only the "
+        "operator principal, so every fleet write is labelled operator:. Set "
+        "%s (a second, distinct token) in .env and recreate.",
+        SERVICE_TOKEN_ENV, SERVICE_TOKEN_ENV,
+    )
+if _current_token() is None and _current_service_token() is None:
     if _dev_mode():
         logger.warning(
             "%s is not set and %s=1; registry API runs in DEVELOPMENT MODE "

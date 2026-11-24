@@ -35,6 +35,7 @@ cannot be wired against today's substrate raises a clear
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import logging
 import os
@@ -45,13 +46,28 @@ from urllib.parse import urlparse
 import asyncpg
 
 from ..data.analysts import KindHandler, discover_analyst_kinds
+from ..data.principals import seat_handle
 from ..data.provenance.kinds import OutputKind
 from ..data.provenance.receipts import RuntimeReceiptChain
 from ..data.schemas.analyst import AnalystDescriptor
 from ..data.schemas.stack import LLMProviderConfig
 from ..data.stack.llm import LLM_HANDLERS
 from ..data.stack.llm.base import LLMProviderHandler, TelemetryHandle
+from ..data.stack.llm.thinking import (
+    ROLE_DEFAULT,
+    ROLE_GATHER,
+    ROLE_NARRATE,
+    ThinkingPlan,
+    ThinkingUnavailable,
+    bind_role,
+    thinking_plan,
+)
 from .analyst_deps_kinds import wire_instrument_kind_deps
+from .analyst_deps_reenrich import (  # noqa: F401 — re-exported (moved, module-size gate)
+    _wire_reenrich_ner,
+    _wire_reenrich_translation,
+    wire_reenrich_kind_deps,
+)
 from .deps import StandardDeps
 from .receipt_chain_factory import build_receipt_chain_for_analyst
 from .registry_client import RegistryClientError, RegistryHTTPClient
@@ -132,8 +148,10 @@ async def build_analyst_run_method(
     embedding_service: Any | None = None,
     qdrant_client: Any | None = None,
     nlp_client: Any | None = None,
+    source_enrichment_factory: Any | None = None,  # W11-F118 — reenrich_pending only
     tools_registry: Mapping[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]] | None = None,
     consult_agency_binding: Any | None = None,
+    consult_provider_bindings: Mapping[str, Any] | None = None,  # C-1b, C-2a §7 — runtime/consult_bindings.py
     inline_target_agency_binding: Any | None = None,
     inline_target_budget_precheck: Callable[[], Awaitable[bool]] | None = None,
 ) -> tuple[
@@ -207,6 +225,12 @@ async def build_analyst_run_method(
         Resolved LAZILY inside ``_wire_reenrich_ner`` (only for that bound
         sub-handler), so no other analyst pays a registry round-trip for a client it
         never uses. ``None`` (NLP plane not provisioned) → the sweep no-ops per tick.
+        ``reenrich_pending`` (W11-F118) takes it too, for its fallback chain.
+    source_enrichment_factory:
+        The host's per-source ``pipeline.enrichment`` factory (``sd -> stage``),
+        threaded ONLY onto the ``reenrich_pending`` sweep so it re-runs a row's
+        own source chain (see :mod:`.analyst_deps_reenrich`). ``None`` → that
+        sweep uses its fallback chain.
 
     Returns
     -------
@@ -274,7 +298,24 @@ async def build_analyst_run_method(
                 f"analyst {descriptor.identity.id!r} (kind={kind!r}) requires "
                 "an LLM but method.llm.primary is unset / malformed"
             )
-        return await _resolve_llm_component(component_id)
+        primary = await _resolve_llm_component(component_id)
+        if kind in _KINDS_WITH_OWN_THINKING_POLICY:
+            return primary
+        # T-1: ``method.llm.thinking: "on"`` makes every call of this analyst's
+        # primary handler think (``stack/llm/thinking.py``); absent = unchanged.
+        return _bind_role(primary, descriptor, ROLE_DEFAULT)
+
+    async def _resolve_role_llm(role: str) -> LLMProviderHandler | None:
+        """T-2: the primary handler bound for ONE call role, or ``None`` when
+        that role's choice is the default's (the caller then uses the primary
+        handler it already holds — byte-identical to before T-2)."""
+        plan = _descriptor_thinking_plan(descriptor)
+        if plan.for_role(role) == plan.for_role(ROLE_DEFAULT):
+            return None
+        component_id = _primary_llm_component_id(descriptor)
+        if not component_id:
+            return None
+        return _bind_role(await _resolve_llm_component(component_id), descriptor, role)
 
     # Per-kind branches.  Each returns the trio; the receipt chain is
     # tacked on at the top level so the per-kind branches stay focused
@@ -282,6 +323,8 @@ async def build_analyst_run_method(
     if kind == "inline_target":
         trio = await _build_inline_target(
             descriptor, handler, _resolve_primary_llm, pg_pool=pg_pool,
+            resolve_role_llm=_resolve_role_llm,
+            registry_client=registry_client, resolve_component=_resolve_llm_component,  # D-1 shadow
             agency_binding=inline_target_agency_binding,
             budget_precheck=inline_target_budget_precheck,
             embedding_service=embedding_service,
@@ -308,6 +351,7 @@ async def build_analyst_run_method(
             descriptor, handler, deps, _resolve_primary_llm,
             embedding_service=embedding_service,
             nlp_client=nlp_client,
+            source_enrichment_factory=source_enrichment_factory,
             # standing_auditor needs it to fetch the web_access pack row; every
             # other sub-handler ignores it.
             registry_client=registry_client,
@@ -330,6 +374,8 @@ async def build_analyst_run_method(
             _resolve_primary_llm,
             substrate_query_port=substrate_query_port,
             agency_binding=consult_agency_binding,
+            provider_bindings=consult_provider_bindings,  # C-1b, C-2a §7 — per-pack bindings
+            pg_pool=pg_pool,  # F-4: the watch mint's write surface
             # F1 model picker: thread the by-id resolver so the kind's run_method
             # can build a per-request handler for the operator's chosen plane.
             # It is bound to the consult allowlist inside _build_consult_on_demand.
@@ -353,6 +399,7 @@ async def build_analyst_run_method(
         # deps, different method".
         trio = await _build_journal_assessor(
             descriptor, handler, _resolve_primary_llm, pg_pool=pg_pool,
+            resolve_role_llm=_resolve_role_llm,
             agency_binding=inline_target_agency_binding,
             budget_precheck=inline_target_budget_precheck,
             resolve_llm_component=_resolve_llm_component,
@@ -518,6 +565,9 @@ async def _build_inline_target(
     budget_precheck: Callable[[], Awaitable[bool]] | None = None,
     embedding_service: Any | None = None,
     qdrant_client: Any | None = None,
+    resolve_role_llm: Callable[[str], Awaitable[Any]] | None = None,
+    registry_client: Any | None = None,
+    resolve_component: Callable[[str], Awaitable[Any]] | None = None,
 ) -> tuple[Callable[..., Any], Any | None, OutputKind]:
     """inline_target — LLM-bearing finding kind (single-shot or agentic).
 
@@ -537,10 +587,14 @@ async def _build_inline_target(
     runner, byte-for-byte unchanged.
     """
     from ..data.analysts.inline_target import InlineTargetRunner
+    from .desk_rows_shadow_wiring import build_rows_shadow
 
     llm = await resolve_llm()
+    # T-2: the GATHER rounds' own thinking choice (``method.gather.thinking``);
+    # None = they share the synthesis handler.
+    llm_gather = await resolve_role_llm(ROLE_GATHER) if resolve_role_llm else None
     max_tokens = _read_method_llm_option(descriptor, "max_tokens", default=1024)
-    temperature = _read_method_llm_option(descriptor, "temperature", default=0.2)
+    temperature = _read_method_llm_option(descriptor, "temperature", default=HOUSE_TEMPERATURE)
     # S5 GATHER round cap + latency guard (only consulted when agency_binding is
     # wired — otherwise inert). ``method.gather.max_rounds`` is a typed field
     # (GatherBlock, default 1); ``method.timeout_seconds`` is the P-1 invoke cap.
@@ -612,6 +666,13 @@ async def _build_inline_target(
         budget_precheck=budget_precheck,
         # V3/P2 — the substrate pool for the event-citation expansion.
         pg=pg_pool,
+        llm_gather=llm_gather,
+        # D-1 — the contract-v2 SHADOW: None (the desk byte-identical) unless
+        # LEGBA_DESK_ROWS_SHADOW names this analyst.
+        rows_shadow=await build_rows_shadow(
+            descriptor, registry_client=registry_client, resolve_component=resolve_component,
+            pg_pool=pg_pool,
+        ) if resolve_component is not None else None,
     )
     return runner, None, handler.output_kind
 
@@ -629,6 +690,7 @@ async def _build_journal_assessor(
     ) = None,
     embedding_service: Any | None = None,
     qdrant_client: Any | None = None,
+    resolve_role_llm: Callable[[str], Awaitable[Any]] | None = None,
 ) -> tuple[Callable[..., Any], Any | None, OutputKind]:
     """journal_assessor — Legba's first-person reflective voice (plan §4.8).
 
@@ -660,7 +722,7 @@ async def _build_journal_assessor(
 
     llm = await resolve_llm()
     max_tokens = _read_method_llm_option(descriptor, "max_tokens", default=4096)
-    temperature = _read_method_llm_option(descriptor, "temperature", default=0.2)
+    temperature = _read_method_llm_option(descriptor, "temperature", default=HOUSE_TEMPERATURE)
     # PER-PHASE LLM SPLIT — resolve the OPTIONAL second (narrate) handler. Present
     # only when the descriptor sets ``method.llm.narrate.raw`` AND a by-id resolver
     # was threaded. Absent → None → the voice falls back to the primary handler
@@ -672,7 +734,11 @@ async def _build_journal_assessor(
     narrate_max_tokens: int | None = None
     gather_reasoning_high = False
     if narrate_component_id and resolve_llm_component is not None:
-        llm_narrate = await resolve_llm_component(narrate_component_id)
+        # T-2: the VOICE thinks per ``method.llm.narrate.thinking`` (else the
+        # seat's ``method.llm.thinking``); GATHER and PROPOSE never inherit it.
+        llm_narrate = _bind_role(
+            await resolve_llm_component(narrate_component_id), descriptor, ROLE_NARRATE,
+        )
         # method.max_tokens now caps ONLY the Opus narrate output (the gather plane
         # serves its own vLLM budget); thread it as the narrate cap.
         narrate_max_tokens = int(max_tokens)
@@ -738,6 +804,7 @@ async def _build_journal_assessor(
         temperature=float(temperature),
         system_prompt=system_prompt,
         llm_narrate=llm_narrate,
+        llm_gather=await resolve_role_llm(ROLE_GATHER) if resolve_role_llm else None,
         narrate_max_tokens=narrate_max_tokens,
         grounding_hook=grounding_hook,
         agency_binding=agency_binding,
@@ -745,6 +812,9 @@ async def _build_journal_assessor(
         invoke_timeout_seconds=invoke_timeout_seconds,
         budget_precheck=budget_precheck,
         gather_reasoning_high=gather_reasoning_high,
+        # N-T — the inquiry pre-pass reads ``deps.pg_pool`` (crossroads' leaf
+        # reads); it was never threaded, so both reads always reported failed.
+        pg_pool=pg_pool,
     )
     # handler.run_method is the journal's 3-arg run_method (inputs, options, deps).
     return handler.run_method, kind_deps, handler.output_kind
@@ -1187,7 +1257,7 @@ async def _build_cross_analyst_correlator(
 
     Constructs the kind's own :class:`CrossAnalystCorrelatorDeps`
     dataclass so the kind-internal default knobs (max_tokens=2048,
-    temperature=0.1) hold without us mirroring them here.
+    temperature=0.1 at the time) hold without us mirroring them here.
     """
     from ..data.analysts.cross_analyst_correlator import CrossAnalystCorrelatorDeps
 
@@ -1304,6 +1374,7 @@ async def _build_entity_researcher(
             llm=llm,
             pg_pool=pg_pool,
             budget=getattr(deps, "budget", None),
+            written_by=seat_handle(descriptor.identity.id, descriptor.identity.version),
             apply=(merge_mode == "apply"),
             max_pairs=int(max_pairs),
             trgm_limit=int(trgm_limit),
@@ -1491,6 +1562,7 @@ async def _build_deterministic(
     embedding_service: Any | None = None,
     nlp_client: Any | None = None,
     registry_client: Any | None = None,
+    source_enrichment_factory: Any | None = None,
 ) -> tuple[Callable[..., Any], Any | None, OutputKind]:
     """deterministic — code-only sub-dispatched kind.
 
@@ -1639,23 +1711,18 @@ async def _build_deterministic(
             descriptor, deps, embedding_service=embedding_service,
         )
 
-    # reenrich_ner — ONE-TIME NER-backfill sweep (no LLM; it re-runs the LIVE
-    # multilingual/telegram NER over the pre-fix historical backlog). Resolve the
-    # hosted NlpServiceClient from the process-lifetime nlp_client source and merge
-    # it into deps.extras so the sweep can call the production translate-then-NER
-    # path. Wired only for the bound sub-handler so no other deterministic analyst
-    # pays for a client it never uses.
-    if is_deterministic and sub_handler == "reenrich_ner":
-        deps = await _wire_reenrich_ner(descriptor, deps, nlp_client=nlp_client)
-
-    # reenrich_translation — TRANSLATION-backfill sweep (M13/T-1c; no LLM). Reuses
-    # the SAME hosted NlpServiceClient source as reenrich_ner (translate is the same
-    # /translate plane), threaded under its OWN deps.extras key. Wired only for the
-    # bound sub-handler so no other deterministic analyst pays for it.
-    if is_deterministic and sub_handler == "reenrich_translation":
-        deps = await _wire_reenrich_translation(
-            descriptor, deps, nlp_client=nlp_client
-        )
+    # reenrich_ner / reenrich_translation / reenrich_pending (W11-F118) — the
+    # re-enrichment sweeps (no LLM). Each gets the hosted NlpServiceClient
+    # resolved from the process-lifetime source; reenrich_pending also gets the
+    # registry + the host's source-enrichment factory so it re-runs a row's own
+    # source chain. Wired only for the bound sub-handler (analyst_deps_reenrich).
+    deps = await wire_reenrich_kind_deps(
+        descriptor, deps,
+        sub_handler=sub_handler if is_deterministic else None,
+        nlp_client=nlp_client,
+        registry_client=registry_client,
+        source_enrichment_factory=source_enrichment_factory,
+    )
 
     # THE OUT-OF-PLANE / INSTRUMENT KIND LEGS — standing_auditor (D5),
     # desk_reference (A-1), correctness_grader (G1), reference_builder (R2) and
@@ -1746,143 +1813,6 @@ async def _wire_signal_embedder(
             descriptor.identity.id, exc,
         )
 
-    return _dc_replace(deps, extras=merged_extras)
-
-
-async def _wire_reenrich_ner(
-    descriptor: AnalystDescriptor,
-    deps: StandardDeps,
-    *,
-    nlp_client: Any | None,
-) -> StandardDeps:
-    """Resolve the hosted :class:`NlpServiceClient` and merge it into
-    ``deps.extras`` for the reenrich_ner NER-backfill sweep, returning the
-    (replaced) deps.
-
-    NLP-WIRING CHOICE (mirrors ``_wire_signal_embedder``'s embedder reuse): rather
-    than re-plumb the registry + secrets here, we reuse the process-lifetime
-    hosted-NLP source the host already built at bring-up — the
-    :class:`~legba.runtime.nlp_client_factory.LazyNlpClient` holder for the
-    ``nlp.local.legba_models`` stack component (the SAME source the source-enrichment
-    pipeline's ner_multilingual filter binds to). It arrives via
-    ``build_analyst_run_method(..., nlp_client=...)``. The holder resolves LAZILY —
-    we call it HERE (only for this bound sub-handler) so no other deterministic
-    analyst triggers a registry round-trip for a client it never uses.
-
-    Degrade-not-break (mirrors ``_wire_signal_embedder`` / ``_wire_corpus_indexer_os``):
-    a ``None`` source, or any resolution failure (models-host unreachable / stack row
-    not seeded at deps-build), logs a warning and returns ``deps`` UNMODIFIED — the
-    sweep then no-ops that tick (its own no-nlp guard sets ``skipped_no_nlp``). The
-    holder does NOT cache a failure, so a later deps (re)build retries once the plane
-    heals."""
-    from dataclasses import replace as _dc_replace
-
-    from ..data.analysts.deterministic_handlers.reenrich_ner import (
-        NLP_DEPS_EXTRA_KEY as _NLP_KEY,
-    )
-
-    if nlp_client is None:
-        logger.warning(
-            "analyst_deps_builder.reenrich_ner.no_nlp_source analyst=%r — no hosted "
-            "NLP client source was provisioned at bring-up; the NER-backfill sweep "
-            "no-ops until one is wired",
-            descriptor.identity.id,
-        )
-        return deps
-
-    # The source is the LazyNlpClient holder (async .get()) in production; accept an
-    # already-resolved client too (tests / a future eager wiring) via duck-typing on
-    # the async getter.
-    resolved: Any | None = nlp_client
-    getter = getattr(nlp_client, "get", None)
-    if callable(getter):
-        try:
-            resolved = await getter()
-        except Exception as exc:
-            logger.warning(
-                "analyst_deps_builder.reenrich_ner.nlp_resolve_failed analyst=%r "
-                "err=%s — degrading to the no-nlp path (the sweep no-ops this tick; "
-                "a later deps rebuild retries once the models-host heals)",
-                descriptor.identity.id, exc,
-            )
-            return deps
-
-    if resolved is None:
-        logger.warning(
-            "analyst_deps_builder.reenrich_ner.nlp_unresolved analyst=%r — the NLP "
-            "source resolved to None; the NER-backfill sweep no-ops this tick",
-            descriptor.identity.id,
-        )
-        return deps
-
-    merged_extras = {**dict(deps.extras), _NLP_KEY: resolved}
-    logger.info(
-        "analyst_deps_builder.reenrich_ner.nlp_wired analyst=%r — resolved the hosted "
-        "NlpServiceClient; the NER-backfill translate-then-NER plane is wired",
-        descriptor.identity.id,
-    )
-    return _dc_replace(deps, extras=merged_extras)
-
-
-async def _wire_reenrich_translation(
-    descriptor: AnalystDescriptor,
-    deps: StandardDeps,
-    *,
-    nlp_client: Any | None,
-) -> StandardDeps:
-    """Resolve the hosted :class:`NlpServiceClient` and merge it into
-    ``deps.extras`` under the reenrich_translation key (M13/T-1c).
-
-    Identical wiring to :func:`_wire_reenrich_ner` (same process-lifetime hosted-NLP
-    source — translate is the same ``nlp.local.legba_models`` /translate plane), only
-    the extras KEY differs so the two backfill sweeps stay independently addressable.
-    Degrade-not-break: a ``None`` source / resolution failure returns ``deps``
-    UNMODIFIED and the sweep no-ops that tick (its own no-nlp guard)."""
-    from dataclasses import replace as _dc_replace
-
-    from ..data.analysts.deterministic_handlers.reenrich_translation import (
-        NLP_DEPS_EXTRA_KEY as _NLP_KEY,
-    )
-
-    if nlp_client is None:
-        logger.warning(
-            "analyst_deps_builder.reenrich_translation.no_nlp_source analyst=%r — no "
-            "hosted NLP client source was provisioned at bring-up; the translation-"
-            "backfill sweep no-ops until one is wired",
-            descriptor.identity.id,
-        )
-        return deps
-
-    # The source is the LazyNlpClient holder (async .get()) in production; accept an
-    # already-resolved client too (tests) via duck-typing on the async getter.
-    resolved: Any | None = nlp_client
-    getter = getattr(nlp_client, "get", None)
-    if callable(getter):
-        try:
-            resolved = await getter()
-        except Exception as exc:
-            logger.warning(
-                "analyst_deps_builder.reenrich_translation.nlp_resolve_failed "
-                "analyst=%r err=%s — degrading to the no-nlp path (the sweep no-ops "
-                "this tick; a later deps rebuild retries once the models-host heals)",
-                descriptor.identity.id, exc,
-            )
-            return deps
-
-    if resolved is None:
-        logger.warning(
-            "analyst_deps_builder.reenrich_translation.nlp_unresolved analyst=%r — the "
-            "NLP source resolved to None; the translation-backfill sweep no-ops",
-            descriptor.identity.id,
-        )
-        return deps
-
-    merged_extras = {**dict(deps.extras), _NLP_KEY: resolved}
-    logger.info(
-        "analyst_deps_builder.reenrich_translation.nlp_wired analyst=%r — resolved the "
-        "hosted NlpServiceClient; the translation-backfill /translate plane is wired",
-        descriptor.identity.id,
-    )
     return _dc_replace(deps, extras=merged_extras)
 
 
@@ -2148,6 +2078,7 @@ def _build_deep_consult(
         llm_component_id=component_id,
         budget_tokens_per_day=budget_tokens_per_day,
         max_analyze_tokens=max_analyze_tokens,
+        thinking=_descriptor_thinking(descriptor),  # T-1
     )
     return handler.run_method, deps_obj, handler.output_kind
 
@@ -2159,6 +2090,8 @@ async def _build_consult_on_demand(
     *,
     substrate_query_port: Any | None,
     agency_binding: Any | None = None,
+    provider_bindings: Mapping[str, Any] | None = None,
+    pg_pool: Any | None = None,
     resolve_llm_component: (
         Callable[[str], Awaitable[LLMProviderHandler]] | None
     ) = None,
@@ -2226,7 +2159,12 @@ async def _build_consult_on_demand(
             # direct port dispatch, no governance, never wired by the
             # runtime.
             agency_binding=agency_binding,
+            provider_bindings=dict(provider_bindings or {}),
             resolve_llm_component=override_resolver,
+            pg_pool=pg_pool,
+            judge_resolver=resolve_llm_component,  # X2/C1: the turn's judge
+            turn_contract=True,  # Q-1: window, explanations, record-only, coverage
+            thinking=_descriptor_thinking(descriptor),  # T-1: consult_thinking's table
         ),
         handler.output_kind,
     )
@@ -2413,7 +2351,8 @@ async def build_search_handler_from_stack_component(
 def infer_llm_subprovider(component_id: str, *, endpoint: str) -> str:
     """Pick the :data:`LLM_HANDLERS` key for a stack-component.
 
-    Resolution priority (most specific → most generic):
+    Resolution priority (most specific → most generic); rung 0 (W11-F108):
+    an id containing ``.decide.`` → ``decide``, the ``POST /decide`` client.
 
       1. Component id contains ``.anthropic.`` or starts with
          ``llm.anthropic`` → ``anthropic``.
@@ -2423,10 +2362,9 @@ def infer_llm_subprovider(component_id: str, *, endpoint: str) -> str:
          → ``openai``.
       4. Endpoint hostname is ``api.anthropic.com`` → ``anthropic``.
       5. Endpoint hostname is ``api.openai.com`` → ``openai``.
-      6. Fall back to ``vllm`` (the OpenAI-compatible self-hosted
-         shape) — this is the dominant case in the legba stack today,
-         and the budget enforcer's zero-cost table picks it up
-         correctly.
+      6. Fall back to ``vllm`` (the OpenAI-compatible self-hosted shape) —
+         the dominant case in the legba stack today, and the budget
+         enforcer's zero-cost table picks it up correctly.
 
     The id-pattern rules are the precision lever — operators registering
     a new LLM stack-component should name it
@@ -2434,6 +2372,8 @@ def infer_llm_subprovider(component_id: str, *, endpoint: str) -> str:
     the legacy ``.openai_compat`` suffix for self-hosted endpoints.
     """
     cid = (component_id or "").lower()
+    if ".decide." in cid:
+        return "decide"
     if ".anthropic." in cid or cid.startswith("llm.anthropic"):
         return "anthropic"
     if cid.endswith(".openai_compat"):
@@ -2806,6 +2746,38 @@ async def resolve_llm_budget_params(
             component_id, exc,
         )
         return "", "", est
+
+
+#: Kinds that apply ``method.llm.thinking`` per CALL ROLE themselves
+#: (``consult_thinking``) instead of thinking on every call of the primary.
+_KINDS_WITH_OWN_THINKING_POLICY = frozenset({"consult_on_demand"})
+
+
+def _descriptor_thinking_plan(descriptor: AnalystDescriptor) -> ThinkingPlan:
+    """The seat's per-role thinking choices (T-2; a bad value raises)."""
+    try:
+        return thinking_plan(
+            getattr(descriptor.method, "llm", None) or {},
+            getattr(descriptor.method, "gather", None),
+        )
+    except ValueError as exc:
+        raise AnalystDepsBuildError(str(exc)) from exc
+
+
+def _descriptor_thinking(descriptor: AnalystDescriptor) -> bool:
+    """``method.llm.thinking`` as a bool (absent = off; a bad value raises)."""
+    return _descriptor_thinking_plan(descriptor).for_role(ROLE_DEFAULT)
+
+
+def _bind_role(handler: Any, descriptor: AnalystDescriptor, role: str) -> Any:
+    """``handler`` bound to the seat's choice for ``role`` (T-2)."""
+    try:
+        return bind_role(
+            handler, _descriptor_thinking_plan(descriptor), role,
+            analyst_id=descriptor.identity.id,
+        )
+    except ThinkingUnavailable as exc:
+        raise AnalystDepsBuildError(str(exc)) from exc
 
 
 def _read_method_llm_option(

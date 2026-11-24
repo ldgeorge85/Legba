@@ -61,6 +61,7 @@ from uuid import UUID
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from ..principals import handle_for_actor
 from .api import RegistryAPIDeps, require_bearer
 from .journal_proposals_apply import (
     ProposalApplyError,
@@ -345,11 +346,11 @@ def build_journal_proposals_router(deps: RegistryAPIDeps) -> APIRouter:
                 UPDATE journal_proposals
                    SET status = 'accepted', decided_by = $2,
                        decision_reason = $3, decided_at = now(),
-                       updated_at = now()
+                       updated_at = now(), written_by = legba_principal($4)
                  WHERE id = $1 AND status = 'pending'
              RETURNING {_COLS}
                 """,
-                proposal_id, actor, reason,
+                proposal_id, actor, reason, handle_for_actor(actor),
             )
             if claimed is None:
                 # Either the id doesn't exist, or it was already decided (replay).
@@ -442,11 +443,12 @@ def build_journal_proposals_router(deps: RegistryAPIDeps) -> APIRouter:
                 f"""
                 UPDATE journal_proposals
                    SET status = 'rejected', decided_by = $2, decision_reason = $3,
-                       decided_at = now(), updated_at = now()
+                       decided_at = now(), updated_at = now(),
+                       written_by = legba_principal($4)
                  WHERE id = $1 AND status = 'pending'
              RETURNING {_COLS}
                 """,
-                proposal_id, actor, reason,
+                proposal_id, actor, reason, handle_for_actor(actor),
             )
             if claimed is None:
                 existing = await conn.fetchrow(

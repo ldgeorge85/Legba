@@ -111,7 +111,7 @@ describe('TargetSourcesPanel', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) => {
-        if (url.includes('/registry/descriptors')) {
+        if ((url.includes('/registry/descriptors') || url.includes('/v3/roster'))) {
           return {
             ok: true,
             json: async () => [

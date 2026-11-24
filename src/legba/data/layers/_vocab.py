@@ -36,6 +36,8 @@ any handler without pulling in the runtime.
 
 from __future__ import annotations
 
+from ..taxon_families import SOURCE_LAYER, SOURCE_LAYERS, bind_taxon
+
 #: The closed six-layer vocabulary (migration 0214's `source_layers_layer_vocab`
 #: and `desk_apertures_layer_vocab` CHECKs mirror this exactly — see
 #: `tests/data_pkg/test_layer_vocab_matches_migration.py`), in canonical order.
@@ -59,14 +61,12 @@ from __future__ import annotations
 #:   physical        — model-free structured feeds (GeoJSON-style hazard /
 #:                      sensor data) — the one layer with no editorial voice
 #:                      at all.
-LAYER_VOCAB: tuple[str, ...] = (
-    "official",
-    "domestic_press",
-    "foreign_press",
-    "social_digest",
-    "public_data",
-    "physical",
-)
+#:
+#: The six are the registered ``source_layer`` vocabulary family (W7 TAXON-1);
+#: this tuple is its fallback, owned by the leaf :mod:`legba.data.taxon_families`
+#: (the bring-up walker seeds the rows from it). The 0214 CHECK stays the
+#: write gate, so the family can narrow the set but never widen it.
+LAYER_VOCAB: tuple[str, ...] = SOURCE_LAYERS
 
 #: The closed three-state aperture-declaration vocabulary (migration 0214's
 #: `desk_apertures_declared_vocab` CHECK mirrors this exactly).
@@ -83,7 +83,9 @@ APERTURE_DECLARED_VOCAB: tuple[str, ...] = ("present", "absent", "unmeasured")
 
 
 def is_valid_layer(value: str) -> bool:
-    return value in LAYER_VOCAB
+    """True when ``value`` binds to the ``source_layer`` family (read through
+    the installed vocabulary; the literal when none is loaded)."""
+    return bind_taxon(SOURCE_LAYER, value).bound
 
 
 def is_valid_declared(value: str) -> bool:

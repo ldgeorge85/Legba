@@ -1,0 +1,64 @@
+# forecast_resolver — ST1-A, the forecast ledger's resolution job.
+#
+# A `deterministic`-kind META analyst (sub_handler=forecast_resolver). Every
+# 6 h it reads the SEALED open questions of the forecast ledger (migration
+# 0242) at or past their due date, runs each question's resolver over the
+# record — regex rules over canonical signals sentence by sentence, the
+# `observations` series for series_threshold; NO model — and writes a
+# PROPOSAL to forecast_resolution_records (migration 0244) when the reading is
+# new: yes | no | void | undetermined | needs_judgement, with the evidence
+# spans, the clause each satisfies, the searched scope behind any absence,
+# the void rule that applies and the judgement it waits on. Idempotent: the
+# same reading on the same evidence writes nothing and alerts nothing.
+#
+# series_threshold settles by rule (a confirmation record + the resolution).
+# Every other kind closes ONLY on the operator's confirmation or override
+# (scripts/resolve_forecasts.py confirm | override | correct; an override is
+# an override_log row with a reason). Each new proposal, and each question
+# that waits on a human judgement, raises one alert through the existing
+# outward path (AlertSinkDispatcher, channel forecast_resolution).
+#
+# META analyst: no subscription.targets → a SINGLE global run per tick;
+# reads/writes via deps.pg_pool and ignores the materialized input slice. The
+# returned FindingPayload is a per-run counts receipt, TRACE_ONLY in
+# deterministic.py — never a finding on a trust surface.
+#
+# State: draft in-tree — registration + the operator's activate flip are
+# deploy steps (migration 0244 must be applied first; 0242 already is).
+
+identity:
+  id: forecast_resolver
+  name: Forecast Resolver (rule proposals for the sealed forecast ledger)
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: st1_forecast_ledger
+
+subscription:
+  # META analyst: one global run per tick over the whole ledger.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: forecast_resolver
+  budget_tokens_per_day: 0      # no LLM — SQL reads + regex rules
+
+cadence:
+  fallback_schedule: "25 */6 * * *"   # every 6 h at :25 (plan 10 §3.4)
+  cooldown_seconds: 19800             # 5.5 h (strictly below the 6 h interval)
+
+# The proposals are side-written by the handler; the returned summary is a
+# TRACE_ONLY receipt. Nothing is a declared output.
+outputs: []

@@ -14,6 +14,7 @@ panel round to find:
 * ``【3】`` / ``［3］`` — full-width brackets (2026-06-30, live).
 * ``【ref:2】``, ``【1-120】``, ``【none】`` / ``【assessed】`` — the R-tail set.
 * ``(57, 87)`` — a parenthesized comma-list of unit markers (C1).
+* ``[11, 47]`` / ``【11，47】`` — the same list in brackets (W11-F86, grade-time).
 * ``(ref:2)``, ``[[ref:2,6]]``, ``【2†L1-L2】`` — V-I3, the round-4 residue.
 
 A cited claim graded as uncited is a free precision loss, which is why the list
@@ -26,11 +27,19 @@ guarantee CJK prose using the same glyphs survives untouched.
 resolve exactly as before. Extracted 2026-08-05 when the V-I train pushed
 verify.py past its DO-NOT-RAISE ceiling.
 
-DELIBERATE DUPLICATION: ``data.analysts.inline_target`` carries the same rules at
-WRITE time and persists the rewrite; this module grades what was stored. They are
-mirrored rather than shared because verify.py stays stdlib-only and
-slim-image-safe — importing the analysts package from here would close an import
-cycle through ``runtime.analyst_method``. A third copy lives in
+TWO NORMALIZERS, ONE SET OF RULES. :func:`_normalize_verify_markers` is the
+GRADE-time reading (what verify.py does to prose already stored);
+:func:`normalize_inline_citation_markers` is the WRITE-time one (what the
+analysts persist, and what the consult census reads). They differ by exactly
+three rules and share every regex. The write-time copy USED to live in
+``data.analysts.inline_target`` — mirrored rather than shared because verify.py
+stays stdlib-only and slim-image-safe, so it must not import the analysts
+package. That mirroring was also what put the rule out of the CONSULT path's
+reach (``inline_target`` imports ``consult_on_demand``, which imports the
+consult census, so the census importing ``inline_target`` would close a cycle),
+which is the 2026-09-28 citation-seam defect. The rules moved down HERE, where
+the regexes already were; ``inline_target`` now imports them, the direction is
+still one-way, and there is one fewer copy. A third copy lives in
 ``data.registry.export_api`` for the export view and is recorded as owed.
 """
 from __future__ import annotations
@@ -89,6 +98,41 @@ _REF_MARKER_RE = re.compile(r"\[\[ref:(\d+)\]\]")
 _VARIANT_CITATION_RE = re.compile(r"[【［〔〖](\s*\d+\s*)[】］〕〗]")
 _PAREN_CITATION_LIST_RE = re.compile(r"\((\s*\d+(?:\s*,\s*\d+)+\s*)\)")
 
+# W11-F86 (2026-10-24) — a BRACKETED comma-list of two or more unit markers,
+# ``[11, 47]`` / ``【11，47】`` -> ``[11][47]``. The bare-marker regex needs ``]``
+# right after the digits, so the list read as NO marker at all and a cited
+# sentence was counted as an uncited fact by the floor, by the X4 uncited-share
+# instrument and in the judge's ledger. One to three digits per member (a slice
+# ordinal, never a year or an id), ASCII or full-width brackets and commas; the
+# composition ``[[ref:2,6]]`` cannot match (``ref:`` sits after the bracket).
+_BRACKET_CITATION_LIST_RE = re.compile(
+    r"[\[【［〔〖](\s*\d{1,3}(?:\s*[,，、]\s*\d{1,3})+\s*)[\]】］〕〗]"
+)
+
+# W11-F86 — a run of citation markers that sits AFTER a sentence terminator,
+# optionally behind a closing quote, with or without whitespace between:
+# ``…fighters. [[ref:1]]`` / ``…zones.\n[21]`` (P7-F1(2), the original rule),
+# and the two shapes that rule missed — ``…13 October.[11] Kharkiv …`` (no
+# space: the split never fired, the marker glued the NEXT, uncited sentence onto
+# this one and cited both) and ``…"will not yield." [11] Kharkiv …`` (a closing
+# quote between the terminator and the marker: same merge). The pull moves the
+# markers INSIDE the sentence, before the terminator, and leaves the quote where
+# the author put it, so the sentence split keeps each marker on its own claim.
+_TRAILING_MARKER_PULL_RE = re.compile(
+    r"([.!?])([\"”’]?)(\s*)((?:\[\d+\]|\[\[ref:\d+\]\])(?:\s*(?:\[\d+\]|\[\[ref:\d+\]\]))*)"
+)
+
+
+def _pull_trailing_markers(text: str) -> str:
+    """``…fighters. [1]`` / ``…fighters.[1]`` / ``…said "x." [1]`` -> the
+    marker before the terminator (``…fighters [1].`` / ``…said "x" [1].``).
+
+    For the original whitespace-separated, quote-less shape the rewrite is
+    byte-identical to the P7-F1(2) rule it replaces."""
+    return _TRAILING_MARKER_PULL_RE.sub(
+        lambda m: f"{m.group(2)} {m.group(4)}{m.group(1)}{m.group(3)}", text
+    )
+
 # R-tail (2026-08-04) — the same bracket drift on the NON-numeric markers, and
 # the same drift on the canonical no-citation marker's own spelling. Mirrors
 # ``inline_target`` (see the long rationale there); duplicated rather than
@@ -116,6 +160,15 @@ _VARIANT_RANGE_CITATION_RE = re.compile(
     r"[【［〔〖]\s*(\d+)\s*[-–—‑]\s*(\d+)\s*[】］〕〗]"
 )
 _VARIANT_ANNOTATION_RE = re.compile(r"[【［〔〖]([^】］〕〗]{1,40})[】］〕〗]")
+#: ``【<uuid>】`` — a SUBSTRATE ID (not an ordinal) in variant brackets: the
+#: consult path's core-plane answers cite whole row ids this way (16 of 16 on
+#: the roll-28 proof run, 2026-09-28). Rewritten to ``[<uuid>]`` FIRST, so the
+#: annotation rule below (which admits any 1–40-char token) never sees it and
+#: the UI's ``[<uuid>]`` chip parser keys on the same bytes the census read.
+_VARIANT_UUID_CITATION_RE = re.compile(
+    r"[【［〔〖]\s*([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\s*[】］〕〗]"
+)
 _ASCII_NO_CITATION_VARIANT_RE = re.compile(
     r"\[\s*no[_\-\s]?citation\s*\]", re.IGNORECASE
 )
@@ -263,6 +316,12 @@ def _normalize_verify_markers(text: str) -> str:
         lambda m: "".join(f"[{n.strip()}]" for n in m.group(1).split(",")),
         text,
     )
+    text = _BRACKET_CITATION_LIST_RE.sub(
+        lambda m: "".join(
+            f"[{n.strip()}]" for n in re.split(r"[,，、]", m.group(1))
+        ),
+        text,
+    )
     text = _VARIANT_RANGE_CITATION_RE.sub(
         lambda m: f"[{m.group(1)}-{m.group(2)}]", text
     )
@@ -276,3 +335,49 @@ def _normalize_verify_markers(text: str) -> str:
         lambda m: _canonical_annotation(m.group(1)) or m.group(0), text
     )
     return _ASCII_NO_CITATION_VARIANT_RE.sub(_NO_CITATION_MARKER, text)
+
+
+def normalize_inline_citation_markers(text: str) -> str:
+    """Rewrite ``【N】``/``［N］``-style citation brackets to ASCII ``[N]``.
+
+    The WRITE-time normalizer. ``inline_target`` ran its own copy of exactly
+    this rule sequence until 2026-09-28; the copy lived in the analysts package,
+    which is why the CONSULT path — the one whose answers arrive full of
+    ``【…】`` from the core plane — could not reach it without closing an import
+    cycle (``inline_target`` imports ``consult_on_demand``, which imports the
+    consult census). The rules moved HERE, where the regexes already lived, and
+    both callers import them: no third copy, and no cycle, because this module
+    is stdlib-only.
+
+    Also rewrites ``【ref:N】`` to the composition marker ``[[ref:N]]`` and the
+    known un-citable annotations (``【none】``, ``【assessed】``, …) to the
+    canonical ``[no citation]``. Idempotent on already-ASCII prose. Run BEFORE
+    ``_extract_citations`` / the provenance census and persist the result, so
+    the stored prose, the marker parser and the UI citation chips all key on
+    the SAME ``[N]``.
+
+    NOT the same function as :func:`_normalize_verify_markers`, deliberately.
+    That one additionally reads a bare parenthesized number list ``(57, 87)``
+    and a bracketed one ``[11, 47]`` (W11-F86) as one marker per member, and
+    re-spells ``[no_citation]``; all three are GRADE-time readings of prose
+    already written, and applying them at write time would rewrite an
+    author's punctuation. The two differ by those three rules and nothing
+    else.
+    """
+    if not text:
+        return text
+    text = _VARIANT_UUID_CITATION_RE.sub(lambda m: f"[{m.group(1).lower()}]", text)
+    text = _VARIANT_CITATION_RE.sub(lambda m: f"[{m.group(1).strip()}]", text)
+    text = _VARIANT_RANGE_CITATION_RE.sub(
+        lambda m: f"[{m.group(1)}-{m.group(2)}]", text
+    )
+    # V-I3: the dagger form runs BEFORE the plain annotation rewrite, which would
+    # otherwise read "2†L1-L2" as un-citable prose and leave it alone.
+    text = _VARIANT_DAGGER_CITATION_RE.sub(lambda m: f"[{m.group(1)}]", text)
+    text = _VARIANT_REF_CITATION_RE.sub(lambda m: f"[[ref:{m.group(1)}]]", text)
+    text = _COMPOUND_REF_CITATION_RE.sub(lambda m: _expand_ref_list(m.group(1)), text)
+    text = _PAREN_REF_CITATION_RE.sub(lambda m: _expand_ref_list(m.group(1)), text)
+    text = _PRIOR_READ_REF_RE.sub(lambda m: f"[{m.group(1)}]", text)
+    return _VARIANT_ANNOTATION_RE.sub(
+        lambda m: _canonical_annotation(m.group(1)) or m.group(0), text
+    )

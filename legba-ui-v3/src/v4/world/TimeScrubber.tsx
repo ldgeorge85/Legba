@@ -1,10 +1,17 @@
 /**
- * TimeScrubber — compact bottom bar (~44px) that drives the World's time window.
+ * TimeScrubber — the bottom bar of the World map that drives THE ONE CLOCK.
  *
- * Reads the orchestrator-owned world store. A range slider over
- * [windowStartMs (≈now−24h), now] is bound to windowEndMs; the map renders
- * events up to time T = windowEndMs. Play advances T forward in wall-clock-ish
- * ticks until it reaches "now", then auto-stops at LIVE.
+ * Reads and writes the orchestrator-owned world store. Every write of the
+ * window goes through `setWindow` (UI-D1 D6): the two thumbs, the playback
+ * tick, and a span preset (whose `setSpan` records the outer span and then
+ * calls `setWindow`). Nothing else on this bar moves "when".
+ *
+ * TWO CLOCKS UNDER THE THUMBS (W8 UI-B4/time; `lib/temporalLayers.ts`). Below
+ * the range sit two density strips over the same outer span — VALID time
+ * (when the world was so) and RECORD time (when the platform learned it) —
+ * for every map layer that is on. Each strip's line names its temporal layers
+ * with their row counts in the window, *no read yet* for a layer with none,
+ * and the as-of, which is the latest RECORD time among the rows counted.
  */
 import { useEffect, useMemo, useRef } from 'react'
 import { Play, Pause } from 'lucide-react'
@@ -37,6 +44,23 @@ import {
   sliderStep,
   windowFraction,
 } from '@/lib/mapTime'
+import { asOfText, figureText, figureValueText, type FigureData } from '@/lib/Figure'
+import {
+  AXIS_MEANING,
+  TEMPORAL_AXES,
+  densityBuckets,
+  instantZ,
+  latestRecordMs,
+  layerFigure,
+  rowsInLayer,
+  sourcesOn,
+  temporalLayers,
+  type TemporalAxis,
+  type TemporalLayer,
+  type TemporalRow,
+  type TemporalSource,
+} from '@/lib/temporalLayers'
+import { useTemporalRows } from '@/lib/useTemporalRows'
 
 /** Window is "live" when its end is within ~1 minute of now. */
 const LIVE_THRESHOLD_MS = 60_000
@@ -44,6 +68,8 @@ const LIVE_THRESHOLD_MS = 60_000
 const TICK_INTERVAL_MS = 1_000
 const TICK_BASE_MS = 120_000
 const SPEEDS = [0.5, 1, 2, 4] as const
+/** Density buckets per strip across the outer span. */
+const BUCKETS = 96
 
 /** Shared thumb styling so both overlaid range inputs match the dark chrome and
  *  their thumbs stay clickable while their tracks are click-through. */
@@ -59,8 +85,122 @@ const THUMB_CLASS = cn(
   '[&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-accent-info [&::-moz-range-thumb]:bg-surface-100',
 )
 
+/** A failed read is an unread layer, not an empty one. */
+const UNREAD: FigureData = {
+  state: 'unmeasured',
+  unit: 'rows',
+  asOf: { absent: 'the route did not answer' },
+}
+
+/** One temporal layer's figure, honouring a source whose read failed. */
+function figureFor(
+  rows: readonly TemporalRow[],
+  layer: TemporalLayer,
+  failed: readonly TemporalSource[],
+): FigureData {
+  return failed.includes(layer.source) ? UNREAD : layerFigure(rows, layer)
+}
+
 /**
- * TimeScrubber — a genuine two-ended [t0, t1] window control.
+ * One clock's strip and line: the density of the on-layers' rows across the
+ * outer span (the window's buckets lit, the rest dimmed), then each temporal
+ * layer's figure and the as-of — the latest record time among the rows the
+ * line counted.
+ */
+function AxisStrip({
+  axis,
+  rows,
+  layers,
+  failed,
+  lo,
+  hi,
+  windowStartMs,
+  windowEndMs,
+}: {
+  axis: TemporalAxis
+  rows: readonly TemporalRow[]
+  layers: readonly TemporalLayer[]
+  failed: readonly TemporalSource[]
+  lo: number
+  hi: number
+  windowStartMs: number
+  windowEndMs: number
+}) {
+  const onRows = useMemo(() => {
+    const on = new Set(layers.map((l) => l.source))
+    return rows.filter((r) => on.has(r.source))
+  }, [rows, layers])
+  const buckets = useMemo(() => densityBuckets(onRows, axis, lo, hi, BUCKETS), [onRows, axis, lo, hi])
+  const peak = Math.max(1, ...buckets)
+  const bucketMs = (hi - lo) / BUCKETS
+  const asOfMs = latestRecordMs(layers.flatMap((l) => rowsInLayer(rows, l)))
+  const asOf = asOfMs === null ? { absent: 'no row in the window' } : instantZ(asOfMs)
+  const figures = layers.map((l) => ({ layer: l, fig: figureFor(rows, l, failed) }))
+  const lineTitle = figures
+    .map(({ layer, fig }) => figureText({ ...fig, label: layer.source }))
+    .join('\n')
+
+  return (
+    <>
+      <span
+        className="col-span-2 justify-self-end text-label uppercase tracking-wide text-ink-3"
+        title={AXIS_MEANING[axis]}
+      >
+        {axis}
+      </span>
+      <div
+        className="flex h-2.5 items-end gap-px"
+        data-testid={`scrubber-axis-${axis}`}
+        data-buckets={buckets.join(',')}
+        aria-label={`${AXIS_MEANING[axis]} — row density across the span`}
+        role="img"
+      >
+        {buckets.map((n, i) => {
+          const at = lo + (i + 0.5) * bucketMs
+          const inWindow = at >= windowStartMs && at <= windowEndMs
+          return (
+            <span
+              key={i}
+              className={cn('flex-1 rounded-sm', axis === 'valid' ? 'bg-accent-info' : 'bg-ink-2')}
+              style={{
+                height: n === 0 ? 0 : `${Math.max(15, (n / peak) * 100)}%`,
+                opacity: inWindow ? 0.9 : 0.3,
+              }}
+            />
+          )
+        })}
+      </div>
+      <span
+        className="col-span-2 truncate text-label text-ink-3"
+        data-testid={`scrubber-axis-${axis}-line`}
+        title={lineTitle}
+      >
+        {layers.length === 0 ? (
+          'no time layer is on'
+        ) : (
+          <>
+            {figures.map(({ layer, fig }, i) => (
+              <span key={layer.id} data-testid={`scrubber-layer-${layer.id}`} data-state={fig.state}>
+                {i > 0 ? ' · ' : ''}
+                {layer.source}{' '}
+                <span className={fig.state === 'measured' ? 'font-mono text-ink-2' : 'italic'}>
+                  {figureValueText(fig)}
+                </span>
+              </span>
+            ))}
+            <span className="font-mono" data-testid={`scrubber-axis-${axis}-asof`}>
+              {' · '}
+              {asOfText(asOf)}
+            </span>
+          </>
+        )}
+      </span>
+    </>
+  )
+}
+
+/**
+ * TimeScrubber — a genuine two-ended [t0, t1] window control over two clocks.
  *
  * A dual-thumb range over the outer span [now − spanMs, now] drives BOTH the
  * window start and end; the map filters signals / findings / situations to that
@@ -74,10 +214,12 @@ export default function TimeScrubber() {
   const spanMs = useWorldState((s) => s.spanMs)
   const playing = useWorldState((s) => s.playing)
   const speed = useWorldState((s) => s.speed)
+  const layerToggles = useWorldState((s) => s.layers)
   const setWindow = useWorldState((s) => s.setWindow)
   const setSpan = useWorldState((s) => s.setSpan)
   const setPlaying = useWorldState((s) => s.setPlaying)
   const setSpeed = useWorldState((s) => s.setSpeed)
+  const { rows, failed } = useTemporalRows()
 
   // Playback loop. Reads live store values inside the tick so it doesn't
   // re-subscribe (and reset its interval) on every window change.
@@ -122,12 +264,19 @@ export default function TimeScrubber() {
 
   const rangeLabel = `${format(windowStartMs, 'MMM d HH:mm')} – ${format(windowEndMs, 'HH:mm')}`
 
+  // The temporal layers: both clocks for every map layer that is on.
+  const layers = useMemo(
+    () => temporalLayers(sourcesOn(layerToggles), { startMs: windowStartMs, endMs: windowEndMs }),
+    [layerToggles, windowStartMs, windowEndMs],
+  )
+
   return (
     <div
       className={cn(
-        'flex h-11 w-full items-center gap-3 border-t border-slate-800',
-        'bg-surface-200 px-3 text-slate-300',
+        'grid w-full shrink-0 grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] items-center gap-x-3 gap-y-0.5',
+        'border-t border-line bg-surf-1 px-3 py-1.5 text-ink-2',
       )}
+      data-testid="time-scrubber"
     >
       <button
         type="button"
@@ -136,8 +285,8 @@ export default function TimeScrubber() {
         title={playing ? 'Pause' : 'Play'}
         className={cn(
           'flex h-7 w-7 shrink-0 items-center justify-center rounded',
-          'border border-slate-800 bg-surface-100 text-slate-200',
-          'transition-colors hover:bg-surface-50 hover:text-white',
+          'border border-line bg-surf-2 text-ink-1',
+          'transition-colors hover:bg-surf-3',
           'focus:outline-none focus:ring-1 focus:ring-accent-info',
         )}
       >
@@ -157,7 +306,7 @@ export default function TimeScrubber() {
               'focus:outline-none focus:ring-1 focus:ring-accent-info',
               spanMs === p.ms
                 ? 'bg-accent-info/20 font-medium text-accent-info'
-                : 'text-slate-500 hover:text-slate-300',
+                : 'text-ink-3 hover:text-ink-1',
             )}
           >
             {p.label}
@@ -166,8 +315,8 @@ export default function TimeScrubber() {
       </div>
 
       {/* Dual-thumb window range — two overlaid inputs, click-through tracks. */}
-      <div className="relative h-4 flex-1" data-testid="time-scrubber-range">
-        <div className="absolute left-0 top-1/2 h-1.5 w-full -translate-y-1/2 rounded-full bg-surface-50" />
+      <div className="relative h-4" data-testid="time-scrubber-range">
+        <div className="absolute left-0 top-1/2 h-1.5 w-full -translate-y-1/2 rounded-full bg-surf-3" />
         <div
           className="absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-accent-info/60"
           style={{ left: `${startPct}%`, width: `${Math.max(0, endPct - startPct)}%` }}
@@ -199,11 +348,11 @@ export default function TimeScrubber() {
       <div className="flex w-40 shrink-0 items-center justify-end gap-1 tabular-nums">
         {isLive ? (
           <span className="flex items-center gap-1 text-xs font-medium text-accent-ok">
-            <span aria-hidden className="text-[10px] leading-none">●</span>
+            <span aria-hidden className="text-label leading-none">●</span>
             LIVE
           </span>
         ) : null}
-        <span className="text-[11px] text-slate-400" title="Selected window">
+        <span className="text-label text-ink-2" title="Selected window">
           {rangeLabel}
         </span>
       </div>
@@ -220,13 +369,27 @@ export default function TimeScrubber() {
               'focus:outline-none focus:ring-1 focus:ring-accent-info',
               speed === s
                 ? 'bg-accent-info/20 font-medium text-accent-info'
-                : 'text-slate-500 hover:text-slate-300',
+                : 'text-ink-3 hover:text-ink-1',
             )}
           >
             {s}x
           </button>
         ))}
       </div>
+
+      {TEMPORAL_AXES.map((axis) => (
+        <AxisStrip
+          key={axis}
+          axis={axis}
+          rows={rows}
+          layers={layers.filter((l) => l.time === axis)}
+          failed={failed}
+          lo={lo}
+          hi={hi}
+          windowStartMs={windowStartMs}
+          windowEndMs={windowEndMs}
+        />
+      ))}
     </div>
   )
 }
@@ -255,12 +418,12 @@ function LensTooltip({ active, payload }: { active?: boolean; payload?: unknown[
   if (!active || !payload || payload.length === 0) return null
   const p = (payload[0] as { payload: TimelinePoint }).payload
   return (
-    <div className="max-w-xs rounded border border-slate-700 bg-surface-100 p-2 text-[11px]">
-      <div className="truncate font-medium text-slate-200">{p.title}</div>
-      <div className="mt-1 text-slate-500">
+    <div className="max-w-xs rounded border border-line bg-surface-100 p-2 text-label">
+      <div className="truncate font-medium text-ink-1">{p.title}</div>
+      <div className="mt-1 text-ink-3">
         {p.kind} · {new Date(p.ts).toLocaleString()}
       </div>
-      {p.subtitle && <div className="mt-1 truncate text-slate-400">{p.subtitle}</div>}
+      {p.subtitle && <div className="mt-1 truncate text-ink-3">{p.subtitle}</div>}
     </div>
   )
 }
@@ -293,7 +456,7 @@ export function ReadTimelineLens({
   if (points.length === 0) {
     return (
       <div
-        className="flex h-full w-full items-center justify-center bg-surface-300 px-4 text-center text-sm text-slate-500"
+        className="flex h-full w-full items-center justify-center bg-surface-300 px-4 text-center text-sm text-ink-3"
         data-testid="read-timeline-lens-empty"
       >
         No timeline evidence for this read.

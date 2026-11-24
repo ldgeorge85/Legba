@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.bsi.press": {
+      "source": "source_bsi_press.yaml",
+      "state": "draft"
+    }
+  }
+}

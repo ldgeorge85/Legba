@@ -97,7 +97,7 @@ export default function TargetGraphPanel({ registration, scope }: PanelProps) {
     queryFn: async () => {
       try {
         return await apiGet<Page<FindingRow>>(
-          `/findings?target_id=${encodeURIComponent(target_id)}&limit=50`,
+          `/findings?target_id=${encodeURIComponent(target_id)}&limit=50&fields=summary`,
         )
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) return { data: [], next_cursor: null }
@@ -338,7 +338,7 @@ export default function TargetGraphPanel({ registration, scope }: PanelProps) {
 
         {/* Depth slider — bounds the lineage hops rendered (1..4). */}
         {root && (
-          <div className="flex items-center gap-2 mb-2 text-[11px]">
+          <div className="flex items-center gap-2 mb-2 text-label">
             <label htmlFor="target-graph-depth" className="text-slate-500 uppercase tracking-wider">
               depth
             </label>
@@ -363,7 +363,7 @@ export default function TargetGraphPanel({ registration, scope }: PanelProps) {
         {/* Row-kind filter chips — only kinds present in this walk. */}
         {allKinds.length > 0 && (
           <div
-            className="flex items-center gap-3 mb-2 text-[11px] flex-wrap"
+            className="flex items-center gap-3 mb-2 text-label flex-wrap"
             data-testid="target-graph-rel-filters"
           >
             <span className="text-slate-500 uppercase tracking-wider">row kinds</span>
@@ -421,14 +421,14 @@ export default function TargetGraphPanel({ registration, scope }: PanelProps) {
             )}
             {tooltip && (
               <div
-                className="pointer-events-none absolute z-10 bg-surface-50 border border-slate-700 rounded p-2 text-[11px] text-slate-200 shadow-lg max-w-[260px]"
+                className="pointer-events-none absolute z-10 bg-surface-50 border border-slate-700 rounded p-2 text-label text-slate-200 shadow-lg max-w-[260px]"
                 style={{
                   left: Math.min(tooltip.x + 12, (containerRef.current?.clientWidth ?? 0) - 270),
                   top: Math.max(tooltip.y - 8, 0),
                 }}
                 data-testid="target-graph-tooltip"
               >
-                <div className="text-slate-500 text-[10px] uppercase tracking-wide">
+                <div className="text-slate-500 text-label uppercase tracking-wide">
                   {tooltip.row_kind}
                 </div>
                 <div className="font-medium">{tooltip.title}</div>
@@ -446,7 +446,7 @@ export default function TargetGraphPanel({ registration, scope }: PanelProps) {
           </div>
         )}
 
-        <div className="text-[10px] text-slate-500 mt-2 px-1">
+        <div className="text-label text-slate-500 mt-2 px-1">
           hover a node for provenance (kind · analyst · time) · click to open lineage · filter by
           row kind + depth above
         </div>
@@ -457,7 +457,7 @@ export default function TargetGraphPanel({ registration, scope }: PanelProps) {
 
 function Legend() {
   return (
-    <div className="absolute bottom-2 left-2 bg-surface-50/90 border border-slate-700 rounded p-2 text-[10px] text-slate-300 space-y-1 max-h-[60%] overflow-auto">
+    <div className="absolute bottom-2 left-2 bg-surface-50/90 border border-slate-700 rounded p-2 text-label text-slate-300 space-y-1 max-h-[60%] overflow-auto">
       {(Object.keys(KIND_COLORS) as Array<keyof typeof KIND_COLORS>).map((k) => (
         <div key={k} className="flex items-center gap-1.5">
           <span

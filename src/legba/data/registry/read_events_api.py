@@ -72,6 +72,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from ..principals import handle_for_actor
 from .api import RegistryAPIDeps, require_bearer
 
 logger = logging.getLogger(__name__)
@@ -258,6 +259,9 @@ def build_read_events_router(deps: RegistryAPIDeps) -> APIRouter:
 
         rows: list[tuple[Any, ...]] = []
         reasons: list[str] = []
+        # Lane 9: whose reading this is (the signed-in person; with sign-in
+        # off, the shared credential every reader holds).
+        who = handle_for_actor(principal)
         for event in batch.events:
             reason = validate_event(event, now=now)
             if reason is not None:
@@ -277,6 +281,7 @@ def build_read_events_router(deps: RegistryAPIDeps) -> APIRouter:
                     event.workspace,
                     event.session_nonce,
                     event.dwell_ms,
+                    who,
                 )
             )
 
@@ -286,8 +291,8 @@ def build_read_events_router(deps: RegistryAPIDeps) -> APIRouter:
                     """
                     INSERT INTO public.read_events (
                         occurred_at, event_kind, subject_kind, subject_id,
-                        workspace, session_nonce, dwell_ms
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                        workspace, session_nonce, dwell_ms, written_by
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, legba_principal($8))
                     """,
                     rows,
                 )

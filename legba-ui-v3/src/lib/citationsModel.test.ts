@@ -791,6 +791,32 @@ describe('extractCitations — the 7b-i source + fold fields', () => {
   })
 })
 
+describe('extractCitations — C-1 claim rows', () => {
+  it('labels a claim citation "claim" with its claimant, and nothing else', () => {
+    const [claim, plain] = extractCitations({
+      data: {
+        citations: [
+          {
+            marker: '[1]',
+            signal_id: 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa',
+            source_id: 'source.ransomware_live.claims',
+            claim: { source_class: 'claim', claimant: 'ransomware.live (leak-site tracker)', verb: 'listed' },
+          },
+          {
+            marker: '[2]',
+            signal_id: 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb',
+            source_id: 'source.reuters.world',
+          },
+        ],
+      },
+    })
+    expect(claim.claimant).toBe('ransomware.live (leak-site tracker)')
+    expect(citationKindLabel(claim)).toBe('claim · ransomware.live (leak-site tracker)')
+    expect(plain.claimant).toBeUndefined()
+    expect(citationKindLabel(plain)).toBe('signal')
+  })
+})
+
 describe('citationMasthead', () => {
   it('prefers the outlet ref, with the `source.` plumbing prefix stripped', () => {
     expect(citationMasthead(cite({ sourceId: 'source.bbc.world' }))).toBe('Bbc world')

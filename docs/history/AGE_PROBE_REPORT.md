@@ -5,9 +5,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # The AGE probe — measured, 2026-08-03
 
-**The question this answers, in the operator's words:** *"are those limits AGE's, or just our
-default Postgres setup? Postgres is becoming the core of tons of things with tons of
-optimizations. Let's really gauge that."*
+> **Later outcome.** The AGE graph never held a production row and was dropped by migration
+> `20261115T1829_drop_empty_age_graph` (the `age` extension stays installed until the database image
+> is swapped). Graph-shaped reads use the relational `entity_edges` store and the rebuilt
+> `graph_arcs` projection; see [DATA_MODEL.md](../DATA_MODEL.md). This report is kept as the
+> measurement behind that direction.
+
+**The question this answers:** are the graph limits attributed to Apache AGE really AGE's, or
+those of an untuned default Postgres setup? Postgres carries a great deal of optimisation, so the
+question deserved measuring.
 
 It is a fair question and it deserved a measurement rather than an opinion. Postgres 18 is a
 genuinely fast engine and most "Postgres is slow at X" claims are really "nobody set
@@ -194,7 +200,7 @@ ones.
 
 ### 2.2 Knob by knob — what each one actually bought
 
-Read down a row and the answer to the operator's question is right there. Differences under
+Read down a row and the answer to the owner's question is right there. Differences under
 ~10 % on these cells are inside the noise and are reported as "nothing".
 
 | knob | on the VLE traversal (`age`) | on index-driven plans (`age_dir`) | on the relational twin (`sql`) |
@@ -233,7 +239,7 @@ found it:
 | AGE `vlp3` | 1,577 ms | 1,511 ms | — |
 | AGE `ego2` / `ego3` / `vlp4` / `triad` | timeout | timeout | — |
 
-So the operator's premise was right and its consequence is the opposite of what one would
+So the owner's premise was right and its consequence is the opposite of what one would
 expect: **Postgres really is accumulating enormous optimisation, our stack really is configured
 to collect it, and none of it reaches AGE's traversal operator.** The tuning that makes the
 relational store 16× faster makes the graph extension 0 % faster, on the same data, in the same
@@ -487,7 +493,7 @@ both problems at once: `ALTER DATABASE legba SET search_path = "$user", public, 
 — `ag_catalog` **last** — removes the per-acquire `SET` entirely *and* puts unqualified DDL
 back in `public`, verified above. Two lines of benefit for one `ALTER DATABASE` and a pool
 restart. It is not in this change set because it is a live-substrate write that wants an
-operator's window, but it is the cheapest item this probe found.
+owner's window, but it is the cheapest item this probe found.
 
 ---
 
@@ -623,7 +629,7 @@ all; they read the relational `nexuses` table, which is neither broken nor slow.
 single digits **on the working relational tools too**. That is no longer a story about AGE
 being a bad instrument; it is a story about nobody asking the question yet.
 
-Which is a statement about *sequencing*, not about the vision. The operator's framing stands:
+Which is a statement about *sequencing*, not about the vision. The owner's framing stands:
 walking the world graph interactively is the endgame. But the measured obstacle is upstream of
 any engine — 810 open derived typed edges over an entity space of ~50k, growing at ~12/day
 against ~9,900 candidate arrivals/day. There is no engine that makes 810 edges interesting.

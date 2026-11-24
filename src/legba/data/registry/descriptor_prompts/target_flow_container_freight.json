@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:flow_container_freight": {
+      "source": "target_flow_container_freight.yaml",
+      "state": "draft"
+    }
+  }
+}

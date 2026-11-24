@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:flow_energy_shipping": {
+      "source": "target_flow_energy_shipping.yaml",
+      "state": "draft"
+    }
+  }
+}

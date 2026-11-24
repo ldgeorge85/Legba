@@ -1,0 +1,47 @@
+{
+  "note": "The registry's light list weights, case by case. tests/data_pkg/test_list_weight_projections.py holds the registry's projections to these; tools/walk/walk.test.ts holds the walk's mirror (weights.mjs) to the same. Change both sides and this file together.",
+  "descriptor_body": [
+    {
+      "in": {
+        "identity": {"name": "Alpha", "aliases": ["a", "b"]},
+        "scope": {"domain": "country", "geo": ["FR"], "tags": ["g20"], "geometry": {"type": "Point", "coordinates": [2, 46]}, "themes": ["t"], "entity_classes": ["x"]},
+        "_auto_wired_sources": ["source.a"],
+        "sources": [{"id": "s1"}, {"id": "s2"}],
+        "coordination": {"k": "v"}
+      },
+      "out": {
+        "identity": {"name": "Alpha"},
+        "scope": {"domain": "country", "geo": ["FR"], "tags": ["g20"], "geometry": {"type": "Point", "coordinates": [2, 46]}, "themes": ["t"]},
+        "declared_sources": 2
+      }
+    },
+    {"in": {"scope": {"geo": ["GH"]}, "sources": []}, "out": {"scope": {"geo": ["GH"]}, "declared_sources": 0}},
+    {"in": {"scope": {"geo": ["OM"]}}, "out": {"scope": {"geo": ["OM"]}}},
+    {"in": {"sources": "not a list", "identity": {"aliases": []}}, "out": {}},
+    {"in": {"analyst": {"kind": "x"}}, "out": {}},
+    {"in": null, "out": {}}
+  ],
+  "signal_data": [
+    {
+      "in": {"title": "t", "title_en": "te", "published_at": "2026-11-13T21:45:37+00:00", "body": "long", "geo": {"lat": 40.7, "lon": -74.0, "country": "X", "countries": ["US"]}},
+      "out": {"title": "t", "title_en": "te", "published_at": "2026-11-13T21:45:37+00:00", "geo": {"lat": 40.7, "lon": -74.0}}
+    },
+    {"in": {"geo": ["FR"]}, "out": {}},
+    {"in": {"geo": null}, "out": {}},
+    {"in": {"geo": {"country": "X"}}, "out": {}},
+    {"in": {"geo": {"lat": 1.5}}, "out": {"geo": {"lat": 1.5}}},
+    {"in": {}, "out": {}}
+  ],
+  "signal_summary_columns": ["id", "title", "source_id", "category", "language", "geo", "tags", "event_timestamp", "produced_at", "data"],
+  "event_rows": [
+    {
+      "in": {"id": "ev-1", "title": "Port strike enters its third day", "summary": "A long summary the map never draws.", "category": "labour", "event_type": "incident", "severity": "high", "lifecycle_state": "developing", "lifecycle_changed_at": "2026-11-14T02:00:00Z", "time_start": "2026-11-13T06:00:00Z", "time_end": null, "geo": ["NL", "BE"], "geo_lat": 51.92, "geo_lon": 4.48, "locations": ["Rotterdam", "Antwerp"], "confidence": 0.8, "signal_count": 12, "distinct_source_count": 5, "oversized": false, "analyst_id": "event_builder", "target_id": "country_nl", "origin_class": "live", "valid_from": "2026-11-13T06:00:00Z", "valid_until": null, "produced_at": "2026-11-14T03:00:00Z"},
+      "out": {"id": "ev-1", "title": "Port strike enters its third day", "severity": "high", "lifecycle_state": "developing", "category": "labour", "target_id": "country_nl", "geo": ["NL", "BE"], "geo_lat": 51.92, "geo_lon": 4.48, "time_start": "2026-11-13T06:00:00Z", "time_end": null, "valid_from": "2026-11-13T06:00:00Z", "produced_at": "2026-11-14T03:00:00Z"}
+    },
+    {
+      "in": {"id": "ev-2", "title": "Unplaced", "summary": "", "category": "", "event_type": "incident", "severity": "low", "lifecycle_state": "emerging", "lifecycle_changed_at": null, "time_start": null, "time_end": null, "geo": ["FR"], "geo_lat": null, "geo_lon": null, "locations": [], "confidence": null, "signal_count": 0, "distinct_source_count": 0, "oversized": false, "analyst_id": null, "target_id": null, "origin_class": null, "valid_from": null, "valid_until": null, "produced_at": "2026-11-14T03:00:00Z"},
+      "out": {"id": "ev-2", "title": "Unplaced", "severity": "low", "lifecycle_state": "emerging", "category": "", "target_id": null, "geo": ["FR"], "geo_lat": null, "geo_lon": null, "time_start": null, "time_end": null, "valid_from": null, "produced_at": "2026-11-14T03:00:00Z"}
+    }
+  ],
+  "event_summary_columns": ["id", "title", "severity", "lifecycle_state", "category", "target_id", "geo", "geo_lat", "geo_lon", "time_start", "time_end", "valid_from", "produced_at"]
+}

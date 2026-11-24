@@ -55,6 +55,7 @@ from nacl.exceptions import BadSignatureError
 from nacl.signing import SigningKey, VerifyKey
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..display_policy import READER, display_payload
 from ..provenance import canonical_json
 from ..registry.signing import SigningIdentity
 
@@ -283,6 +284,61 @@ def _validate_args(args: Any, schema: Mapping[str, Any]) -> None:
 
 
 LatestOutputFetcher = Callable[..., Awaitable[list[dict[str, Any]]]]
+
+
+def json_safe(value: Any) -> Any:
+    """Recursively reduce an asyncpg value to JSON-native types.
+
+    The A2A routes hand fetched rows to ``JSONResponse`` (and the display
+    policy / signer before it); raw ``uuid.UUID`` and ``datetime`` values are
+    not serialisable (W11-F68a). UUID -> ``str``, datetime/date -> ISO-8601,
+    Decimal -> ``str`` (exact), bytes -> hex, mappings/sequences recursed.
+    """
+    import datetime as _dt
+    import decimal as _dec
+    import uuid as _uuid
+
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, _uuid.UUID):
+        return str(value)
+    if isinstance(value, (_dt.datetime, _dt.date, _dt.time)):
+        return value.isoformat()
+    if isinstance(value, _dec.Decimal):
+        return str(value)
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value).hex()
+    if isinstance(value, Mapping):
+        return {str(k): json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [json_safe(v) for v in value]
+    return str(value)
+
+
+async def fetch_latest_analyst_outputs(
+    pool: Any,
+    *,
+    analyst_ids: list[str],
+    limit: int = DEFAULT_RECENT_LIMIT,
+    target_filter: str | None = None,
+) -> list[dict[str, Any]]:
+    """The runtime's ``LatestOutputFetcher``: recent ``analyst_outputs`` rows
+    for the given analysts, JSON-safe (see :func:`json_safe`)."""
+    query = """
+        SELECT id, kind, title, body, data, produced_at,
+               target_id, analyst_id, analyst_version, schema_uri
+          FROM analyst_outputs
+         WHERE analyst_id = ANY($1::text[])
+    """
+    args: list[Any] = [list(analyst_ids)]
+    if target_filter is not None:
+        args.append(target_filter)
+        query += f" AND target_id = ${len(args)}"
+    args.append(limit)
+    query += f" ORDER BY produced_at DESC LIMIT ${len(args)}"
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(query, *args)
+    return [json_safe(dict(r)) for r in rows]
 """Callable signature ``async (analyst_ids: list[str], limit: int,
 target_filter: str | None) -> list[dict]``.
 
@@ -548,6 +604,9 @@ def register_a2a_skill_route(
         rows = await fetch_latest_outputs(
             analyst_ids=[reg.analyst_id], limit=limit, target_filter=None,
         )
+        # X2-B4: A2A is a reader surface — rows pass the reader display policy
+        # BEFORE signing (the signature covers what the caller receives).
+        rows = display_payload(rows, READER)
         payload = {"skill_id": skill_id, "findings": rows, "limit": limit}
         body = envelope_response(skill_id=skill_id, payload=payload, identity=identity)
         return JSONResponse(
@@ -647,6 +706,7 @@ def register_a2a_skill_route(
             limit=limit,
             target_filter=target_filter,
         )
+        rows = display_payload(rows, READER)  # X2-B4, before signing
         payload = {
             "skill_id": skill_id,
             "analyst_id": reg.analyst_id,
@@ -682,6 +742,8 @@ __all__ = [
     "HEADER_SIGNER_DID",
     "KIND_NAME",
     "LatestOutputFetcher",
+    "fetch_latest_analyst_outputs",
+    "json_safe",
     "TrustedKeyDirectory",
     "build_envelope",
     "envelope_response",

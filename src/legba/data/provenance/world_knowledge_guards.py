@@ -30,9 +30,17 @@ V-I banner already recorded about the markerless-uncited fold: they manipulate
 the report + ledger types that module owns, and ``_fold_guard_spans`` is shared
 with W31 and the absence route besides.
 
-THE IMPORT EDGE. The gazetteer comes from ``absence_slice`` (a sibling, one way,
-no cycle — the M15 guard and the V-B slice scope have always read the SAME
-tables). ``UnsupportedSpan`` cannot: ``verify`` imports THIS module, so the span
+THE GAZETTEER (W10 CANON-1). The tables — the officeholder country groups,
+their acronyms, the three polity offices, the M15 desk-slug and other-country
+sets — are the PROFILE'S, read at call time through ``legba.data.gazetteer``
+(the M15 guard and the V-B slice scope still read the SAME sections, through
+``absence_slice``'s matchers). A profile that does not declare a guard's
+sections gets a typed :class:`~legba.data.gazetteer.NotApplicable` from it —
+counted, logged once, labelled on the verify report — never a silent pass
+(SEAMS #67).
+
+THE IMPORT EDGE. The matchers come from ``absence_slice`` (a sibling, one way,
+no cycle). ``UnsupportedSpan`` cannot: ``verify`` imports THIS module, so the span
 type late-binds through :func:`_verify` at call time — the
 ``judge_input_checks`` / ``composition_integrity`` pattern. ``verify``
 RE-EXPORTS every name moved here, so ``verify.stale_leader_spans``,
@@ -45,12 +53,12 @@ import logging
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from functools import lru_cache
+from typing import TYPE_CHECKING, Any, NamedTuple
 
+from ..gazetteer import Gazetteer, NotApplicable, applicable, gazetteer
 from .origin import origin_class_clause
 from .absence_slice import (
-    _COUNTRY_TOKENS,
-    _TARGET_SLUG_TO_COUNTRY,
     _country_desk_slug,
     _mentions_own_country,
     _names_country,
@@ -91,10 +99,11 @@ def _verify():
 #
 # Both are cheap LEXICAL backstops that FLAG (add an unsupported span → demote
 # effective_confidence via the min(confidence, faithfulness) gate), NEVER delete.
-# Kept LOCAL + stdlib-only so verify.py stays slim-image-safe (no runtime import);
-# the curated maps deliberately MIRROR their runtime counterparts (the
-# legba.runtime.grounding current-officeholder anchor / finding_is_off_target
-# gazetteer) — minimal by design (US president only; a small country-token set).
+# Kept LOCAL + slim-image-safe (no runtime import); the M15 tables are the
+# profile gazetteer's (``slug_to_country`` / ``country_tokens``, W10 CANON-1),
+# which deliberately MIRROR their runtime counterparts (grounding's
+# ``target_slug_names`` / ``known_country_tokens``). M13 below stays a curated
+# code regex pair — US president only, the one confirmed live error.
 
 _STALE_LEADER_REASON = "stale_leader"
 _CROSS_TARGET_REASON = "cross_target_leak"
@@ -179,49 +188,21 @@ def stale_leader_spans(text: str) -> list[UnsupportedSpan]:
 
 _STALE_LEADER_VS_FACTS_REASON = "stale_leader_vs_facts"
 
-# Country alias groups: every surface form the extractor recognizes AND every
-# candidate ``facts.subject`` spelling probed (lower()-compared). One tuple per
-# country so a match on any surface probes all its spellings. Conservative +
-# minimal by design (the seeded-world scope), like the M13/M15 maps above.
-_OFFICEHOLDER_COUNTRY_GROUPS: tuple[tuple[str, ...], ...] = (
-    ("united states", "united states of america", "america", "usa"),
-    ("united kingdom", "great britain", "britain"),
-    ("russia", "russian federation"),
-    ("china", "people's republic of china"),
-    ("india",), ("france",), ("germany",), ("italy",), ("japan",),
-    ("canada",), ("mexico",), ("brazil",), ("argentina",), ("australia",),
-    ("turkey", "turkiye"), ("iran",), ("israel",), ("ukraine",),
-    ("saudi arabia",), ("south korea",), ("north korea",), ("south africa",),
-    ("indonesia",), ("pakistan",), ("venezuela",), ("slovenia",),
-    ("somalia",), ("sudan",), ("egypt",), ("nigeria",), ("poland",),
-    ("spain",), ("netherlands",),
-    ("democratic republic of the congo", "dr congo", "drc", "congo-kinshasa"),
-)
-# Uppercase-only acronym surfaces (NEVER matched case-insensitively — "us" /
-# "it" / "in" are ordinary English words) → their alias group.
-_OFFICEHOLDER_ACRONYMS: dict[str, tuple[str, ...]] = {
-    "US": _OFFICEHOLDER_COUNTRY_GROUPS[0],
-    "U.S.": _OFFICEHOLDER_COUNTRY_GROUPS[0],
-    "USA": _OFFICEHOLDER_COUNTRY_GROUPS[0],
-    "UK": _OFFICEHOLDER_COUNTRY_GROUPS[1],
-    "DRC": _OFFICEHOLDER_COUNTRY_GROUPS[-1],
-}
-
-# Role surface → the facts predicates whose CURRENT row is the reconciliation
-# BASIS (canonical lowercase-spaced forms — vocabulary.PREDICATE_CANONICAL).
-# "president" maps to BOTH office predicates: seeds store an executive
-# president under 'head of government' where a separate head of state exists
-# (e.g. Iran), and under 'head of state' elsewhere.
-_OFFICEHOLDER_ROLE_PREDICATES: dict[str, tuple[str, ...]] = {
-    "president": ("head of state", "head of government"),
-    "prime minister": ("head of government",),
-    "chancellor": ("head of government",),
-    "premier": ("head of government",),
-}
-_OFFICEHOLDER_FAMILY_PREDICATES: tuple[str, ...] = (
-    "head of state", "head of government",
-)
-_LEADER_OF_PREDICATE = "leader of"
+# Country alias groups (every surface form the extractor recognizes AND every
+# candidate ``facts.subject`` spelling probed, lower()-compared; one group per
+# country, the first spelling keys it), their uppercase-only ACRONYMS (NEVER
+# matched case-insensitively — "us" / "it" / "in" are ordinary English words)
+# and the three POLITY OFFICES (role surface -> the facts predicates whose
+# CURRENT row is the reconciliation basis; "president" maps to BOTH office
+# predicates: seeds store an executive president under 'head of government'
+# where a separate head of state exists, e.g. Iran) are the profile gazetteer's
+# sections ``officeholder_country_groups`` / ``officeholder_acronyms`` /
+# ``polity_offices`` (W10 CANON-1; formerly _OFFICEHOLDER_COUNTRY_GROUPS /
+# _OFFICEHOLDER_ACRONYMS / _OFFICEHOLDER_ROLE_PREDICATES /
+# _OFFICEHOLDER_FAMILY_PREDICATES / _LEADER_OF_PREDICATE here). Without them
+# the E-1 guard is NOT APPLICABLE, by name.
+_OFFICEHOLDER_GUARD = "officeholder_vs_facts"
+_CROSS_TARGET_GUARD = "cross_target_leak"
 
 # A qualifier immediately before the match that makes the phrase NOT a
 # current-officeholder claim ("former President X" is correct prose about a
@@ -233,36 +214,63 @@ _OFFICEHOLDER_SKIP_QUALIFIER_RE = re.compile(
 )
 
 
-def _officeholder_country_alternation() -> str:
+def _officeholder_country_alternation(
+    groups: tuple[tuple[str, ...], ...],
+    acronyms: dict[str, tuple[str, ...]],
+) -> str:
     """The country alternation for the extractor regexes: case-insensitive full
     names (longest-first so 'united states of america' beats 'united states')
     plus the uppercase-only acronym branch."""
     names = sorted(
-        {n for grp in _OFFICEHOLDER_COUNTRY_GROUPS for n in grp},
+        {n for grp in groups for n in grp},
         key=len, reverse=True,
     )
     ci = "|".join(re.escape(n) for n in names)
-    acro = "|".join(re.escape(a) for a in _OFFICEHOLDER_ACRONYMS)
+    acro = "|".join(re.escape(a) for a in acronyms)
     return f"(?:(?i:{ci})|(?:{acro}))"
 
 
 _OFFICEHOLDER_NAME_RE = r"[A-Z][\w'’.\-]+(?:\s+[A-Z][\w'’.\-]+){0,3}"
 _OFFICEHOLDER_ROLE_RE = r"(?i:prime\s+minister|president|chancellor|premier)"
-_COUNTRY_ALT = _officeholder_country_alternation()
 
-# "<Country>['s] [current|sitting|incumbent|new] <Role> <Name>"
-_OFFICEHOLDER_COUNTRY_FIRST_RE = re.compile(
-    rf"\b(?P<country>{_COUNTRY_ALT})(?:['’]s)?\s+"
-    rf"(?:(?i:current|sitting|incumbent|new)\s+)?"
-    rf"(?P<role>{_OFFICEHOLDER_ROLE_RE})\s+"
-    rf"(?P<name>{_OFFICEHOLDER_NAME_RE})"
-)
-# "<Role> <Name> of [the] <Country>"
-_OFFICEHOLDER_ROLE_FIRST_RE = re.compile(
-    rf"\b(?P<role>{_OFFICEHOLDER_ROLE_RE})\s+"
-    rf"(?P<name>{_OFFICEHOLDER_NAME_RE})\s+of\s+(?:(?i:the)\s+)?"
-    rf"(?P<country>{_COUNTRY_ALT})(?![a-z0-9])"
-)
+
+class _OfficeholderTables(NamedTuple):
+    """One gazetteer's officeholder tables + the two extractor regexes."""
+
+    groups: tuple[tuple[str, ...], ...]
+    acronyms: dict[str, tuple[str, ...]]
+    role_predicates: dict[str, tuple[str, ...]]
+    family_predicates: tuple[str, ...]
+    leader_of: str
+    #: "<Country>['s] [current|sitting|incumbent|new] <Role> <Name>"
+    country_first: "re.Pattern[str]"
+    #: "<Role> <Name> of [the] <Country>"
+    role_first: "re.Pattern[str]"
+
+
+@lru_cache(maxsize=8)
+def _officeholder_tables(gz: Gazetteer) -> _OfficeholderTables:
+    """Compiled once per gazetteer (the caller has checked :func:`applicable`)."""
+    groups = gz.get("officeholder_country_groups")
+    acronyms = gz.get("officeholder_acronyms") or {}
+    offices = gz.get("polity_offices")
+    country_alt = _officeholder_country_alternation(groups, acronyms)
+    country_first = re.compile(
+        rf"\b(?P<country>{country_alt})(?:['’]s)?\s+"
+        rf"(?:(?i:current|sitting|incumbent|new)\s+)?"
+        rf"(?P<role>{_OFFICEHOLDER_ROLE_RE})\s+"
+        rf"(?P<name>{_OFFICEHOLDER_NAME_RE})"
+    )
+    role_first = re.compile(
+        rf"\b(?P<role>{_OFFICEHOLDER_ROLE_RE})\s+"
+        rf"(?P<name>{_OFFICEHOLDER_NAME_RE})\s+of\s+(?:(?i:the)\s+)?"
+        rf"(?P<country>{country_alt})(?![a-z0-9])"
+    )
+    return _OfficeholderTables(
+        groups, acronyms, dict(offices.role_predicates),
+        tuple(offices.family_predicates), offices.leader_of,
+        country_first, role_first,
+    )
 
 
 @dataclass
@@ -275,11 +283,11 @@ class OfficeholderClaim:
     country_aliases: tuple[str, ...]  # candidate facts.subject spellings (lower)
 
 
-def _country_aliases_for(surface: str) -> tuple[str, ...]:
-    if surface in _OFFICEHOLDER_ACRONYMS:
-        return _OFFICEHOLDER_ACRONYMS[surface]
+def _country_aliases_for(surface: str, tables: _OfficeholderTables) -> tuple[str, ...]:
+    if surface in tables.acronyms:
+        return tables.acronyms[surface]
     s = surface.casefold()
-    for grp in _OFFICEHOLDER_COUNTRY_GROUPS:
+    for grp in tables.groups:
         if s in grp:
             return grp
     return (s,)
@@ -291,22 +299,29 @@ def extract_officeholder_claims(text: str) -> list[OfficeholderClaim]:
     Conservative: only the two explicit shapes; a preceding former/ex/vice/…
     qualifier disqualifies the match (correct prose about a predecessor or a
     different office must never enter the probe). De-duplicated on
-    (role, country, person). Never raises."""
+    (role, country, person). Never raises.
+
+    NOT APPLICABLE (``[]``, recorded by name — SEAMS #67) on a profile whose
+    gazetteer declares no officeholder groups or polity offices."""
     if not text:
         return []
+    gz = gazetteer()
+    if applicable(_OFFICEHOLDER_GUARD, gz) is not None:
+        return []
+    tables = _officeholder_tables(gz)
     out: list[OfficeholderClaim] = []
     seen: set[tuple[str, str, str]] = set()
-    for regex in (_OFFICEHOLDER_COUNTRY_FIRST_RE, _OFFICEHOLDER_ROLE_FIRST_RE):
+    for regex in (tables.country_first, tables.role_first):
         for m in regex.finditer(text):
             window = text[max(0, m.start() - 24):m.start()]
             if _OFFICEHOLDER_SKIP_QUALIFIER_RE.search(window):
                 continue
             role = re.sub(r"\s+", " ", m.group("role")).strip().casefold()
-            if role not in _OFFICEHOLDER_ROLE_PREDICATES:
+            if role not in tables.role_predicates:
                 continue  # defensive — the alternation and the map must agree
             surface = m.group("country").strip()
             person = m.group("name").strip()
-            aliases = _country_aliases_for(surface)
+            aliases = _country_aliases_for(surface, tables)
             key = (role, aliases[0], person.casefold())
             if key in seen:
                 continue
@@ -384,20 +399,25 @@ async def stale_leader_vs_facts_spans(
     emits a ``stale_leader_vs_facts`` span when the claimed office has a
     current fact naming someone else AND the claimed person matches NO current
     family officeholder. Fail-open + degrade-not-drop throughout; never raises.
+    Not applicable (``[]``, by name) on a profile with no officeholder tables —
+    the verify fold labels the report ``gazetteer_not_applicable_<guard>``.
     """
     try:
         claims = extract_officeholder_claims(text)
     except Exception as exc:  # pragma: no cover — pure path, defensive only
         logger.warning("verify.stale_leader_vs_facts.extract_failed err=%s", exc)
         return []
+    if not claims:
+        return []
+    tables = _officeholder_tables(gazetteer())
     spans: list[UnsupportedSpan] = []
     for claim in claims[:_STALE_VS_FACTS_MAX_CLAIMS]:
         try:
             rows = await conn.fetch(
                 _CURRENT_OFFICEHOLDER_SQL,
                 list(claim.country_aliases),
-                list(_OFFICEHOLDER_FAMILY_PREDICATES),
-                _LEADER_OF_PREDICATE,
+                list(tables.family_predicates),
+                tables.leader_of,
             )
         except Exception as exc:  # degrade-not-drop — facts read must not block
             logger.warning(
@@ -405,7 +425,7 @@ async def stale_leader_vs_facts_spans(
                 claim.country_surface, exc,
             )
             return spans
-        role_preds = set(_OFFICEHOLDER_ROLE_PREDICATES[claim.role])
+        role_preds = set(tables.role_predicates[claim.role])
         basis = sorted({
             str(r["value"]) for r in rows
             if r["predicate"] in role_preds and r["value"]
@@ -414,10 +434,10 @@ async def stale_leader_vs_facts_spans(
             continue  # no CURRENT fact for the claimed office — fail-open
         holders = [
             str(r["value"]) for r in rows
-            if r["predicate"] in _OFFICEHOLDER_FAMILY_PREDICATES and r["value"]
+            if r["predicate"] in tables.family_predicates and r["value"]
         ] + [
             str(r["subject"]) for r in rows
-            if r["predicate"] == _LEADER_OF_PREDICATE and r["subject"]
+            if r["predicate"] == tables.leader_of and r["subject"]
         ]
         claimed_tokens = _person_name_tokens(claim.person)
         if not claimed_tokens:
@@ -441,13 +461,21 @@ async def stale_leader_vs_facts_spans(
 
 def cross_target_leak_span(
     *, title: str, body: str, target_id: str | None,
-) -> UnsupportedSpan | None:
+) -> UnsupportedSpan | NotApplicable | None:
     """FLAG a per-country finding whose named subject-country contradicts its desk
     (M15): it names a DIFFERENT country and NEVER its own target geo.
 
     Conservative fail-OPEN (mirrors :func:`grounding.finding_is_off_target`): a
     finding that mentions its own country anywhere, or that names no country at
-    all, is NOT flagged. Non-country / unmapped desks are never flagged."""
+    all, is NOT flagged. Non-country / unmapped desks are never flagged.
+
+    On a profile whose gazetteer declares no desk-id convention, desk-slug
+    names or other-country set, the answer is a (falsy) :class:`NotApplicable`
+    naming them — counted, logged once — never a silent pass (SEAMS #67)."""
+    gz = gazetteer()
+    na = applicable(_CROSS_TARGET_GUARD, gz)
+    if na is not None:
+        return na
     slug = _country_desk_slug(target_id)
     if slug is None:
         return None
@@ -457,7 +485,7 @@ def cross_target_leak_span(
     # normal prose, firing the on-target early-return on EVERY finding and silently
     # disabling the guard for those desks. Fail-OPEN when the desk has no country-
     # NAME mapping (an unmapped slug): we cannot tell its own country → never flag.
-    own = {n.casefold() for n in _TARGET_SLUG_TO_COUNTRY.get(slug, ())}
+    own = {n.casefold() for n in gz.get("slug_to_country").get(slug, ())}
     if not own:
         return None
     haystack_lc = f"{title}\n{body}".casefold()
@@ -468,7 +496,7 @@ def cross_target_leak_span(
     # `cross_target_leak` class was a finding that said "US" six times.
     if _mentions_own_country(slug, own, title, body):
         return None  # on-target — mentions its own geo somewhere
-    others = {c for c in _COUNTRY_TOKENS if c not in own}
+    others = {c for c in gz.get("country_tokens") if c not in own}
     # SYMMETRY: the other-country arm reads demonyms too, so the tolerance
     # cannot skew the on-target / off-target decision in one direction only.
     named = sorted(c for c in others if _names_country(c, haystack_lc))

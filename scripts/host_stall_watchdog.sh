@@ -197,6 +197,16 @@ esac
 
 # Durable, operator-visible recovery row (fail-safe: a failed insert never
 # undoes the recovery — log and move on).
+# L-1 (single alert path): raise through scripts/lib/legba_alert.sh first; the
+# direct push below is the fallback (and the only path unless LEGBA_ALERT_RAISE=1).
+_legba_alert_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/legba_alert.sh"
+if [ -r "$_legba_alert_lib" ]; then . "$_legba_alert_lib"; else legba_raise() { return 1; }; fi
+if legba_raise host_stall_recovered high pipeline \
+    "Legba: pipeline stall auto-recovered (freshest signal ${age}s old)" \
+    "The host stall watchdog restarted the sidecar and the runtime: the freshest signal was ${age}s old (threshold ${MAX_AGE_SECS}s). Recipe: restart sidecar + runtime."; then
+  log "RECOVERED restart issued; raised on the alert log. Cooldown ${COOLDOWN_SECS}s armed."
+  exit 0
+fi
 payload="{\"kind\":\"pipeline_stall_auto_recovery\",\"age_seconds\":${age},\"threshold_seconds\":${MAX_AGE_SECS},\"recovered_at\":\"$(now_iso)\",\"recipe\":\"restart sidecar + runtime (host_stall_watchdog)\"}"
 if ! docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -qc \
     "INSERT INTO alert_sink_deliveries (sink_kind, sink_target, status, channel_name, severity, payload_summary)

@@ -2,64 +2,86 @@
      SPDX-License-Identifier: AGPL-3.0-or-later -->
 # Legba documentation
 
-Four tiers. The front door tells you what it is and gets you running; the design tier describes the
-shape and the reason for the shape, in the present tense; the reference tier is tables and procedures
-checked against the tree; the history tier is where the dates live.
+Every page in this directory, grouped by what you are trying to do. The root [README](../README.md)
+says what Legba is; [CONTRIBUTING](../CONTRIBUTING.md) is the short guide for changing it.
 
-## Front door
+## Start
 
 | Page | One job |
 |---|---|
-| [README](../README.md) | what Legba is, in two sentences and one diagram |
-| [Direction](DIRECTION.md) | the rule that decides what gets built next, and what is next |
 | [Tour](TOUR.md) | your first ten minutes: a finding, its citations, its verification, the source |
-| [Setup](SETUP.md) | from zero to a running instance |
-| [Operating your instance](OPERATING_YOUR_INSTANCE.md) | seeding, curating, measuring and governing your own deployment |
-| [FAQ](FAQ.md) | the questions people ask first |
+| [Setup](SETUP.md) | from zero to a running instance, and who can get in afterwards |
+| [Bring-up](BRINGUP.md) | how a fresh instance gets its descriptors registered |
+| [Operating your instance](OPERATING_YOUR_INSTANCE.md) | seeding, curating, measuring and governing a deployment; turning on sign-in, and what each role can and cannot do |
+| [FAQ](FAQ.md) | short answers to first questions, linked to the pages that own them |
 
-## Design
+## Concepts
 
-| Page | Covers |
+| Page | One job |
 |---|---|
 | [Architecture](ARCHITECTURE.md) | the planes, the descriptor model, the analyst kinds, the tower, the measurement layer, the actor runtime |
-| [Design rules](DESIGN.md) | the implementation contract: gates, the slim registry image, migrations, flags, budgets, tests |
-| [Analysis](ANALYSIS.md) | every analyst mechanism: what it reads, what it writes, how it is measured, its cadence |
 | [Flows](FLOWS.md) | the end-to-end paths as numbered steps, with the table or route each step touches |
+| [Data model](DATA_MODEL.md) | the tables by plane: who wrote each row, citations as rows, the held record, origins, events, the temporal surface and the graph projection |
+| [Analysis](ANALYSIS.md) | every analyst mechanism: what it reads, what it writes, how it is measured, its cadence |
+| [The correctness grader](CORRECTNESS_GRADER.md) | the per-unit grader and its badges |
+| [The reference builder](REFERENCE_BUILDER.md) | the job that builds the references the grader scores against |
+| [Forecast ledger](LEDGER.md) | forecasts: the resolver vocabulary, the seal, resolution, adding a forecast |
 | [Acquisition](ACQUISITION.md) | how data enters: sources, enrichment, fan-out |
-| [Data model](DATA_MODEL.md) | the tables that matter, grouped by plane |
-| [Data model v3](DATA_MODEL_V3.md) · [its build order](V3_IMPLEMENTATION_PLAN.md) | events, the temporal surface, one typed graph |
-| [Data sources](DATA_SOURCES.md) | the source catalog and its tiers |
-| [Collections](COLLECTIONS.md) | curated holdings of the past: the manifest, the firewall, the verifier |
-| [Layers](LAYERS.md) | the per-country layer table + aperture declaration |
+| [On-request fetching](operations/on-request-fetching.md) | the ingestion intake and the page pipeline |
 | [Manual ingest](MANUAL_INGEST_FORMAT.md) | the batch format for hand-supplied data |
-| [AI models](AI_MODELS.md) | the model planes, how the runtime reaches them, the judge |
-| [Agency gating](AGENCY_GATING_MODEL.md) | how an analyst is allowed to act |
-| [The correctness grader](CORRECTNESS_GRADER.md) · [the reference builder](REFERENCE_BUILDER.md) | the desks graded against independently built references |
-| [UI](UI.md) | the operator workstation |
+| [Data sources](DATA_SOURCES.md) | the source catalog model: scope, kinds, classes, licences, source layers |
+| [Claim sources](operations/claim-sources.md) | how to switch on a claim source |
+| [Collections](COLLECTIONS.md) | curated holdings of the past: the manifest, the firewall, the verifier |
+| [AI models](AI_MODELS.md) | every model, its plane and purpose, and how the runtime reaches it |
+| [Agency gating](AGENCY_GATING_MODEL.md) | the trust model for what an analyst may fetch or do |
+| [UI](UI.md) | the console and the phone shell: pages, panels, sign-in and roles on screen, building and running |
+| [Instance profiles](PROFILES.md) | the manifest that makes an instance: what each key means, how one is selected |
+| [Direction](DIRECTION.md) | the rule that orders the work, and what is next |
+
+## Operations
+
+| Page | One job |
+|---|---|
+| [Runbook](RUNBOOK.md) | start, stop, deploy, health, routine tasks (accounts included), failure signatures, release |
+| [Rolling deploy](operations/rolling-deploy.md) | shipping a change to a provisioned stack with the tiered deploy script; the nightly suite |
+| [Archive tiering](operations/archive-tiering.md) | hot to cold tiering of the evidence archive, restore, moving the cold tier |
+| [Alerting](ALERTING.md) | one alert path, one log, one page rule |
 
 ## Reference
 
-| Page | Holds |
+| Page | One job |
 |---|---|
-| [Runbook](RUNBOOK.md) | start, stop, deploy, health, routine tasks, failure signatures, release |
+| [Status](STATUS.md) | what is live, what is off by default or partial, and what is not built |
+| [Release state](RELEASE_STATE.md) | generated: the reference deployment's counts (the example instance's, not the product's scale) |
+| [Release-state matrix](RELEASE_STATE_MATRIX.md) | every route and UI panel classified by release state (its panel table is generated) |
+| [API roles](API_ROLES.md) | generated: every route's minimum role, with and without sign-in |
+| [Declared types](TYPES.md) | generated: the type families in the registry |
+| [Adding a type](ADDING_A_TYPE.md) | how to add a type to the registry |
 | [Tunables](TUNABLES.md) | every budget, cap, governor and threshold, with the plane that pays |
-| [Status](STATUS.md) | what is live, gated, built-not-deployed, seam, or designed |
-| [Release state](RELEASE_STATE.md) · [release matrix](RELEASE_STATE_MATRIX.md) | generated counts and per-route maturity |
+| [Seams](SEAMS.md) | the registry of deliberately not-built things, with their guard rails |
 | [Code map](CODE_MAP.md) | one row per module family |
 | [Glossary](GLOSSARY.md) | the platform's own words |
-| [Seams](SEAMS.md) | the registry of deliberately not-built things, with their guard rails |
-| [Tickets](TICKETS.md) | where ticket and decision ids are defined |
+
+## Contributing
+
+| Page | One job |
+|---|---|
+| [Design rules](DESIGN.md) | the implementation contract: gates, the slim registry image, migrations, flags, banned dependencies, security boundaries |
+| [Ticket and decision ids](../CONTRIBUTING.md#ticket-and-decision-ids-in-comments) | how to read the ids cited in code comments |
 
 ## History
 
-| Page | Holds |
+| Page | One job |
 |---|---|
 | [Changelog](../CHANGELOG.md) | one line per dated change, newest first |
-| [docs/history](history/README.md) | the incident write-ups, the decision records, and the measured reports: the AGE probe, the typing bake-off and its rerun |
+| [History index](history/README.md) | what each measured report below answers |
+| [AGE probe](history/AGE_PROBE_REPORT.md) | the graph-engine probe of 2026-08-03 |
+| [Typing bake-off](history/TYPING_BAKEOFF.md) | the typing bake-off of 2026-08-03 and its rerun of 2026-09-22 |
+| [Consult divergence](history/CONSULT_DIVERGENCE_2026-09-28.md) | one consult question run five times on two models |
 
 ## Reading paths
 
-- **Evaluating it:** README, Status, Direction, then Analysis.
+- **Evaluating it:** the root README, Status, Direction, then Analysis.
 - **Running it:** Setup, Tour, Runbook, Operating your instance.
 - **Changing it:** Design rules, Architecture, Code map, Seams, then [Contributing](../CONTRIBUTING.md).
 - **Auditing a claim:** Tour, then Analysis on the judge, the grader and the audit, then Flows.

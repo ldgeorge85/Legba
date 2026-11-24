@@ -43,11 +43,42 @@ class _Row(dict):
 
 
 class _NoReadBackPg:
-    """A pg pool whose acquire() blows up — proves the chat path never reads
-    back from analyst_outputs."""
+    """A pg pool that refuses the deep read-back (``fetchrow``) — proves the
+    chat path never reads its answer back from analyst_outputs. The one read
+    it does make is the cited-ref kind lookup (``fetch``, W11 walk fix:
+    ``cited_ref_kinds``), answered from ``tables``: ``{table: [ids]}``."""
 
-    def acquire(self):  # noqa: D401 — must be awaitable-context, but never used
-        raise AssertionError("chat path must not read back from the DB")
+    def __init__(self, tables: dict[str, list[str]] | None = None) -> None:
+        self.tables = tables if tables is not None else {
+            "signals": ["11111111-1111-1111-1111-111111111111"],
+        }
+        self.lookups: list[str] = []
+
+    def acquire(self):
+        pg = self
+
+        class _Conn:
+            async def fetchrow(self, *args, **kwargs):
+                raise AssertionError("chat path must not read back from the DB")
+
+            async def fetch(self, sql, ids):
+                table = sql.split(" FROM ")[1].split()[0]
+                pg.lookups.append(table)
+                kind = sql.split("SELECT id, ")[1].split(" AS k")[0].strip("'")
+                held = set(pg.tables.get(table, []))
+                return [
+                    {"id": i, "k": ("finding" if kind == "kind" else kind)}
+                    for i in ids if str(i) in held
+                ]
+
+        class _Ctx:
+            async def __aenter__(self_inner):
+                return _Conn()
+
+            async def __aexit__(self_inner, *exc):
+                return False
+
+        return _Ctx()
 
 
 class _ReadBackPg:
@@ -210,6 +241,39 @@ def test_chat_envelope_no_readback(monkeypatch):
     assert sent["messages"] == [{"role": "user", "content": "hi"}]
 
 
+_SIT = "328eb202-681a-4a39-a38e-ca387fb55e37"
+_FIND = "22222222-2222-2222-2222-222222222222"
+_GONE = "33333333-3333-3333-3333-333333333333"
+
+
+def test_chat_cited_refs_carry_their_true_kind(monkeypatch):
+    """Roll 84's live walk: a cited SITUATION came back labelled ``signal``, so
+    the Record sheet asked ``/lineage/signal/<situation id>`` and got a 404.
+    Each ref is now typed by the table its id is in; an id in none is
+    ``unresolved`` (the console shows it without a link)."""
+    sig = "11111111-1111-1111-1111-111111111111"
+    envelope = {
+        "outcome": "success",
+        "mode": "chat",
+        "consult_response": {
+            "question": "q", "answer": "a",
+            "cited_substrate_refs": [_SIT, sig, _FIND, _GONE],
+        },
+        "derived_from": [],
+    }
+    monkeypatch.setattr(consult_api.httpx, "AsyncClient", _stub_dapr(envelope, {}))
+    pg = _NoReadBackPg({"situations": [_SIT], "signals": [sig], "analyst_outputs": [_FIND]})
+    r = TestClient(_build_app(pg)).post(
+        "/api/v1/consult", json={"question": "q", "mode": "chat"},
+    )
+    assert r.status_code == 200, r.text
+    assert [(c["kind"], c["id"]) for c in r.json()["cited_refs"]] == [
+        ("situation", _SIT), ("signal", sig), ("finding", _FIND), ("unresolved", _GONE),
+    ]
+    # one batched lookup per substrate table, not one per ref
+    assert sorted(pg.lookups) == sorted(set(pg.lookups))
+
+
 def test_chat_request_id_passthrough(monkeypatch):
     envelope = {
         "outcome": "success",
@@ -306,17 +370,25 @@ def test_default_mode_is_chat(monkeypatch):
 def test_resolve_consult_model_override_mapping():
     """The allowlist maps friendly→component id; the default plane threads NO
     override (default-preserving)."""
-    assert consult_api.resolve_consult_model_override(None) == ("opus", None)
-    assert consult_api.resolve_consult_model_override("opus") == ("opus", None)
-    assert consult_api.resolve_consult_model_override("core") == (
-        "core", "llm.primary.openai_compat",
+    # DEC-17a (2026-10-03): the FREE core plane is the default — no override is
+    # threaded for it; Opus (and Fable) are explicit picks that DO thread one.
+    assert consult_api.resolve_consult_model_override(None) == ("core", None)
+    assert consult_api.resolve_consult_model_override("core") == ("core", None)
+    assert consult_api.resolve_consult_model_override("opus") == (
+        "opus", "llm.anthropic.opus_4_7",
     )
     assert consult_api.resolve_consult_model_override("fable") == (
         "fable", "llm.anthropic.fable_5_1",
     )
     assert consult_api.CONSULT_MODEL_ALLOWLIST["opus"] == "llm.anthropic.opus_4_7"
     assert consult_api.CONSULT_MODEL_ALLOWLIST["fable"] == "llm.anthropic.fable_5_1"
-    assert consult_api.DEFAULT_CONSULT_MODEL == "opus"
+    assert consult_api.DEFAULT_CONSULT_MODEL == "core"  # DEC-17a (2026-10-03): the free plane is the default
+    # roll 84: a request that names no model answers on core; opus and fable
+    # stay in the request's closed choice.
+    req = consult_api.ConsultRequest(question="q")
+    assert consult_api.resolve_consult_model_override(req.model) == ("core", None)
+    for m in ("opus", "fable", "core"):
+        assert consult_api.ConsultRequest(question="q", model=m).model == m
 
 
 def _chat_envelope() -> dict[str, Any]:
@@ -328,8 +400,8 @@ def _chat_envelope() -> dict[str, Any]:
     }
 
 
-def test_model_core_threads_override_and_echoes(monkeypatch):
-    """model='core' → the sanctioned component id is threaded into the invoke
+def test_model_opus_threads_override_and_echoes(monkeypatch):
+    """model='opus' → the sanctioned component id is threaded into the invoke
     body, and the response echoes the chosen friendly plane."""
     captured: dict[str, Any] = {}
     monkeypatch.setattr(
@@ -337,18 +409,18 @@ def test_model_core_threads_override_and_echoes(monkeypatch):
     )
     app = _build_app(_NoReadBackPg())
     client = TestClient(app)
-    r = client.post("/api/v1/consult", json={"question": "q", "model": "core"})
+    r = client.post("/api/v1/consult", json={"question": "q", "model": "opus"})
     assert r.status_code == 200, r.text
     assert (
         captured["body"]["inputs"][0]["llm_component_override"]
-        == "llm.primary.openai_compat"
+        == "llm.anthropic.opus_4_7"
     )
-    assert r.json()["model"] == "core"
+    assert r.json()["model"] == "opus"
 
 
 def test_model_default_omits_override(monkeypatch):
-    """No model (or model='opus') → NO override key is threaded (the run keeps the
-    cached Opus primary), and the response echoes 'opus'."""
+    """No model (or model='core') → NO override key is threaded (the run keeps the
+    cached CORE primary — the descriptor's own route), and the response echoes 'core'."""
     captured: dict[str, Any] = {}
     monkeypatch.setattr(
         consult_api.httpx, "AsyncClient", _stub_dapr(_chat_envelope(), captured)
@@ -358,13 +430,13 @@ def test_model_default_omits_override(monkeypatch):
     r = client.post("/api/v1/consult", json={"question": "q"})
     assert r.status_code == 200, r.text
     assert "llm_component_override" not in captured["body"]["inputs"][0]
-    assert r.json()["model"] == "opus"
+    assert r.json()["model"] == "core"
 
     captured.clear()
-    r2 = client.post("/api/v1/consult", json={"question": "q", "model": "opus"})
+    r2 = client.post("/api/v1/consult", json={"question": "q", "model": "core"})
     assert r2.status_code == 200
     assert "llm_component_override" not in captured["body"]["inputs"][0]
-    assert r2.json()["model"] == "opus"
+    assert r2.json()["model"] == "core"
 
 
 def test_model_fable_threads_override_and_echoes(monkeypatch):
@@ -557,6 +629,73 @@ async def test_persist_assistant_turn_threads_steps(monkeypatch):
     assert captured["role"] == "assistant"
     assert captured["steps"] == steps
     assert captured["finding_id"] == "f-1"
+    # 0223 — the response bag rides every assistant turn; an answer with no
+    # census/hold/floor still records the bag, with those keys null.
+    assert captured["response"] == {
+        "uncertainty": None,
+        "provenance_census": None,
+        "hold_reason": None,
+        "uncertainty_floor_applied": None,
+        "watch_candidates": None,
+        "model": None,
+        "context_compaction": None,
+        "watch_minted": None,
+        # C-1b — the case key; None = the turn presented no case.
+        "case": None,
+        # C-2b-1 — the writes key; None = the turn was not armed for changes.
+        "writes": None,
+        # Q-1 — the turn contract; None = the run carried none.
+        "contract": None,
+    }
+
+
+def test_projection_lifts_floor_stamp_and_watch_candidates():
+    """§B.4's two facts used to ride only the ``build_consult_response`` step
+    frame. The projection lifts them so the live body AND the persisted turn
+    (0223) carry them; absent stays absent (None), never an empty list."""
+    floor = {"from": 0.3, "to": 0.6, "resolved": 2}
+    resp = consult_api._project_consult_response(
+        {
+            "answer": "a",
+            "uncertainty": 0.6,
+            "data": {
+                "uncertainty_floor_applied": floor,
+                "watch_candidates": ["the vote is postponed"],
+                "provenance_census": {"live": 2, "model_knowledge": 1},
+                "hold_reason": None,
+            },
+        },
+        finding_id=None,
+        derived_from=[],
+        model="core",
+    )
+    assert resp.uncertainty_floor_applied == floor
+    assert resp.watch_candidates == ["the vote is postponed"]
+    bag = consult_api.consult_persistence.response_bag(resp)
+    assert bag == {
+        "uncertainty": 0.6,
+        "provenance_census": {"live": 2, "model_knowledge": 1},
+        "hold_reason": None,
+        "uncertainty_floor_applied": floor,
+        "watch_candidates": ["the vote is postponed"],
+        "model": "core",
+        "context_compaction": None,
+        "watch_minted": None,
+        # C-1b — the case key; None = the turn presented no case.
+        "case": None,
+        # C-2b-1 — the writes key; None = the turn was not armed for changes.
+        "writes": None,
+        # Q-1 — the turn contract; None = the run carried none.
+        "contract": None,
+    }
+
+    bare = consult_api._project_consult_response(
+        {"answer": "a", "data": {"watch_candidates": []}},
+        finding_id=None,
+        derived_from=[],
+    )
+    assert bare.uncertainty_floor_applied is None
+    assert bare.watch_candidates is None
 
 
 @pytest.mark.asyncio
@@ -576,3 +715,32 @@ async def test_persist_assistant_turn_no_session_is_noop(monkeypatch):
     resp = consult_api.ConsultResponse(answer="a")
     await consult_api._persist_assistant_turn(object(), None, resp, steps=[{"x": 1}])
     assert called is False
+
+
+def test_chat_threads_an_existing_session_into_the_invoke_body(monkeypatch):
+    """W3 / F-4 — the watch mint names the session a minted watch came from, so
+    the actor's first input carries ``session_id`` whenever one exists. (With no
+    session — an audit outage — the body is unchanged; the pinned-context
+    golden holds that case.)"""
+    envelope = {
+        "outcome": "success",
+        "mode": "chat",
+        "consult_response": {"question": "q", "answer": "a"},
+        "derived_from": [],
+    }
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        consult_api.httpx, "AsyncClient", _stub_dapr(envelope, captured)
+    )
+
+    async def _no_audit(*_a: Any, **_k: Any) -> None:
+        return None
+
+    monkeypatch.setattr(consult_api.consult_persistence, "append_turn", _no_audit)
+    client = TestClient(_build_app(_NoReadBackPg()))
+    r = client.post(
+        "/api/v1/consult",
+        json={"question": "q", "mode": "chat", "session_id": "sess-f4"},
+    )
+    assert r.status_code == 200, r.text
+    assert captured["body"]["inputs"][0]["session_id"] == "sess-f4"

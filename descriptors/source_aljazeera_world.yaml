@@ -44,6 +44,8 @@ config:
   url:
     factory_kind: text
     raw: "https://www.aljazeera.com/xml/rss/all.xml"
+  # W6 SPLIT-1 fold, 2026-10-04: the live head carries this; the tree now does too: the sports-noise exclusion set live by PUT.
+  keyword_exclude: [football, Premier League, Champions League, tennis, cricket, Formula 1, Olympics]
 
 pipeline:
   ingestion_filters:

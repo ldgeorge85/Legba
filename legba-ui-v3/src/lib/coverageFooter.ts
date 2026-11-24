@@ -287,7 +287,9 @@ export function judgeFigure(
   return {
     id: 'judge',
     label: 'judge',
-    value: `${mean.toFixed(2)} faithfulness`,
+    // C2 — named for what it is (a MEAN over a stated window), so it cannot be
+    // read against a per-record faithfulness or an LLM-judged share.
+    value: `${mean.toFixed(2)} mean faithfulness · ${window}`,
     asOf: ago(stamp, now),
     title:
       `Mean faithfulness ${mean.toFixed(4)} over ${NUM.format(t.faithfulness_n ?? 0)} scored ` +

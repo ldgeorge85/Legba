@@ -48,7 +48,12 @@ import {
   type GapUnit,
 } from '@/lib/gapStripModel'
 import type { CoverageRow } from '@/lib/assemblyModel'
+import { PROFILE_UI } from '@/lib/profileUi'
 import type { ReferenceState, UnitCorrectness } from '@/lib/unitCorrectnessModel'
+
+/** The profile's subject noun (the exemplar's "desk") — UI-B3: every line
+ *  this model generates names the subject in the profile's words. */
+const NOUN = PROFILE_UI.subject.singular.toLowerCase()
 
 // ---------------------------------------------------------------------------
 // The `POST /v3/export` JSON document, as the route publishes it.
@@ -255,6 +260,7 @@ export type EvidenceState =
   | 'insufficient'
   | 'stale'
   | 'no_read'
+  | 'carried_unsupported'
 
 /** The word each state prints. Never a colour alone, never an abbreviation. */
 export const EVIDENCE_STATE_LABEL: Record<EvidenceState, string> = {
@@ -265,6 +271,7 @@ export const EVIDENCE_STATE_LABEL: Record<EvidenceState, string> = {
   insufficient: 'insufficient evidence',
   stale: 'stale',
   no_read: 'no read yet',
+  carried_unsupported: 'carried, unsupported',
 }
 
 /** Which record decided the state — printed, so the reader can go check it. */
@@ -294,6 +301,14 @@ export interface EvidenceUnitRow {
   correctnessBadge: string | null
   /** The typed absences whose subject IS this unit, in the route's order. */
   absences: { kind: AbsenceKind; label: string; reason: string; stale: boolean }[]
+  /** W11 — the age (h) of the read the composition QUOTED, and whether the
+   *  composition marked it stale (older than the unit's cadence × the
+   *  multiple). Null = not measured; a fresh-marked read is `false`. */
+  quotedAgeH?: number | null
+  quotedStale?: boolean | null
+  /** W11-F14 — "status 'moderate' held; last re-evidenced 336 h ago" when the
+   *  composition's register named this unit carried, unsupported; else null. */
+  carried?: string | null
 }
 
 /** The state the coverage register's own word maps onto, when it is not
@@ -309,6 +324,8 @@ function coverageState(status: string): EvidenceState | null {
       return 'no_head_in_horizon'
     case 'unverified':
       return 'unverified'
+    case 'carried_unsupported':
+      return 'carried_unsupported'
     default:
       return 'unverified'
   }
@@ -428,8 +445,29 @@ export function deriveEvidenceTable(input: EvidenceTableInput): EvidenceUnitRow[
       correctnessCoverage: graded?.coverage_share ?? null,
       correctnessBadge: graded?.badge ?? null,
       absences: absencesForUnit(absences, unit.id),
+      quotedAgeH: cov?.age_h ?? null,
+      quotedStale: cov?.stale ?? null,
+      carried: cov ? carriedReadText(cov) : null,
     }
   })
+}
+
+/** W11-F14 — the carried line for a `carried_unsupported` coverage row; null
+ *  for any other row. An unknown last-evidence age says so, never "0 h". */
+export function carriedReadText(cov: CoverageRow): string | null {
+  if (cov.status !== 'carried_unsupported') return null
+  const status = cov.carried_status ? `status '${cov.carried_status}' held` : 'status held'
+  const age = cov.last_evidence_age_h
+  return age == null
+    ? `${status}; no read in the lookback re-evidenced it`
+    : `${status}; last re-evidenced ${Math.round(age)} h ago`
+}
+
+/** W11 — "read 94 h old" for a quoted read the composition marked stale;
+ *  null otherwise (a fresh or unmeasured read prints nothing extra). */
+export function staleReadText(ageH: number | null | undefined, stale: boolean | null | undefined): string | null {
+  if (stale !== true || ageH == null) return null
+  return `read ${Math.round(ageH)} h old`
 }
 
 /** The scorecard's machine reason for an `insufficient` row, in words. */
@@ -468,7 +506,7 @@ export interface NotPublishedInput {
 /** The line a page carries when the export was composed without absences. */
 export const ABSENCES_NOT_ASKED =
   'the typed-absence block was not composed for this document, so this page ' +
-  'cannot say what the desk is missing'
+  `cannot say what the ${NOUN} is missing`
 
 /**
  * Assemble the section from records that already said these things.
@@ -491,7 +529,7 @@ export function notPublished(input: NotPublishedInput): NotPublishedLine[] {
       if (block.state !== 'not_measured') continue
       out.push({
         subject: `typed absence · ${ABSENCE_KIND_LABEL[block.kind] ?? block.kind}`,
-        why: block.not_measured ?? 'the route could not read this kind for this desk',
+        why: block.not_measured ?? `the route could not read this kind for this ${NOUN}`,
         source: 'typed absence',
       })
     }
@@ -522,7 +560,7 @@ export function notPublished(input: NotPublishedInput): NotPublishedLine[] {
   for (const i of missing) {
     out.push({
       subject: `${i.kind} · ${i.id}`,
-      why: i.error ?? 'not found in substrate',
+      why: i.error ?? 'not found in the record',
       source: 'export document',
     })
   }
@@ -532,8 +570,8 @@ export function notPublished(input: NotPublishedInput): NotPublishedLine[] {
       subject: 'correctness against an independent reference',
       why:
         referenceState === 'none'
-          ? 'no reference has been built for this desk, so no unit carries a correctness share'
-          : 'the reference for this desk is stale, so its correctness shares are last known, not re-checked',
+          ? `no reference has been built for this ${NOUN}, so no unit carries a correctness share`
+          : `the reference for this ${NOUN} is stale, so its correctness shares are last known, not re-checked`,
       source: 'grader reference',
     })
   }
@@ -634,4 +672,62 @@ export function cadenceState(row: EvidenceUnitRow): GapCellState {
   if (row.state === 'stale') return 'stale'
   if (row.state === 'insufficient') return 'insufficient'
   return 'current'
+}
+
+// ---------------------------------------------------------------------------
+// X1/D1 — the index card's headline and its "composition as of", ONE source
+// ---------------------------------------------------------------------------
+
+/** What the index card states about the composition it is the card of. */
+export interface CompositionIndex {
+  /** True when a composition row is on record for the subject. */
+  present: boolean
+  /** The card's headline — the row's own title, or the stated absence. */
+  headline: string
+  /** The as-of instant, verbatim (the reading limits keep the full string). */
+  asOf: string | null
+  /** The as-of as the card prints it: `YYYY-MM-DD HH:MMZ`, or not recorded. */
+  asOfLabel: string
+}
+
+/** `2026-10-08T11:30:02.680467+00:00` → `2026-10-08 11:30Z`; null on a non-date. */
+export function asOfLabel(iso: string | null | undefined): string | null {
+  if (!iso) return null
+  const ms = Date.parse(iso)
+  if (!Number.isFinite(ms)) return null
+  return new Date(ms).toISOString().slice(0, 16).replace('T', ' ') + 'Z'
+}
+
+/**
+ * The headline and the as-of off the SAME row — the composition the brief
+ * read (`/findings?analyst_id_in=<producers>`), never the export document.
+ *
+ * Review D (2026-10-08) found Brazil's card headlined "No composition
+ * published for this desk yet" directly above "composition as of 2026-10-08":
+ * the headline read the export document's item (null while the document was
+ * composing, or when the export refused), the as-of read the row. A card that
+ * contradicts itself is the failure; one row now answers both, so the
+ * headline can only say "no composition" when there is no row to date.
+ */
+export function compositionIndex(
+  row: { title?: string | null; produced_at?: string | null } | null | undefined,
+  assemblyAsOf: string | null | undefined,
+  noun: string = NOUN,
+): CompositionIndex {
+  if (!row) {
+    return {
+      present: false,
+      headline: `No composition on record for this ${noun}.`,
+      asOf: null,
+      asOfLabel: LIMIT_UNKNOWN,
+    }
+  }
+  const asOf = assemblyAsOf?.trim() || row.produced_at?.trim() || null
+  const label = asOfLabel(asOf) ?? LIMIT_UNKNOWN
+  return {
+    present: true,
+    headline: row.title?.trim() || `Composition as of ${label}`,
+    asOf,
+    asOfLabel: label,
+  }
 }

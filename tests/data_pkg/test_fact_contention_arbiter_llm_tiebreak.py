@@ -265,7 +265,7 @@ def test_near_tie_flag_on_stub_picks_surfaces_winner(monkeypatch):
     # The LLM call was BOUNDED (token cap + temperature 0).
     kw = llm.calls[0]["kwargs"]
     assert kw["max_tokens"] == arb.LLM_TIEBREAK_MAX_TOKENS
-    assert kw["temperature"] == 0.0
+    assert kw["temperature"] == 1.0
 
 
 def test_stub_abstain_reply_keeps_abstain(monkeypatch):

@@ -41,9 +41,12 @@ __all__ = [
     "COUNTRY_SECTION_HEADER",
     "PROMPT_VERSION_V4",
     "PROMPT_VERSION_V5",
+    "PROMPT_VERSION_V6",
+    "WEAKEST_CAP_CLAUSE",
     "WORLD_ASSESSMENT_BODY_SHAPE_V4",
     "WORLD_ASSESSMENT_SYSTEM_V4",
     "WORLD_ASSESSMENT_SYSTEM_V5",
+    "WORLD_ASSESSMENT_SYSTEM_V6",
 ]
 
 
@@ -105,6 +108,22 @@ PROMPT_VERSION_V4: str = "assessment_prompt.v4"
 #: :mod:`assessment_unsupported`) beside the prose. v5 = v4 + the two clauses;
 #: v4 is kept, byte-identical, so the before/after stays legible on the rows.
 PROMPT_VERSION_V5: str = "assessment_prompt.v5"
+
+#: v6 (2026-11-07, world read dig item 3) — THE WEAKEST CAP. Every desk is told
+#: to name "WHAT IS HOLDING IT BACK: the actor, commitment, constraint, or cost
+#: that caps it" (``_tradecraft.UNIT_VERDICT_RULE``) and the world REGISTER asks
+#: for "the named brake on a trend", so every block reaches this voice paired
+#: with a cap, and the 64f74201 read (12:35Z, v5) relayed them: every thread
+#: came out "held by a cap whose survival keeps it from widening", and nothing
+#: on the page said which of those caps a reader should doubt first. A page of
+#: caps all standing is a page with no forecast in it. v6 = v5 + ONE clause in
+#: section (3), ``## What would change this``: when two or more carried threads
+#: are framed as held, name the single cap read as weakest, the actor or
+#: decision it rests on, and the observable that would show it failing, dated
+#: when the record dates it. Phrased as perspective ("the cap I read as
+#: weakest"), never as a rank of the world, so it stays clear of
+#: ``assessment_unsupported._RANK_TERMS``. v5 is kept, byte-identical.
+PROMPT_VERSION_V6: str = "assessment_prompt.v6"
 
 #: The header the world tier's context section is rendered under — the
 #: ``CONTEXT_SECTION_HEADER`` twin. A module constant for the same reason: the
@@ -220,6 +239,27 @@ REGISTER. Specificity is the craft target: dates, magnitudes, named actors, the 
 
 OUTPUT. Respond with PROSE, in markdown — NOT JSON. The FIRST line is your headline, alone, in bold (**like this**). Then a blank line, then the body. No fences, no preamble, no commentary about the task."""
 
+#: v6's anchor: the end of section (3)'s v4 sentence, which every later
+#: version carries verbatim through :data:`WORLD_ASSESSMENT_BODY_SHAPE_V4`.
+_V6_ANCHOR: str = "and which country read you are least sure of; "
+
+#: The weakest-cap line, appended to section (3).
+WEAKEST_CAP_CLAUSE: str = (
+    "and THE WEAKEST CAP: where two or more of the threads you carry are framed "
+    "as HELD by a cap (the actor, commitment, constraint, cost or brake a block "
+    "or a country read names as what keeps that thread from widening), do not "
+    "leave every one of them standing as held. Name the ONE cap you read as "
+    "weakest, with its ordinal; say WHY it is weakest, meaning the actor or the "
+    "decision it depends on and whether that actor has reason to lift it; and "
+    "name the observable that would show it failing (a vote, a deadline, a "
+    "deployment, a statement), with its date when a block or a country read "
+    "puts one on the calendar. Write it as your reading (\"the cap I read as "
+    "weakest is ... [[ref:4]]\"), never as a ranking of the world, and only "
+    "from caps the record states: a cap no block and no country read names is "
+    "not yours to supply. Where fewer than two threads are framed as held, "
+    "leave it out; "
+)
+
 #: v5 = v4 with the two H8 clauses inserted before REGISTER (see
 #: :data:`PROMPT_VERSION_V5`); built from v4's bytes so the shared clauses can
 #: never drift between the two versions.
@@ -227,3 +267,9 @@ WORLD_ASSESSMENT_SYSTEM_V5: str = WORLD_ASSESSMENT_SYSTEM_V4.replace(
     _V5_ANCHOR, _V5_CLAUSES, 1
 )
 
+#: v6 = v5 with :data:`WEAKEST_CAP_CLAUSE` appended to section (3) (see
+#: :data:`PROMPT_VERSION_V6`); built from v5's bytes for the same reason v5 is
+#: built from v4's.
+WORLD_ASSESSMENT_SYSTEM_V6: str = WORLD_ASSESSMENT_SYSTEM_V5.replace(
+    _V6_ANCHOR, _V6_ANCHOR + WEAKEST_CAP_CLAUSE, 1
+)

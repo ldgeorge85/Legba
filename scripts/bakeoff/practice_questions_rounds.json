@@ -1,0 +1,30 @@
+{
+ "about": "Practice questions for round smoke / calibration runs (arm_round.py). P01 and P02 are the two practice questions of practice_questions.json, unchanged; P03 was written by lane G-5 for its smoke run and is added here by lane G-6 so the three-question set is in the tree. Smoke only: no gold, not the experiment's question set.",
+ "questions": [
+  {
+   "qid": "P01",
+   "class": "HEADLINE",
+   "desk": "country_g20_cn",
+   "window": "T-7d..T",
+   "gold": "G-WIRE",
+   "text": "What were the most significant Chinese naval, coast-guard or air actions near Taiwan, the Philippines or Japan in the window, with dates?"
+  },
+  {
+   "qid": "P02",
+   "class": "SLOW-CHANGE",
+   "desk": "lane_hormuz",
+   "window": "T-42d..T vs prior 42d",
+   "gold": "G-WIRE",
+   "text": "Over the window, did commercial traffic through the Strait of Hormuz recover, hold, or fall compared with the previous six weeks?"
+  },
+  {
+   "qid": "P03",
+   "class": "HEADLINE",
+   "desk": "country_watch_sd",
+   "window": "T-7d..T",
+   "gold": "none (smoke only)",
+   "origin": "written by lane G-5 for its smoke run",
+   "text": "What did the record show about fighting around El Fasher and humanitarian access in Sudan in the window, with dates?"
+  }
+ ]
+}

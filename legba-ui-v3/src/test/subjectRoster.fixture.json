@@ -1,0 +1,1031 @@
+{
+  "_generated": "from descriptors/target_*.yaml (identity.id/name/state, scope.domain/geo/tags) - the shape of GET /registry/descriptors?family=target; regenerate when a target descriptor is added",
+  "rows": [
+    {
+      "descriptor_id": "country_g20_ar",
+      "name": "G20 — Argentina",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "AR"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "g20",
+            "region_americas"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_g20_au",
+      "name": "G20 — Australia",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "AU"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "g20",
+            "region_indo_pacific"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_g20_br",
+      "name": "G20 — Brazil",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "BR"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "g20",
+            "region_americas"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_g20_ca",
+      "name": "G20 — Canada",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "CA"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "g20",
+            "region_americas"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_g20_cn",
+      "name": "G20 — China",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "CN"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "g20",
+            "region_indo_pacific",
+            "nuclear_watch",
+            "sanctions_regime"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_g20_de",
+      "name": "G20 — Germany",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "DE"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "g20",
+            "region_europe"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_g20_fr",
+      "name": "G20 — France",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "FR"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "g20",
+            "region_europe"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_g20_gb",
+      "name": "G20 — United Kingdom",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "GB"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "g20",
+            "region_europe"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_g20_id",
+      "name": "G20 — Indonesia",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "ID"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "g20",
+            "region_indo_pacific"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_g20_in",
+      "name": "G20 — India",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "IN"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "g20",
+            "region_indo_pacific",
+            "nuclear_watch"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_g20_it",
+      "name": "G20 — Italy",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "IT"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "g20",
+            "region_europe"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_g20_jp",
+      "name": "G20 — Japan",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "JP"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "g20",
+            "region_indo_pacific"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_g20_kr",
+      "name": "G20 — Korea, Republic of",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "KR"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "g20",
+            "region_indo_pacific"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_g20_mx",
+      "name": "G20 — Mexico",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "MX"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "g20",
+            "region_americas"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_g20_ru",
+      "name": "G20 — Russian Federation",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "RU"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "g20",
+            "region_europe",
+            "nuclear_watch",
+            "conflict_active",
+            "sanctions_regime"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_g20_sa",
+      "name": "G20 — Saudi Arabia",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "SA"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "g20",
+            "region_mena"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_g20_tr",
+      "name": "G20 — Türkiye",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "TR"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "g20",
+            "region_mena"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_g20_us",
+      "name": "G20 — United States",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "US"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "g20",
+            "region_americas",
+            "nuclear_watch",
+            "conflict_active"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_g20_za",
+      "name": "G20 — South Africa",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "ZA"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "g20",
+            "region_africa"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_watch_bf",
+      "name": "Watch — Burkina Faso",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "BF"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "watch",
+            "region_africa",
+            "conflict_active"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_watch_cd",
+      "name": "Watch — Congo, The Democratic Republic of the",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "CD"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "watch",
+            "region_africa",
+            "conflict_active"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_watch_ht",
+      "name": "Watch — Haiti",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "HT"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "watch",
+            "region_americas",
+            "conflict_active"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_watch_il",
+      "name": "Watch — Israel",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "IL"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "watch",
+            "region_mena",
+            "nuclear_watch",
+            "conflict_active"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_watch_ir",
+      "name": "Watch — Iran, Islamic Republic of",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "IR"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "watch",
+            "region_mena",
+            "nuclear_watch",
+            "conflict_active",
+            "sanctions_regime"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_watch_kp",
+      "name": "Watch — Korea, Democratic People's Republic of",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "KP"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "watch",
+            "region_indo_pacific",
+            "nuclear_watch",
+            "sanctions_regime"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_watch_ml",
+      "name": "Watch — Mali",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "ML"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "watch",
+            "region_africa",
+            "conflict_active"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_watch_mm",
+      "name": "Watch — Myanmar",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "MM"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "watch",
+            "region_indo_pacific",
+            "conflict_active",
+            "sanctions_regime"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_watch_ne",
+      "name": "Watch — Niger",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "NE"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "watch",
+            "region_africa",
+            "conflict_active"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_watch_pk",
+      "name": "Watch — Pakistan",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "PK"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "watch",
+            "region_indo_pacific",
+            "nuclear_watch"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_watch_sd",
+      "name": "Watch — Sudan",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "SD"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "watch",
+            "region_africa",
+            "conflict_active"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_watch_tw",
+      "name": "Watch — Taiwan, Province of China",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "TW"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "watch",
+            "region_indo_pacific"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "country_watch_ua",
+      "name": "Watch — Ukraine",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "geo",
+          "geo": [
+            "UA"
+          ],
+          "tags": [
+            "geopolitical",
+            "news",
+            "watch",
+            "region_europe",
+            "conflict_active"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "flow_container_freight",
+      "name": "Flow — Container Freight & Logistics",
+      "state": "draft",
+      "body": {
+        "scope": {
+          "domain": "thematic",
+          "geo": [],
+          "tags": [
+            "supply_chain",
+            "disruption",
+            "flow"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "flow_critical_minerals",
+      "name": "Flow — Critical Minerals",
+      "state": "draft",
+      "body": {
+        "scope": {
+          "domain": "thematic",
+          "geo": [
+            "CD",
+            "ZM",
+            "ID",
+            "AU",
+            "CL",
+            "ZA",
+            "MN"
+          ],
+          "tags": [
+            "supply_chain",
+            "disruption",
+            "flow"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "flow_energy_shipping",
+      "name": "Flow — Energy Shipping (producer-side export flow)",
+      "state": "draft",
+      "body": {
+        "scope": {
+          "domain": "thematic",
+          "geo": [
+            "NG",
+            "AO",
+            "DZ",
+            "LY",
+            "QA",
+            "AU",
+            "NO",
+            "KZ"
+          ],
+          "tags": [
+            "supply_chain",
+            "disruption",
+            "flow"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "flow_semiconductors",
+      "name": "Flow — Semiconductors",
+      "state": "draft",
+      "body": {
+        "scope": {
+          "domain": "thematic",
+          "geo": [
+            "TW",
+            "KR",
+            "JP",
+            "NL",
+            "SG"
+          ],
+          "tags": [
+            "supply_chain",
+            "disruption",
+            "flow"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "germany_news",
+      "name": "Germany News",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": null,
+          "geo": [
+            "DE"
+          ],
+          "tags": []
+        }
+      }
+    },
+    {
+      "descriptor_id": "japan_news",
+      "name": "Japan News",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": null,
+          "geo": [
+            "JP"
+          ],
+          "tags": []
+        }
+      }
+    },
+    {
+      "descriptor_id": "lane_baltic_north_sea",
+      "name": "Lane — Baltic & North Sea",
+      "state": "draft",
+      "body": {
+        "scope": {
+          "domain": "thematic",
+          "geo": [
+            "SE",
+            "FI",
+            "EE",
+            "LV",
+            "LT",
+            "DK",
+            "NO",
+            "PL"
+          ],
+          "tags": [
+            "supply_chain",
+            "disruption",
+            "lane"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "lane_black_sea",
+      "name": "Lane — Black Sea & Turkish Straits",
+      "state": "draft",
+      "body": {
+        "scope": {
+          "domain": "thematic",
+          "geo": [
+            "UA",
+            "RU",
+            "TR",
+            "RO",
+            "BG",
+            "GE"
+          ],
+          "tags": [
+            "supply_chain",
+            "disruption",
+            "lane"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "lane_hormuz",
+      "name": "Lane — Strait of Hormuz",
+      "state": "draft",
+      "body": {
+        "scope": {
+          "domain": "thematic",
+          "geo": [
+            "IR",
+            "OM",
+            "AE",
+            "QA",
+            "KW",
+            "IQ",
+            "BH"
+          ],
+          "tags": [
+            "supply_chain",
+            "disruption",
+            "lane"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "lane_malacca_south_china_sea",
+      "name": "Lane — Malacca Strait & South China Sea",
+      "state": "draft",
+      "body": {
+        "scope": {
+          "domain": "thematic",
+          "geo": [
+            "SG",
+            "MY",
+            "ID",
+            "PH",
+            "VN",
+            "TW",
+            "CN"
+          ],
+          "tags": [
+            "supply_chain",
+            "disruption",
+            "lane"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "lane_panama",
+      "name": "Lane — Panama Canal",
+      "state": "draft",
+      "body": {
+        "scope": {
+          "domain": "thematic",
+          "geo": [
+            "PA",
+            "CR",
+            "CO"
+          ],
+          "tags": [
+            "supply_chain",
+            "disruption",
+            "lane"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "lane_red_sea",
+      "name": "Lane — Red Sea / Bab el-Mandeb / Suez",
+      "state": "draft",
+      "body": {
+        "scope": {
+          "domain": "thematic",
+          "geo": [
+            "YE",
+            "ER",
+            "DJ",
+            "EG",
+            "SD",
+            "SO"
+          ],
+          "tags": [
+            "supply_chain",
+            "disruption",
+            "lane"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "mexico_news",
+      "name": "Mexico News",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": null,
+          "geo": [
+            "MX"
+          ],
+          "tags": []
+        }
+      }
+    },
+    {
+      "descriptor_id": "nigeria_news",
+      "name": "Nigeria News",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": null,
+          "geo": [
+            "NG"
+          ],
+          "tags": []
+        }
+      }
+    },
+    {
+      "descriptor_id": "region_africa",
+      "name": "Region — Africa",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "thematic",
+          "geo": [],
+          "tags": [
+            "region",
+            "region_africa",
+            "geopolitical"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "region_americas",
+      "name": "Region — Americas",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "thematic",
+          "geo": [],
+          "tags": [
+            "region",
+            "region_americas",
+            "geopolitical"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "region_europe",
+      "name": "Region — Europe",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "thematic",
+          "geo": [],
+          "tags": [
+            "region",
+            "region_europe",
+            "geopolitical"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "region_indo_pacific",
+      "name": "Region — Indo-Pacific",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "thematic",
+          "geo": [],
+          "tags": [
+            "region",
+            "region_indo_pacific",
+            "geopolitical"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "region_mena",
+      "name": "Region — Middle East & North Africa",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "thematic",
+          "geo": [],
+          "tags": [
+            "region",
+            "region_mena",
+            "geopolitical"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "situation_iran_war",
+      "name": "Situation — US–Iran War",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": "thematic",
+          "geo": [],
+          "tags": [
+            "thematic",
+            "situation",
+            "iran",
+            "conflict"
+          ]
+        }
+      }
+    },
+    {
+      "descriptor_id": "turkey_news",
+      "name": "Turkey News",
+      "state": "active",
+      "body": {
+        "scope": {
+          "domain": null,
+          "geo": [
+            "TR"
+          ],
+          "tags": []
+        }
+      }
+    }
+  ]
+}

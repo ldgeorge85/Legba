@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.lefaso.news": {
+      "source": "source_lefaso_net.yaml",
+      "state": "draft"
+    }
+  }
+}

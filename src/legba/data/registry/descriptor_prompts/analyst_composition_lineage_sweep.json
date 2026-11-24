@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:composition_lineage_sweep": {
+      "source": "analyst_composition_lineage_sweep.yaml",
+      "state": "active"
+    }
+  }
+}

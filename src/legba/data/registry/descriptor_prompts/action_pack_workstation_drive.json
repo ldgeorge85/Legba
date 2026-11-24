@@ -1,0 +1,8 @@
+{
+  "states": {
+    "action_pack:workstation_drive": {
+      "source": "action_pack_workstation_drive.yaml",
+      "state": "active"
+    }
+  }
+}

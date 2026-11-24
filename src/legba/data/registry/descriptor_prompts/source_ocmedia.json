@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.ocmedia.news": {
+      "source": "source_ocmedia.yaml",
+      "state": "draft"
+    }
+  }
+}

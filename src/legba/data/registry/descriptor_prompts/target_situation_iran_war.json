@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:situation_iran_war": {
+      "source": "target_situation_iran_war.yaml",
+      "state": "active"
+    }
+  }
+}

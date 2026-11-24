@@ -1,0 +1,123 @@
+# I-5 series-kind capabilities (2026-11-14) — the National Bank of Ukraine's
+# official hryvnia exchange rates, daily, every listed currency, as a SERIES.
+# Ships DRAFT; the reference host walks it to CONFIGURED
+# (descriptors/LIFECYCLE.md), never active — activation is the owner's call.
+# Kind: series_api.
+#
+# WHY: war-economy rates (the review's row 5, "add"). X-1 could not write it:
+# the body is a TOP-LEVEL JSON ARRAY (I-5: `rows_path: "$"`) and its dates are
+# DD.MM.YYYY (I-5: date format `dmy_dotted`, matched exactly).
+#
+# THE ENDPOINT. NBU open-data API, /NBUStatService/v1/statdirectory/exchange
+# with the bare `json` switch (the URL the review checked, kept verbatim — no
+# other parameter). Checked 2026-11-14 by the source-expansion review (one
+# GET, generic client identity): 200, application/json, a top-level array of
+# 45 rows (one per currency), 5,543 bytes. Row fields as the NBU documents
+# them (the review recorded the shape, not the field list): `r030` (ISO 4217
+# numeric), `txt` (currency name, Ukrainian), `rate` (hryvnias per ONE unit of
+# the currency), `cc` (ISO 4217 alpha), `exchangedate` (DD.MM.YYYY, the day
+# the rate is in force). If the first poll finds other names it writes
+# nothing and its health detail counts the skipped rows. Without a `date`
+# parameter the endpoint answers for the current day only, so this source
+# BUILDS its history one day per poll (no backfill is possible through it;
+# a since parameter is not declared — the endpoint has none).
+#
+# SUBJECT. The foreign currency (`cc`, e.g. "USD"), subject_kind `entity`.
+# UNIT: `fx_quote_per_base` — hryvnias (the quote) per one unit of the
+# subject currency (the base): the reverse orientation of the ECB series,
+# where the subject is the quote; each description says which way round.
+# READER: series_change/2026-11.3 proposes `nbu.exchange.*=fx_move` (a move of
+# 2% or more across the current window is an event); registering it is a roll
+# step.
+#
+# robots.txt allows the path for `*`. Class: official (a central bank).
+
+identity:
+  id: source.nbu.exchange_daily
+  name: National Bank of Ukraine — official hryvnia exchange rates, daily (series)
+  kind: series_api
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: i5_series_kind_capabilities
+  created: "2026-11-14T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [UA]
+  languages: [uk]
+  tags: [fx, exchange_rates, central_banks, markets, series, ukraine]
+  source_class: official
+  license_class: open_gov_attribution   # open data, commercial use allowed, source reference mandatory
+  attribution: "Source: National Bank of Ukraine open data (bank.gov.ua), official exchange rates"
+  access_class: public
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "37 14 * * *"            # daily, after the NBU sets the day's rates
+  cooldown_seconds: 3600
+  jitter_seconds: 120
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://bank.gov.ua/NBUStatService/v1/statdirectory/exchange?json"
+  format:
+    factory_kind: text
+    raw: json
+  rows_path:
+    factory_kind: text
+    raw: "$"                      # the document root is the row array
+  date_field:
+    factory_kind: text
+    raw: exchangedate
+  date_format:
+    factory_kind: text
+    raw: dmy_dotted
+  provenance_fields:
+    factory_kind: list
+    raw: [r030]
+  outputs:
+    factory_kind: list
+    raw:
+      - series: nbu.exchange.official_rate
+        value_field: rate
+        subject_field: cc
+        unit: fx_quote_per_base
+        period: day
+        subject_kind: entity
+        methodology_version: nbu-statdirectory-exchange/1
+  lag_days:
+    factory_kind: number
+    raw: 1
+  revision_days:
+    factory_kind: number
+    raw: 7
+  backfill_days:
+    factory_kind: number
+    raw: 7
+
+sink:
+  family: observation
+  config:
+    series:
+      - id: nbu.exchange.official_rate
+        field: rate
+        unit: fx_quote_per_base
+        period: day
+        subject_kind: entity
+        methodology_version: nbu-statdirectory-exchange/1
+        description: "NBU official exchange rate: Ukrainian hryvnias per one unit of the subject currency (cc), in force on the day"
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  media: reference
+
+deps: {}
+
+subscription_policy: open

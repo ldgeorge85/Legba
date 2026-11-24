@@ -59,6 +59,8 @@ import re
 import unicodedata
 from typing import Iterable, Mapping, Sequence
 
+from ... import rosters as _rosters
+
 # ---------------------------------------------------------------------------
 # Normalisation
 # ---------------------------------------------------------------------------
@@ -413,52 +415,19 @@ def is_masthead(title: str) -> bool:
 # Dimension coverage
 # ---------------------------------------------------------------------------
 
-#: The eight bounded-unit desk dimensions, each as the vocabulary a title uses
-#: when it is ABOUT that dimension. Terms are matched as substrings of the
-#: lower-cased title, so stems ("escalat") catch their own inflections.
+#: The bounded-unit desk dimensions, each as the vocabulary a title uses when it
+#: is ABOUT that dimension. Terms are matched as substrings of the lower-cased
+#: title, so stems ("escalat") catch their own inflections.
 #:
 #: Overlap is intentional and harmless: "missile" belongs to both the escalation
 #: and military-posture desks in real life, and the metric counts DISTINCT
 #: dimensions touched rather than partitioning titles between them.
-DIMENSION_TERMS: Mapping[str, tuple[str, ...]] = {
-    "escalation": (
-        "escalat", "strike", "offensive", "clash", "shelling", "missile",
-        "airstrike", "air strike", "war", "militant", "insurgen", "attack",
-        "bombard", "ceasefire", "front line", "frontline",
-    ),
-    "energy_security": (
-        "oil", "gas", "energy", "chokepoint", "refinery", "pipeline", "lng",
-        "crude", "barrel", "tanker", "strait", "blockade", "power grid",
-        "electricity", "fuel supply",
-    ),
-    "leadership_transition": (
-        "succession", "election", "leadership", "transition", "president",
-        "prime minister", "resign", "cabinet", "handover", "inaugurat",
-        "impeach", "term limit", "junta leader",
-    ),
-    "military_posture": (
-        "deployment", "deploy", "mobiliz", "mobilis", "exercise", "drill",
-        "procurement", "basing", "buildup", "build-up", "posture", "troop",
-        "naval", "fleet", "brigade", "garrison", "rearm",
-    ),
-    "internal_stability": (
-        "protest", "unrest", "riot", "crackdown", "repression", "coup",
-        "gang", "civil disorder", "curfew", "detention", "purge",
-        "state of emergency",
-    ),
-    "economic_coercion": (
-        "sanction", "tariff", "embargo", "export control", "blacklist",
-        "asset freeze", "coercion", "boycott", "trade ban", "import ban",
-    ),
-    "narrative_coordination": (
-        "disinformation", "propaganda", "narrative", "influence operation",
-        "bot network", "coordinated messaging", "information campaign",
-    ),
-    "proliferation_watch": (
-        "nuclear", "enrichment", "uranium", "warhead", "iaea", "safeguards",
-        "centrifuge", "proliferation", "weapons-grade", "fissile",
-    ),
-}
+#:
+#: ROSTER-2: PROFILE data — each unit's ``title_terms`` on the profile's
+#: ``rosters.units`` entry, roster order; a unit that declares none is not a
+#: dimension here (the exemplar's lane unit). Built at import from the
+#: process's roster.
+DIMENSION_TERMS: Mapping[str, tuple[str, ...]] = _rosters.unit_title_terms()
 
 DIMENSIONS: tuple[str, ...] = tuple(DIMENSION_TERMS)
 

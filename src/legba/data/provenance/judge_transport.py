@@ -91,6 +91,7 @@ fix, and it is not made here.
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import asyncio
 import logging
@@ -417,7 +418,7 @@ async def call_judge_with_retry(
     system: str,
     telemetry: JudgeTransportTelemetry,
     max_tokens: int = JUDGE_MAX_TOKENS,
-    temperature: float = 0.0,
+    temperature: float = HOUSE_TEMPERATURE,
     attempts: int = JUDGE_RETRY_ATTEMPTS,
     budget_s: float = JUDGE_RETRY_BUDGET_S,
     sleeper: Callable[[float], Awaitable[None]] | None = None,
@@ -674,7 +675,7 @@ async def _judge_claim_partition(
         system=system,
         telemetry=telemetry if telemetry is not None else JudgeTransportTelemetry(),
         max_tokens=JUDGE_MAX_TOKENS,
-        temperature=0.0,
+        temperature=HOUSE_TEMPERATURE,
     )
     # (#116d) Fence/prose-tolerant parse: a reasoning-class judge may wrap the
     # verdicts in a ```json fence or emit thinking around them, so scan for the

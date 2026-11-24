@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:signal_embedder": {
+      "source": "analyst_signal_embedder.yaml",
+      "state": "active"
+    }
+  }
+}

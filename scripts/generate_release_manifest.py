@@ -88,6 +88,7 @@ Env (same convention as the other DB-reading scripts, e.g.
 from __future__ import annotations
 
 import argparse
+import re
 import asyncio
 import os
 import sys
@@ -325,7 +326,55 @@ async def gather(conn: asyncpg.Connection) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def render(data: dict[str, Any]) -> str:
+#: Sections that describe ONE deployment rather than the code: how many sources
+#: and country desks that instance runs, which model routes judge its output,
+#: which optional features and env flags it has switched on. ``--public`` omits
+#: them, so the page committed to a public tree states only what the tree
+#: itself ships (units, layers, desk definitions, schema head).
+_INSTANCE_SECTIONS: tuple[str, ...] = (
+    "## Sources",
+    "## Country desks",
+    "## Verify configuration",
+    "## Experimental / optional features (derived)",
+)
+
+
+def _public_trim(text: str) -> str:
+    """Drop the per-deployment sections and per-desk activation state."""
+    out: list[str] = []
+    skipping = False
+    thematic = False
+    for line in text.split("\n"):
+        if line.startswith("## "):
+            skipping = line in _INSTANCE_SECTIONS
+            thematic = line.startswith("## Thematic desks")
+        if skipping:
+            continue
+        if thematic:
+            if line.startswith("- **Active: "):
+                continue
+            if line == "| Desk | State | Tags |":
+                line = "| Desk | Tags |"
+            elif line == "|---|---|---|":
+                line = "|---|---|"
+            elif line.startswith("| `"):
+                cells = line.split(" | ")
+                if len(cells) == 3:
+                    line = f"{cells[0]} | {cells[2]}"
+        out.append(line)
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(out))
+    note = (
+        "_Public edition: the sections that describe one running deployment "
+        "(source and country-desk counts, the judge route, optional-feature "
+        "flags, per-desk activation state) are omitted. Generate without "
+        "`--public` against your own instance for the full page._\n"
+    )
+    return text.replace("\n## ", "\n" + note + "\n## ", 1)
+
+
+def render(data: dict[str, Any], public: bool = False) -> str:
+    if public:
+        return _public_trim(render(data))
     lines: list[str] = []
     lines.append("# Release State")
     lines.append("")
@@ -591,14 +640,14 @@ def render(data: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-async def main_async(check: bool) -> int:
+async def main_async(check: bool, public: bool = False) -> int:
     conn = await _connect_pg()
     try:
         data = await gather(conn)
     finally:
         await conn.close()
 
-    new_text = render(data)
+    new_text = render(data, public=public)
     current_text = OUT_MD.read_text(encoding="utf-8") if OUT_MD.exists() else None
 
     if current_text == new_text:
@@ -631,8 +680,17 @@ def main(argv: list[str] | None = None) -> int:
             "an env-less check reports a false STALE."
         ),
     )
+    ap.add_argument(
+        "--public",
+        action="store_true",
+        help=(
+            "write the public edition: omit the sections that describe one "
+            "running deployment (source and country-desk counts, judge "
+            "route, feature flags, per-desk activation state)"
+        ),
+    )
     args = ap.parse_args(argv)
-    return asyncio.run(main_async(args.check))
+    return asyncio.run(main_async(args.check, args.public))
 
 
 if __name__ == "__main__":

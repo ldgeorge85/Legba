@@ -38,7 +38,7 @@ config:
   # Standard WordPress REST v2 shape: top-level array; title/excerpt are nested {rendered}. Confident paths — still confirm the live route on activation (draft gate).
   url_template:
     factory_kind: text
-    raw: "https://www.understandingwar.org/wp-json/wp/v2/posts?per_page=20&_fields=id,date,link,title,excerpt&after={window_start_iso}"
+    raw: "https://www.understandingwar.org/wp-json/wp/v2/posts?per_page=20&_fields=id,date,date_gmt,link,title,excerpt&after={window_start_iso}"
   items_path:
     factory_kind: text
     raw: ""
@@ -51,9 +51,13 @@ config:
   url_path:
     factory_kind: text
     raw: "link"
+  # W11-F151: WordPress `date` is the SITE-LOCAL wall time (ISW = America/New_York,
+  # naive) and was read as UTC — every post dated 5 h early and dropped by the
+  # since-filter when it landed in the first ~5 h of a poll window (3 of 20
+  # posts ingested in the week to 11-05). `date_gmt` is the same instant in UTC.
   timestamp_path:
     factory_kind: text
-    raw: "date"
+    raw: "date_gmt"
   body_path:
     factory_kind: text
     raw: "excerpt.rendered"
@@ -63,6 +67,15 @@ config:
   max_items_per_pull:
     factory_kind: number
     raw: 50
+  # W11-F169 (roll 64) — the source actor's per-pull wall-clock budget. The
+  # generic 30 s lands ~2-4 items a poll at ~7-15 s of NER each. 180 s: worst
+  # case one pull = 180 + one in-flight item (12 s enrichment timeout + ~1 s
+  # write/publish) + ~1 s cursor/outcome persist = 194 s, 46 s under the
+  # actor's 240 s ceiling. A pull cut by a roll's 45 s drain is recorded
+  # capped and its items are already published one by one.
+  poll_budget_seconds:
+    factory_kind: number
+    raw: 180
 
 pipeline:
   ingestion_filters:

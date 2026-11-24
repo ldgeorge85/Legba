@@ -63,6 +63,7 @@ from typing import Any
 from fastapi import APIRouter
 from fastapi.responses import PlainTextResponse
 
+from ..signal_slice_scope import CANONICAL_ONLY_SQL
 from .api import RegistryAPIDeps
 
 logger = logging.getLogger(__name__)
@@ -145,7 +146,7 @@ async def _collect_families(pool: Any) -> list[dict[str, Any]]:
         # tracks distinct ingested items, mirroring the read API's filter).
         signals_total = await conn.fetchval(
             "SELECT COUNT(*) FROM signals "
-            "WHERE canonical_signal_id IS NULL OR canonical_signal_id = id"
+            f"WHERE {CANONICAL_ONLY_SQL}"
         )
 
         # Analyst output throughput, by kind.

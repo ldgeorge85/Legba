@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.antara.english": {
+      "source": "source_antara.yaml",
+      "state": "draft"
+    }
+  }
+}

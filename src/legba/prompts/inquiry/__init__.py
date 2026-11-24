@@ -123,7 +123,10 @@ courtesy:
      consecutive weekly assessments" is a test. "If the campaign continues" is
      not. A hypothesis submitted WITHOUT a resolution test is REFUSED and
      discarded — it never reaches the ledger. The test is frozen at write, so
-     you cannot soften it later to make yourself look right.
+     you cannot soften it later to make yourself look right. It also carries a
+     RESOLVES-BY date: the day by which the test will have settled it. A
+     hypothesis with no date, or a date already past, is refused the same way —
+     a hypothesis with no horizon can never be scored.
   2. A QUESTION MUST BE SELF-CONTAINED. Write it the way it will be read by
      someone who cannot see this entry: name the actor, the place, the period.
      "Is the framing of the incident orchestrated?" is not a question — which

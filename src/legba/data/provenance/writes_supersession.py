@@ -9,7 +9,12 @@ source-tier precedence table (Holes-A A1), the contested-claims coexistence
 flag (Holes-B Wave 4), and the four close-the-prior-open-row writers for
 ``facts`` and ``nexuses`` — ``supersede_prior_facts``,
 ``_supersede_prior_facts_coexist``, ``supersede_prior_functional_role_facts``,
-``collapse_open_triple`` and ``supersede_prior_nexuses``.
+``collapse_open_triple`` and ``supersede_prior_nexuses`` — plus (W11
+C-2b-2/facts) the operator's exact-id writers the consult write plane uses:
+``read_open_fact_set``, ``close_facts_by_id``, ``reopen_facts_by_id``,
+``open_set_digest`` and ``lock_fact_pair``. ``supersede_prior_facts`` returns
+a :class:`ClosedFacts` — the count every caller compared, plus the closed ids
+on request.
 
 ``writes.py`` re-exports every public and private name defined here, so
 ``legba.data.provenance.writes.<name>`` — and the ``provenance.__init__``
@@ -19,13 +24,15 @@ the SQL text, the docstrings and the comments below are verbatim moves.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from datetime import datetime
-from typing import Sequence
+from typing import Any, Iterable, Sequence
 from uuid import UUID
 
 import asyncpg
 
+from ..gazetteer import applicable, gazetteer
 from .origin import origin_class_clause
 
 #: P7/7g-1 — the origin-class leg on EVERY fact supersession site in this
@@ -50,6 +57,8 @@ _LIVE_FACTS = origin_class_clause("")
 #
 # Total order (higher int = more authoritative):
 #   seed     == curated   -> 2   (AUTHORITATIVE: human/operator-owned ground truth)
+#   operator              -> 2   (AUTHORITATIVE: the operator's own word through a
+#                                 consult write — decision D6, W11 C-2b-2/facts)
 #   ingestion == agent    -> 1   (MACHINE-EXTRACTED: NER hit / LLM emission)
 #   <anything else / None>-> 1   (unknown class is treated as machine-extracted)
 #
@@ -60,6 +69,7 @@ _LIVE_FACTS = origin_class_clause("")
 _SOURCE_TIER_RANK: dict[str, int] = {
     "seed": 2,
     "curated": 2,
+    "operator": 2,
     "ingestion": 1,
     "agent": 1,
 }
@@ -100,6 +110,33 @@ def _fact_contention_enabled() -> bool:
     raw = os.environ.get(_FACT_CONTENTION_ENV, "0").strip().lower()
     return raw in {"1", "true", "yes", "on"}
 
+class ClosedFacts(int):
+    """What a supersession closed: the COUNT (it IS the int every caller
+    compared before) plus the closed row IDS when the caller asked for them.
+
+    ``ids`` is the tuple of ``facts.id`` the UPDATE actually closed (from its
+    ``RETURNING``) when the call passed ``returning_ids=True``; ``None`` when
+    the ids were not collected — the default path keeps its single blind
+    ``execute`` byte for byte, so ``None`` means *not asked*, never *none*.
+    A reversal needs the ids (W11 C-2b-2/facts: the consult write plane
+    reopens exactly the rows its assert closed), so it always asks.
+    """
+
+    ids: tuple[UUID, ...] | None
+
+    def __new__(cls, count: int, ids: Sequence[UUID] | None = None) -> "ClosedFacts":
+        obj = super().__new__(cls, int(count))
+        obj.ids = None if ids is None else tuple(ids)
+        return obj
+
+
+def _closed_count(result: str | None) -> int:
+    try:
+        return int(result.split()[-1]) if result else 0
+    except (ValueError, IndexError):                     # pragma: no cover
+        return 0
+
+
 async def supersede_prior_facts(
     conn: asyncpg.Connection,
     *,
@@ -108,7 +145,8 @@ async def supersede_prior_facts(
     value: str,
     new_fact_id: UUID,
     incoming_source_type: str | None = None,
-) -> int:
+    returning_ids: bool = False,
+) -> ClosedFacts:
     """Close any open fact(s) for ``(lower(subject), lower(predicate))`` whose
     VALUE differs from the incoming ``value``, pointing them at ``new_fact_id``
     — UNLESS the prior row outranks the incoming fact on source authority
@@ -159,11 +197,13 @@ async def supersede_prior_facts(
     (the default) this function is byte-for-byte the single blind UPDATE below —
     ZERO extra queries on the hot path.
 
-    Returns the number of prior rows closed (0 when this is the first
-    assertion of the subject+predicate, a same-value re-assert, every
-    differing-value prior row outranks the incoming fact on authority, or — with
-    the flag ON — every differing-value same-tier prior is a fuzzy-distinct
-    coexistence and nothing is left to close).
+    Returns a :class:`ClosedFacts` — an ``int``, the number of prior rows
+    closed (0 when this is the first assertion of the subject+predicate, a
+    same-value re-assert, every differing-value prior row outranks the incoming
+    fact on authority, or — with the flag ON — every differing-value same-tier
+    prior is a fuzzy-distinct coexistence and nothing is left to close) — whose
+    ``.ids`` are the closed rows' ids when ``returning_ids=True`` (the same
+    UPDATE with ``RETURNING id``, run through ``fetch``), else ``None``.
     """
     if _fact_contention_enabled():
         # Flag ON — the ONE behavioral change. Fetch the candidate open
@@ -178,6 +218,7 @@ async def supersede_prior_facts(
             value=value,
             new_fact_id=new_fact_id,
             incoming_source_type=incoming_source_type,
+            returning_ids=returning_ids,
         )
 
     # Flag OFF (default) — the single blind UPDATE, unchanged.
@@ -193,8 +234,7 @@ async def supersede_prior_facts(
         None if incoming_source_type is None
         else _source_tier_rank(incoming_source_type)
     )
-    result = await conn.execute(
-        f"""
+    sql = f"""
         UPDATE facts
            SET valid_until   = now(),
                superseded_by = $4, superseded_at = now(),
@@ -211,22 +251,18 @@ async def supersede_prior_facts(
                  OR CASE lower(coalesce(source_type, ''))
                         WHEN 'seed'      THEN 2
                         WHEN 'curated'   THEN 2
+                        WHEN 'operator'  THEN 2
                         WHEN 'ingestion' THEN 1
                         WHEN 'agent'     THEN 1
                         ELSE 1
                     END <= $5::int
                )
-        """,
-        subject,
-        predicate,
-        value,
-        new_fact_id,
-        incoming_rank,
-    )
-    try:
-        return int(result.split()[-1]) if result else 0
-    except (ValueError, IndexError):                     # pragma: no cover
-        return 0
+        """
+    params = (subject, predicate, value, new_fact_id, incoming_rank)
+    if returning_ids:
+        rows = await conn.fetch(sql + "        RETURNING id\n", *params)
+        return ClosedFacts(len(rows), [r["id"] for r in rows])
+    return ClosedFacts(_closed_count(await conn.execute(sql, *params)))
 
 
 async def _supersede_prior_facts_coexist(
@@ -237,7 +273,8 @@ async def _supersede_prior_facts_coexist(
     value: str,
     new_fact_id: UUID,
     incoming_source_type: str | None,
-) -> int:
+    returning_ids: bool = False,
+) -> ClosedFacts:
     """Contention-aware variant of :func:`supersede_prior_facts` (flag ON).
 
     Replaces the single blind UPDATE with a FETCH → decide-per-row → close-set
@@ -309,10 +346,9 @@ async def _supersede_prior_facts_coexist(
         to_close.append(row["id"])
 
     if not to_close:
-        return 0
+        return ClosedFacts(0, () if returning_ids else None)
 
-    result = await conn.execute(
-        f"""
+    sql = f"""
         UPDATE facts
            SET valid_until   = now(),
                superseded_by = $1, superseded_at = now(),
@@ -321,14 +357,11 @@ async def _supersede_prior_facts_coexist(
            AND valid_until IS NULL
            AND superseded_by IS NULL
            AND {_LIVE_FACTS}
-        """,
-        new_fact_id,
-        to_close,
-    )
-    try:
-        return int(result.split()[-1]) if result else 0
-    except (ValueError, IndexError):                     # pragma: no cover
-        return 0
+        """
+    if returning_ids:
+        closed = await conn.fetch(sql + "        RETURNING id\n", new_fact_id, to_close)
+        return ClosedFacts(len(closed), [r["id"] for r in closed])
+    return ClosedFacts(_closed_count(await conn.execute(sql, new_fact_id, to_close)))
 
 
 # ---------------------------------------------------------------------------
@@ -351,18 +384,21 @@ async def _supersede_prior_facts_coexist(
 # (``data->>'role'``) so a dual-office country (Iran supreme leader vs president,
 # both 'leader of Iran') is NOT collapsed into one holder.
 
-#: Which column names the COUNTRY for each functional-role predicate (normalized).
-_FUNCTIONAL_ROLE_COUNTRY_SIDE: dict[str, str] = {
-    "leader of": "value",          # subject=person, value=country
-    "head of state": "subject",    # subject=country, value=person
-    "head of government": "subject",
-}
+#: Which column names the COUNTRY for each functional-role predicate
+#: (normalized) is the profile gazetteer's ``functional_role_country_side``
+#: section (W10 CANON-1; formerly _FUNCTIONAL_ROLE_COUNTRY_SIDE here): on the
+#: exemplar 'leader of' -> value (subject=person, value=country), 'head of
+#: state' / 'head of government' -> subject (subject=country, value=person).
+#: A profile that declares none has no functional roles: the office-keyed close
+#: is NOT APPLICABLE, by name (SEAMS #67), and closes nothing.
+_FUNCTIONAL_ROLE_GUARD = "functional_role_supersession"
 
 #: Reused SQL tier-rank CASE (mirrors supersede_prior_facts's A1 guard exactly).
 _FUNCTIONAL_ROLE_TIER_CASE = """
         CASE lower(coalesce(source_type, ''))
             WHEN 'seed'      THEN 2
             WHEN 'curated'   THEN 2
+            WHEN 'operator'  THEN 2
             WHEN 'ingestion' THEN 1
             WHEN 'agent'     THEN 1
             ELSE 1
@@ -403,7 +439,10 @@ async def supersede_prior_functional_role_facts(
     Idempotent (only open rows touched). ``id <> new_fact_id`` plus the person-side
     inequality exclude the just-inserted / collapsed-into row. Returns #closed.
     """
-    side = _FUNCTIONAL_ROLE_COUNTRY_SIDE.get(predicate)
+    gz = gazetteer()
+    if applicable(_FUNCTIONAL_ROLE_GUARD, gz) is not None:
+        return 0
+    side = gz.get("functional_role_country_side").get(predicate)
     if side is None or not new_fact_id:
         return 0
     incoming_rank = (
@@ -627,3 +666,174 @@ async def supersede_prior_nexuses(
         return int(result.split()[-1]) if result else 0
     except (ValueError, IndexError):                     # pragma: no cover
         return 0
+
+
+# ---------------------------------------------------------------------------
+# The operator's fact writes (W11 C-2b-2/facts — the consult write plane)
+# ---------------------------------------------------------------------------
+#
+# A consult write on the ``fact`` class is the operator's own word (decision
+# D6): ``source_type='operator'``, ranked with seed/curated (tier 2 above), and
+# grounding like curated. Unlike every producer above it does NOT supersede by
+# rule: the executor (``registry/consult_write_fact.py``) reads the pair's open
+# set, decides the close set EXPLICITLY from the operator's ``supersede``
+# argument, and closes exactly those ids here — so it can store them as the
+# write's pre-image and a revert can reopen exactly them. Every read and close
+# below carries the origin-class leg (a loaded historical row is never a belief
+# the operator can close or reopen).
+
+#: The operator's author class on ``facts.source_type`` (D6/D7: the author axis;
+#: ``origin_class`` stays ``live`` — see ``provenance/origin.py``).
+OPERATOR_SOURCE_TYPE = "operator"
+
+#: The ``data`` keys a plain close stamps (the 0117 soft-close idiom).
+CLOSE_MARKER_KEYS: tuple[str, str] = ("closed_by", "closed_reason")
+
+
+def open_set_digest(ids: Iterable[Any]) -> str:
+    """The compare-and-set token of an open set: sha256 over the sorted ids, 16 hex."""
+    joined = ",".join(sorted(str(i).lower() for i in ids))
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:16]
+
+
+async def lock_fact_pair(conn: asyncpg.Connection, *, subject: str, predicate: str) -> None:
+    """Serialise operator writes on one ``(subject, predicate)`` pair for the
+    rest of the caller's transaction (an advisory lock, released at commit)."""
+    await conn.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        f"fact:{subject.strip().lower()}|{predicate.strip().lower()}",
+    )
+
+
+async def read_open_fact_set(
+    conn: asyncpg.Connection, *, subject: str, predicate: str,
+) -> list[asyncpg.Record]:
+    """The OPEN live rows of ``(lower(subject), lower(predicate))`` — the
+    pre-image every operator fact write reads in its own transaction."""
+    return await conn.fetch(
+        f"""
+        SELECT id, subject, predicate, value, source_type, confidence, valid_from,
+               origin_class, produced_at, created_at, analyst_id, data
+          FROM facts
+         WHERE lower(subject)   = lower($1)
+           AND lower(predicate) = lower($2)
+           AND valid_until IS NULL
+           AND superseded_by IS NULL
+           AND {_LIVE_FACTS}
+         ORDER BY created_at, id
+        """,
+        subject,
+        predicate,
+    )
+
+
+async def close_facts_by_id(
+    conn: asyncpg.Connection,
+    *,
+    ids: Sequence[UUID],
+    superseded_by: UUID | None,
+    closed_by: str,
+    reason: str | None = None,
+) -> list[UUID]:
+    """Close EXACTLY the still-open live rows among ``ids``; returns the ids closed.
+
+    With ``superseded_by`` it is a supersession (``valid_until`` /
+    ``superseded_at`` = now, ``superseded_by`` = the new fact) and ``data`` is
+    not touched, so a reopen restores the pre-image exactly. Without it, it is a
+    plain close: ``valid_until`` = now, ``superseded_by`` stays NULL, and
+    ``data.closed_by`` / ``data.closed_reason`` record who and why.
+    """
+    if not ids:
+        return []
+    if superseded_by is not None:
+        rows = await conn.fetch(
+            f"""
+            UPDATE facts
+               SET valid_until   = now(),
+                   superseded_by = $2, superseded_at = now(),
+                   updated_at    = now()
+             WHERE id = ANY($1::uuid[])
+               AND valid_until IS NULL
+               AND superseded_by IS NULL
+               AND {_LIVE_FACTS}
+            RETURNING id
+            """,
+            list(ids),
+            superseded_by,
+        )
+    else:
+        rows = await conn.fetch(
+            f"""
+            UPDATE facts
+               SET valid_until = now(),
+                   updated_at  = now(),
+                   data        = COALESCE(data, '{{}}'::jsonb)
+                                 || jsonb_build_object('closed_by', $2::text,
+                                                       'closed_reason', $3::text)
+             WHERE id = ANY($1::uuid[])
+               AND valid_until IS NULL
+               AND superseded_by IS NULL
+               AND {_LIVE_FACTS}
+            RETURNING id
+            """,
+            list(ids),
+            closed_by,
+            reason,
+        )
+    return [r["id"] for r in rows]
+
+
+async def reopen_facts_by_id(
+    conn: asyncpg.Connection,
+    *,
+    ids: Sequence[UUID],
+    superseded_by: UUID | None,
+    closed_by: str | None = None,
+    null_data_ids: Sequence[UUID] = (),
+) -> list[UUID]:
+    """Reopen the rows among ``ids`` that are STILL closed by the named act;
+    returns the ids reopened (the caller compares it with what it expected).
+
+    ``superseded_by``: rows whose ``superseded_by`` is that fact get
+    ``valid_until`` / ``superseded_by`` / ``superseded_at`` back to NULL.
+    Otherwise ``closed_by``: plain-closed rows whose ``data.closed_by`` is that
+    marker reopen, the close keys come off ``data`` (back to NULL for the ids
+    in ``null_data_ids``, whose ``data`` was NULL before the close).
+    """
+    if not ids:
+        return []
+    if superseded_by is not None:
+        rows = await conn.fetch(
+            f"""
+            UPDATE facts
+               SET valid_until   = NULL,
+                   superseded_by = NULL, superseded_at = NULL,
+                   updated_at    = now()
+             WHERE id = ANY($1::uuid[])
+               AND superseded_by = $2
+               AND {_LIVE_FACTS}
+            RETURNING id
+            """,
+            list(ids),
+            superseded_by,
+        )
+    else:
+        rows = await conn.fetch(
+            f"""
+            UPDATE facts
+               SET valid_until = NULL,
+                   updated_at  = now(),
+                   data        = CASE WHEN id = ANY($3::uuid[]) THEN NULL
+                                      ELSE data - 'closed_by' - 'closed_reason' END
+             WHERE id = ANY($1::uuid[])
+               AND superseded_by IS NULL
+               AND valid_until IS NOT NULL
+               AND data->>'closed_by' = $2
+               AND {_LIVE_FACTS}
+            RETURNING id
+            """,
+            list(ids),
+            closed_by,
+            list(null_data_ids),
+        )
+    return [r["id"] for r in rows]

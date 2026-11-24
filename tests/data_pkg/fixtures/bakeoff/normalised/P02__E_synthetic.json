@@ -1,0 +1,14 @@
+{
+ "arm": "E",
+ "cut": {
+  "dropped": [],
+  "sentences_in": 2,
+  "top": 0,
+  "words_in": 39,
+  "words_out": 39
+ },
+ "question_id": "P02",
+ "receipts": [],
+ "schema": "legba.bakeoff.normalised/1",
+ "text": "Change 1 bears on the question: the transit-volume indicator was activated on 2026-10-07 (not observed → triggered), which supports a fall in traffic. No other indicator moved; the corridor-attack indicator was unsettled and is not read as a change.\n\nStated confidence: 0.55"
+}

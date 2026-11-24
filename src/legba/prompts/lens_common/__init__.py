@@ -34,6 +34,8 @@ path silently falls back to the kind default and loses the entire lens stance).
 
 from __future__ import annotations
 
+import re
+
 # ---------------------------------------------------------------------------
 # The shared lens STANCE — who is speaking, and the one hard limit.
 # ---------------------------------------------------------------------------
@@ -181,9 +183,33 @@ def compose_lens_system(*, prior_block: str, voice: str) -> str:
     )
 
 
+#: The opening line of every faculty's delimited prior block:
+#: ``--- DECLARED PRIOR (lens_<fn> — <persona>; <question>) ---``.
+_PRIOR_HEADER_RE = re.compile(
+    r"^--- DECLARED PRIOR \((?P<lens>lens_[a-z_]+) \u2014 (?P<header>.+)\) ---$",
+    re.MULTILINE,
+)
+
+
+def lens_prior_header(prior_block: str) -> str | None:
+    """The one-line HEADER of a declared prior block, verbatim — the text after
+    the lens id in its ``--- DECLARED PRIOR (lens_<fn> — …) ---`` line (e.g.
+    ``"the Historian; asks how often this actually happens"``).
+
+    This is what a lens row stamps as ``data.lens_prior`` so a reader names the
+    prior the run actually saw without re-deriving it from a persona module the
+    row may have outlived. ``None`` for an empty block (a non-faculty tier) or a
+    block whose header line does not match — never an invented label."""
+    if not prior_block:
+        return None
+    m = _PRIOR_HEADER_RE.search(prior_block)
+    return m.group("header").strip() if m else None
+
+
 __all__ = [
     "LENS_PERSONA",
     "LENS_TASK",
     "LENS_NARRATE_PREAMBLE",
     "compose_lens_system",
+    "lens_prior_header",
 ]

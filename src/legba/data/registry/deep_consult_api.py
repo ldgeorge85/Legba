@@ -31,6 +31,16 @@ Status polling reads the produced FINDING row back from Postgres (the registry
 owns the pool) keyed by the workflow's ``run_id``: a row present → ``completed``
 with the finding id; absent → ``running``. The finding's ``derived_from`` makes
 it lineage-walkable via the existing lineage route.
+
+Owner check (X4 GATE, W11-F76)
+==============================
+
+A signed-in user reads only the status of a task THEY submitted
+(:func:`require_deep_task_owner`): the task's ``deep`` session — matched on the
+EXACT ``task_id`` — must carry their principal. The status read itself matches
+the finding on the task id's 8-hex run prefix, so a looser match here would let
+a variant spelling of someone else's task id through; no session for the exact
+id is a refusal, not a pass. The operator, the fleet and dev mode pass.
 """
 
 from __future__ import annotations
@@ -45,13 +55,16 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field, model_validator
 
+from ..consult_on_screen import OnScreen
 from ..pinned_context import (
     MAX_PINNED_RECORDS,
     MAX_PINNED_TOTAL_CHARS,
     pinned_context_chars,
 )
 from . import consult_persistence
-from .consult_api import PinnedRef, resolve_consult_model_override
+from . import consult_turn_stamps as _turn_stamps
+from . import session_auth as _session_auth
+from .consult_api import CONSULT_MODEL_ALLOWLIST, PinnedRef, resolve_consult_model_override
 from .api import RegistryAPIDeps, require_bearer
 from .descriptor import Family
 from .errors import DescriptorNotFound
@@ -84,9 +97,9 @@ class DeepConsultRequest(BaseModel):
     emit_facts: bool = True
     emit_hypotheses: bool = True
     # F1 model picker — which registered LLM plane runs the deep workflow's
-    # plan/analyze stages. None / absent ⇒ "opus" (the billed Anthropic Opus
-    # plane, the default). "fable" routes to the billed Anthropic Claude
-    # Fable 5.1 plane; "core" routes to the free self-hosted core plane.
+    # plan/analyze stages. None / absent ⇒ "core" (the self-hosted core
+    # component; plan and analyze think, extraction does not — T-1). "opus" and
+    # "fable" route to the billed Anthropic planes, ONLY when picked.
     # Mapped friendly→component id server-side off the SAME allowlist as chat
     # (``resolve_consult_model_override`` / ``CONSULT_MODEL_ALLOWLIST`` in
     # ``consult_api.py``) — this Literal must stay a superset-free mirror of
@@ -102,6 +115,10 @@ class DeepConsultRequest(BaseModel):
     pinned_context: list[PinnedRef] = Field(
         default_factory=list, max_length=MAX_PINNED_RECORDS,
     )
+    # Q-1 — the turn contract's inputs, the chat front door's own fields.
+    window: dict[str, Any] | None = Field(default=None, max_length=4)
+    grounding_mode: Literal["record_only", "default"] | None = None
+    on_screen: OnScreen | None = None
 
     @model_validator(mode="after")
     def _bounded_pinned_context(self) -> DeepConsultRequest:
@@ -137,6 +154,11 @@ class DeepConsultStatusResponse(BaseModel):
     fact_ids: list[str] = Field(default_factory=list)
     hypothesis_ids: list[str] = Field(default_factory=list)
     detail: str | None = None
+    # Q-2 — the deep turn's contract (``consult_contract/1``) and its
+    # settle-point verdict, as the analyze stage settled them; ``None`` for a
+    # finding written before Q-2.
+    contract: dict[str, Any] | None = None
+    verification: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +181,45 @@ def _build_actor_id(version: str) -> str:
 # ---------------------------------------------------------------------------
 # Router factory
 # ---------------------------------------------------------------------------
+
+
+#: The owner of a deep-consult task: its ``deep`` session, on the exact task id
+#: (``idx_consult_sessions_task``, a partial btree on ``task_id``).
+_TASK_OWNER_SQL = (
+    "SELECT principal FROM consult_sessions "
+    "WHERE task_id = $1 AND mode = 'deep' LIMIT 1"
+)
+
+
+async def require_deep_task_owner(pg: Any, request: Request, task_id: str) -> None:
+    """X4 GATE (W11-F76): refuse (403 ``not_row_owner``) a signed-in user on a
+    deep-consult task they did not submit (module docstring, "Owner check").
+
+    Unconfined callers (``session_auth.consult_owner_filter`` is ``None``: the
+    operator, the fleet, dev mode) pass without a read. A task with no session
+    for its exact id is refused for a confined caller — the owner cannot be
+    established — and a store error is a 503, never a pass.
+    """
+    owner = _session_auth.consult_owner_filter(request)
+    if owner is None:
+        return
+    try:
+        async with pg.acquire() as conn:
+            principal = await conn.fetchval(_TASK_OWNER_SQL, task_id)
+    except Exception as exc:  # noqa: BLE001 — fail closed
+        logger.warning("deep_consult.owner_check_failed err=%s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="could not check who submitted this deep-consult task",
+        ) from exc
+    if principal != owner:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "not_row_owner",
+                "message": f"deep-consult task {task_id} belongs to another user",
+            },
+        )
 
 
 def build_deep_consult_router(deps: RegistryAPIDeps) -> APIRouter:
@@ -209,13 +270,18 @@ def build_deep_consult_router(deps: RegistryAPIDeps) -> APIRouter:
             f"{sidecar_url}/v1.0/actors/{ACTOR_TYPE}/{actor_id}/method/run"
         )
         run_id = str(uuid4())
-        # F1 model picker: thread the plane override (None for the Opus default,
-        # so the deep run keeps the descriptor primary unchanged). The deep_consult
-        # kind validates it against the same allowlist and stamps it into the
-        # workflow input, so the workflow's stage deps + budget key off the plane.
+        # F1 model picker: thread the plane. The deep_consult kind validates it
+        # against the same allowlist and stamps it into the workflow input, so
+        # the workflow's stage deps + budget key off the plane. Roll 84 (the
+        # owner: "there is no paid deep... it's just the same model"): the
+        # DEFAULT is threaded too — the core component, explicitly — so a deep
+        # run that names no model runs on core whatever the descriptor head's
+        # primary says; a paid plane runs only when the request picks it.
         _chosen_model, llm_component_override = resolve_consult_model_override(
             body.model,
         )
+        if llm_component_override is None:
+            llm_component_override = CONSULT_MODEL_ALLOWLIST[_chosen_model]
         first_input: dict[str, Any] = {
             "question": body.question,
             "scope_predicate": body.scope_predicate,
@@ -225,6 +291,10 @@ def build_deep_consult_router(deps: RegistryAPIDeps) -> APIRouter:
         pinned_context = [p.model_dump() for p in body.pinned_context]
         if pinned_context:
             first_input["pinned_context"] = pinned_context
+        for _k, _v in (("window", body.window), ("grounding_mode", body.grounding_mode),
+                       ("on_screen", body.on_screen.wire() if body.on_screen else None)):
+            if _v is not None:
+                first_input[_k] = _v  # Q-1: set only when sent
         invoke_body = {
             "trigger_kind": "method",
             "inputs": [first_input],
@@ -345,6 +415,7 @@ def build_deep_consult_router(deps: RegistryAPIDeps) -> APIRouter:
     )
     async def deep_consult_status(
         task_id: str,
+        request: Request,
         _principal: str = Depends(require_bearer),
     ) -> DeepConsultStatusResponse:
         """Poll deep-consult status.
@@ -357,6 +428,7 @@ def build_deep_consult_router(deps: RegistryAPIDeps) -> APIRouter:
         ``running``. (The registry has no workflow-engine gRPC channel; the
         finding row is the authoritative completion signal.)
         """
+        await require_deep_task_owner(pg, request, task_id)
         # The instance id grammar is ``deep_consult.<scope>.<run8>`` where
         # ``run8`` is the run_id's first 8 hex chars (no dashes). Match the
         # produced finding row by that prefix on its run_id.
@@ -393,7 +465,15 @@ def build_deep_consult_router(deps: RegistryAPIDeps) -> APIRouter:
                 data_blob = {}
         if not isinstance(data_blob, dict):
             data_blob = {}
-        deep_blob = data_blob.get("deep_consult") or {}
+        # The row's ``data`` column holds the whole Finding (body, data, tags,
+        # ...): the synthesize stage's blob sits at data.data.deep_consult.
+        # The flat data.deep_consult shape is read too (older callers, tests).
+        deep_blob = data_blob.get("deep_consult")
+        if not isinstance(deep_blob, dict):
+            inner = data_blob.get("data")
+            deep_blob = inner.get("deep_consult") if isinstance(inner, dict) else None
+        if not isinstance(deep_blob, dict):
+            deep_blob = {}
         uncertainty = deep_blob.get("uncertainty")
         try:
             uncertainty = float(uncertainty) if uncertainty is not None else None
@@ -407,12 +487,32 @@ def build_deep_consult_router(deps: RegistryAPIDeps) -> APIRouter:
         # the synthesised answer as the assistant turn of the deep session.
         # Idempotent (at-most-once per session) so repeated polls don't dup it;
         # best-effort so the poll never fails on an audit write.
+        contract = deep_blob.get("contract") if isinstance(deep_blob.get("contract"), dict) else None
+        verification = (
+            deep_blob.get("verification") if isinstance(deep_blob.get("verification"), dict) else None
+        )
+        judged_refs = deep_blob.get("judged_refs")
+        usage = deep_blob.get("usage") if isinstance(deep_blob.get("usage"), dict) else None
+        plane, route = _deep_plane_route(usage)
         await consult_persistence.record_deep_completion(
             pg,
             task_id=task_id,
             answer=output_row["body"] or "",
             cited_refs=cited_refs,
             finding_id=str(output_row["id"]),
+            contract=contract,
+            verification=verification,
+            judged_refs=judged_refs,
+            usage=usage,
+            plane=plane,
+            route=route,
+        )
+        # The verdict as the turn stores it: checked against the persisted
+        # answer (a stamp over other text is withdrawn), or the label.
+        verification = _turn_stamps.verification_stamp(
+            verification, reason_if_absent="deep_consult_not_judged",
+            answer=(output_row["body"] or "") if verification is not None else None,
+            cited_refs=[str(r) for r in judged_refs] if isinstance(judged_refs, list) else None,
         )
 
         return DeepConsultStatusResponse(
@@ -422,9 +522,25 @@ def build_deep_consult_router(deps: RegistryAPIDeps) -> APIRouter:
             answer=output_row["body"],
             uncertainty=uncertainty,
             cited_refs=cited_refs,
+            contract=contract,
+            verification=verification,
         )
 
     return router
+
+
+def _deep_plane_route(usage: dict[str, Any] | None) -> tuple[str | None, str | None]:
+    """The plane and route a deep run's calls ran on, read off its per-call
+    receipts (``component_id``): the route when every call names the same
+    component, its friendly plane when the allowlist names it. Calls on
+    several components, or none recorded: ``(None, None)`` — not a guess."""
+    receipts = usage.get("call_receipts") if isinstance(usage, dict) else None
+    ids = {r.get("component_id") for r in receipts or [] if isinstance(r, dict) and r.get("component_id")}
+    if len(ids) != 1:
+        return None, None
+    route = str(next(iter(ids)))
+    plane = next((k for k, v in CONSULT_MODEL_ALLOWLIST.items() if v == route), None)
+    return plane, route
 
 
 __all__ = [

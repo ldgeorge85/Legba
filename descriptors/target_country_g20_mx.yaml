@@ -1,0 +1,102 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# target country_g20_mx — the live head, folded into the tree 2026-10-04 (W6 SPLIT-1, DEC-13).
+# It was registered by scripts/bringup_register_g20_country_targets.py (synthesised from iso_countries) + scripts/bringup_tag_targets.py (region/applicability tags);
+# scripts/bringup_register_descriptors.py now registers this file and nothing else does.
+# identity.version is the 16-zero placeholder: the registry stamps the content hash.
+# The live head also carries an inline `analyst:` block (analyst_ref null). It is
+# dead config: the runtime never reads it (X-1; 98d8ca54 removed it from every repo
+# target file). This file leaves it out, so the bring-up dry-run reports this head as
+# would-update with that one difference until the block is dropped live.
+identity:
+  abstraction_level: L1
+  created: '2026-06-03T00:00:00Z'
+  id: country_g20_mx
+  inherits: []
+  name: G20 — Mexico
+  owner: p17_reregister
+  retire_after: null
+  schema_uri: legba/target/2.0.0
+  state: active
+  version: '0000000000000000'
+scope:
+  domain: geo
+  entity_classes:
+  - country
+  - organization
+  - corporation
+  - person
+  - location
+  - political_party
+  - international_org
+  - infrastructure
+  - media_outlet
+  - military_unit
+  - armed_group
+  - event_series
+  - commodity
+  - concept
+  geo:
+  - MX
+  languages:
+  - es-MX
+  - en
+  predicate: null
+  relationship_types:
+  - AlliedWith
+  - HostileTo
+  - MemberOf
+  - LeaderOf
+  - TradesWith
+  - BordersWith
+  - SanctionsAgainst
+  - DiplomaticRelationsWith
+  - MilitaryPresenceIn
+  - SuppliesWeaponsTo
+  tags:
+  - geopolitical
+  - news
+  - g20
+  - region_americas
+  time_horizon_days: 90
+discovery: null
+sources:
+- source_id: null
+  source_selector:
+    geo: []
+    kinds:
+    - rss
+    languages: []
+    owner_tenant: shared
+    predicate: null
+    tags:
+    - news
+  subscription:
+    canonical_only: true
+    entity_classes: []
+    geo:
+    - MX
+    languages: []
+    modalities: []
+    predicate: geo_match(["MX"])
+    tags: []
+allowed_action_packs:
+- governor_override: null
+  pack_id: media_processing
+- governor_override: null
+  pack_id: incident_response
+- governor_override: null
+  pack_id: escalate_finding
+pipeline:
+  enrichment: []
+  ingestion_filters: []
+  routing: []
+outputs:
+- config:
+    skill_id: intelligence.country_g20_mx_assessment
+  kind: a2a_skill
+coordination:
+  allow_cycles: false
+  cycle_hop_limit: 0
+  publishes: []
+  subscribes_to: []

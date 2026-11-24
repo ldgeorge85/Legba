@@ -1351,9 +1351,9 @@ def test_shipped_manifest_matches_the_edited_descriptor():
     prompt without regenerating makes the R4 drift gauge quietly wrong."""
     import hashlib
 
-    from legba.data.registry.production_gauge_integrity import MANIFEST_PATH
+    from legba.data.registry.descriptor_prompt_manifest import load_manifest
 
-    manifest = json.loads(Path(MANIFEST_PATH).read_text("utf-8"))
+    manifest = load_manifest()
     prompt = _corpus_researcher().method.system_prompt
     lines = [ln.rstrip() for ln in prompt.replace("\r\n", "\n").split("\n")]
     normalized = "\n".join(lines).strip() + "\n"

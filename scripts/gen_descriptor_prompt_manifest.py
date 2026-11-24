@@ -25,6 +25,11 @@ Usage::
 
     python3 scripts/gen_descriptor_prompt_manifest.py          # write
     python3 scripts/gen_descriptor_prompt_manifest.py --check  # verify only
+
+R-1: the artefact is a DIRECTORY of one JSON per descriptor file
+(``src/legba/data/registry/descriptor_prompts/``), assembled at read time into
+the same dict the single file held; see
+``legba.data.registry.descriptor_prompt_manifest``.
 """
 from __future__ import annotations
 
@@ -39,9 +44,13 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DESCRIPTORS_DIR = REPO_ROOT / "descriptors"
-MANIFEST_PATH = (
-    REPO_ROOT / "src" / "legba" / "data" / "registry" / "descriptor_prompts.json"
-)
+#: R-1: one JSON per contributing descriptor file, in a package-data directory
+#: (``legba.data.registry.descriptor_prompt_manifest`` assembles them). The
+#: single ``descriptor_prompts.json`` it replaces was the second most edited
+#: file in the tree; a lane now touches only its own descriptor's file.
+MANIFEST_DIR = REPO_ROOT / "src" / "legba" / "data" / "registry" / "descriptor_prompts"
+#: The pre-R-1 single file; ``--check`` fails while it exists.
+LEGACY_MANIFEST_PATH = MANIFEST_DIR.with_name("descriptor_prompts.json")
 
 #: Bumped when the manifest's SHAPE changes, so a gauge reading an old artefact
 #: can say so instead of comparing hashes computed under different rules.
@@ -139,6 +148,23 @@ def render(manifest: dict[str, Any]) -> str:
     return json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
 
+def render_files(manifest: dict[str, Any]) -> dict[str, str]:
+    """``{file name: text}`` — one JSON per descriptor file that contributes a
+    prompt or a state, named after that YAML file."""
+    parts: dict[str, dict[str, dict[str, Any]]] = {}
+    for section in ("prompts", "states"):
+        for key, entry in manifest[section].items():
+            stem = Path(entry["source"]).stem
+            parts.setdefault(stem, {}).setdefault(section, {})[key] = entry
+    return {f"{stem}.json": render(part) for stem, part in sorted(parts.items())}
+
+
+def _current_files() -> dict[str, str]:
+    if not MANIFEST_DIR.is_dir():
+        return {}
+    return {p.name: p.read_text(encoding="utf-8") for p in MANIFEST_DIR.glob("*.json")}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
@@ -148,25 +174,35 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    text = render(build_manifest())
+    manifest = build_manifest()
+    wanted = render_files(manifest)
+    current = _current_files()
+    stale = sorted(n for n in set(wanted) | set(current) if wanted.get(n) != current.get(n))
     if args.check:
-        current = MANIFEST_PATH.read_text(encoding="utf-8") if MANIFEST_PATH.exists() else ""
-        if current != text:
+        if stale or LEGACY_MANIFEST_PATH.exists():
             print(
-                f"STALE: {MANIFEST_PATH.relative_to(REPO_ROOT)} does not match "
-                f"descriptors/ — run scripts/gen_descriptor_prompt_manifest.py",
+                f"STALE: {MANIFEST_DIR.relative_to(REPO_ROOT)} does not match "
+                f"descriptors/ ({', '.join(stale[:5]) or LEGACY_MANIFEST_PATH.name}"
+                f"{' …' if len(stale) > 5 else ''}) — run "
+                "scripts/gen_descriptor_prompt_manifest.py",
                 file=sys.stderr,
             )
             return 1
-        print(f"ok: manifest matches descriptors/")
+        print("ok: manifest matches descriptors/")
         return 0
 
-    MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
-    MANIFEST_PATH.write_text(text, encoding="utf-8")
-    parsed = json.loads(text)
+    MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
+    for name in stale:
+        path = MANIFEST_DIR / name
+        if name in wanted:
+            path.write_text(wanted[name], encoding="utf-8")
+        else:
+            path.unlink()
+    if LEGACY_MANIFEST_PATH.exists():
+        LEGACY_MANIFEST_PATH.unlink()
     print(
-        f"wrote {MANIFEST_PATH.relative_to(REPO_ROOT)} "
-        f"({len(parsed['prompts'])} prompts, {len(parsed['states'])} states)"
+        f"wrote {MANIFEST_DIR.relative_to(REPO_ROOT)}/ ({len(stale)} file(s) changed; "
+        f"{len(manifest['prompts'])} prompts, {len(manifest['states'])} states)"
     )
     return 0
 

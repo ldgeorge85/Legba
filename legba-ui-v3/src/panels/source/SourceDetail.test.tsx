@@ -4,12 +4,13 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactElement } from 'react'
 import SourceDetailPanel from './SourceDetail'
 import type { PanelRegistration } from '@/types'
 import { useSelection } from '@/state/selection'
+import { pickScopeOption } from '@/test/pickScope'
 
 function reg(): PanelRegistration {
   return {
@@ -101,7 +102,7 @@ const DESCRIPTORS = [{ descriptor_id: 'source.rss.brazil', name: 'Brazil RSS', s
 
 function mockFetch() {
   const fetchMock = vi.fn().mockImplementation((url: string) => {
-    if (url.includes('/registry/descriptors'))
+    if ((url.includes('/registry/descriptors') || url.includes('/v3/roster')))
       return Promise.resolve({ ok: true, json: async () => DESCRIPTORS })
     if (url.includes('/signals')) return Promise.resolve({ ok: true, json: async () => SIGNALS })
     return Promise.resolve({ ok: true, json: async () => SOURCE })
@@ -112,9 +113,7 @@ function mockFetch() {
 
 /** Pick a source in the ScopePicker once its options have loaded. */
 async function pickSource(value: string) {
-  const select = screen.getByTestId('source-detail-id')
-  await waitFor(() => expect(select.querySelector(`option[value="${value}"]`)).toBeInTheDocument())
-  fireEvent.change(select, { target: { value } })
+  await pickScopeOption('source-detail-id', value)
 }
 
 describe('SourceDetailPanel', () => {
@@ -154,7 +153,7 @@ describe('SourceDetailPanel', () => {
     render(wrap(<SourceDetailPanel registration={reg()} scope={{}} mode="personal" />))
     useSelection.getState().select({ kind: 'source', id: 'source.rss.brazil' })
     await waitFor(() => {
-      expect(screen.getByTestId('source-detail-id')).toHaveValue('source.rss.brazil')
+      expect(screen.getByTestId('source-detail-id')).toHaveAttribute('data-value', 'source.rss.brazil')
     })
     await waitFor(() => expect(screen.getByTestId('source-detail-body')).toBeInTheDocument())
   })

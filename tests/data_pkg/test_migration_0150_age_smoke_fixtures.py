@@ -20,7 +20,6 @@ something different from the one that will run.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -72,132 +71,7 @@ def test_migration_signature_covers_both_fixture_shapes():
     assert UNDATED_FIXTURE in sql, "the one undated smoke vertex is not matched"
 
 
-# ---------------------------------------------------------------------------
-# Behaviour — the shipped SQL against a real AGE substrate
-# ---------------------------------------------------------------------------
-
-_PIVOT_DB = {
-    "host": os.environ.get("LEGBA_PIVOT_PG_HOST", "127.0.0.1"),
-    "port": int(os.environ.get("LEGBA_PIVOT_PG_PORT", "5432")),
-    "user": os.environ.get("LEGBA_PIVOT_PG_USER", "legba"),
-    "password": os.environ.get("LEGBA_PIVOT_PG_PASSWORD", "legba"),
-    "database": os.environ.get("LEGBA_PIVOT_PG_DB", "legba_pivot_test"),
-}
-
-_FIXTURE_VERTICES = (
-    ("Organization", "SearchOrg1"),
-    ("Person", "Boss"),
-    ("Person", "Worker"),
-    ("Country", "CountryA"),
-    ("Concept", "TestMerge"),
-)
-
-
-@pytest.fixture
-async def age_conn():
-    asyncpg = pytest.importorskip("asyncpg")
-    try:
-        conn = await asyncpg.connect(**_PIVOT_DB)
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip(f"legba_pivot_test unreachable: {exc}")
-    try:
-        await conn.execute("LOAD 'age'")
-        await conn.execute('SET search_path = ag_catalog, "$user", public')
-        exists = await conn.fetchval(
-            "SELECT count(*) FROM ag_catalog.ag_graph WHERE name = 'legba_graph'"
-        )
-        if not exists:
-            pytest.skip("legba_graph absent on the pivot substrate")
-        yield conn
-    finally:
-        await conn.close()
-
-
-async def _seed_fixtures(conn) -> None:
-    """Recreate the June-17 smoke shape: dated vertices, one undated, one edge."""
-    await conn.execute("DELETE FROM legba_graph._ag_label_edge")
-    await conn.execute("DELETE FROM legba_graph._ag_label_vertex")
-    for label, name in _FIXTURE_VERTICES:
-        await conn.execute(
-            f"""SELECT * FROM cypher('legba_graph', $$
-                CREATE (:{label} {{name: '{name}',
-                    entity_id: '00000000-0000-4000-8000-000000000001',
-                    created_at: '{FIXTURE_TS_PREFIX}6:58.758806+00:00',
-                    updated_at: '{FIXTURE_TS_PREFIX}6:58.758899+00:00'}})
-                $$) AS (v agtype)"""
-        )
-    await conn.execute(
-        """SELECT * FROM cypher('legba_graph', $$
-            CREATE (:CypherCreated {name: 'FromCypher', origin: 'test'}) $$)
-           AS (v agtype)"""
-    )
-    await conn.execute(
-        """SELECT * FROM cypher('legba_graph', $$
-            MATCH (a:Person {name:'Worker'}), (b:Person {name:'Boss'})
-            CREATE (a)-[:ReportsTo]->(b) $$) AS (v agtype)"""
-    )
-
-
-async def test_migration_deletes_the_smoke_cohort(age_conn):
-    tr = age_conn.transaction()
-    await tr.start()
-    try:
-        await _seed_fixtures(age_conn)
-        assert await age_conn.fetchval(
-            "SELECT count(*) FROM legba_graph._ag_label_vertex"
-        ) == len(_FIXTURE_VERTICES) + 1
-        assert await age_conn.fetchval(
-            "SELECT count(*) FROM legba_graph._ag_label_edge"
-        ) == 1
-
-        await age_conn.execute(_sql())
-
-        assert await age_conn.fetchval(
-            "SELECT count(*) FROM legba_graph._ag_label_vertex"
-        ) == 0, "fixture vertices survived the migration"
-        assert await age_conn.fetchval(
-            "SELECT count(*) FROM legba_graph._ag_label_edge"
-        ) == 0, "fixture edges survived the migration"
-        # The labels themselves are untouched — this is a data migration.
-        assert await age_conn.fetchval(
-            "SELECT count(*) FROM ag_catalog.ag_label WHERE graph = "
-            "(SELECT graphid FROM ag_catalog.ag_graph WHERE name='legba_graph')"
-        ) > 10
-    finally:
-        await tr.rollback()
-
-
-async def test_migration_is_a_noop_on_an_already_empty_graph(age_conn):
-    tr = age_conn.transaction()
-    await tr.start()
-    try:
-        await age_conn.execute("DELETE FROM legba_graph._ag_label_edge")
-        await age_conn.execute("DELETE FROM legba_graph._ag_label_vertex")
-        await age_conn.execute(_sql())  # must not raise
-        await age_conn.execute(_sql())  # and must stay idempotent
-    finally:
-        await tr.rollback()
-
-
-async def test_migration_refuses_when_the_graph_holds_production_data(age_conn):
-    """One id-keyed vertex is enough to stop the whole delete. That is the guard."""
-    asyncpg = pytest.importorskip("asyncpg")
-    tr = age_conn.transaction()
-    await tr.start()
-    try:
-        await _seed_fixtures(age_conn)
-        await age_conn.execute(
-            """SELECT * FROM cypher('legba_graph', $$
-                CREATE (:Country {id: '11111111-1111-4111-8111-111111111111',
-                                  name: 'Iran'}) $$) AS (v agtype)"""
-        )
-        before = await age_conn.fetchval(
-            "SELECT count(*) FROM legba_graph._ag_label_vertex"
-        )
-        with pytest.raises(asyncpg.PostgresError, match="refusing to delete"):
-            await age_conn.execute(_sql())
-    finally:
-        await tr.rollback()
-
-    # Nothing was deleted — the exception aborted the whole DO block.
-    assert before == len(_FIXTURE_VERTICES) + 2
+# The behaviour tests that ran this migration against a live AGE substrate were
+# removed on 2026-11-15: the graph they seeded no longer exists after
+# 20261115T1829_drop_empty_age_graph, and 0150 has applied everywhere. The
+# guards above pin the shipped text.

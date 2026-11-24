@@ -73,6 +73,7 @@ from mcp.types import (
 # it at descriptor activate time. Importing it here does not by itself
 # trigger any registration — it's just the SECOND catalog source the
 # legba-mcp stdio server reads (the built-ins are the first).
+from ..data.display_policy import READER, display_payload
 from ..data.outputs.mcp_tool import MCP_TOOL_REGISTRY
 from ..runtime.registry_client import RegistryHTTPClient
 from .mcp_builtin_tools import (
@@ -120,7 +121,14 @@ def merge_tool_catalogs(
 
 
 def _format_result(result: Any) -> str:
-    """Serialize a built-in handler's structured dict result to MCP text."""
+    """Serialize a built-in handler's structured dict result to MCP text.
+
+    X2-B4: MCP is a READER surface by construction (an external agent's
+    client, whatever token the process holds), so every structured result
+    passes the reader display policy before it is serialized — a signal row
+    becomes its projection, publisher text and archived bytes are withheld.
+    """
+    result = display_payload(result, READER)
     if isinstance(result, str):
         return result
     try:

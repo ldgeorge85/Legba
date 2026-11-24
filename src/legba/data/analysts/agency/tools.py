@@ -173,6 +173,13 @@ class ToolContext:
     #: close over one number. Defaults to the pack's own budget account when
     #: unset (see ``web_tools``).
     search_budget_account: str = ""
+    #: C-2b-1 — the consult write plane's thin client
+    #: (``runtime/consult_writes_client.ConsultWritesClient``): it preflights a
+    #: write through the runtime's own parser and posts it to the registry's ONE
+    #: executor. Wired only on the ``consult_write`` binding
+    #: (``runtime/consult_bindings``); ``None`` elsewhere, and a write handler
+    #: without it returns a loud ``failed`` result.
+    consult_writes: Any | None = None
 
 
 ToolHandler = Callable[[ToolCall, ActionPack, ToolContext], Awaitable[ToolResult]]
@@ -291,7 +298,27 @@ class ChannelEmitter:
                 detail=str(payload.get("detail") or ""),
                 faithfulness_score=payload.get("faithfulness_score"),
             )
-            await self._alert_sinks.fan_out(sink_payload)
+            # L-1: the ONE alert path — the escalation is an alert episode
+            # keyed by its finding (two channels for one finding are one
+            # episode), and the page rule decides the push.
+            from ...alerts.raise_alert import raise_alert
+
+            output_id = payload.get("output_id")
+            await raise_alert(
+                self._pg_pool,
+                kind="escalations",
+                severity=payload.get("severity"),
+                summary=str(payload.get("title") or ""),
+                detail=str(payload.get("detail") or ""),
+                subject_id=payload.get("target_id") or "",
+                dedupe_key=(
+                    f"escalations:finding:{output_id}" if output_id else None
+                ),
+                evidence_refs=[output_id] if output_id else [],
+                raised_by=f"escalate:{channel.name}:{payload.get('requested_by') or '-'}",
+                payload=sink_payload,
+                dispatcher=self._alert_sinks,
+            )
         except Exception as exc:  # pragma: no cover - defensive guard
             logger.warning(
                 "channel.emit.alert_sink_fanout_failed name=%s err=%s",
@@ -602,11 +629,15 @@ def default_tool_registry() -> ToolRegistry:
     # ToolResult/ToolContext from this module, so a module-level import here
     # would be a cycle.
     from .inquiry_state import register_inquiry_state_tools
+    from .evidence_drift_tools import register_evidence_drift_tools
+    from .intake_tools import register_intake_tools
     from .journal_propose import register_journal_propose_tools
     from .journal_read import register_journal_read_tools
     from .research_tools import register_research_tools
     from .substrate_read import register_substrate_read_tools
     from .web_tools import register_web_access_tools
+    from .consult_write import register_consult_write_tools
+    from .workstation_drive import register_workstation_drive_tools
     from .write_tools import register_write_tools
 
     r = ToolRegistry()
@@ -629,6 +660,14 @@ def default_tool_registry() -> ToolRegistry:
     # Registered here so the agency dispatch resolves the names; they RUN only
     # when a granted+allowed inquiry descriptor's per-run ctx.writeback is wired.
     register_inquiry_state_tools(r)
+    # I-1 — the `ingestion_intake` pack: an agent submits an ingestion request
+    # (and reads its own requests' status). Both tools answer `failed` unless
+    # LEGBA_INTAKE_AGENT_REQUESTS is on AND a per-run ctx.writeback is wired.
+    register_intake_tools(r)
+    # D-1 — the `evidence_drift` pack: versions of a cited page, the changed
+    # passages side by side, a re-read request, a re-derive request and the
+    # drift-flag review. Granted to no analyst until an operator adds it.
+    register_evidence_drift_tools(r)
     register_web_access_tools(r)
     register_write_tools(r)
     # R-A — the `research` pack's single tool. It is BOTH a web-egress tool and
@@ -636,6 +675,14 @@ def default_tool_registry() -> ToolRegistry:
     # needs a bound ctx.search AND a per-run ctx.writeback; with either missing
     # it returns a loud `failed` naming the gap rather than a silent no-op.
     register_research_tools(r)
+    # C-1b — the `workstation_drive` pack's nine canonicalizers (consult
+    # presents a case). Pure: no store, no ctx; they RUN only for a consult
+    # turn the operator armed, through the case gate and then this gate.
+    register_workstation_drive_tools(r)
+    # C-2b-1 — the `consult_write` pack's five tools: thin clients of the
+    # registry's write executor. They RUN only for a consult turn the operator
+    # armed (allow_writes), through the write gate and then this gate.
+    register_consult_write_tools(r)
     return r
 
 

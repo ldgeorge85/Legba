@@ -30,7 +30,14 @@ export const ASSESSMENT_SCHEMA = 'assessment.v1'
 export type AssemblyTier = 'country' | 'world' | 'thematic'
 export type AssemblyRegime = 'assembly' | 'legacy'
 export type LeadKind = 'earned_single' | 'co_leads' | 'none'
-export type SpanRole = 'bluf' | 'what_changed' | 'body' | 'indicator' | 'context_body'
+export type SpanRole =
+  | 'bluf'
+  | 'what_changed'
+  | 'body'
+  | 'indicator'
+  | 'context_body'
+  /** N-C — the head's new-material bullet, quoted verbatim after the BLUF. */
+  | 'window_adds'
 
 /**
  * P3 Lane A — CONTEXT, not quotation. A COUNTRY block carries its origin desk
@@ -120,6 +127,82 @@ export interface AssemblyBlock {
   contextSpans: AssemblySpan[]
   signals: AssemblySignal[]
   corroboration: { n_sources: number; n_desks_sharing: number } | null
+  /**
+   * W4 F-3 — the block's position in the PURE order (`order_key`), stamped on
+   * a world record carrying a subject-group floor; `null` everywhere else.
+   */
+  order_rank?: number | null
+  /** W4 F-3 — the floor KEPT this block though the order ranked it below the cut. */
+  carried_by_floor?: boolean
+  /** W4 F-3 — a floor-kept block older than the floor's stale bar. */
+  floor_stale?: boolean
+  /** N-C — a cross-unit shared thread gave this block its slot. */
+  carried_by_thread?: boolean
+  /** N-C — opposite verdicts on one event among the unit head's cited headlines. */
+  contested_facts?: ContestedFact[]
+  /**
+   * Lane N-D — the lead span checked against the signals ITS markers cite
+   * (`assembly_span_checks`): numbers no cited signal states, and citations
+   * that name none of the span's actors. `null` when the block was not
+   * checked (built before the check, or a head with no citation bridge).
+   */
+  span_checks?: SpanChecks | null
+}
+
+/** N-C — one cited signal named on a contested fact. */
+export interface ContestedSignal {
+  signal_id: string
+  source_id: string
+  title: string
+}
+
+/** N-C — `blocks[].contested_facts[]` (`cited_signal_titles.v1`). */
+export interface ContestedFact {
+  event_terms: string[]
+  /** `confirmed` only when an affirming headline says so; else `reported`. */
+  affirm_label: string
+  affirmed_by: ContestedSignal[]
+  disputed_by: ContestedSignal[]
+}
+
+/** N-C — one side of a declared tension's evidence balance. */
+export interface BalanceSide {
+  n_signals: number
+  n_sources: number
+  sources: string[]
+  newest_at: string | null
+}
+
+/** N-C — `tensions[].evidence_balance` (`distinct_cited_sources.v1`). */
+export interface EvidenceBalance {
+  basis: string
+  a: BalanceSide
+  b: BalanceSide
+  shared_signals: number
+  favours: 'a' | 'b' | 'balanced' | string
+}
+
+/** N-C — `assembly.threads[]`: signals two or more units' heads both cite. */
+export interface SharedThread {
+  units: string[]
+  signal_ids: string[]
+  titles: string[]
+  max_magnitude: number | null
+  block_ordinals: number[]
+}
+
+/** N-C — `carry_plan.empty_slots[]`: a thematic slot that refused its fallback. */
+export interface EmptySlot {
+  via_head_id: string
+  unit: string
+  why: string
+}
+
+
+export interface SpanChecks {
+  flags: string[]
+  number_unsupported: { number: string; phrase: string; markers: string[] }[]
+  actor_mismatch: { marker: string; names: string[]; span_actors: string[] }[]
 }
 
 export interface LeadTest {
@@ -178,6 +261,8 @@ export interface AssemblyTension {
   detector: string
   same_target: boolean
   same_window_h: number | null
+  /** N-C — the deterministic weighing; `null` on a record written before it. */
+  evidence_balance?: EvidenceBalance | null
 }
 
 export interface TensionChecked {
@@ -207,6 +292,14 @@ export interface DropRow {
   severity: string | null
   cited_mass: number | null
   why: string
+  /** W4 F-3 — the row's position in the PURE order; `null` off a floored record. */
+  order_rank?: number | null
+  /** W4 F-3 — the pure prefix would have carried this row; the floor displaced it. */
+  displaced_by_floor?: boolean
+  /** N-C — a thematic slot declared empty rather than filled by fallback. */
+  declared_empty_slot?: boolean
+  /** N-C — displaced by the shared-thread slot. */
+  displaced_by_thread?: boolean
 }
 
 export interface DropCounts {
@@ -239,6 +332,17 @@ export interface CoverageRow {
   read_date: string | null
   age_h: number | null
   effective_confidence?: number | null
+  /** W11 — the unit's cadence (hours) the composition judged staleness by;
+   *  absent/null = not measured. */
+  cadence_h?: number | null
+  /** W11 — true when the quoted read is older than cadence × the multiple;
+   *  null = not measured (never read as fresh). */
+  stale?: boolean | null
+  /** W11-F14 — on a `carried_unsupported` row: the status the head still
+   *  states, and the age (h) of the last read whose indicators triggered
+   *  (null = none inside the lookback). */
+  carried_status?: string | null
+  last_evidence_age_h?: number | null
 }
 
 export interface AssemblyPayload {
@@ -253,16 +357,70 @@ export interface AssemblyPayload {
   drops: DropLedger | null
   coverage: CoverageRow[]
   connectives: { vocabulary_version: string } | null
+  /** W4 F-3 — the subject-group floor's audit line; `null` when none was applied. */
+  floor?: AssemblyFloor | null
+  /** N-C — cross-unit shared threads; `[]` on a record written before them. */
+  threads?: SharedThread[]
+  /** N-C — thematic slots declared empty (`carry_plan.empty_slots`). */
+  empty_slots?: EmptySlot[]
+}
+
+/**
+ * W4 F-3 — one subject group on the floor's ledger. `reason` is
+ * `in_prefix` / `kept_by_floor` / `no_candidate`.
+ */
+export interface FloorGroup {
+  group_id: string
+  group_name: string
+  offered: number
+  carried: number
+  best_order_rank: number | null
+  reason: 'in_prefix' | 'kept_by_floor' | 'no_candidate' | string
+}
+
+/**
+ * W4 F-3 — `data.data.assembly.floor` (`subject_group_floor.v1`): one block per
+ * subject group is guaranteed on the world read, the rest is the order's top.
+ * `grain` is the roster tag the groups are cut on (the reader pluralises it).
+ */
+export interface AssemblyFloor {
+  version: string
+  grain: string
+  per_group: number
+  cap: number
+  cap_effective: number
+  honoured: boolean
+  promoted: string[]
+  displaced: string[]
+  groups: FloorGroup[]
+  stale_hours: number | null
+  /** N-C — groups at zero because their slot was declared empty. */
+  declared_empty?: string[]
 }
 
 /** §3.6 READ time — a row whose arms failed refuses the affected blocks. */
 export interface AssemblyArms {
   gate: 'passed' | 'failed' | string
+  /**
+   * The arms' own headline, `verification.branch_scores.assembly.score`
+   * (supported / checkable over every check unit the four arms ran). `null` on
+   * the legacy `assembly_arms` shape, which never carried it.
+   */
+  score?: number | null
   quote_fidelity: number | null
   scope_preservation: number | null
   attribution_equality: number | null
   coverage_completeness: number | null
   spans: number | null
+  /**
+   * Spans that passed the WHOLE quote check — offsets, containment AND the
+   * origin sha over a complete capture (`assembly_quote_sha_verified`; on rows
+   * written before that counter, `checked - assembly_quote_sha_unverifiable`).
+   * `null` when unknown. A span whose head ran past the capture window was only
+   * checked for containment, so `quote_fidelity` alone must never be printed
+   * as a pass over it.
+   */
+  spans_fully_checked?: number | null
   failed_ordinals: number[]
 }
 
@@ -563,6 +721,146 @@ function projectBlock(v: unknown): AssemblyBlock | null {
     corroboration: corr
       ? { n_sources: int(corr.n_sources), n_desks_sharing: int(corr.n_desks_sharing) }
       : null,
+    order_rank: num(o.order_rank),
+    carried_by_floor: o.carried_by_floor === true,
+    floor_stale: o.floor_stale === true,
+    carried_by_thread: o.carried_by_thread === true,
+    contested_facts: arr(o.contested_facts)
+      .map(projectContested)
+      .filter((f): f is ContestedFact => f !== null),
+    ...(obj(o.span_checks) ? { span_checks: projectSpanChecks(o.span_checks) } : {}),
+  }
+}
+
+function projectContestedSignal(v: unknown): ContestedSignal | null {
+  const o = obj(v)
+  if (!o) return null
+  return { signal_id: str(o.signal_id), source_id: str(o.source_id), title: str(o.title) }
+}
+
+function projectContested(v: unknown): ContestedFact | null {
+  const o = obj(v)
+  if (!o) return null
+  const sides = (k: string) =>
+    arr(o[k]).map(projectContestedSignal).filter((s): s is ContestedSignal => s !== null)
+  const affirmed = sides('affirmed_by')
+  const disputed = sides('disputed_by')
+  if (affirmed.length === 0 || disputed.length === 0) return null
+  return {
+    event_terms: arr(o.event_terms).map((x) => str(x)).filter((x) => x !== ''),
+    affirm_label: str(o.affirm_label, 'reported'),
+    affirmed_by: affirmed,
+    disputed_by: disputed,
+  }
+}
+
+function projectBalanceSide(v: unknown): BalanceSide {
+  const o = obj(v) ?? {}
+  return {
+    n_signals: int(o.n_signals),
+    n_sources: int(o.n_sources),
+    sources: arr(o.sources).map((x) => str(x)).filter((x) => x !== ''),
+    newest_at: strOrNull(o.newest_at),
+  }
+}
+
+function projectBalance(v: unknown): EvidenceBalance | null {
+  const o = obj(v)
+  if (!o) return null
+  return {
+    basis: str(o.basis, 'distinct_cited_sources.v1'),
+    a: projectBalanceSide(o.a),
+    b: projectBalanceSide(o.b),
+    shared_signals: int(o.shared_signals),
+    favours: str(o.favours, 'balanced'),
+  }
+}
+
+function sourceLabel(id: string): string {
+  return id.replace(/^source\./, '') || 'unknown source'
+}
+
+/**
+ * N-C — the record body's evidence-balance line, the same words
+ * (`world_block_evidence.balance_sentence`).
+ */
+export function balanceSentence(
+  balance: EvidenceBalance | null | undefined,
+  aLabel: string,
+  bLabel: string,
+): string | null {
+  if (!balance) return null
+  const srcs = (n: number) => (n === 1 ? '1 distinct source' : `${n} distinct sources`)
+  const when = (s: BalanceSide) => (s.newest_at ? `, newest ${s.newest_at.slice(0, 10)}` : '')
+  const verdict =
+    balance.favours === 'a'
+      ? `the count favours ${aLabel}`
+      : balance.favours === 'b'
+        ? `the count favours ${bLabel}`
+        : 'balanced'
+  const tail =
+    balance.shared_signals > 0
+      ? `; ${balance.shared_signals} signal(s) cited by both sides set aside`
+      : ''
+  return (
+    `Evidence balance (cited signals only): ${aLabel} cites ${srcs(balance.a.n_sources)}` +
+    `${when(balance.a)}; ${bLabel} cites ${srcs(balance.b.n_sources)}${when(balance.b)}${tail} — ${verdict}.`
+  )
+}
+
+/** N-C — the contested-fact line (`world_block_evidence.contested_sentence`). */
+export function contestedSentence(f: ContestedFact): string {
+  const side = (items: ContestedSignal[]) => {
+    const shown = items
+      .slice(0, 3)
+      .map((s) => `${sourceLabel(s.source_id)} ("${s.title}")`)
+      .join(', ')
+    return items.length > 3 ? `${shown} and ${items.length - 3} more` : shown
+  }
+  return (
+    `Contested in cited reporting — ${f.affirm_label || 'reported'} by ${side(f.affirmed_by)}` +
+    ` / disputed by ${side(f.disputed_by)}.`
+  )
+}
+
+function projectThread(v: unknown): SharedThread | null {
+  const o = obj(v)
+  if (!o) return null
+  const units = arr(o.units).map((x) => str(x)).filter((x) => x !== '')
+  if (units.length < 2) return null
+  return {
+    units,
+    signal_ids: arr(o.signal_ids).map((x) => str(x)).filter((x) => x !== ''),
+    titles: arr(o.titles).map((x) => str(x)),
+    max_magnitude: num(o.max_magnitude),
+    block_ordinals: arr(o.block_ordinals)
+      .map((x) => num(x))
+      .filter((x): x is number => x !== null),
+  }
+}
+
+/** Lane N-D — `blocks[].span_checks`, total over a malformed entry. */
+export function projectSpanChecks(v: unknown): SpanChecks | null {
+  const o = obj(v)
+  if (!o) return null
+  return {
+    flags: arr(o.flags).map((x) => str(x)).filter((x) => x !== ''),
+    number_unsupported: arr(o.number_unsupported)
+      .map(obj)
+      .filter((x): x is Record<string, unknown> => x !== null)
+      .map((x) => ({
+        number: str(x.number),
+        phrase: str(x.phrase),
+        markers: arr(x.markers).map((m) => str(m)),
+      })),
+    actor_mismatch: arr(o.actor_mismatch)
+      .map(obj)
+      .filter((x): x is Record<string, unknown> => x !== null)
+      .map((x) => ({
+        marker: str(x.marker),
+        names: arr(x.names).map((m) => str(m)),
+        span_actors: arr(x.span_actors).map((m) => str(m)),
+      })),
   }
 }
 
@@ -607,6 +905,7 @@ function projectTension(v: unknown): AssemblyTension | null {
     detector: str(o.detector, 'direction_conflict'),
     same_target: o.same_target === true,
     same_window_h: num(o.same_window_h),
+    evidence_balance: projectBalance(o.evidence_balance),
   }
 }
 
@@ -626,7 +925,69 @@ function projectDropRow(v: unknown): DropRow | null {
     severity: strOrNull(o.severity),
     cited_mass: num(o.cited_mass),
     why: str(o.why, 'not_selected'),
+    order_rank: num(o.order_rank),
+    displaced_by_floor: o.displaced_by_floor === true,
+    declared_empty_slot: o.declared_empty_slot === true,
+    displaced_by_thread: o.displaced_by_thread === true,
   }
+}
+
+function projectFloor(v: unknown): AssemblyFloor | null {
+  const o = obj(v)
+  if (!o) return null
+  const groups = arr(o.groups)
+    .map((g): FloorGroup | null => {
+      const x = obj(g)
+      if (!x) return null
+      const id = str(x.group_id)
+      if (id === '') return null
+      return {
+        group_id: id,
+        group_name: str(x.group_name) || id,
+        offered: int(x.offered),
+        carried: int(x.carried),
+        best_order_rank: num(x.best_order_rank),
+        reason: str(x.reason, 'in_prefix'),
+      }
+    })
+    .filter((g): g is FloorGroup => g !== null)
+  return {
+    version: str(o.version, 'subject_group_floor.v1'),
+    grain: str(o.grain) || 'group',
+    per_group: int(o.per_group, 1),
+    cap: int(o.cap),
+    cap_effective: int(o.cap_effective),
+    honoured: o.honoured === true,
+    promoted: arr(o.promoted).map((x) => str(x)).filter((x) => x !== ''),
+    displaced: arr(o.displaced).map((x) => str(x)).filter((x) => x !== ''),
+    groups,
+    stale_hours: num(o.stale_hours),
+    declared_empty: arr(o.declared_empty).map((x) => str(x)).filter((x) => x !== ''),
+  }
+}
+
+/**
+ * W4 F-3 — the floor line, the SAME sentence the record body carries under its
+ * as-of line: "6 regions carried, floor honoured — 1 kept by the floor." /
+ * "5 of 6 regions carried, floor NOT honoured: Americas." Counts the groups
+ * that OFFERED a candidate. `null` on a record with no floor (country,
+ * thematic, every pre-floor world record) — absence, never a zero.
+ */
+export function floorSentence(floor: AssemblyFloor | null): string | null {
+  if (!floor) return null
+  // N-C — a group whose slot was declared empty is stated by its own line.
+  const declared = new Set(floor.declared_empty ?? [])
+  const offered = floor.groups.filter((g) => g.offered >= 1 && !declared.has(g.group_id))
+  const carried = offered.filter((g) => g.carried >= 1)
+  const noun = offered.length === 1 ? floor.grain : `${floor.grain}s`
+  if (carried.length === offered.length) {
+    const kept = floor.promoted.length
+    return `${carried.length} ${noun} carried, floor honoured${
+      kept > 0 ? ` — ${kept} kept by the floor` : ''
+    }.`
+  }
+  const missed = offered.filter((g) => g.carried < 1).map((g) => g.group_name)
+  return `${carried.length} of ${offered.length} ${noun} carried, floor NOT honoured: ${missed.join(', ')}.`
 }
 
 function projectDrops(v: unknown): DropLedger | null {
@@ -669,6 +1030,10 @@ function projectCoverage(v: unknown): CoverageRow | null {
     read_date: strOrNull(o.read_date),
     age_h: num(o.age_h),
     effective_confidence: num(o.effective_confidence),
+    cadence_h: num(o.cadence_h),
+    stale: typeof o.stale === 'boolean' ? o.stale : null,
+    carried_status: strOrNull(o.carried_status),
+    last_evidence_age_h: num(o.last_evidence_age_h),
   }
 }
 
@@ -730,16 +1095,74 @@ export function projectAssembly(row: ReadFindingRow): AssemblyPayload | null {
     connectives: obj(a.connectives)
       ? { vocabulary_version: str(obj(a.connectives)!.vocabulary_version, 'connective.v1') }
       : null,
+    floor: projectFloor(a.floor),
+    threads: arr(a.threads).map(projectThread).filter((t): t is SharedThread => t !== null),
+    empty_slots: arr(obj(a.carry_plan)?.empty_slots)
+      .map((x): EmptySlot | null => {
+        const e = obj(x)
+        return e ? { via_head_id: str(e.via_head_id), unit: str(e.unit), why: str(e.why) } : null
+      })
+      .filter((e): e is EmptySlot => e !== null && e.unit !== ''),
   }
 }
 
-/** §3.6 — the verify arms' gate, off the row's `verification` block. */
+/**
+ * §3.6 — the verify arms' gate, off the row's `verification` block.
+ *
+ * WHAT THE SERVER WRITES (`provenance/assembly_arms.branch_score`,
+ * `assembly_arms.fold`): `verification.branch_scores.assembly =
+ * {score, checkable, supported}` with `branch_versions.assembly =
+ * "assembly_arms.v1"`, plus the arms' raw tallies in `verification.counters`
+ * (`assembly_quote_spans_checked` / `_ok`, `assembly_scope_spans_checked`, ...).
+ * A critique has NEVER carried an `assembly_arms` key (0 of 4,572 audited
+ * critiques, 2026-11-07), so that shape is read only as a fallback for the
+ * fixtures that model it.
+ *
+ * Derivations, all from those two server-written objects:
+ *   - `score`          = `branch_scores.assembly.score`.
+ *   - `quote_fidelity` = `assembly_quote_spans_ok / assembly_quote_spans_checked`
+ *     (the arm's own definition, `quote_fidelity_score`); `null` with no span.
+ *   - `gate`           = `failed` when the headline reads under 1.0. The server
+ *     does not persist WHICH blocks failed, so `failed_ordinals` is empty and
+ *     nothing is withheld on this shape; the banner says so.
+ * Scope / attribution / coverage have no persisted per-arm ratio: `null`.
+ * A row with neither object returns `null` (no arms ran on it; an Assessment
+ * row is audited by the judge, not the arms, and lands here).
+ */
 export function projectArms(row: ReadFindingRow): AssemblyArms | null {
   const v = obj(row.verification)
+  const branch = v ? obj(obj(v.branch_scores)?.assembly) : null
+  if (v && branch) {
+    const score = num(branch.score)
+    const counters = obj(v.counters)
+    const checked = counters ? num(counters.assembly_quote_spans_checked) : null
+    const ok = counters ? num(counters.assembly_quote_spans_ok) : null
+    const verified = counters ? num(counters.assembly_quote_sha_verified) : null
+    const unverifiable = counters ? num(counters.assembly_quote_sha_unverifiable) : null
+    let fully: number | null = null
+    if (checked !== null && ok !== null) {
+      fully =
+        verified !== null
+          ? verified
+          : Math.max(0, Math.min(ok, checked - (unverifiable ?? 0)))
+    }
+    return {
+      gate: score !== null && score < 1 ? 'failed' : 'passed',
+      score,
+      quote_fidelity: checked !== null && checked > 0 && ok !== null ? ok / checked : null,
+      scope_preservation: null,
+      attribution_equality: null,
+      coverage_completeness: null,
+      spans: checked,
+      spans_fully_checked: fully,
+      failed_ordinals: [],
+    }
+  }
   const a = v ? obj(v.assembly_arms) : null
   if (!a) return null
   return {
     gate: str(a.gate, 'passed'),
+    score: null,
     quote_fidelity: num(a.quote_fidelity),
     scope_preservation: num(a.scope_preservation),
     attribution_equality: num(a.attribution_equality),
@@ -995,6 +1418,9 @@ export function standingSentence(
  */
 export interface RecordBadge {
   quoteFidelity: number | null
+  /** `[fully checked, spans]` — set when SOME span was checked for
+   *  containment only, so the badge reads "k of n checked", never 1.00. */
+  quoteChecked?: [number, number] | null
   coverageCompleteness: number | null
   dropCount: number
   blocks: number
@@ -1012,8 +1438,11 @@ export function recordBadge(a: AssemblyPayload, arms: AssemblyArms | null): Reco
     const accounted = a.coverage.filter((c) => c.status !== '').length
     coverage = accounted / a.coverage.length
   }
+  const spans = arms?.spans ?? null
+  const fully = arms?.spans_fully_checked ?? null
   return {
     quoteFidelity: arms?.quote_fidelity ?? null,
+    quoteChecked: spans !== null && fully !== null && fully < spans ? [fully, spans] : null,
     coverageCompleteness: coverage,
     dropCount,
     blocks: a.blocks.length,

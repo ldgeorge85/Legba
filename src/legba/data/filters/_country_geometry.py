@@ -18,6 +18,7 @@ attribution; the source's exact lat/lon is preserved separately.
 from __future__ import annotations
 
 import json
+import math
 import pathlib
 from functools import lru_cache
 from typing import Any
@@ -85,6 +86,91 @@ def country_iso2_for_point(lat: float, lon: float) -> str | None:
             if _point_in_polygon(lon, lat, poly):
                 return c.get("iso2")
     return None
+
+
+# ---- nearest coast (lane N-S) ------------------------------------------------
+#
+# An authoritative point in NO country (an incident at sea, lane N-R) is filed
+# under no country; this answers the next question honestly — WHICH coastal
+# states it lies off, and how far — from the same bundled 110m outlines, so
+# nothing is fetched and nothing is added. The distance is to the 110m
+# outline, whose generalisation is itself tens of km along an intricate coast
+# (the Musandam peninsula, the Gulf islands), so it is reported to the km but
+# is a coarse figure: a relation for routing, never a position.
+
+#: Coastal states within this distance of an at-sea point are recorded as
+#: ``payload.geo.inferred``. 200 km spans the Gulf, the Red Sea and the
+#: Malacca/Singapore straits from their median lines.
+NEAREST_COAST_MAX_KM = 200.0
+#: At most this many states, nearest first.
+NEAREST_COAST_MAX_STATES = 3
+
+_KM_PER_DEG_LAT = 110.574
+_KM_PER_DEG_LON_EQ = 111.320
+
+
+def _segment_km(px: float, py: float, ax: float, ay: float, bx: float, by: float) -> float:
+    """Planar distance from P to segment AB (all in local km)."""
+    dx, dy = bx - ax, by - ay
+    seg2 = dx * dx + dy * dy
+    t = 0.0 if seg2 == 0 else max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / seg2))
+    cx, cy = ax + t * dx - px, ay + t * dy - py
+    return math.hypot(cx, cy)
+
+
+def coastal_states_near(
+    lat: float, lon: float, *,
+    max_km: float = NEAREST_COAST_MAX_KM,
+    limit: int = NEAREST_COAST_MAX_STATES,
+) -> list[tuple[str, float]]:
+    """``[(iso2, distance_km), ...]`` — the states whose 110m outline passes
+    within ``max_km`` of ``(lat, lon)``, nearest first, at most ``limit``.
+
+    Local equirectangular projection centred on the point (error well under
+    1% inside 200 km), point-to-edge distance over every outer ring, a
+    bbox prefilter widened by ``max_km``. Offline, deterministic. A point
+    INSIDE a country returns that country at 0 km — callers ask only for
+    points that are in none.
+    """
+    try:
+        lat = float(lat)
+        lon = float(lon)
+    except (TypeError, ValueError):
+        return []
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0) or limit <= 0:
+        return []
+    kx = _KM_PER_DEG_LON_EQ * max(math.cos(math.radians(lat)), 1e-6)
+    dlat_pad = max_km / _KM_PER_DEG_LAT
+    dlon_pad = min(180.0, max_km / kx)
+    best: dict[str, float] = {}
+    for c in _countries():
+        iso2 = c.get("iso2")
+        bb = c.get("bbox")
+        if not iso2 or iso2 == "-99":
+            continue
+        if bb and not (bb[1] - dlat_pad <= lat <= bb[3] + dlat_pad
+                       and bb[0] - dlon_pad <= lon <= bb[2] + dlon_pad):
+            continue
+        d_min = math.inf
+        for poly in c.get("polys") or []:
+            if not poly:
+                continue
+            if _point_in_polygon(lon, lat, poly):
+                d_min = 0.0
+                break
+            ring = poly[0]
+            pts = []
+            for v in ring:
+                dlon = (float(v[0]) - lon + 540.0) % 360.0 - 180.0
+                pts.append((dlon * kx, (float(v[1]) - lat) * _KM_PER_DEG_LAT))
+            for (ax, ay), (bx, by) in zip(pts, pts[1:] + pts[:1]):
+                d = _segment_km(0.0, 0.0, ax, ay, bx, by)
+                if d < d_min:
+                    d_min = d
+        if d_min <= max_km:
+            best[iso2] = d_min
+    ranked = sorted(best.items(), key=lambda kv: (kv[1], kv[0]))
+    return [(iso, round(km, 1)) for iso, km in ranked[:limit]]
 
 
 # ---- representative-point extraction from a heterogeneous payload -----------
@@ -170,4 +256,10 @@ def representative_point(payload: dict[str, Any]) -> tuple[float, float] | None:
     return None
 
 
-__all__ = ["country_iso2_for_point", "representative_point"]
+__all__ = [
+    "NEAREST_COAST_MAX_KM",
+    "NEAREST_COAST_MAX_STATES",
+    "coastal_states_near",
+    "country_iso2_for_point",
+    "representative_point",
+]

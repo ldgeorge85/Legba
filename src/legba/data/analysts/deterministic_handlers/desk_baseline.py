@@ -79,9 +79,9 @@ Stored in the row's ``features`` jsonb (audit provenance of the estimate, not a
 query axis): lags at t-1 / t-7 / t-28, rolling means over 7 / 28 days,
 ``hours_since_last_high_sev`` (time-since-last-high-sev-event), and the
 neighbour-desk SPILLOVER — the summed current-window signal volume of the
-geographically-adjacent desks, over a coarse static in-code land-border
-adjacency (:data:`LAND_ADJACENCY`) used ONLY as a feature input, never surfaced
-as a geographic claim.
+geographically-adjacent desks, over a coarse static land-border adjacency
+(:data:`LAND_ADJACENCY`, the profile's ``land_border`` edges) used ONLY as a
+feature input, never surfaced as a geographic claim.
 
 Registered via ``scripts/bringup_register_desk_baseline.py`` (descriptor
 ``descriptors/analyst_desk_baseline.yaml``, ships ``state: draft``).
@@ -99,6 +99,8 @@ from uuid import UUID, uuid4
 from ....runtime.analyst_method import AnalystMethodResult
 from ...provenance.models import FindingPayload
 from ...provenance.origin import origin_class_clause
+from ... import profile_constants as _profile_constants
+from ... import rosters as _rosters
 from . import alert_trigger_scan as ats
 
 logger = logging.getLogger(__name__)
@@ -176,38 +178,19 @@ NO_FORECAST_NOTE = (
 
 
 # ---------------------------------------------------------------------------
-# Static land-border adjacency (in-code — a feature input, NOT a geo claim)
+# Static land-border adjacency (profile data — a feature input, NOT a geo claim)
 # ---------------------------------------------------------------------------
-# A coarse land-border adjacency among the CURRENT g20 + watch desk countries,
-# used ONLY to compute the neighbour-desk spillover feature. Edges are listed
-# once (canonical) and expanded symmetrically by build_adjacency, so an
-# asymmetry bug is impossible; the test asserts symmetry. Countries with no
-# desk neighbour (islands, or land borders only with non-desk countries — AU,
-# GB, JP, SA, ZA, IL, TW, SD, CD, HT, ID) simply carry no edge and get zero
-# spillover (honest degradation). This is public geographic fact expressed as a
-# code constant (like the geo_convergence precision sets), NOT curated seed data.
-_ADJACENCY_EDGES: tuple[tuple[str, str], ...] = (
-    ("AR", "BR"),
-    ("CA", "US"),
-    ("MX", "US"),
-    ("DE", "FR"),
-    ("FR", "IT"),
-    ("CN", "RU"),
-    ("CN", "IN"),
-    ("CN", "KP"),
-    ("CN", "PK"),
-    ("CN", "MM"),
-    ("IN", "PK"),
-    ("IN", "MM"),
-    ("RU", "UA"),
-    ("RU", "KP"),
-    ("KR", "KP"),
-    ("IR", "TR"),
-    ("IR", "PK"),
-    ("ML", "BF"),
-    ("ML", "NE"),
-    ("BF", "NE"),
-)
+#: The adjacency family the spillover feature reads from the instance profile.
+ADJACENCY_FAMILY = "land_border"
+# A coarse land-border adjacency among the desk countries, used ONLY to compute
+# the neighbour-desk spillover feature: the profile's ``constants.adjacency``
+# ``land_border`` edges (SPLIT-3, ``profile_constants``). Edges are listed once
+# (canonical) and expanded symmetrically by build_adjacency, so an asymmetry
+# bug is impossible; the test asserts symmetry. A desk with no desk neighbour
+# (islands, or land borders only with non-desk countries) simply carries no
+# edge and gets zero spillover (honest degradation); a profile that declares
+# no family gives every desk zero spillover.
+_ADJACENCY_EDGES: tuple[tuple[str, str], ...] = _profile_constants.adjacency_edges(ADJACENCY_FAMILY)
 
 
 def build_adjacency(
@@ -465,15 +448,16 @@ def build_record(
 # SQL — desks + the per-metric bucket vectors (mirrors the P1-3 trigger)
 # ---------------------------------------------------------------------------
 
-# The desk set: non-retired target heads tagged g20 or watch (the trigger's
-# _DESKS_SQL shape).
+# The desk set: non-retired target heads carrying a SCORED roster tag
+# (``rosters.scored_roster_tags()`` bound as ``$2``; the trigger's _DESKS_SQL
+# shape).
 _DESKS_SQL = """
     SELECT descriptor_id,
            body -> 'scope' -> 'geo' AS geo
       FROM target_descriptors
      WHERE is_head = TRUE
        AND COALESCE(state, 'active') <> 'retired'
-       AND (body -> 'scope' -> 'tags') ?| array['g20', 'watch']
+       AND (body -> 'scope' -> 'tags') ?| $2::text[]
      ORDER BY descriptor_id
      LIMIT $1
 """
@@ -663,7 +647,10 @@ def build_summary(
     ]
 
     if not records:
-        title = "Desk baseline recompute: no g20/watch desks resolved"
+        title = (
+            "Desk baseline recompute: no "
+            f"{'/'.join(_rosters.scored_roster_tags()) or 'scored'} desks resolved"
+        )
     elif deviating:
         title = (
             f"Desk baselines: {len(records)} rows across {len(by_metric)} "
@@ -774,7 +761,7 @@ async def compute_desk_baselines(
     now: datetime,
 ) -> list[DeskBaseline]:
     """Compute every (desk, metric) baseline row (two passes for spillover)."""
-    desks = await conn.fetch(_DESKS_SQL, _MAX_DESKS)
+    desks = await conn.fetch(_DESKS_SQL, _MAX_DESKS, list(_rosters.scored_roster_tags()))
 
     # First pass: desk geo + per-desk bucket vectors + current signal volume.
     desk_geo: dict[str, list[str]] = {}

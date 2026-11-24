@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.cisa.kev": {
+      "source": "source_cisa_kev.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -15,21 +15,17 @@ export type Mode = 'personal' | 'above_ai' | 'cis'
 
 /** L-108 §2 PanelKind union — every L-092 panel listed. */
 export type PanelKind =
-  // Per-target (T1–T10)
-  | 'target.overview'
-  | 'target.signals'
-  | 'target.findings'
-  | 'target.situations'
-  | 'target.sources'
+  // The SUBJECT PAGE (UI-B3, UI-D1 Table A) — one bound page per subject of
+  // any frame kind, tabbed Brief · Evidence · Claims · Signals · Situations ·
+  // Sources · Graph · Runtime. The eight per-subject reads it absorbed —
+  // target.{overview,signals,findings,claims,situations,sources,graph,
+  // desk_brief_page} — are no longer in this union: they RETIRED into
+  // `panel-registry/aliases.ts`, each landing on its tab.
+  | 'subject.page'
+  // Per-target reads still pending their own survivors (Table B: the map and
+  // the clock, with a subject param)
   | 'target.map'
-  | 'target.graph'
   | 'target.timeline'
-  | 'target.claims'
-  // P-A — the desk brief READ AS A PAGE. `POST /v3/export` has composed a desk
-  // brief since 7b-iii and the print document has laid it out since k1; both
-  // hand the reader a FILE. This is the same composed document as a surface,
-  // organised by the desk's bounded units.
-  | 'target.desk_brief_page'
   // Per-analyst (A1–A5)
   | 'analyst.runs'
   | 'analyst.outputs'
@@ -39,23 +35,35 @@ export type PanelKind =
   //   (D1–D3 system.targets.roster / system.pulse / dashboard.dynamic
   //    DELETED in S7-T2 panel consolidation — roster→registry.targets,
   //    no pulse correlator, no dynamic widgets)
-  // Operator (O1–O5)
-  | 'registry.targets'
-  | 'registry.analysts'
-  | 'registry.stack'
-  | 'registry.action_packs'
+  // Operator — the Engine's merged wrappers (UI-B1/merges, UI-D1 Table A). The
+  // ids they absorbed — registry.{targets,analysts,sources,stack,action_packs},
+  // source.{detail,subscription_builder,subscription_policy,fanout},
+  // system.{budget,governor,audit,dead_letter,actor_health,stream_lag,
+  // production_gauge,optimizer.diff,wall_movers,navigator}, v4.kpi — are no
+  // longer in this union: they RETIRED into `panel-registry/aliases.ts`, each
+  // landing on its survivor's tab.
   //   (registry.wirings / registry.mutations / registry.discovery DELETED —
   //    empty wiring table, superseded mutations queue, 0 discovery descriptors)
+  // The descriptor families: Subjects · Units · Sources · Stack · Packs ·
+  // Builder · Policy · Canvas
+  | 'system.registry'
+  // N-J — the Flow: a READ-ONLY canvas over the descriptors (what each agent
+  // reads and writes, as declared; what a real run did). Not the Registry's
+  // Canvas tab (the v4 wiring editor): this one derives every edge from a
+  // declared field and edits nothing.
+  | 'system.flow'
+  // The append-only engine ledgers: Governor · Audit · Budget
+  | 'system.ledgers'
+  // The frame register: Situations · Narratives
+  | 'system.register'
   // System (S1–S8 + P-1 cross-target findings feed)
   | 'system.findings'
-  | 'system.budget'
   | 'system.optimizer'
-  | 'system.dead_letter'
   | 'system.consult'
   | 'system.settings'
   //   (system.eval→system.eval_scorecard, system.runtime→system.actor_health,
   //    system.streams/users/backfill DELETED in S7-T2 consolidation)
-  // System Status — at-a-glance per-layer health (acquisition/analysis/queues/infra)
+  // System Status — per-layer health + Production · Failures · Actors · Queues
   | 'system.status'
   // The Timeline — validity-window temporal view (P4-4): facts/situations/
   // findings as ranged items ([valid_from, valid_until) / lifecycle /
@@ -63,20 +71,9 @@ export type PanelKind =
   | 'system.timeline'
   // The Wall — the mission-control anchor tile (P1-7): banded-verdict desk
   // grid + movers-since-last-visit (/v3/since) + newest high-severity
-  // verified + a system-health corner, one glanceable 2×2 screen
+  // verified + a system-health corner, one glanceable 2×2 screen; the
+  // At-a-Glance band above it and a Movers tab (UI-B1/merges)
   | 'system.wall'
-  // U-4 (COHERENCE_WAVES_PLAN_2026-07-28) — a standalone mount of JUST the
-  // Wall's movers-since-last-visit quadrant. The landing workspace now mounts
-  // the WALL itself (which carries that quadrant), so this tile is no longer
-  // boot-seeded; it stays registered + hidden (registry.ts HIDDEN_KINDS) so a
-  // saved layout holding it keeps rendering, and ⌘K can still open it.
-  | 'system.wall_movers'
-  // The Report/Journal NAVIGATOR (WORKSTATION_V2_FLOW_DESIGN §4) — the landing's
-  // left rail. It lists the day's PRODUCTS (world read + Assessment, regional
-  // rollups, country desks, thematic lanes, journal), not panels; clicking a row
-  // sets the global SCOPE, which every following surface subscribes to. No new
-  // endpoint: every section is a `/findings?analyst_id=…` the reader already made.
-  | 'system.navigator'
   // Entity knowledge-graph (UI-3 — source-first analogue of v2's entity KG)
   | 'system.entities'
   // K-G4 — the graph WALK: anchored ego expansion over the reified
@@ -85,22 +82,11 @@ export type PanelKind =
   // top-N subgraph projection); this is the surface under the operator's
   // "walking the world graph" vision.
   | 'system.graph_walk'
-  // Source-first surfaces (UI-2 / Tier C — pivot)
-  | 'registry.sources'
-  | 'source.detail'
-  | 'source.subscription_builder'
-  | 'source.subscription_policy'
-  | 'source.fanout'
   // Eval + Ops (UI-5 / Tiers E+F — appended)
   | 'system.eval_scorecard'
   // Correctness gold-set weekly labeling worksheet (P2-5) — the operator
   // judges ~8 sampled verified findings/week; verdicts grow the scoreboard n
   | 'system.goldset'
-  | 'system.optimizer.diff'
-  | 'system.governor'
-  | 'system.audit'
-  | 'system.stream_lag'
-  | 'system.actor_health'
   // Product surfaces (UI-6 / Tier G — pivot)
   | 'system.search'
   | 'system.report_export'
@@ -117,15 +103,9 @@ export type PanelKind =
   // standing rule, and the gate was API-only until this kind existed.
   | 'system.journal_gate'
   // GLASS-3 — the ops deck. Four kinds over seven server surfaces that had no
-  // consumer at all, plus the one new API the track shipped. All four land in
-  // Engine Room, whose rows fold behind a single collapsed header and so cost
-  // nothing against the ≤23 visible-row budget (navGroups.test.ts) that the
-  // GLASS-2 additions had already spent to the last row.
+  // consumer at all, plus the one new API the track shipped. (The production
+  // gauge is System Status' Production tab since UI-B1/merges.)
   //
-  // The production gauge — the whole-engine "did it produce what its descriptor
-  // promised" read (`/v3/system/production-gauge`), including the integrity and
-  // metering bricks and the SAME `pages` predicate the alert plane uses.
-  | 'system.production_gauge'
   // Judge verdict mix by SERVING PROVIDER (`/v3/system/judge-stats`) — the
   // track's one new backend surface, making `served_by` provider drift visible.
   | 'system.judge_stats'
@@ -149,6 +129,10 @@ export type PanelKind =
   // calls — `/findings`, `/v3/contentions`, `/v3/absence`,
   // `/v3/layers/divergence`, `/journal?kind=lens` — and it adds none.
   | 'analysis.cross_framing'
+  // CONTENTIONS (W2 S-batch) — the contrary-evidence pass's records as a LIST,
+  // fleet-wide or by desk, with each row's stance, host class and fences.
+  // `/v3/contentions` only; it adds no route.
+  | 'analysis.contentions'
   // THE READ SCOREBOARD (D2e) — `/read-events/rollup`. The only panel that
   // measures the OPERATOR rather than the engine: reads today / this week and
   // the morning-read day count the 90-day oracle wager is graded on.
@@ -160,9 +144,6 @@ export type PanelKind =
   // The composition-demotion reading surface (D-4): the quoted record, its
   // evidence map, its published selection and the fenced Assessment channel.
   | 'v4.morning_read'
-  // Mission-control default-layout surfaces (S7-T2): the KPI glance strip and
-  // the global banded Timeline lanes — self-fetching singletons.
-  | 'v4.kpi'
   // U-3 merges (COHERENCE_WAVES_PLAN_2026-07-28 §U-3) — one panel kind per
   // merge set. The folded-away originals (v4.why / system.lineage / v4.flow /
   // system.situations / system.narratives, system.alert_center /
@@ -225,18 +206,15 @@ export interface PanelKindDefinition {
   scopeKey: ScopeKey
   /** Human-readable default title — overridden by registration row. */
   defaultTitle: string
+  /**
+   * One line saying what the tile is FOR — the `＋` catalog prints it under
+   * the name (X3/D2). Data lives in `panel-registry/descriptions.ts`.
+   */
+  description?: string
   /** Whether the panel only renders when bound to a descriptor (T1-T10, A1-A5). */
   requiresBinding: boolean
   /** Sidebar icon name (lucide-react). */
   iconName?: string
-  /**
-   * When true, the panel is registered (so existing layouts that
-   * reference it don't crash) but hidden from the sidebar and the
-   * always-on singleton list.  Used for panels dropped by the §6
-   * redesign — they stay in the bundle (deep links still resolve) but
-   * don't clutter the operator's daily-driver surface.
-   */
-  hidden?: boolean
   /**
    * Release tier — drives the chrome badge so a `preview` surface is
    * visually distinct from a `live` one.  Defaults to `live` (omitted in
@@ -250,10 +228,10 @@ export interface PanelKindDefinition {
   /**
    * #89 — product bucket for the two-section sidebar: `intelligence` (the
    * analytical product — assessments, findings, entities, why, map) vs
-   * `operations` (registries, runtime health, plumbing). Optional: when
-   * omitted, the bucket is derived from the panel's nav group
-   * (`productForKind` in panel-registry/navGroups.ts). Set explicitly only to
-   * override that derivation.
+   * `operations` (registries, runtime health, plumbing). Optional, and read
+   * by nothing since UI-B1/shell retired the nav tree (`navGroups.ts` and its
+   * `productForKind` derivation are gone); kept so a definition that sets it
+   * still type-checks.
    */
   product_group?: 'intelligence' | 'operations'
 }

@@ -82,6 +82,7 @@ class _Pg:
                         "content": args[2], "steps": args[3],
                         "request_id": args[7], "parent_turn_id": args[8],
                         "synthesis_status": args[9], "usage": args[11],
+                        "response": args[12],
                     })
                     return {"id": f"turn-{len(pg.inserted)}"}
                 if "FROM consult_turns" in s and "role = 'assistant'" in s:
@@ -268,6 +269,9 @@ def _turn_row(**overrides: Any) -> dict[str, Any]:
         "synthesis_status": "none",
         "replay_transcript": None,
         "usage": {"est_cost_usd": 9.80},
+        # The 0223 response bag (load_turn_for_recovery selects it for the
+        # turn contract); None = the original turn recorded none.
+        "response": None,
         "created_at": None,
     }
     row.update(overrides)
@@ -438,8 +442,8 @@ def test_the_default_plane_is_the_cheaper_one(
     with TestClient(_app(pg)) as client:
         resp = _synthesize(client)
 
-    assert resp.json()["model"] == "opus"
-    # "opus" IS the default plane, so no override is threaded — the run keeps
+    assert resp.json()["model"] == "core"
+    # "core" IS the default plane (DEC-17a, 2026-10-03), so no override is threaded — the run keeps
     # the cached ACTIVATE-time primary, matching the chat path's contract.
     assert "llm_component_override" not in captured[0]["body"]["inputs"][0]
 
@@ -451,11 +455,11 @@ def test_an_explicit_plane_is_threaded(monkeypatch: pytest.MonkeyPatch) -> None:
     pg = _Pg(_turn_row())
 
     with TestClient(_app(pg)) as client:
-        resp = _synthesize(client, model="core")
+        resp = _synthesize(client, model="opus")
 
-    assert resp.json()["model"] == "core"
+    assert resp.json()["model"] == "opus"
     assert captured[0]["body"]["inputs"][0]["llm_component_override"] == (
-        "llm.primary.openai_compat"
+        "llm.anthropic.opus_4_7"
     )
 
 
@@ -487,6 +491,73 @@ def test_the_recovered_answer_is_a_new_turn_linked_to_the_old_one(
         "the recovery is its own run and gets its own id"
     )
     assert json.loads(written["usage"])["est_cost_usd"] == 0.21
+
+
+def test_the_recovered_turn_records_its_own_response_bag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """0223 — the recovery's census, hold, floor stamp and watch candidates go
+    onto the NEW turn's ``response`` column, so a reload renders the recovered
+    answer exactly as the live recovery did — never the original's numbers."""
+    monkeypatch.setenv(API_TOKEN_ENV, TEST_TOKEN)
+    census = {"version": "7g-2", "live": 0, "history": 0, "web_retrieval": 0,
+              "seed": 0, "model_knowledge": 9}
+    envelope = json.loads(json.dumps(RECOVERY_ENVELOPE))
+    envelope["consult_response"]["uncertainty"] = 0.85
+    envelope["consult_response"]["data"].update({
+        "provenance_census": census,
+        "hold_reason": "no_live_or_held_reporting",
+        "uncertainty_floor_applied": {"from": 0.35, "to": 0.85, "resolved": 0},
+        "watch_candidates": ["a second outlet names the successor"],
+    })
+    _install_dapr(monkeypatch, [], envelope=envelope)
+    pg = _Pg(_turn_row())
+
+    with TestClient(_app(pg)) as client:
+        resp = _synthesize(client)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["uncertainty_floor_applied"] == {
+        "from": 0.35, "to": 0.85, "resolved": 0,
+    }
+    assert body["watch_candidates"] == ["a second outlet names the successor"]
+    bag = json.loads(pg.inserted[0]["response"])
+    assert bag == {
+        "uncertainty": 0.85,
+        "provenance_census": census,
+        "hold_reason": "no_live_or_held_reporting",
+        "uncertainty_floor_applied": {"from": 0.35, "to": 0.85, "resolved": 0},
+        "watch_candidates": ["a second outlet names the successor"],
+        "model": body["model"],
+        "context_compaction": None,
+        "watch_minted": None,
+        # C-1b — the case key; None = the turn presented no case.
+        "case": None,
+        # C-2b-1 — the writes key; None = the turn was not armed for changes.
+        "writes": None,
+        # Q-1 — the turn contract; None = the run carried none.
+        "contract": None,
+    }
+
+
+def test_the_recovered_turn_answers_with_and_stores_the_original_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Q-1 — the recovery run opens no turn of its own, so it answers with the
+    turn contract the ORIGINAL turn stored in its 0223 bag, and stores that
+    same contract on the new turn (a reload shows what the POST showed)."""
+    monkeypatch.setenv(API_TOKEN_ENV, TEST_TOKEN)
+    contract = {"schema": "consult_contract/1", "window": {"days": 7}}
+    _install_dapr(monkeypatch, [], envelope=json.loads(json.dumps(RECOVERY_ENVELOPE)))
+    pg = _Pg(_turn_row(response=json.dumps({"model": "core", "contract": contract})))
+
+    with TestClient(_app(pg)) as client:
+        resp = _synthesize(client)
+
+    assert resp.status_code == 200
+    assert resp.json()["contract"] == contract
+    assert json.loads(pg.inserted[0]["response"])["contract"] == contract
 
 
 # ---------------------------------------------------------------------------

@@ -35,7 +35,9 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from ..analysts.deterministic_handlers._entity_geo import resolve_entity_geo_offline
+from ..case_columns import bind_entity_type
 from ..provenance import AnalystContext, FactPayload, NexusPayload, write_fact, write_nexus
+from ..tags import tag_vocabulary_index
 from ._base import SeedContext, SeedEntity, SeedFact, SeedNexus, SeedSource
 
 logger = logging.getLogger(__name__)
@@ -200,7 +202,9 @@ async def _resolve_entity(
         RETURNING id
         """,
         canonical_name,
-        entity_class,
+        # TAX-4: entity_type is the entity_class family's value, or
+        # `unclassified` — never the catch-all.
+        bind_entity_type(entity_class, families=await tag_vocabulary_index()),
         entity_class,
         json.dumps(payload),
         geo_lat,

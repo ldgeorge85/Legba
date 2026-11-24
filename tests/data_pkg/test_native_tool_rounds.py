@@ -16,6 +16,22 @@ byte for byte, because a run with no tools to offer sends no ``tools`` and
 takes no new branch. That is the whole safety argument for deploying this with
 the flag up, and it is asserted rather than reasoned about.
 
+*Re-pin, 2026-11-14 (D-1).* The four recordings carrying a finding gained ONE
+key, ``finding.data.slice_scope`` (every desk finding now stores the window,
+sources and row ids it was handed — ``desk_rows_computed.slice_scope``). It is
+deterministic here (no coverage stamp and no window option, so the basis is
+the rows' own ``observed_span``). The re-pin asserted the run output equals
+each old recording with that key removed; nothing else moved.
+
+*Re-pin, 2026-09-28 (wave Q).* All five recordings re-captured off the flag-OFF
+path at the wave-Q integration head. The whole diff against the 2026-09-26 pin
+is ONE paragraph, verified path by path before the re-pin: the CARRIED-ANCHOR
+rule (``_tradecraft.CARRIED_ANCHOR_RULE``, appended to
+``UNIT_GROUNDING_CLAUSE``) now closes every ``requests[*].system`` — the three
+tool-less compositions included, because they share the grounding clause at
+the same choke point. No request payload, trace, finding, usage or lineage
+byte changed besides that paragraph. Anything beyond it is a real regression.
+
 *Re-pin, 2026-09-26.* The goldens were re-captured off the flag-OFF path at
 a39286bc. The whole diff against the 311a62d1 recording was two unrelated
 feature additions, each verified leaf by leaf before the re-pin — nothing in
@@ -628,3 +644,252 @@ async def test_fallback_engages_for_a_non_native_provider(monkeypatch):
     assert CORPUS_DOC in refs
     assert all(r["tools"] is None for r in llm.requests)
     assert all("protocol" not in s for s in gsteps)
+
+
+# ---------------------------------------------------------------------------
+# validate_args — the reply side of the grammar (the 2026-09-28 tool seam).
+#
+# The schemas above were rendered TO the model and never checked ON the reply.
+# Live, consult session 96d7bfc2 (core plane, 00:58Z): the first tool call was
+# ``list_situations`` carrying ``{"result": [six fabricated situation rows],
+# "status": "ok", "metadata": {}}`` — the model had written the answer it
+# expected into the call it was making. ``result``/``metadata`` were dropped by
+# the ``args.get()`` dispatch, ``status="ok"`` ran as a SQL predicate no row can
+# match, the read came back count 0, and the answer cited the six ids the model
+# had invented. These pin the refusal that turns that run into a round-one
+# error the model can recover from.
+# ---------------------------------------------------------------------------
+
+
+async def test_a_fabricated_result_in_the_args_is_refused_by_name():
+    """The live call, verbatim. The message must say what the model DID —
+    wrote an output into an input — not merely that ``result`` is unknown."""
+    from legba.data.stack.llm.tool_rounds import (
+        CAUSE_RESULT_SHAPED_ARG, TOOL_SCHEMAS, split_arg_problem, validate_args,
+    )
+
+    problem = validate_args(TOOL_SCHEMAS["list_situations"], {
+        "result": [{"id": "sit-001", "name": "fabricated"}],
+        "status": "ok",
+        "metadata": {},
+    })
+    assert problem is not None
+    cause, detail = split_arg_problem(problem)
+    assert cause == CAUSE_RESULT_SHAPED_ARG
+    # Both offending keys named, and the declared grammar restated.
+    assert "result" in detail and "metadata" in detail
+    assert "OUTPUT" in detail and "INPUT" in detail
+    assert "since_hours" in detail and "target_id" in detail
+    # The status enum is NOT what is reported — the bigger mistake wins.
+    assert "'ok'" not in detail
+
+
+async def test_every_result_shaped_key_is_caught_and_a_declared_one_is_not():
+    """The refusal set is the tool's UNDECLARED keys ∩ the result-shaped
+    names. ``get_timeline`` declares no ``items``, so ``items`` is refused
+    there — but a tool that genuinely declared one would keep it."""
+    from legba.data.stack.llm.tool_rounds import (
+        CAUSE_RESULT_SHAPED_ARG, RESULT_SHAPED_ARG_KEYS, TOOL_SCHEMAS,
+        ToolSpec, split_arg_problem, validate_args,
+    )
+
+    for key in RESULT_SHAPED_ARG_KEYS:
+        problem = validate_args(
+            TOOL_SCHEMAS["get_timeline"], {"subject": "Iran", key: []},
+        )
+        assert problem is not None, key
+        assert split_arg_problem(problem)[0] == CAUSE_RESULT_SHAPED_ARG, key
+
+    declares_rows = ToolSpec(
+        name="hypothetical", description="",
+        json_schema={"type": "object", "properties": {"rows": {"type": "array"}}},
+    )
+    assert validate_args(declares_rows, {"rows": [1, 2]}) is None
+
+
+async def test_an_unknown_argument_is_blocked_with_the_declared_set():
+    from legba.data.stack.llm.tool_rounds import (
+        CAUSE_INVALID_ARG, TOOL_SCHEMAS, split_arg_problem, validate_args,
+    )
+
+    problem = validate_args(
+        TOOL_SCHEMAS["search_signals"], {"query": "iran", "top_k": 5},
+    )
+    cause, detail = split_arg_problem(problem)
+    assert cause == CAUSE_INVALID_ARG
+    assert "top_k" in detail and "limit" in detail and "query" in detail
+
+
+async def test_a_missing_required_argument_blocks_and_null_counts_as_missing():
+    from legba.data.stack.llm.tool_rounds import (
+        CAUSE_INVALID_ARG, TOOL_SCHEMAS, split_arg_problem, validate_args,
+    )
+
+    for args in ({"limit": 5}, {"query": None, "limit": 5}):
+        cause, detail = split_arg_problem(
+            validate_args(TOOL_SCHEMAS["search_signals"], args)
+        )
+        assert cause == CAUSE_INVALID_ARG
+        assert "requires query" in detail
+    # series_history requires all four window arguments and names only the
+    # ones actually absent.
+    _, detail = split_arg_problem(validate_args(
+        TOOL_SCHEMAS["series_history"], {"series_id": "s", "subject": "US"},
+    ))
+    assert "from" in detail and "to" in detail
+
+
+async def test_coarse_type_mismatches_block_but_a_parseable_string_does_not():
+    """The check is COARSE on purpose: every dispatcher coerces its own
+    scalars (``int(args.get("limit", 20))``), so ``"20"`` is not a mistake
+    worth a round — an object where a number was declared is."""
+    from legba.data.stack.llm.tool_rounds import (
+        CAUSE_INVALID_ARG, TOOL_SCHEMAS, split_arg_problem, validate_args,
+    )
+
+    assert validate_args(
+        TOOL_SCHEMAS["search_signals"], {"query": "iran", "limit": "20"},
+    ) is None
+    assert validate_args(
+        TOOL_SCHEMAS["list_findings"], {"include_superseded": "true"},
+    ) is None
+    # A single string where a list is declared is the HANDLERS' own documented
+    # tolerance (``_subjects`` reads "US" as ["US"]); the validator does not
+    # overrule them.
+    assert validate_args(TOOL_SCHEMAS["series_compare"], {
+        "series_id": "s", "subjects": "US", "from": "2020", "to": "2024",
+    }) is None
+
+    cause, detail = split_arg_problem(validate_args(
+        TOOL_SCHEMAS["search_signals"], {"query": "iran", "limit": {"n": 5}},
+    ))
+    assert cause == CAUSE_INVALID_ARG
+    assert "'limit'" in detail and "integer" in detail
+    cause, detail = split_arg_problem(validate_args(
+        TOOL_SCHEMAS["search_signals"], {"query": ["iran", "drone"]},
+    ))
+    assert cause == CAUSE_INVALID_ARG and "string" in detail
+    # A boolean is not an integer, whatever isinstance thinks.
+    assert validate_args(
+        TOOL_SCHEMAS["search_signals"], {"query": "q", "limit": True},
+    ) is not None
+
+
+async def test_the_status_enum_refuses_a_value_no_situation_can_have():
+    from legba.data.stack.llm.tool_rounds import (
+        CAUSE_INVALID_ARG, TOOL_SCHEMAS, split_arg_problem, validate_args,
+    )
+
+    cause, detail = split_arg_problem(
+        validate_args(TOOL_SCHEMAS["list_situations"], {"status": "ok"})
+    )
+    assert cause == CAUSE_INVALID_ARG
+    assert "'ok'" in detail
+    assert "active" in detail and "dormant" in detail and "closed" in detail
+    for good in ("active", "dormant", "closed"):
+        assert validate_args(
+            TOOL_SCHEMAS["list_situations"], {"status": good},
+        ) is None
+
+
+async def test_the_status_enum_is_the_vocabulary_the_reader_holds():
+    """One vocabulary, two modules. ``tool_rounds`` is a LEAF and cannot
+    import the reader (asyncpg); the reader cannot be the validator's source
+    for the same reason — so the two declarations are pinned to each other
+    here rather than left to drift."""
+    from legba.data.stack.llm.tool_rounds import TOOL_SCHEMAS
+    from legba.runtime.substrate_frame_reads import SITUATION_STATUSES
+
+    prop = TOOL_SCHEMAS["list_situations"].json_schema["properties"]["status"]
+    assert tuple(prop["enum"]) == SITUATION_STATUSES
+
+
+async def test_the_lifecycle_state_enum_is_the_events_vocabulary():
+    """``query_events.lifecycle_state`` is an enum, pinned to the events
+    module's lifecycle vocabulary and to the reader's ordered copy of it —
+    the way ``list_situations.status`` is pinned above. ``tool_rounds`` is a
+    LEAF, so the three declarations are held together here."""
+    from legba.data.events.lifecycle import LIFECYCLE_STATES
+    from legba.data.stack.llm.tool_rounds import TOOL_SCHEMAS, validate_args
+    from legba.runtime.substrate_frame_reads import EVENT_LIFECYCLE_STATES
+
+    spec = TOOL_SCHEMAS["query_events"]
+    prop = spec.json_schema["properties"]["lifecycle_state"]
+    assert set(prop["enum"]) == set(LIFECYCLE_STATES)
+    assert tuple(prop["enum"]) == EVENT_LIFECYCLE_STATES
+    for good in EVENT_LIFECYCLE_STATES:
+        assert validate_args(spec, {"lifecycle_state": good}) is None
+    detail = validate_args(spec, {"lifecycle_state": "ok"})
+    assert detail is not None and detail.startswith("invalid_arg")
+    assert "emerging" in detail and "resolved" in detail
+
+
+async def test_a_tool_with_no_declared_schema_is_not_validated():
+    """``build_tool_specs`` synthesizes a permissive spec for a tool with no
+    authored grammar. Refusing arguments against a schema we never stated
+    would block a working tool for not being in TOOL_SCHEMAS."""
+    from legba.data.stack.llm.tool_rounds import (
+        TOOL_SCHEMAS, build_tool_specs, validate_args,
+    )
+
+    assert "process_media" not in TOOL_SCHEMAS
+    (fallback,) = build_tool_specs(["process_media"])
+    assert validate_args(fallback, {"result": [1], "anything": "at all"}) is None
+    # And the lookup a caller does for an unknown name yields None, which is
+    # equally not a refusal.
+    assert validate_args(TOOL_SCHEMAS.get("process_media"), {"x": 1}) is None
+
+
+async def test_the_keys_the_platform_injects_are_never_the_models_fault():
+    """``scope_predicate`` is injected caller-side by the consult loops after
+    the model wrote the call; ``_raw``/``_value`` are what ``_coerce_args``
+    leaves when a provider sent an unparseable payload. None is declared in
+    any schema and none may be read as the model's doing — but whitelisting
+    ``_raw`` hides nothing, because the required arguments are still absent."""
+    from legba.data.stack.llm.tool_rounds import (
+        INJECTED_ARG_KEYS, TOOL_SCHEMAS, split_arg_problem, validate_args,
+    )
+
+    assert {"scope_predicate", "_raw", "_value"} == set(INJECTED_ARG_KEYS)
+    assert validate_args(TOOL_SCHEMAS["list_situations"], {
+        "status": "active", "scope_predicate": "target_id == 'x'",
+    }) is None
+    assert validate_args(TOOL_SCHEMAS["search_signals"], {
+        "query": "iran", "scope_predicate": None,
+    }) is None
+
+    _, detail = split_arg_problem(validate_args(
+        TOOL_SCHEMAS["search_signals"], {"_raw": "{not json"},
+    ))
+    assert "requires query" in detail
+
+
+async def test_the_grammar_declares_every_argument_its_handlers_honour():
+    """Enforcement makes an undeclared argument a BLOCK, so a key a handler
+    reads and the schema omits turns a working call into a refusal. These
+    three were read by their handlers and declared nowhere."""
+    from legba.data.stack.llm.tool_rounds import TOOL_SCHEMAS, validate_args
+
+    assert validate_args(
+        TOOL_SCHEMAS["web_search"], {"query": "q", "provider": "search.brave"},
+    ) is None
+    assert validate_args(TOOL_SCHEMAS["propose_fact"], {
+        "subject": "s", "predicate": "p", "value": "v",
+        "derived_from": [str(REF)],
+        "valid_from": "2026-01-01", "valid_until": "2026-06-01",
+    }) is None
+    assert validate_args(TOOL_SCHEMAS["query_paths"], {
+        "subject": "A", "object": "B", "edge_families": ["cooccurrence"],
+    }) is None
+
+
+async def test_split_arg_problem_never_invents_a_cause():
+    from legba.data.stack.llm.tool_rounds import (
+        ARG_BLOCK_CAUSES, CAUSE_INVALID_ARG, split_arg_problem,
+    )
+
+    assert split_arg_problem("invalid_arg: x") == ("invalid_arg", "x")
+    assert split_arg_problem("something else entirely") == (
+        CAUSE_INVALID_ARG, "something else entirely",
+    )
+    assert ARG_BLOCK_CAUSES == {"result_shaped_arg", "invalid_arg"}

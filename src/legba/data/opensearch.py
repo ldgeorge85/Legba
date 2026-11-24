@@ -366,6 +366,35 @@ def _delete_status(err: Any) -> int | None:
     return status if isinstance(status, int) else None
 
 
+#: Per-item bulk statuses that describe the CLUSTER's state at that moment,
+#: not the document: 403 (``cluster_block_exception``: flood-stage read-only or
+#: a create block), 408, 429 (rejected execution / too many requests) and any
+#: 5xx. A doc that failed this way is fine and must be retried; anything else
+#: (a 400 ``mapper_parsing_exception``) is the doc's own fault and retrying it
+#: forever would wedge the sweep.
+_RETRYABLE_ITEM_STATUSES = frozenset({403, 408, 429})
+
+
+def bulk_item_failure(err: Any) -> tuple[str | None, int | None, bool]:
+    """``(doc id, status, retryable)`` for one ``async_bulk`` error entry
+    (shape ``{"<op>": {"_id": ..., "status": ..., "error": {...}}}``). An entry
+    of any other shape reads as a non-retryable failure of an unknown doc."""
+    if not isinstance(err, Mapping) or len(err) != 1:
+        return None, None, False
+    inner = next(iter(err.values()))
+    if not isinstance(inner, Mapping):
+        return None, None, False
+    doc_id = inner.get("_id")
+    status = inner.get("status")
+    status = status if isinstance(status, int) else None
+    error = inner.get("error")
+    etype = error.get("type") if isinstance(error, Mapping) else str(error or "")
+    retryable = (
+        status is not None and (status in _RETRYABLE_ITEM_STATUSES or status >= 500)
+    ) or "cluster_block_exception" in str(etype)
+    return (str(doc_id) if doc_id is not None else None), status, retryable
+
+
 class OpenSearchStore:
     """Async wrapper around ``AsyncOpenSearch`` for the signal corpus index.
 
@@ -455,6 +484,21 @@ class OpenSearchStore:
         per-doc mapping error is logged and counted as a non-success (it is NOT
         re-raised) so one poison doc never wedges the batch.
         """
+        report = await self.bulk_index_report(index, docs)
+        return len(report["accepted"])
+
+    async def bulk_index_report(
+        self, index: str, docs: Iterable[Mapping[str, Any]],
+    ) -> dict[str, set[str]]:
+        """:meth:`bulk_index`, reporting per doc: ``{"accepted": ids,
+        "retryable": ids, "rejected": ids}`` (doc ``_id`` strings).
+
+        ``retryable`` = the item failed on the cluster's state
+        (:func:`bulk_item_failure`: 403 cluster block / flood stage, 408, 429,
+        5xx), so the caller must leave it to be retried; ``rejected`` = the doc
+        itself was refused (a mapping error). A failure entry naming no id
+        known to this batch is logged and counted in neither set.
+        """
         actions: list[dict[str, Any]] = []
         for doc in docs:
             d = dict(doc)
@@ -467,20 +511,32 @@ class OpenSearchStore:
             if _id is not None:
                 action["_id"] = str(_id)
             actions.append(action)
+        report: dict[str, set[str]] = {
+            "accepted": set(), "retryable": set(), "rejected": set(),
+        }
         if not actions:
-            return 0
+            return report
         success, errors = await async_bulk(
             self.client, actions, raise_on_error=False, stats_only=False
         )
+        for err in errors or []:
+            doc_id, _status, retryable = bulk_item_failure(err)
+            if doc_id is not None:
+                report["retryable" if retryable else "rejected"].add(doc_id)
+        failed = report["retryable"] | report["rejected"]
+        report["accepted"] = {
+            str(a["_id"]) for a in actions if "_id" in a and str(a["_id"]) not in failed
+        }
         if errors:
             logger.warning(
-                "opensearch.bulk_index index=%s indexed=%d errors=%d first_err=%s",
+                "opensearch.bulk_index index=%s indexed=%d errors=%d retryable=%d first_err=%s",
                 index,
                 success,
                 len(errors),
+                len(report["retryable"]),
                 str(errors[0])[:300],
             )
-        return int(success)
+        return report
 
     async def bulk_delete(self, index: str, doc_ids: Iterable[str]) -> int:
         """Bulk-delete ``doc_ids`` from ``index``. Returns the number deleted.
@@ -532,10 +588,14 @@ class OpenSearchStore:
         *,
         filters: Mapping[str, Any] | None = None,
         size: int = 10,
+        before: Mapping[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """BM25 multi_match over the text fields + keyword term filters.
 
         ``filters`` maps a keyword field → a scalar (term) or a list (terms).
+        ``before`` maps a date field → an instant; each adds a ``range``
+        filter ``field < instant`` (lane E0's known_at cut). A doc with no
+        value in that field does not match — an unknown time is not "before".
         A falsy ``query`` degrades to match_all (filter-only browse). Returns
         ``[{"id", "score", "source"}]`` sorted by BM25 score.
         """
@@ -563,6 +623,9 @@ class OpenSearchStore:
                     filter_clauses.append({"terms": {field: list(vals)}})
             else:
                 filter_clauses.append({"term": {field: value}})
+        for field, instant in (before or {}).items():
+            iso = instant.isoformat() if hasattr(instant, "isoformat") else str(instant)
+            filter_clauses.append({"range": {field: {"lt": iso}}})
 
         body = {
             "size": int(size),

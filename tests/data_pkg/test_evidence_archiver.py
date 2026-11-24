@@ -46,6 +46,7 @@ from legba.data.analysts.deterministic import (
 )
 from legba.data.analysts.deterministic_handlers import evidence_archiver as ea
 from legba.data.archive import cas_object_ref, cas_path, sha256_from_object_ref
+from legba.data import archive_codec
 from legba.data.config import PostgresConfig
 from legba.data.opensearch import signal_to_doc
 from legba.data.provenance.kinds import (
@@ -163,7 +164,10 @@ def test_store_bytes_atomic_and_dedup(tmp_path: Path):
     assert not existed
     assert digest == hashlib.sha256(_HTML).hexdigest()
     stored = cas_path(tmp_path, digest)
-    assert stored.read_bytes() == _HTML          # the BYTES are the archive
+    # The ORIGINAL bytes are the archive; they rest zstd-compressed (N-K)
+    # and decode back exactly.
+    assert archive_codec.is_zstd(stored.read_bytes())
+    assert archive_codec.decode(stored.read_bytes()) == _HTML
     assert ref == cas_object_ref(digest)
     # Same bytes again — dedup hit, never rewritten.
     digest2, ref2, existed2 = ea._store_bytes(tmp_path, _HTML)
@@ -579,7 +583,7 @@ async def test_archives_cited_verified_only(
 
     digest = hashlib.sha256(_HTML).hexdigest()
     stored = cas_path(archive_env, digest)
-    assert stored.read_bytes() == _HTML   # content-addressed original bytes
+    assert archive_codec.decode(stored.read_bytes()) == _HTML   # content-addressed original bytes
 
     async with pg_pool.acquire() as conn:
         row = await _signal(conn, cited)
@@ -682,7 +686,7 @@ async def test_wall_pattern_rejected_bytes_archived_no_text_dirty_marker_not_tri
 
     digest = hashlib.sha256(_JSWALL_HTML).hexdigest()
     stored = cas_path(archive_env, digest)
-    assert stored.read_bytes() == _JSWALL_HTML   # bytes archive untouched
+    assert archive_codec.decode(stored.read_bytes()) == _JSWALL_HTML   # bytes archive untouched
 
     async with pg_pool.acquire() as conn:
         row = await _signal(conn, cited)
@@ -862,7 +866,7 @@ async def test_cas_dedup_and_media_leg(
     html_digest = hashlib.sha256(_HTML).hexdigest()
     media_digest = hashlib.sha256(_MEDIA).hexdigest()
     assert cas_path(archive_env, html_digest).exists()
-    assert cas_path(archive_env, media_digest).read_bytes() == _MEDIA
+    assert archive_codec.decode(cas_path(archive_env, media_digest).read_bytes()) == _MEDIA
 
     async with pg_pool.acquire() as conn:
         side_one = await _sidecar(conn, one)

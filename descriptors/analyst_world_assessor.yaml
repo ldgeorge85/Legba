@@ -92,6 +92,13 @@ subscription:
     - id: escalation_composition
       data_types: [finding]
       time_window: 336h
+    # W5 (2026-11-07): the THEME-filtered cross-border hybrid-activity
+    # composition, admitted the same way: a labelled `thematic` block, its own
+    # subject group under the world floor, verify-floored. Ships with its
+    # LIFECYCLE.md activation row, so the world never declares a draft lane.
+    - id: hybrid_threat_composition
+      data_types: [finding]
+      time_window: 336h
   substrate:
     direct_queries: false        # reads via the kind's READ_SLICE, not ad-hoc SQL
 

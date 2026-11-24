@@ -69,7 +69,11 @@ import yaml  # noqa: E402
 
 from legba.data.analysts._tradecraft import (  # noqa: E402
     SEVERITY_AS_STATE_RULE,
+    UNIT_CITED_SENTENCE_RULE,
 )
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _level_peel import pre_level_indicators  # noqa: E402
 
 #: The EIGHT units the VOICE-3 replay cleared to flip.
 UNITS: tuple[str, ...] = (
@@ -160,6 +164,31 @@ TITLE_AMENDMENT_SENTENCE: str = (
 #: CONTRACT on all NINE desks — the held one included, because it is a scorecard
 #: dimension and the tag contract cannot be per-desk.
 LATER_CONTRACT_PARAGRAPHS: tuple[str, ...] = (SEVERITY_AS_STATE_RULE,)
+
+#: Paragraphs a later train added to SOME of the nine - not the house contract,
+#: so not (by construction) on every desk. X4 / ESC (2026-10-13, W11-F52) added
+#: ``UNIT_CITED_SENTENCE_RULE`` to ``escalation`` and ``military_posture``, ahead
+#: of the response-schema paragraph; W11-F86 (2026-10-24) pasted the same
+#: paragraph, at the same place, into the other seven units once the after-read
+#: on the two held. Keyed unit -> paragraphs so the peel test can say which desks
+#: must carry which (a paragraph on a desk that is not listed is a failure,
+#: exactly as a missing one is). Peeled like the above: whole blank-line-
+#: separated paragraphs, wrap-independent.
+LATER_DESK_PARAGRAPHS: dict[str, tuple[str, ...]] = {
+    unit: (UNIT_CITED_SENTENCE_RULE,)
+    for unit in (
+        "escalation",
+        "military_posture",
+        # W11-F86
+        "internal_stability",
+        "economic_coercion",
+        "energy_security",
+        "leadership_transition",
+        "narrative_coordination",
+        "proliferation_watch",
+        "disruption_status",
+    )
+}
 
 
 #: TITLE-FRAME-FIX (2026-09-01) — the second later train to touch these nine
@@ -289,11 +318,16 @@ def d6_base(prompt: str) -> str:
        NORMALIZED text is wrap-independent, and rejoining is byte-exact for
        everything kept.
 
+    0. (Latest first.) X4 LEVEL's level-indicator lines on two desks are
+       rolled back by :func:`_level_peel.pre_level_indicators` — whole-line
+       swaps, like (1).
+
     The result is the D6 prompt as the drafts wrote it, or the input unchanged
     when no later edit is present.
     """
-    rolled = pre_title_frame_fix(prompt)
+    rolled = pre_title_frame_fix(pre_level_indicators(prompt))
     drop = {norm(p) for p in LATER_CONTRACT_PARAGRAPHS}
+    drop |= {norm(p) for paras in LATER_DESK_PARAGRAPHS.values() for p in paras}
     return "\n\n".join(p for p in rolled.split("\n\n") if norm(p) not in drop)
 
 

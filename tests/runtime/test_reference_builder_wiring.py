@@ -50,7 +50,7 @@ from legba.data.analysts.deterministic_handlers.reference_builder import (
     LLM_DEPS_EXTRA_KEY,
     WEB_BINDING_DEPS_EXTRA_KEY,
 )
-from legba.data.analysts.handler_options import (
+from legba.data.option_catalog.handler_options import (
     HANDLER_OPTIONS,
     known_option_names,
 )
@@ -609,7 +609,7 @@ def test_the_build_cap_default_fits_the_actor_plane():
 def test_the_two_walls_are_declared_knobs_and_the_descriptor_states_them():
     """Both are settable so an operator can SHRINK a build on a loaded box, and
     both are bounded so nobody can widen one past what the plane carries."""
-    from legba.data.analysts.handler_options import HANDLER_OPTIONS
+    from legba.data.option_catalog.handler_options import HANDLER_OPTIONS
 
     declared = set(known_option_names("reference_builder"))
     assert {"build_max_seconds", "build_max_tokens"} <= declared
@@ -637,7 +637,7 @@ def test_the_two_walls_are_declared_knobs_and_the_descriptor_states_them():
 
 
 def test_the_retry_backoff_is_a_declared_knob_the_descriptor_states():
-    from legba.data.analysts.handler_options import HANDLER_OPTIONS
+    from legba.data.option_catalog.handler_options import HANDLER_OPTIONS
 
     assert "retry_backoff_hours" in set(known_option_names("reference_builder"))
     spec = {s.name: s for s in HANDLER_OPTIONS["reference_builder"]}[

@@ -34,7 +34,10 @@ from legba.runtime.source_factory import _unwrap_factory_dict
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 DESCRIPTORS_DIR = REPO_ROOT / "descriptors"
 
-VOCAB = {"reporting", "analysis", "official", "state_media"}
+VOCAB = {"reporting", "analysis", "official", "state_media", "claim"}
+
+#: C-1: the claim class needs its declaration (claimant) to validate.
+_CLAIM_DECL = {"claimant": "Example tracker", "verb": "listed"}
 
 # The committed YAML source descriptors and their honest, conservative class.
 EXPECTED_YAML_CLASS: dict[str, str] = {
@@ -77,6 +80,9 @@ EXPECTED_YAML_CLASS: dict[str, str] = {
     "source_rsshub_rfi_ameriques.yaml": "reporting",
     # P3-6 Wave-A breadth batch (41 draft no-auth feeds)
     "source_who_disease_outbreak_news.yaml": "official",
+    "source_imf_portwatch_chokepoints.yaml": "official",  # N-L series source
+    "source_eia_petroleum_spot_daily.yaml": "official",  # S-1 series source
+    "source_bis_policy_rates_daily.yaml": "official",  # S-1 series source
     "source_eia_today_in_energy.yaml": "official",
     "source_cgtn_world.yaml": "state_media",
     "source_timesofisrael.yaml": "reporting",
@@ -120,6 +126,7 @@ EXPECTED_YAML_CLASS: dict[str, str] = {
     # Supply-chain domain top-10 first registrations (2026-07-29):
     # planning/SUPPLY_CHAIN_SOURCES_2026-07-29.md §5.
     "source_pancanal.yaml": "official",
+    "source_page_pipeline_default.yaml": "reporting",   # I-2: the page pipeline
     "source_splash247.yaml": "reporting",
     "source_theloadstar.yaml": "reporting",
     "source_maritime_executive.yaml": "reporting",
@@ -167,6 +174,66 @@ EXPECTED_YAML_CLASS: dict[str, str] = {
     "source_sudanwarmonitor.yaml": "analysis",
     "source_scmp_china.yaml": "reporting",
     "source_rbi_press.yaml": "official",
+    # 2026-11-13 official-document gap closers (loss funnel S0): US Federal
+    # Register agency feeds and the German defence ministry / Bundeswehr feeds.
+    "source_federalregister_bis_feed.yaml": "official",
+    "source_federalregister_ofac_feed.yaml": "official",
+    "source_federalregister_presidential.yaml": "official",
+    "source_bmvg_news.yaml": "official",
+    "source_bundeswehr_procurement.yaml": "official",
+    "source_ukmto_incidents.yaml": "official",  # roll 73: UKMTO (Royal Navy)
+    # K-1 cyber desk (2026-11-14): national CERTs / agencies and the provider
+    # status feeds (a primary-source publisher about its own service) are
+    # official; the three trade outlets are reporting.
+    "source_cisa_kev.yaml": "official",
+    "source_cisa_advisories.yaml": "official",
+    "source_ncsc_uk.yaml": "official",
+    "source_certfr_alerts.yaml": "official",
+    "source_certfr_cti.yaml": "official",
+    "source_certeu_advisories.yaml": "official",
+    "source_bsi_press.yaml": "official",
+    "source_therecord.yaml": "reporting",
+    "source_cyberscoop.yaml": "reporting",
+    "source_securityweek.yaml": "reporting",
+    "source_aws_status.yaml": "official",
+    "source_azure_status.yaml": "official",
+    "source_gcp_status.yaml": "official",
+    "source_gworkspace_status.yaml": "official",
+    # X-1 source expansion (2026-11-14): three independent outlets (reporting);
+    # government / EU-institution / central-bank / public-health publishers,
+    # their series and two sanctions registers (official); the staged Telegram
+    # batch keeps the `reporting` batch default, its government channels are
+    # per-channel overrides (EXPECTED_YAML_CHANNEL_CLASS_OVERRIDES below).
+    "source_novayagazeta_europe.yaml": "reporting",
+    "source_radiotamazuj.yaml": "reporting",
+    "source_ocmedia.yaml": "reporting",
+    "source_ukmod_govuk.yaml": "official",
+    "source_ukofsi_govuk.yaml": "official",
+    "source_eucommission_press.yaml": "official",
+    "source_ecb_press.yaml": "official",
+    "source_federalreserve_speeches.yaml": "official",
+    "source_ecdc_threats.yaml": "official",
+    "source_ecdc_news.yaml": "official",
+    "source_ecb_exr_usd_daily.yaml": "official",
+    "source_ecb_deposit_rate_daily.yaml": "official",
+    "source_eu_fsf_sanctions_list.yaml": "official",
+    "source_canada_sema_sanctions_list.yaml": "official",
+    "source_telegram_x1_staged.yaml": "reporting",
+    # C-1 claim source class
+    "source_ransomware_live.yaml": "claim",
+    # C-3 claims sources (2026-11-15)
+    "source_ransomlook.yaml": "claim",
+    "source_checkpoint_research.yaml": "reporting",
+    "source_cloudflare_ddos.yaml": "reporting",
+    # I-5 (2026-11-14): an IFI's statistics, three central banks, the EU
+    # statistical office and a national seismological agency — all official.
+    "source_worldbank_wdi_cpi_inflation_world.yaml": "official",
+    "source_nbu_exchange_daily.yaml": "official",
+    "source_nbu_key_rates.yaml": "official",  # roll 84
+    "source_bcb_selic_target.yaml": "official",
+    "source_boe_bank_rate_daily.yaml": "official",
+    "source_eurostat_hicp_ea_monthly.yaml": "official",
+    "source_jma_quake_list.yaml": "official",
 }
 
 # 2026-07-29 Ansar Allah decision — source_telegram_ansarallah.yaml (a
@@ -183,7 +250,21 @@ EXPECTED_YAML_CHANNEL_CLASS_OVERRIDES: dict[str, dict[str, str]] = {
     "source_telegram_monitor.yaml": {
         "Almasirah_En": "state_media",
         "ansarollah1": "state_media",
+        # X-1 channels moved in from the staged batch on 2026-11-14 (roll 83),
+        # overrides with them. A government body's channel
+        # is that government's official voice.
+        "GeneralStaffZSU": "official",
+        "kpszsu": "official",
+        "mod_russia": "official",
+        "medvedev_telegram": "official",
+        "idfofficial": "official",
+        "SyPresidency": "official",
+        "DeepStateUA": "analysis",
     },
+    # X-1 (2026-11-14): the staged batch (configured only — channels move into
+    # source_telegram_monitor.yaml to go live, overrides with them). Empty
+    # since roll 83: all ten moved.
+    "source_telegram_x1_staged.yaml": {},
 }
 
 NEW_STATE_MEDIA_FILES = [
@@ -233,7 +314,8 @@ def test_scope_defaults_source_class_to_reporting_when_absent():
 
 @pytest.mark.parametrize("cls", sorted(VOCAB))
 def test_scope_accepts_every_vocabulary_class(cls: str):
-    scope = SourceScope(source_class=cls)
+    extra = {"claim": _CLAIM_DECL} if cls == "claim" else {}
+    scope = SourceScope.model_validate({"source_class": cls, **extra})
     assert scope.source_class == cls
     # Round-trip through dict (the YAML-descriptor parse shape) preserves it.
     reparsed = SourceScope.model_validate(scope.model_dump(mode="python"))
@@ -245,7 +327,7 @@ def test_scope_rejects_off_vocabulary_class():
         SourceScope(source_class="opinion")  # not in the Literal vocabulary
 
 
-def test_source_class_literal_vocabulary_is_exactly_the_four():
+def test_source_class_literal_vocabulary_is_exactly_the_five():
     from typing import get_args
 
     assert set(get_args(SourceClass)) == VOCAB

@@ -1,0 +1,61 @@
+# X3/G0 — substrate_read_verified: the bake-off's ARM C read surface (DRAFT).
+#
+# planning/reviews/BAKEOFF_DESIGN.md v1.0 §2, arm C — "frontier consult over
+# VERIFIED findings only": the platform's findings that pass the composition
+# admission floor, the source documents those findings cite, and target
+# resolution. No raw search.
+#
+# THE SCOPE IS SET HERE, IN TOOL CONFIG, NEVER BY THE PLANNER
+# (agency/substrate_read.py reads it off the bound pack; a planner-supplied
+# verified_only is refused by the agency's arg grammar as invalid_arg):
+#   * list_findings / belief_as_of  verified_only: true — only findings whose
+#     latest faithfulness verdict exists and min(confidence, verdict) >=
+#     LEGBA_COMPOSITION_VERIFY_FLOOR (live 0.50): the same INNER-join rule that
+#     admits a sub-claim to a composition (data/verified_findings.py);
+#   * read_document  receipt_scoped: true — only a signal an admitted finding
+#     cites (derived_from); any other id is refused by name.
+#
+# Bound by the runtime as the consult kind's governed read binding when a consult
+# descriptor GRANTS it (data/analysts/consult_bakeoff.consult_read_pack_for) —
+# today only analyst_consult_bakeoff_verified.yaml.
+#
+# DRAFT. NOT in scripts/bringup_register_action_packs.py. The operator registers
+# it for the bake-off window (G1) and retires it after.
+
+identity:
+  id: substrate_read_verified
+  name: Substrate Read — verified findings + receipts (bake-off arm C)
+  schema_uri: legba/action_pack/1.0.0
+  version: "<content-hash stamped at register time>"
+  abstraction_level: L1
+  state: draft
+  owner: x3_g0_bakeoff
+  created: "2026-10-09T00:00:00Z"
+
+tools:
+  - name: list_findings
+    config:
+      verified_only: true
+  - name: belief_as_of
+    config:
+      verified_only: true
+  - name: read_document
+    config:
+      receipt_scoped: true
+  - name: list_targets
+    config: {}
+
+prompt_fragments:
+  - >-
+    Every finding this run can read passed the platform's faithfulness check.
+    A finding is the platform's reading of its sources, not a source: open the
+    signals it cites with read_document before resting a claim on it, and cite
+    both the finding id and the signal ids you read.
+
+rules:
+  - "Never fabricate substrate refs — cite only UUIDs the tools returned."
+
+governor:
+  budget_account: substrate_read_verified
+  max_invocations_per_hour: 600
+  api_rate_per_minute: 60

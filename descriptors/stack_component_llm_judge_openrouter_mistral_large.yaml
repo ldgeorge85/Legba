@@ -1,3 +1,8 @@
+# ⚠ RETIRED 2026-10-23 (cutover to the innoai gateway): the OpenRouter credits ran out
+# on 2026-10-17 (402 on every call) and the third-family grader slot moved to
+# `llm.grader.innoai_lightning.openai_compat` (descriptors/stack_component_llm_grader_innoai_lightning.yaml).
+# The registrar no longer loads this file; it stays as the history of the lane.
+#
 # THE THIRD-FAMILY GRADER — Mistral Large 3 on OpenRouter (kind: llm_provider).
 #
 # It replaces the UNFUNDED Cerebras Gemma slot. `llm.judge.cerebras_gemma4_31b`

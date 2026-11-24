@@ -76,6 +76,7 @@ from typing import Any, Mapping, Sequence
 from uuid import UUID, uuid4
 
 from ... import correctness_axis
+from ...principals import rule_handle
 
 logger = logging.getLogger(__name__)
 
@@ -216,11 +217,14 @@ SELECT id, finding_id, unit_analyst_id, target_id, label, labeled_by,
  LIMIT $2
 """
 
-_INSERT_SAMPLE_SQL = """
+#: Who writes the sampling frame (lane 9): this code path, named once.
+_WRITTEN_BY = rule_handle("reference_validity_sampler")
+
+_INSERT_SAMPLE_SQL = f"""
 INSERT INTO correctness_labels (
     id, finding_id, unit_analyst_id, target_id, label, rationale,
-    labeled_by, finding_snapshot
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+    labeled_by, finding_snapshot, written_by
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, legba_principal('{_WRITTEN_BY}'))
 ON CONFLICT (finding_id) DO NOTHING
 RETURNING id
 """

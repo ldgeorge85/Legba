@@ -115,6 +115,7 @@ Tests that actually compile the DSPy module use
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import datetime
 import html
@@ -129,6 +130,8 @@ from typing import (
 )
 from uuid import UUID
 
+from ..slice_coverage import COVERAGE_KEY, finalize_coverage
+from .. import desk_rows_computed as _rows_scope, desk_rows_shadow as _rows_shadow  # D-1: scope + v2 shadow
 from ._llm_budget import (
     CHARS_PER_TOKEN,
     DEFAULT_INPUT_TOKEN_BUDGET,
@@ -136,7 +139,10 @@ from ._llm_budget import (
     input_token_budget,
 )
 from ..run_accounting import bind_run_steps
-from ..provenance.citation_markers import _PRIOR_READ_REF_RE
+from ..claim_support import with_claim_stamp  # C-1: claim rows' citations carry the stamp
+from ..citation_rows import handed_from_index  # DM-A: the run's typed handed list
+from .citation_resolve import _PREBUILT_CITATION_KEY, _citation_from_index_entry, _extract_citations  # noqa: F401 — DM-A extraction, re-exported
+from ..provenance.citation_markers import normalize_inline_citation_markers
 from ..provenance.consumption import CONSUMPTION_CONTEXT_QUESTION
 from ..provenance.event_citations import (
     EVENT_ID_RE,
@@ -147,6 +153,7 @@ from ..provenance.event_citations import (
 from ..provenance.kinds import OutputKind
 from ..provenance.models import FindingPayload
 from ..schemas.analyst import IndicatorEntry, MAX_OPEN_QUESTIONS, OpenQuestionEntry
+from .. import indicator_shape as _shape
 # S5 GATHER reuses consult's JSON-extraction + tool-ref helpers rather than
 # re-implementing them — same shape, one source of truth.
 from .consult_on_demand import (
@@ -180,6 +187,7 @@ from .output_contract import (
 # decision + the batch concurrency policy; ``stack.llm.tool_rounds`` owns the
 # provider-shaped wire grammar and is SHARED with the consult loop. The
 # JSON-text protocol below is unchanged and remains the fallback.
+from . import gather_context_budget as _ctxb  # W11-F91 — the GATHER evidence cap
 from .gather_native import (
     complete_with_tools,
     execute_batch,
@@ -232,6 +240,8 @@ from .unit_grounding import (
     render_grounding_section,
     with_grounding_clause,
 )
+from .history_grounding import HISTORY_DETAIL_RECEIPT_KEY, history_receipt_detail
+from .severity_delta_first_read import settle_first_read_delta
 
 logger = logging.getLogger(__name__)
 
@@ -342,6 +352,10 @@ class AnalystMethodResult:
     # Same data-driven contract as ``consumed_edges``: kinds that don't stamp it
     # are byte-for-byte unchanged.
     situation_events: list[Any] = field(default_factory=list)
+    # DM-A — what the run was HANDED (its [N] render index, typed by kind):
+    # the runtime forwards it to ``write_analyst_output(handed_refs=...)``,
+    # which keeps it as ``run_handed`` rows beside the finding. None = not kept.
+    handed_refs: tuple[Any, ...] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -590,6 +604,7 @@ def _orient(
     *,
     stats: dict[str, Any] | None = None,
     focus: "_SliceFocus | None" = None,
+    budget: int | None = None,
 ) -> tuple[list[Mapping[str, Any]], list[UUID]]:
     """Sort + prune + pack the substrate slice under the INPUT-token budget.
 
@@ -650,7 +665,8 @@ def _orient(
 
     live, wire_copies_collapsed = collapse_wire_pairs(live)
 
-    budget = _input_token_budget()
+    # W11-F91: a GATHER run under an evidence cap packs to its slice share.
+    budget = budget if budget is not None else _input_token_budget()
     trimmed: list[Mapping[str, Any]] = []
     used = 0
     for row in live:
@@ -1113,137 +1129,28 @@ from .slice_render import (  # noqa: F401
 # digits inside the brackets; the synthesis prose uses ``[N]`` per the prompt.
 _CITATION_MARKER_RE = re.compile(r"\[(\d+)\]")
 
-# Non-ASCII citation brackets that wrap a bare integer. Some core-plane models
-# (gpt-oss, Qwen-family) emit full-width / CJK lenticular brackets — ``【3】`` /
-# ``［3］`` / ``〔3〕`` — instead of ASCII ``[3]``. Without normalization the
-# ``[N]`` parser misses them entirely, so a CORRECTLY-cited finding resolves to
-# ZERO citations: it breaks drill-to-source AND tanks the faithfulness verify
-# (an apparently-cited claim that the verifier can't bind to a signal). Only
-# digit-wrapping pairs are rewritten, so non-citation prose using these glyphs is
-# left intact. (Caught live 2026-06-30 on the energy_security unit: ``【3】【76】``
-# scored faithfulness 0.00 with 0 resolved citations.)
-_VARIANT_CITATION_RE = re.compile(r"[【［〔〖](\s*\d+\s*)[】］〕〗]")
-
-# R-tail (2026-08-04) — the same bracket drift, on the NON-numeric markers.
+# THE CITATION-MARKER DRIFT RULES LIVE IN ``provenance.citation_markers``.
 #
-# The digit rule above deliberately left everything else alone, which is right
-# for CJK prose but wrong for the three other things the core plane puts in
-# these brackets. Measured over the live corpus (457 findings carry a
-# lenticular bracket; 218 carry a non-digit one):
-#
-#   * ``【ref:2】`` / ``【[ref:1]】`` — the COMPOSITION citation marker
-#     (``[[ref:N]]``) in variant brackets. ~100 occurrences. Same failure as the
-#     original bug, one layer up: the composition marker parser misses it, so a
-#     correctly-cited composed claim resolves to zero citations.
-#   * ``【1-120】`` — a RANGE citation, 93 occurrences (see the regex below).
-#   * ``【none】`` (23), ``【assessed】`` (36), ``【assessment】`` (25),
-#     ``【not_observed】`` (25), ``【assessed situation】``, ``【system_assessed】``,
-#     ``【authoritative_current_context】`` — the model ANNOTATING a clause as
-#     deliberately un-citable. ``verify._NO_CITATION_MARKER`` already has a
-#     canonical spelling for exactly this intent (``[no citation]``, floor-EXEMPT
-#     but still judge-graded), and these are that intent in other words. Left
-#     un-normalized they survive into published prose AND are counted as uncited
-#     fact assertions — the floor punishing the model for being honest.
-#
-# An explicit ALLOWLIST, not "any non-digit content": the guarantee that CJK
-# prose using these glyphs is left intact is worth keeping, and a bounded list
-# of observed tokens is auditable in a way that a catch-all is not. Matching is
-# case-insensitive and tolerant of ``_``/`` ``/``-`` as the word separator,
-# since the live corpus spells the same token all three ways.
-_VARIANT_REF_CITATION_RE = re.compile(
-    r"[【［〔〖]\s*\[?\s*ref:\s*(\d+)\s*\]?\s*[】］〕〗]", re.IGNORECASE
-)
-#: A RANGE citation in variant brackets — ``【1-120】``. 93 live occurrences.
-#: The digit rule above requires a bare integer, so these fall through, and the
-#: range parser (``verify._CLAIM_RANGE_RE``) never sees them: a survey clause
-#: that legitimately cites the whole enumerated corpus floors as UNCITED. The
-#: dash class is wide on purpose — the corpus uses ASCII ``-``, en dash ``–``
-#: and the non-breaking hyphen ``‑`` interchangeably — and the rewrite emits an
-#: ASCII hyphen so the downstream parser matches whichever glyph arrived.
-_VARIANT_RANGE_CITATION_RE = re.compile(
-    r"[【［〔〖]\s*(\d+)\s*[-–—‑]\s*(\d+)\s*[】］〕〗]"
-)
-_UNCITABLE_ANNOTATIONS: frozenset[str] = frozenset(
-    {
-        "none",
-        "no citation",
-        "not observed",
-        "assessed",
-        "assessment",
-        "assessed situation",
-        "assessed situations",
-        "assessed structure",
-        "system assessed",
-        "derived structure",
-        "authoritative current context",
-    }
-)
-_VARIANT_ANNOTATION_RE = re.compile(r"[【［〔〖]([^】］〕〗]{1,40})[】］〕〗]")
-# V-I3 (2026-08-05) — the three marker syntaxes the round-4 panel found still
-# unparsed, each with a live specimen (see the long rationale in
-# ``verify._normalize_verify_markers``, which carries the same three rules):
-# ``(ref:2)`` (S2, `country_composition`/cn), the compound ``[[ref:2,6]]``
-# (08-04 §6.2, named and unshipped), and ``【2†L1-L2】`` (§6.8, the Brazil
-# `military_posture` body). Mirrored rather than imported: this module runs at
-# WRITE time and persists the rewrite, verify.py grades what was stored, and
-# verify.py stays stdlib-only + slim-image-safe.
-_PAREN_REF_CITATION_RE = re.compile(
-    r"\(\s*\[{0,2}\s*ref:\s*(\d+(?:\s*,\s*\d+)*)\s*\]{0,2}\s*\)", re.IGNORECASE
-)
-_COMPOUND_REF_CITATION_RE = re.compile(
-    r"\[\[\s*ref:\s*(\d+(?:\s*,\s*\d+)+)\s*\]\]", re.IGNORECASE
-)
-#: ``【2†L1-L2】`` — the dagger is required, so CJK prose using the same glyphs
-#: is left intact.
-_VARIANT_DAGGER_CITATION_RE = re.compile(r"[【［〔〖]\s*(\d+)\s*†[^】］〕〗]*[】］〕〗]")
-
-
-def _expand_ref_list(digits: str) -> str:
-    """``"2, 6, 7"`` -> ``"[[ref:2]][[ref:6]][[ref:7]]"`` (one marker each)."""
-    return "".join(f"[[ref:{n.strip()}]]" for n in digits.split(","))
-#: The ASCII form the annotations above collapse to — the marker
-#: ``verify._NO_CITATION_MARKER`` already recognizes. Spelled here rather than
-#: imported: verify.py is stdlib-only/slim-image-safe and must not import the
-#: analysts package, so the constant travels as a literal in both directions.
-_NO_CITATION_ASCII = "[no citation]"
-
-
-def _canonical_annotation(token: str) -> str | None:
-    """The canonical ``[no citation]`` marker when ``token`` is one of the
-    known un-citable annotations, else ``None`` (leave the text alone)."""
-    flat = re.sub(r"[_\-\s]+", " ", token).strip().casefold()
-    return _NO_CITATION_ASCII if flat in _UNCITABLE_ANNOTATIONS else None
-
-
+# They were written here (2026-06-30, the energy_security unit: ``【3】【76】``
+# scored faithfulness 0.00 with 0 resolved citations) and mirrored into
+# ``citation_markers`` so verify.py could grade what this module persists
+# without importing the analysts package. On 2026-09-28 the mirror became a
+# defect of its own: the CONSULT path — whose core-plane answers arrive full of
+# ``【…】`` — cannot import this module (``inline_target`` imports
+# ``consult_on_demand``, which imports the consult provenance census, so the
+# census importing this module closes the cycle), and so the consult answer's
+# markers were never normalized and its census counted correctly-cited
+# sentences as model knowledge. The rules now live ONCE, in the stdlib-only
+# leaf, and both write-time callers import them.
 def _normalize_citation_markers(text: str) -> str:
     """Rewrite ``【N】``/``［N］``-style citation brackets to ASCII ``[N]``.
 
-    Also rewrites ``【ref:N】`` to the composition marker ``[[ref:N]]`` and the
-    known un-citable annotations (``【none】``, ``【assessed】``, …) to the
-    canonical ``[no citation]``.
-
-    Idempotent on already-ASCII prose. Run BEFORE ``_extract_citations`` and
-    persist the result so the stored prose, the marker parser, and the UI
-    citation chips all key on the SAME ``[N]``.
+    Thin alias for :func:`citation_markers.normalize_inline_citation_markers`,
+    kept under this name because it is what this module, ``journal_assessor``
+    and ``dapr_workflow.gepa`` already call and an extraction must not become
+    an import-path break for callers with no stake in it.
     """
-    if not text:
-        return text
-    text = _VARIANT_CITATION_RE.sub(lambda m: f"[{m.group(1).strip()}]", text)
-    text = _VARIANT_RANGE_CITATION_RE.sub(
-        lambda m: f"[{m.group(1)}-{m.group(2)}]", text
-    )
-    # V-I3: the dagger form runs BEFORE the plain annotation rewrite, which would
-    # otherwise read "2†L1-L2" as un-citable prose and leave it alone.
-    text = _VARIANT_DAGGER_CITATION_RE.sub(lambda m: f"[{m.group(1)}]", text)
-    text = _VARIANT_REF_CITATION_RE.sub(lambda m: f"[[ref:{m.group(1)}]]", text)
-    text = _COMPOUND_REF_CITATION_RE.sub(lambda m: _expand_ref_list(m.group(1)), text)
-    text = _PAREN_REF_CITATION_RE.sub(lambda m: _expand_ref_list(m.group(1)), text)
-    # The PRIOR-READ REFERENCE — IMPORTED, not mirrored (rationale, and the
-    # falsified number that did NOT motivate it, in ``citation_markers``).
-    text = _PRIOR_READ_REF_RE.sub(lambda m: f"[{m.group(1)}]", text)
-    return _VARIANT_ANNOTATION_RE.sub(
-        lambda m: _canonical_annotation(m.group(1)) or m.group(0), text
-    )
+    return normalize_inline_citation_markers(text)
 
 
 def _resolve_signal_id(raw_id: Any) -> str | None:
@@ -1461,7 +1368,7 @@ def _citation_entry(
         # demoted — the fuller article covered it). See _marker_to_evidence.
         source_truncated = len(cleaned_source) > _SOURCE_TEXT_CHARS
         source_text = cleaned_source[:_SOURCE_TEXT_CHARS]
-    return {
+    return with_claim_stamp({
         "signal_id": signal_id,
         "title": str(title) if title is not None else None,
         "source": str(source) if source else None,
@@ -1474,7 +1381,7 @@ def _citation_entry(
         "snippet": snippet or None,
         "source_text": source_text or None,
         "source_truncated": source_truncated,
-    }
+    }, fields)
 
 
 def _build_citation_index(
@@ -1505,95 +1412,6 @@ def _build_citation_index(
             source_id=row.get("source_id"),
         )
     return index
-
-
-#: QW1-B — index key carrying an ALREADY-BUILT citation for a non-signal block
-#: (a DESK GROUNDING block: prior read / situation register / desk baseline /
-#: standing questions). Those blocks are not ``signals`` rows, have no
-#: ``signal_id``, and each has its own honest ref shape built by
-#: ``unit_grounding.citation_for_block`` — so the index carries the finished
-#: citation rather than the field bag :func:`_citation_entry` builds for a signal.
-_PREBUILT_CITATION_KEY = "_citation"
-
-
-def _citation_from_index_entry(
-    n: int, entry: Mapping[str, Any] | None,
-) -> dict[str, Any] | None:
-    """One resolved citation entry for slice position ``n`` — shared by
-    :func:`_extract_citations`'s marker-driven resolution and the A2 (2026-07-31)
-    unmarked-basis fallback in :func:`run_method`. ``None`` when the entry
-    carries no resolvable ``signal_id`` (never a fabricated ref)."""
-    if not entry:
-        return None
-    # QW1-B: a DESK GROUNDING block hands over its finished citation verbatim —
-    # ref_kind + the REAL underlying ids + the rendered evidence_text, and
-    # deliberately NO ``signal_id`` (it is not a signal) and NO fabricated
-    # ``ref_id`` on the synthetic blocks.
-    prebuilt = entry.get(_PREBUILT_CITATION_KEY)
-    if isinstance(prebuilt, Mapping):
-        return dict(prebuilt)
-    if not entry.get("signal_id"):
-        return None
-    citation: dict[str, Any] = {
-        "marker": f"[{n}]",
-        "signal_id": entry["signal_id"],
-    }
-    if entry.get("title"):
-        citation["title"] = entry["title"]
-    if entry.get("source"):
-        citation["source"] = entry["source"]
-    # V-H1: the OUTLET, so an attribution claim ("near-identical framing across
-    # CBC, NPR and the BBC") is checkable at all. Emitted only when the row
-    # carried one — never fabricated.
-    if entry.get("source_id"):
-        citation["source_id"] = entry["source_id"]
-    # #116(e): carry the compact evidence snippet (the analyst's WORKING text,
-    # distilled-first) so the verify judge sees the cited signal's CONTENT, not
-    # just its headline (see _marker_to_evidence).
-    if entry.get("snippet"):
-        citation["snippet"] = entry["snippet"]
-    # FAITHFULNESS TRUST BOUNDARY: carry the RAW authoritative source text so the
-    # verify judge grounds a claim against the real article, not our distilled
-    # summary — catching a summarizer hallucination (see _marker_to_evidence).
-    # ``source_truncated`` rides along ONLY when True (payload-minimal; absent =>
-    # complete) so the judge softens "absent => unsupported" on an excerpt.
-    if entry.get("source_text"):
-        citation["source_text"] = entry["source_text"]
-        if entry.get("source_truncated"):
-            citation["source_truncated"] = True
-    return citation
-
-
-def _extract_citations(
-    body: str,
-    index: Mapping[int, Mapping[str, Any]],
-) -> tuple[list[dict[str, Any]], int, int]:
-    """Resolve the ``[N]`` markers in ``body`` against the render-time index.
-
-    Returns ``(citations, marker_count, resolved_count)``:
-      * ``citations`` — one entry per DISTINCT marker that maps to a real
-        signal_id, in first-appearance order:
-        ``{"marker": "[N]", "signal_id": <id>, "title"?, "source"?}``. A marker
-        whose index has no resolvable signal_id is COUNTED but NOT emitted (no
-        fabricated id) — same for an out-of-range marker.
-      * ``marker_count`` — the number of DISTINCT ``[N]`` markers in the prose.
-      * ``resolved_count`` — how many of those resolved to a citation entry.
-    """
-    citations: list[dict[str, Any]] = []
-    seen: set[int] = set()
-    marker_count = 0
-    for match in _CITATION_MARKER_RE.finditer(body or ""):
-        n = int(match.group(1))
-        if n in seen:
-            continue
-        seen.add(n)
-        marker_count += 1
-        citation = _citation_from_index_entry(n, index.get(n))
-        if citation is None:
-            # Out-of-range or unresolved index — count it, never fabricate an id.
-            continue
-        citations.append(citation)
-    return citations, marker_count, len(citations)
 
 
 # ---------------------------------------------------------------------------
@@ -1713,14 +1531,19 @@ def _unwrap_envelope_body(body: str) -> str:
     return inner_body
 
 
-def _coerce_indicators(raw: Any) -> list[dict[str, Any]]:
+def _coerce_indicators(
+    raw: Any, level: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Lenient per-entry coercion of the LLM's ``indicators`` array (S3-T1).
 
     Coerces each entry into the typed :class:`IndicatorEntry` shape and DROPS any
     malformed entry (degrade-not-drop) so a single bad indicator never DLQs an
     otherwise-good finding; the strict ``FindingPayload`` validator then re-checks
     what survives. Returns ``[]`` when the block is absent / not a list.
+    ``level`` — the unit's declared level indicators (X4 LEVEL,
+    ``indicator_shape.shape_raw_indicators``), stamped before coercion.
     """
+    raw = _shape.shape_raw_indicators(raw, level or {})
     if not isinstance(raw, (list, tuple)):
         return []
     out: list[dict[str, Any]] = []
@@ -1728,7 +1551,7 @@ def _coerce_indicators(raw: Any) -> list[dict[str, Any]]:
         if not isinstance(entry, dict):
             continue
         try:
-            out.append(IndicatorEntry(**entry).model_dump(mode="json"))
+            out.append(IndicatorEntry(**entry).model_dump(mode="json", exclude_none=True))
         except Exception as exc:  # noqa: BLE001 — degrade-not-drop; skip the bad one
             logger.debug("inline_target.indicator.dropped err=%s entry=%s", exc, entry)
             continue
@@ -2111,16 +1934,23 @@ def _unstructured_finding(
     # DS-1: truncation loses the `indicators` array (it serializes AFTER the
     # body) and keeps the prose — derive it, never fabricate. test_s3_indicators §2b.
     derived = _coerce_indicators(_derive_indicators_from_prose(body))
+    data: dict[str, Any] = {"indicators": derived} if derived else {}
+    # N-T — keep the raw completion the parse failed on, as the structured
+    # path already does: narrative_coordination failed to parse 23 of 403
+    # times in a week and not one raw output was left to say why.
+    data["raw_llm_response"] = str(text)[:16000]
     return FindingPayload(
         title=_title_from_text(body, fallback_title=fallback_title),
         body=body[:65536],
         confidence=0.3,
         tags=[tag],
-        data={"indicators": derived} if derived else {},
+        data=data,
     )
 
 
-def _coerce_finding(raw: str, *, fallback_title: str) -> FindingPayload:
+def _coerce_finding(
+    raw: str, *, fallback_title: str, level: Mapping[str, Any] | None = None,
+) -> FindingPayload:
     """Parse the LLM's JSON response into a :class:`FindingPayload`.
 
     Robust to:
@@ -2245,7 +2075,7 @@ def _coerce_finding(raw: str, *, fallback_title: str) -> FindingPayload:
         if ind_raw is None and isinstance(parsed.get("data"), dict):
             ind_raw = parsed["data"].get("indicators")
         data: dict[str, Any] = {"raw_llm_response": raw[:8000]}
-        indicators = _coerce_indicators(ind_raw)
+        indicators = _coerce_indicators(ind_raw, level)
         # S3-T1 EMIT FALLBACK: the core plane won't emit the structured array but
         # DOES write a prose "## Indicators to watch" bullet list. When the model
         # gave us no usable structured entries, derive them from that prose (route
@@ -2502,7 +2332,7 @@ class InlineTargetDeps:
 
     llm: LLMHandlerLike
     max_tokens: int = 1024
-    temperature: float = 0.2
+    temperature: float = HOUSE_TEMPERATURE
     system_prompt: str = _SYSTEM_PROMPT
     # PER-PHASE LLM SPLIT (journal §4.1). Optional SECOND handler for the VOICE
     # phases (the journal's field-notes seam + NARRATE). ``None`` → every phase
@@ -2547,6 +2377,10 @@ class InlineTargetDeps:
     # expansion (LEGBA_EVENT_CITATIONS). None (the pre-P2 construction shape)
     # leaves the tokens ordinary prose even when the flag is on.
     pg: Any | None = None
+    # N-T — the substrate pool a kind's PLAN pre-pass reads (the inquiry hook's
+    # ``deps.pg_pool``: crossroads' two leaf reads). Never wired before N-T, so
+    # those reads reported failed on every crossroads run since 2026-09-24.
+    pg_pool: Any | None = None
     # PER-PHASE LLM SPLIT — inject the gpt-oss ``Reasoning: high`` directive into
     # the GATHER system prompt ONLY (the heavy gpt-oss/vLLM investigation rounds).
     # Default False → the gather suffix is byte-for-byte unchanged for every
@@ -2556,6 +2390,8 @@ class InlineTargetDeps:
     # NOT a vLLM wire arg — gpt-oss takes a ``Reasoning: high`` content directive
     # (see vllm.py:106,:129), so the CALLER (here) injects it into the prompt.
     gather_reasoning_high: bool = False
+    llm_gather: LLMHandlerLike | None = None  # T-2: GATHER's own thinking choice; None = ``llm``
+    rows_shadow: Any | None = None  # D-1: a ``desk_rows_shadow.DeskRowsShadow`` when LEGBA_DESK_ROWS_SHADOW names this desk
 
     def narrate_llm(self) -> LLMHandlerLike:
         """The handler for the VOICE phases (field-notes + NARRATE).
@@ -2628,6 +2464,7 @@ async def _gather(
     extra_write_tools: tuple[str, ...] = (),
     base_offset: int = 0,
     dispatch_hypothesis_id: str | None = None,
+    context_budget: "_ctxb.GatherContextBudget | None" = None,
 ) -> tuple[
     str, dict[str, int], list[UUID], list[dict[str, Any]], dict[int, dict[str, Any]]
 ]:
@@ -2752,12 +2589,14 @@ async def _gather(
     # action pack), and it is why their request payload is bit-for-bit the same
     # with the flag on as with it off — nothing is offered, so nothing is sent.
     native = native_round_plan(
-        deps.llm,
+        (gl := deps.llm_gather or deps.llm),
         routable=sorted(read_tools) + sorted(set(tool_bindings) - read_tools),
     )
     messages: list[Mapping[str, Any]] = [
         {"role": "user", "content": user_prompt}
     ]
+    # W11-F91: one digest per tool result, in append order (compaction input).
+    ctx, digests, empty_completions = context_budget, [], 0
 
     async def _dispatch(call: ToolCall) -> tuple[dict[str, Any], bool, bool]:
         """Route ONE call to its owning pack's binding and run it.
@@ -2806,7 +2645,7 @@ async def _gather(
     def _fold(
         tool_name: str, tool_args: Mapping[str, Any],
         tool_result: Mapping[str, Any], ok: bool,
-    ) -> None:
+    ) -> list[tuple[int, str, str]]:
         """Fold ONE result into lineage, the citable set, and the prose summary.
 
         Called in EMITTED order for every call in a batch, whatever order they
@@ -2838,9 +2677,11 @@ async def _gather(
         # falls through to the existing prose summary so the model still sees the
         # query outcome.
         signal_pairs = _gathered_signals_from_result(tool_name, tool_result)
+        numbered: list[tuple[int, str, str]] = []  # W11-F91: what a digest keeps
         for raw_id, fields in signal_pairs:
             key = str(raw_id)
             if key in gathered_seen:
+                numbered.append((gathered_seen[key], key, str(fields.get("title") or "")))
                 continue
             if len(gathered_seen) >= _GATHER_MAX_CITED_SIGNALS:
                 # BOUND the numbered/rendered gathered set. A broad search_corpus
@@ -2868,6 +2709,7 @@ async def _gather(
             # which is what makes the dated-claim rule followable for gathered
             # evidence at all.
             gathered_blocks.append(_render_gathered_block(n, entry, fields))
+            numbered.append((n, key, str(fields.get("title") or "")))
             # L1 lineage: search_corpus / read_document carry NO ``refs`` key, so
             # without this a [N]-cited corpus doc never reaches the finding's
             # derived_from. A numbered gathered signal IS a real substrate ref the
@@ -2885,6 +2727,7 @@ async def _gather(
                 f"{tool_name}({json.dumps(dict(tool_args))[:200]}) -> "
                 f"{json.dumps(tool_result)[:600]}"
             )
+        return numbered
 
     rounds_used = 0
     for round_idx in range(max_rounds):
@@ -2905,12 +2748,22 @@ async def _gather(
                 analyst_id, target_id, rounds_used,
             )
             break
+        if ctx is not None:  # W11-F91: compact older results, then pre-flight
+            messages = list(_ctxb.compact_transcript(messages, digests, ctx))
+            refused = _ctxb.preflight_step(
+                ctx, system=gather_system, messages=messages, round_no=round_idx + 1,
+                tools=native.wire_tools if native is not None else None,
+            )
+            if refused is not None:
+                steps.append(refused)
+                gather_steps.append(refused)
+                break
         rounds_used = round_idx + 1
         response: Any = None
         try:
             if native is None:
                 content, usage = await _reason_via_llm(
-                    deps.llm,
+                    gl,
                     user_prompt="",  # full conversation passed via messages below
                     max_tokens=deps.max_tokens,
                     temperature=deps.temperature,
@@ -2919,7 +2772,7 @@ async def _gather(
                 )
             else:
                 response = await complete_with_tools(
-                    deps.llm,
+                    gl,
                     messages=messages,
                     system_prompt=gather_system,
                     max_tokens=deps.max_tokens,
@@ -2954,6 +2807,14 @@ async def _gather(
             calls = parse_tool_calls(native.provider, response)
             if calls:
                 protocol = "native"
+        if _ctxb.is_empty_completion(content, calls):
+            # W11-F91: no text and no call is a FAILED round, never a clean done.
+            empty_completions += 1
+            step = {"phase": "gather", "kind": _ctxb.EMPTY_COMPLETION_KIND,
+                    "round": rounds_used, "protocol": "text" if native is None else "native"}
+            steps.append(step)
+            gather_steps.append(step)
+            break
         if not calls:
             parsed = _extract_json(content)
             action = (
@@ -3058,6 +2919,7 @@ async def _gather(
         )
 
         bodies: list[str] = []
+        round_digests: list[str] = []
         for (_call, _stamped), (tool_result, _admitted, _unbound) in zip(
             prepared, outcomes,
         ):
@@ -3083,11 +2945,14 @@ async def _gather(
                 step["batch"] = batch_size
             steps.append(step)
             gather_steps.append(step)
-            _fold(_call.name, _call.args, tool_result, ok)
+            numbered = _fold(_call.name, _call.args, tool_result, ok)
             # R2 / W2-T3: JSON-safe cut + explicit truncated marker — a blind
             # [:4000] chop handed the model invalid mid-JSON with no way to tell
             # rows were missing.
             bodies.append(_bounded_tool_json(tool_result, 4000))
+            round_digests.append(_ctxb.result_digest(_call.name, numbered, bodies[-1]))
+        # The text protocol appends only the first result (a one-call turn).
+        digests.extend(round_digests if native is not None else round_digests[:1])
 
         if native is not None:
             # Replay the assistant turn VERBATIM and id-stable (rebuilt from
@@ -3142,6 +3007,12 @@ async def _gather(
             "ground the finding in these and cite returned UUIDs):\n"
             + "\n".join(f"- {s}" for s in tool_summaries)
         )
+    if ctx is not None and ctx.preflight_refused and (sections or base_offset):
+        sections.append(_ctxb.STOPPED_EARLY_NOTE)
+    receipt = _ctxb.gather_receipt(ctx, empty_completions)
+    if receipt is not None:
+        steps.append(receipt)
+        gather_steps.append(receipt)
     gathered_context = ("\n\n".join(sections) + "\n") if sections else ""
     return gathered_context, aggregate_usage, refs, gather_steps, citation_extension
 
@@ -3195,11 +3066,35 @@ async def run_method(
     # every legacy caller, every non-unit kind — partitions to ``(inputs, [])``
     # and is byte-for-byte the pre-grounding path.
     signal_inputs, grounding_rows = partition_grounding_rows(inputs)
+    # SEAM #22: per-tool bindings for the external (web_access) + write-back
+    # (propose_facts) packs, each EFFECTIVE-gated + re-pointed per run by the
+    # actor. {} when no write/web pack is bound — read-only GATHER, unchanged.
+    tool_bindings = options.get("gather_tool_bindings") or {}
+    # Splice the bound packs' operator-authored tool-use guidance into the GATHER
+    # system suffix. Fragments come through options (the actor lifts them from
+    # the bound pack descriptors); None for a pack → its section is omitted.
+    web_fragments = options.get("gather_web_prompt_fragments")
+    write_fragments = options.get("gather_write_prompt_fragments")
+    gather_system = _gather_system_suffix(
+        web_fragments=list(web_fragments) if web_fragments is not None else None,
+        write_fragments=list(write_fragments) if write_fragments is not None else None,
+        # Which egress tools actually have a binding on this run — the research
+        # pack and web_access are granted independently.
+        bound_tools=tuple(tool_bindings),
+    )
+    # W11-F91 — the multi-round GATHER evidence cap (gather_context_budget). It is
+    # resolved BEFORE the pack because the slice is packed to its share of it.
+    ctx_budget = _ctxb.resolve_gather_context_budget(
+        options, gather_system=_effective_system_prompt(deps) + gather_system,
+        max_rounds=max(1, min(_GATHER_ROUNDS_CEILING, deps.max_rounds)),
+        engaged=(options.get("agency_binding") or deps.agency_binding) is not None,
+    )
     render_stats: dict[str, Any] = {}
     sliced, derived_from = _orient(
         list(signal_inputs), target_id,
         stats=render_stats,
         focus=_resolve_slice_focus(options),
+        budget=ctx_budget.slice_budget_tokens if ctx_budget is not None else None,
     )
     orient_step: dict[str, Any] = {
         "phase": "orient",
@@ -3211,6 +3106,11 @@ async def run_method(
         # renderer dropped, prosed, marked, or upgraded on THIS slice.
         **render_stats,
     }
+    # Lane N-B — a watermark slice's DECLARED coverage gap: in-window signals
+    # this read never saw (slice cut + ORIENT pack). Absent ⇒ no key.
+    slice_coverage = finalize_coverage(options.get(COVERAGE_KEY), read=len(derived_from))
+    if slice_coverage is not None:
+        orient_step[COVERAGE_KEY] = slice_coverage
     # RECEIPTS — how many grounding blocks actually entered this run, one key per
     # block kind, ALWAYS all four (a key that appeared only when the block
     # resolved could not distinguish "no prior read" from "the receipt changed
@@ -3220,6 +3120,9 @@ async def run_method(
     # so an untouched run's trace is byte-identical.
     if grounding_rows:
         orient_step.update(grounding_receipts(grounding_rows))
+        # SW-2 — WHY the history block is or is not here (offered / desk
+        # resolved / rows / rendered), not merely whether.
+        orient_step[HISTORY_DETAIL_RECEIPT_KEY] = history_receipt_detail(grounding_rows)
     steps.append(orient_step)
 
     # Piece 2 — the empty-slice NOOP. A normal analyst with no signals emits the
@@ -3290,11 +3193,14 @@ async def run_method(
             "spread_max_sources": spread_result.max_sources,
             "spread_min_hours": spread_result.min_hours,
         })
+    from .feed_roster_block import feed_roster_from_options  # K-2: opt-in, else None
+    roster_text = await feed_roster_from_options(options, sliced, getattr(deps, "pg", None), steps)
     user_prompt = _render_user_prompt(
         sliced,
         target_id,
         window_hours=_window_opt if isinstance(_window_opt, int) else None,
         spread_block=spread_block_text,
+        feed_roster=roster_text,
     )
     # Piece 2 (gather_only): with an EMPTY slice the default render is
     # "Number of signals: 0", which reads as "nothing to do" — the model then
@@ -3414,22 +3320,6 @@ async def run_method(
     # populated only when GATHER engages (keyed [len(sliced)+1 ..]).
     gather_citation_extension: dict[int, dict[str, Any]] = {}
     active_binding = options.get("agency_binding") or deps.agency_binding
-    # SEAM #22: per-tool bindings for the external (web_access) + write-back
-    # (propose_facts) packs, each EFFECTIVE-gated + re-pointed per run by the
-    # actor. {} when no write/web pack is bound — read-only GATHER, unchanged.
-    tool_bindings = options.get("gather_tool_bindings") or {}
-    # Splice the bound packs' operator-authored tool-use guidance into the GATHER
-    # system suffix. Fragments come through options (the actor lifts them from
-    # the bound pack descriptors); None for a pack → its section is omitted.
-    web_fragments = options.get("gather_web_prompt_fragments")
-    write_fragments = options.get("gather_write_prompt_fragments")
-    gather_system = _gather_system_suffix(
-        web_fragments=list(web_fragments) if web_fragments is not None else None,
-        write_fragments=list(write_fragments) if write_fragments is not None else None,
-        # Which egress tools actually have a binding on this run — the research
-        # pack and web_access are granted independently.
-        bound_tools=tuple(tool_bindings),
-    )
     if active_binding is not None:
         gathered_context, gather_usage, gather_refs, _, gather_citation_extension = (
             await _gather(
@@ -3444,6 +3334,7 @@ async def run_method(
                 # Piece 1: gathered [N] continue AFTER the slice signals [1..len].
                 base_offset=len(sliced),
                 dispatch_hypothesis_id=assignment_question_id,
+                context_budget=ctx_budget,
             )
         )
         if gathered_context:
@@ -3494,11 +3385,15 @@ async def run_method(
     # resting on the desk's memory is graded against exactly what the model was
     # shown — the RAG-rollback lesson, enforced structurally: the ONLY licensed
     # source of "before" is a block that must be cited like any other evidence.
+    history_detail: dict[str, Any] | None = None
     if grounding_rows:
         _start = (max(citation_index) if citation_index else len(sliced)) + 1
         grounding_text, grounding_stamped = render_grounding_section(
             grounding_rows, start_ordinal=_start,
         )
+        # SW-2 — the witness off the RENDER itself: ``rendered`` is whether the
+        # history row is among the blocks the model was actually shown.
+        history_detail = history_receipt_detail(grounding_rows, stamped=grounding_stamped)
         if grounding_text:
             user_prompt = f"{user_prompt}\n\n{grounding_text}"
             for _ordinal, _row in grounding_stamped:
@@ -3516,8 +3411,15 @@ async def run_method(
                 "block_chars": len(grounding_text),
             }
             ground_blocks_step.update(grounding_receipts(grounding_rows))
+            ground_blocks_step[HISTORY_DETAIL_RECEIPT_KEY] = history_detail
             steps.append(ground_blocks_step)
 
+    _over = _ctxb.synthesis_over_budget_step(  # W11-F91: named, then sent
+        ctx_budget, system=_effective_system_prompt(deps),
+        user_prompt=synthesis_prompt(user_prompt, gathered=active_binding is not None),
+    )
+    if _over is not None:
+        steps.append(_over)
     # --- REASON+ACT ----------------------------------------------------
     # NOTE: when DSPy is wired into the runtime (L-176 GEPA replays this
     # phase), the call below is the boundary the optimizer monkey-patches
@@ -3560,7 +3462,9 @@ async def run_method(
     # --- REFLECT -------------------------------------------------------
     fallback_title = f"Assessment for {target_id or 'target'}"
     try:
-        finding = _coerce_finding(content, fallback_title=fallback_title)
+        finding = _coerce_finding(
+            content, fallback_title=fallback_title, level=_shape.level_specs(options),
+        )
     except OutputContractError as exc:
         # V-N1 DEGRADE-NOT-FABRICATE. Nothing a reader could use came back — an
         # empty completion, a bare tool call, or pure JSON scaffolding. Fail the
@@ -3634,6 +3538,11 @@ async def run_method(
         citation_data = dict(finding.data) if isinstance(finding.data, dict) else {}
         citation_data["citations"] = citations
         finding = finding.model_copy(update={"data": citation_data})
+    # X4 LEVEL (W11-F36) — a level observed at its level must cite a collected
+    # report; one resting on desk memory alone is set back (indicator_shape).
+    level_data, level_demoted = _shape.demote_unsupported_levels(finding.data)
+    if level_demoted:
+        finding = finding.model_copy(update={"data": level_data})
     # S-1d (salience stamp) — record this finding's CONSEQUENCE as the MAX-magnitude
     # scored signal in its input window, so the composition tier can order by
     # salience (S-2b) and the S-3 judge can check whether the read led with its
@@ -3647,6 +3556,15 @@ async def run_method(
         sal_data = dict(finding.data) if isinstance(finding.data, dict) else {}
         sal_data["salience"] = _finding_salience
         finding = finding.model_copy(update={"data": sal_data})
+    finding = _rows_scope.stamp_slice_scope(finding, _rows_scope.slice_scope(sliced, derived_from, collection=target_id, coverage=slice_coverage, window_hours=_window_opt if isinstance(_window_opt, int) else None), slice_coverage)  # D-1: EVERY finding's slice scope (window, sources, rows handed); the coverage stamp as before
+    # SW-2 — the history witness rides the FINDING too, so a granted desk's
+    # read says on its own row whether the block was there. Granted units only:
+    # an ungranted unit's finding stays byte-identical.
+    if history_detail is not None and history_detail["offered"]:
+        hist_data = dict(finding.data) if isinstance(finding.data, dict) else {}
+        hist_data["grounding_history_ref"] = 1 if history_detail["rendered"] else 0
+        hist_data[HISTORY_DETAIL_RECEIPT_KEY] = history_detail
+        finding = finding.model_copy(update={"data": hist_data})
 
     # R-1 — backlog answer-link: resolve the model's OPTIONAL
     # ``addressed_question`` TAG (stamped into ``finding.data
@@ -3686,7 +3604,7 @@ async def run_method(
             }
             finding = finding.model_copy(update={"data": link_data})
 
-    steps.append({
+    _coerce_step: dict[str, Any] = {
         "phase": "reflect",
         "kind": "coerce_finding",
         "confidence": finding.confidence,
@@ -3706,9 +3624,21 @@ async def run_method(
         "event_unresolved": event_stats.get("event_unresolved", 0),
         # R-1 — whether this run resolved a backlog answer-link (see above).
         "backlog_question_addressed": backlog_question_id is not None,
-    })
+    }
+    # X4 LEVEL — level observations kept / set back for want of a report. Stamped
+    # ONLY for a unit that declares level indicators (or that produced one): the
+    # toolless path of every other unit stays byte-identical to its golden
+    # (tests/data_pkg/fixtures/native_tool_rounds/), which is the contract.
+    _level_obs = _shape.count_level_observations(
+        (finding.data or {}).get("indicators") if isinstance(finding.data, dict) else None
+    )
+    if _shape.level_specs(options) or _level_obs or level_demoted:
+        _coerce_step.update({"level_observations": _level_obs, "level_demoted": level_demoted})
+    steps.append(_coerce_step)
 
-    # --- NARRATE -------------------------------------------------------
+    # --- NARRATE (roll 83: a first read's movement call is `new`, decided in code)
+    finding, _first_read = await settle_first_read_delta(getattr(deps, "pg", None), finding, analyst_id=analyst_id, target_id=target_id)
+    steps.extend([_first_read] if _first_read else [])
     narrated = _narrate(finding, target_id=target_id, analyst_id=analyst_id)
     steps.append({
         "phase": "narrate",
@@ -3794,7 +3724,7 @@ async def run_method(
             )
     except Exception as exc:  # pragma: no cover — guard must never break a run
         logger.debug("inline_target.off_target_guard.skipped err=%s", exc)
-
+    steps.extend(_rows_shadow.launch_shadow(deps.rows_shadow, options=options, user_prompt=user_prompt, sliced=sliced, citation_index=citation_index, derived_from=derived_from))  # D-1: contract-v2 SHADOW, detached; [] unless switched on
     return AnalystMethodResult(
         finding=narrated,
         usage=usage,
@@ -3802,6 +3732,7 @@ async def run_method(
         intermediate_steps=steps,
         force_trace_only=force_trace_only,
         consumed_edges=consumed_edges,
+        handed_refs=handed_from_index(citation_index),
     )
 
 
@@ -3842,7 +3773,7 @@ class InlineTargetRunner:
         llm: LLMHandlerLike,
         *,
         max_tokens: int = 1024,
-        temperature: float = 0.2,
+        temperature: float = HOUSE_TEMPERATURE,
         system_prompt: str | None = None,
         grounding_hook: GroundingHook | None = None,
         # S5 GATHER deps — all default-off so the legacy construction shape
@@ -3856,9 +3787,8 @@ class InlineTargetRunner:
         llm_narrate: LLMHandlerLike | None = None,
         narrate_max_tokens: int | None = None,
         gather_reasoning_high: bool = False,
-        # V3/P2 — optional substrate pool/conn for the event-citation
-        # expansion (LEGBA_EVENT_CITATIONS).
-        pg: Any | None = None,
+        # V3/P2 — optional substrate pool/conn for the event-citation expansion (LEGBA_EVENT_CITATIONS).
+        pg: Any | None = None, llm_gather: LLMHandlerLike | None = None, rows_shadow: Any | None = None,
     ) -> None:
         self._deps = InlineTargetDeps(
             llm=llm,
@@ -3873,7 +3803,7 @@ class InlineTargetRunner:
             invoke_timeout_seconds=invoke_timeout_seconds,
             budget_precheck=budget_precheck,
             gather_reasoning_high=gather_reasoning_high,
-            pg=pg,
+            pg=pg, llm_gather=llm_gather, rows_shadow=rows_shadow,
         )
 
     async def __call__(

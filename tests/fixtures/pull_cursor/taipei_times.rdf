@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rdf:RDF
+xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+xmlns:dc="http://purl.org/dc/elements/1.1/"
+xmlns:sy="http://purl.org/rss/1.0/modules/syndication/"
+xmlns="http://purl.org/rss/1.0/">
+
+<channel rdf:about="https://www.taipeitimes.com/">
+<title>Taipei Times</title>
+<link>https://www.taipeitimes.com/</link>
+<description>
+Bringing Taiwan to the World and the World to Taiwan
+</description>
+<sy:updatePeriod>daily</sy:updatePeriod>
+<sy:updateFrequency>1</sy:updateFrequency>
+<sy:updateBase>2005-02-14T08:00:00+08:00</sy:updateBase>
+
+
+</channel><item rdf:about="https://www.taipeitimes.com/News/front/archives/2026/11/06/2003867245">
+<title><![CDATA[China targeted 131 Taiwanese: MAC]]></title>
+<link>https://www.taipeitimes.com/News/front/archives/2026/11/06/2003867245</link>
+<description></description>
+<dc:subject></dc:subject>
+<dc:creator></dc:creator>
+<dc:date>2026-11-06T08:00:00+08:00</dc:date>
+</item>
+<item rdf:about="https://www.taipeitimes.com/News/front/archives/2026/11/06/2003867246">
+<title><![CDATA[NSTC in talks to establish space investment fund]]></title>
+<link>https://www.taipeitimes.com/News/front/archives/2026/11/06/2003867246</link>
+<description></description>
+<dc:subject></dc:subject>
+<dc:creator></dc:creator>
+<dc:date>2026-11-06T08:00:00+08:00</dc:date>
+</item>
+<item rdf:about="https://www.taipeitimes.com/News/front/archives/2026/11/06/2003867247">
+<title><![CDATA[Retired general out on bail, suspected of vote interference]]></title>
+<link>https://www.taipeitimes.com/News/front/archives/2026/11/06/2003867247</link>
+<description></description>
+<dc:subject></dc:subject>
+<dc:creator></dc:creator>
+<dc:date>2026-11-06T08:00:00+08:00</dc:date>
+</item>
+<item rdf:about="https://www.taipeitimes.com/News/front/archives/2026/11/06/2003867248">
+<title><![CDATA[Hong Kong activist Joshua Wong given another 10 years]]></title>
+<link>https://www.taipeitimes.com/News/front/archives/2026/11/06/2003867248</link>
+<description></description>
+<dc:subject></dc:subject>
+<dc:creator></dc:creator>
+<dc:date>2026-11-06T08:00:00+08:00</dc:date>
+</item>
+<item rdf:about="https://www.taipeitimes.com/News/front/archives/2026/11/06/2003867249">
+<title><![CDATA[France hit by more protests, as workers go on strike]]></title>
+<link>https://www.taipeitimes.com/News/front/archives/2026/11/06/2003867249</link>
+<description></description>
+<dc:subject></dc:subject>
+<dc:creator></dc:creator>
+<dc:date>2026-11-06T08:00:00+08:00</dc:date>
+</item>
+<item rdf:about="https://www.taipeitimes.com/News/taiwan/archives/2026/11/06/2003867255">
+<title><![CDATA[Democrats may codify Taiwan pledge]]></title>
+<link>https://www.taipeitimes.com/News/taiwan/archives/2026/11/06/2003867255</link>
+<description></description>
+<dc:subject></dc:subject>
+<dc:creator></dc:creator>
+<dc:date>2026-11-06T08:00:00+08:00</dc:date>
+</item>
+<item rdf:about="https://www.taipeitimes.com/News/taiwan/archives/2026/11/06/2003867256">
+<title><![CDATA[Blue sweep could bring AI hurdles]]></title>
+<link>https://www.taipeitimes.com/News/taiwan/archives/2026/11/06/2003867256</link>
+<description></description>
+<dc:subject></dc:subject>
+<dc:creator></dc:creator>
+<dc:date>2026-11-06T08:00:00+08:00</dc:date>
+</item>
+<item rdf:about="https://www.taipeitimes.com/News/taiwan/archives/2026/11/06/2003867257">
+<title><![CDATA[Democrat control of Congress presents opportunity and challenge for China]]></title>
+<link>https://www.taipeitimes.com/News/taiwan/archives/2026/11/06/2003867257</link>
+<description></description>
+<dc:subject></dc:subject>
+<dc:creator></dc:creator>
+<dc:date>2026-11-06T08:00:00+08:00</dc:date>
+</item>
+<item rdf:about="https://www.taipeitimes.com/News/taiwan/archives/2026/11/06/2003867258">
+<title><![CDATA[Chinese men sentenced over illegal entry into Taiwan]]></title>
+<link>https://www.taipeitimes.com/News/taiwan/archives/2026/11/06/2003867258</link>
+<description></description>
+<dc:subject></dc:subject>
+<dc:creator></dc:creator>
+<dc:date>2026-11-06T08:00:00+08:00</dc:date>
+</item>
+<item rdf:about="https://www.taipeitimes.com/News/taiwan/archives/2026/11/06/2003867259">
+<title><![CDATA[Supplementary budget stuck on defense, welfare]]></title>
+<link>https://www.taipeitimes.com/News/taiwan/archives/2026/11/06/2003867259</link>
+<description></description>
+<dc:subject></dc:subject>
+<dc:creator></dc:creator>
+<dc:date>2026-11-06T08:00:00+08:00</dc:date>
+</item>
+<item rdf:about="https://www.taipeitimes.com/News/taiwan/archives/2026/11/06/2003867260">
+<title><![CDATA[Taiwan ranks high on CCW open parliament index]]></title>
+<link>https://www.taipeitimes.com/News/taiwan/archives/2026/11/06/2003867260</link>
+<description></description>
+<dc:subject></dc:subject>
+<dc:creator></dc:creator>
+<dc:date>2026-11-06T08:00:00+08:00</dc:date>
+</item>
+<item rdf:about="https://www.taipeitimes.com/News/taiwan/archives/2026/11/06/2003867261">
+<title><![CDATA[Weekday travel program approved until year-end]]></title>
+<link>https://www.taipeitimes.com/News/taiwan/archives/2026/11/06/2003867261</link>
+<description></description>
+<dc:subject></dc:subject>
+<dc:creator></dc:creator>
+<dc:date>2026-11-06T08:00:00+08:00</dc:date>
+</item>
+</rdf:RDF>

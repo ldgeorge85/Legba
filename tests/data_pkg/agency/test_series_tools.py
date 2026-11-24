@@ -257,6 +257,43 @@ async def test_an_ungranted_analyst_cannot_reach_the_series_tools(pool):
         assert await _invocations(conn, requested_by=who) == []
 
 
+async def test_the_consult_per_call_entry_reaches_series_history_governed(pool):
+    """R-0 — the consult's own dispatch entry (``_run_one_call``) over the REAL
+    binding: the scope_predicate it injects, the three-way gate, the pack
+    handler, the port, and the ledger row. The router-only path is pinned
+    without a database in ``tests/data_pkg/test_consult_series_dispatch.py``."""
+    from types import SimpleNamespace
+
+    from legba.data.analysts.consult_tool_routing import _run_one_call
+
+    pack = _load_pack()
+    port = _RecorderPort()
+    who = f"analyst::r0cons_{uuid4().hex[:8]}"
+    b = _binding(
+        pool, pack, port=port,
+        grants=[ActionPackRef(pack_id=SUBSTRATE_READ_PACK_ID)],
+        allows=[ActionPackRef(pack_id=SUBSTRATE_READ_PACK_ID)],
+        account=who,
+    )
+    b.requested_by = who
+    deps = SimpleNamespace(agency_binding=b, substrate=port)
+    result, meta = await _run_one_call(
+        deps, tool_name="series_history",
+        tool_args={"series_id": "bis.cbpol.us", "subject": "US",
+                   "from": "2024-01-01", "to": "2026-11-01"},
+        scope_predicate=None, analyst_id="consult_on_demand",
+    )
+    assert "error" not in result, result
+    assert result["count"] == 1
+    assert meta == {"governed": True, "admitted": True}
+    assert port.calls[0][0] == "series_history"
+    async with pool.acquire() as conn:
+        inv = await _invocations(conn, requested_by=who)
+    assert [(r["tool_name"], r["outcome"]) for r in inv] == [
+        ("series_history", "completed"),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Handler-unit: the arg coercion
 # ---------------------------------------------------------------------------

@@ -104,6 +104,15 @@ config:
   lookback_minutes:
     factory_kind: number
     raw: 15
+  # W11-F169 (roll 64) — the source actor's per-pull wall-clock budget. The
+  # generic 30 s lands ~2-4 items a poll at ~7-15 s of NER each. 180 s: worst
+  # case one pull = 180 + one in-flight item (12 s enrichment timeout + ~1 s
+  # write/publish) + ~1 s cursor/outcome persist = 194 s, 46 s under the
+  # actor's 240 s ceiling. A pull cut by a roll's 45 s drain is recorded
+  # capped and its items are already published one by one.
+  poll_budget_seconds:
+    factory_kind: number
+    raw: 180
 
 pipeline:
   ingestion_filters:

@@ -1,6 +1,12 @@
 # S-2 — IntelMQ bridge SourceDescriptor: source.intelmq.cisa_kev
 # (kind: intelmq_collector_bridge).
 #
+# K-1 (2026-11-14): STILL PARKED, and no longer needed for the catalogue
+# itself — source_cisa_kev.yaml (source.cisa.kev) reads the same public JSON
+# feed through the json_api kind, which needs no extra image. This adapter
+# stays as the example of the IntelMQ bridge for CERT feeds that only IntelMQ
+# speaks; the layer maps that name it name an unregistered source either way.
+#
 # CISA Known Exploited Vulnerabilities (KEV) catalog via the IntelMQ
 # collector bridge (LB-12: adopt IntelMQ's CERT-grade collectors instead of
 # re-implementing them). Handler: src/legba/data/sources/intelmq.py

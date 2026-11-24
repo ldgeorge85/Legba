@@ -381,15 +381,21 @@ async def test_history_gap_is_published_in_the_closed_vocabulary(client):
 @pytest.mark.integration
 async def test_a_declared_but_unloaded_pair_is_one_history_gap(api_app, client):
     _, pg_store = api_app
-    load_id = await _seed(pg_store)
+    # A load that finished YESTERDAY: "current" is relative to the read's
+    # clock, so a fixed calendar date here would turn stale once the shelf
+    # life elapsed on the wall (it did, on 2026-10-25 — the nightly went red
+    # on an unchanged tree). The as_of stamp is still proven to come from the
+    # load, not from the read.
+    loaded_at = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(days=1)
+    load_id = await _seed(pg_store, finished_at=loaded_at)
     body = (await client.get(_ABSENCE, params={"scope": DESK})).json()
     gaps = [a for a in body["absences"] if a["kind"] == HISTORY_GAP_KIND]
     assert [g["subject"] for g in gaps] == ["wb.cpi:IR"]
     gap = gaps[0]
     # STAMPED BY THE LOAD, never by the read's own clock.
-    assert gap["as_of"].startswith("2026-09-25T20:40:31")
+    assert gap["as_of"].startswith(loaded_at.isoformat()[:19])
     assert "completed load" in gap["as_of_basis"]
-    expected = (_LOADED_AT + timedelta(days=GAP_SHELF_LIFE_DAYS)).isoformat()
+    expected = (loaded_at + timedelta(days=GAP_SHELF_LIFE_DAYS)).isoformat()
     assert gap["expires_at"] == expected
     # A gap measured by a load that ran within the shelf life is CURRENT.
     assert gap["stale"] is False

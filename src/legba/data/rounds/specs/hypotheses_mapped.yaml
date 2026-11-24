@@ -1,0 +1,108 @@
+# hypotheses_mapped/1 — neither linear nor a debate (plan P4 §2.6 (iv)).
+# Generate competing hypotheses; for each, run a bounded evidence loop that
+# stops when a diagnostic row is found; build the matrix in code; escalate to a
+# deeper adjudicator only when the matrix does not separate the top two.
+round:
+  id: hypotheses_mapped
+  version: 1
+  about: competing hypotheses, a bounded evidence hunt per hypothesis, a matrix, an escalating ruling
+  inputs:
+    subject: {type: subject_ref}
+    question: {type: text}
+    as_of: {type: timestamp}
+  seats:
+    freeze:
+      kind: code
+      fn: scope_and_freeze
+      reads: [{from: input.subject}, {from: input.as_of}]
+      output: frozen_scope/1
+      deadline_s: 30
+    generator:      # 3-6, mutually exclusive
+      kind: model
+      card: cards/hypothesis_generator.md
+      plane: llm.primary.openai_compat
+      thinking: on
+      reads: [{from: input.question}, {from: freeze}]
+      output: hypothesis_set/1
+      deadline_s: 110
+      retries: 1
+      on_failure: stop_round
+    seeker:         # reads its OWN earlier passes only (the enclosing loop, this item)
+      kind: model
+      card: cards/evidence_seeker.md
+      plane: llm.primary.openai_compat
+      thinking: off
+      reads: [{from: item.hypothesis}, {from: hunt.sealed, view: rows}, {from: freeze}]
+      tools: [substrate_read]
+      output: evidence_rows/1
+      gates: [handed_rows, quote_in_source]
+      deadline_s: 120
+    assessor:       # is any row diagnostic: consistent with this hypothesis and inconsistent with another?
+      kind: model
+      card: cards/diagnosticity_assessor.md
+      plane: llm.primary.openai_compat
+      thinking: on
+      reads: [{from: item.hypothesis}, {from: seeker, view: rows}]
+      output: assessment/1
+      deadline_s: 120
+    matrix:
+      kind: code
+      fn: consistency_matrix
+      reads: [{from: per_hypothesis.sealed, view: rows}]
+      output: matrix/1
+      deadline_s: 30
+    adjudicator:
+      kind: model
+      card: cards/adjudicator.md
+      plane: llm.primary.openai_compat
+      thinking: off
+      reads: [{from: matrix}, {from: per_hypothesis.sealed, view: rows}]
+      output: ruling/1
+      gates: [handed_rows]
+      deadline_s: 110
+      retries: 1
+    deep_adjudicator: {seat_ref: adjudicator, thinking: on, card: cards/adjudicator_deep.md}
+    verifier:
+      kind: judge
+      card: cards/verifier.md
+      plane: llm.verify.innoai_gemma.openai_compat
+      family_rule: {differs_from: [adjudicator, deep_adjudicator]}
+      reads: [{from: rule, view: sentence_table}]
+      output: verdict/1
+      deadline_s: 90
+      retries: 1
+    editor:
+      kind: model
+      card: cards/editor.md
+      plane: llm.primary.openai_compat
+      thinking: off
+      reads: [{from: rule}, {from: verify.tally}, {from: matrix}]
+      output: read/1
+      gates: [every_sentence_maps_to_rows]
+      deadline_s: 110
+      retries: 1
+  flow:
+    seq:
+      - {seat: freeze}
+      - {seat: generator}
+      - map:
+          over: generator.hypotheses
+          as: hypothesis
+          max_items: 6
+          concurrency: 3
+          body:
+            loop:
+              body: {seq: [{seat: seeker}, {seat: assessor}], id: pass}
+              until: "count(pass.assessment/1 where diagnostic == true) >= 1"
+              max_iterations: 3
+              model_calls: 6
+              id: hunt
+        id: per_hypothesis
+        deadline_s: 1200
+      - {seat: matrix}
+      - {escalate: {try: {seat: adjudicator}, to: deep_adjudicator, when: "count(matrix.matrix/1 where top_two_separated == false) >= 1"}, id: rule}
+      - {panel: {judges: [verifier], on: rule, tally: majority}, id: verify, deadline_s: 240}
+      - {seat: editor}
+    id: main
+  budgets: {wall_s: 2400, model_calls: 46, max_parallel: 3}
+  publishes: shadow

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.digitimes.news": {
+      "source": "source_digitimes.yaml",
+      "state": "draft"
+    }
+  }
+}

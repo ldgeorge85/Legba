@@ -140,8 +140,8 @@ async function fanout(scope: ScopeQuery): Promise<PanelHit[]> {
   const findingTgt = scope.orphans_only ? '&target_id_null=true' : targetTgt
   const signalTgt = scope.orphans_only ? '' : targetTgt
   const [signals, findings, situations, sources] = await Promise.all([
-    softGet(`/signals?limit=100${signalTgt}${lang}`),
-    softGet(`/findings?limit=100${findingTgt}${q}${analyst}`),
+    softGet(`/signals?limit=100&fields=full${signalTgt}${lang}`),
+    softGet(`/findings?limit=100${findingTgt}${q}${analyst}&fields=full`),
     softGet('/situations?limit=100'),
     softGet('/registry/sources'),
   ])

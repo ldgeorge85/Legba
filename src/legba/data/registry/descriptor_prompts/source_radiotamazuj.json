@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.radiotamazuj.news": {
+      "source": "source_radiotamazuj.yaml",
+      "state": "draft"
+    }
+  }
+}

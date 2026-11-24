@@ -449,6 +449,37 @@ async def test_journal_run_stamps_rendered_slice_as_journal_edges():
     assert result.derived_from == []
 
 
+@pytest.mark.asyncio
+async def test_journal_run_stamps_what_gather_read_as_journal_gathered(monkeypatch):
+    """N-T (2026-11-13) — the ids GATHER returned (the journal's memory: the
+    prior entry, the open consolidation, the recent entries) were collected and
+    dropped, so consolidation 0b0d85a0 could not be traced to the entries the
+    07:49 correction withdrew. They now ride ``journal_gathered`` edges."""
+    from legba.data.analysts import journal_assessor as ja
+    from legba.data.provenance.consumption import CONSUMPTION_CONTEXT_JOURNAL_GATHERED
+
+    sig, prior, consolidation = uuid4(), uuid4(), uuid4()
+
+    async def _fake_gather(*a, **k):
+        return "gathered", {}, [str(prior), str(consolidation), str(sig), "bad"], [], {}
+
+    monkeypatch.setattr(ja, "_gather", _fake_gather)
+    deps = InlineTargetDeps(
+        llm=_ScriptedLLM(["field notes", "A quiet window entry."]),
+        system_prompt="PERSONA", max_rounds=1, agency_binding=object(),
+    )
+    result = await journal_run_method(
+        [{"id": sig, "title": "signal", "source_id": "s"}],
+        {"analyst_id": "journal_assessor"}, deps,
+    )
+    assert set(result.consumed_edges) == {
+        (sig, CONSUMPTION_CONTEXT_JOURNAL),
+        (prior, CONSUMPTION_CONTEXT_JOURNAL_GATHERED),
+        (consolidation, CONSUMPTION_CONTEXT_JOURNAL_GATHERED),
+    }
+    assert result.derived_from == []
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_journal_slice_consumption_materializes(

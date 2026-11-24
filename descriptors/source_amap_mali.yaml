@@ -48,11 +48,8 @@
 # government (Assimi Goïta) since 2021, which sharpens rather than weakens the
 # case for treating the state agency's output as framing rather than fact.
 #
-# LICENCE/ROBOTS POSTURE: `robots.txt` present (Yoast SEO default block),
-# `User-agent: * / Disallow:` (nothing disallowed) — no restriction observed.
-# No machine-readable licence declaration found on-site. `scope.license_class`
-# left UNSET (honest absence, the LIC-2 default), which lands ingested signals
-# at teaser depth until an operator reviews it.
+# ROBOTS: `robots.txt` present (Yoast SEO default block),
+# `User-agent: * / Disallow:` (nothing disallowed).
 #
 # state: draft — bulk registration creates NO live actor; activation
 # (draft -> configured -> active) is the operator's after the route is

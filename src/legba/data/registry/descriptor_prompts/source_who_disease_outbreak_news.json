@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.who.disease_outbreak_news": {
+      "source": "source_who_disease_outbreak_news.yaml",
+      "state": "draft"
+    }
+  }
+}

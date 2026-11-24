@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.acled.conflict": {
+      "source": "source_acled_conflict.yaml",
+      "state": "draft"
+    }
+  }
+}

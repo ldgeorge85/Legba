@@ -15,33 +15,26 @@
  * telemetry as it does on the desk. A second renderer would have been a second
  * definition of what a citation IS, and the two would have drifted.
  *
- * ── WHAT THIS SCREEN DOES NOT DO ──────────────────────────────────────────
- * It does not recompute a disclosure. The drop ledger line reads `drops.counts`
- * verbatim, exactly as the Morning Read does, because a reader that derives its
- * own aperture number can contradict the record it is disclosing.
+ * ── WHAT THIS SCREEN DOES NOT SHOW ────────────────────────────────────────
+ * M-0a (2026-11-14): the engine's own figures — the verify score, the gate,
+ * the block count, the drop ledger and the floor sentence — left the phone's
+ * reader header and cards, as they left the desktop reader pages on 11-13. A
+ * number a reader cannot interpret is not a disclosure to them.
  */
 
 import { memo, useMemo, useState } from 'react'
 import CitedProse from '@/components/CitedProse'
 import { blockCitations, leadSpan } from '@/v4/read/RecordBlock'
-import {
-  projectArms,
-  projectAssembly,
-  projectAssessment,
-  recordBadge,
-  type ReadFindingRow,
-} from '@/lib/assemblyModel'
-import { age, longStamp, score } from '@/v4/read/readFormat'
+import type { ReadFindingRow } from '@/lib/assemblyModel'
+import { age, longStamp } from '@/v4/read/readFormat'
 import { emitRead } from '@/lib/readTelemetry'
-import {
-  filterToEntity,
-  reportEntities,
-  reportFindings,
-  reportSignals,
-  reportWhere,
-  TIER_LABEL,
-  tierOf,
-} from '../mobileModel'
+import { filterToEntity, readerBlockName, readerReportTitle, tierLabel, tierOf } from '../mobileModel'
+import { humanizeId } from '@/lib/deskNames'
+import { PROFILE_UI } from '@/lib/profileUi'
+
+/** The entities section's heading, in the profile's subject noun (U-1). */
+const SUBJECTS_NAMED = `${PROFILE_UI.subject.plural.charAt(0).toUpperCase()}${PROFILE_UI.subject.plural.slice(1)} named`
+import { reportSections, type TargetNamer } from '../reportSections'
 
 /** A collapsible section. Closed sections cost one line; open ones own the screen. */
 function Section({
@@ -53,7 +46,8 @@ function Section({
 }: {
   id: string
   title: string
-  count: number
+  /** `null` = not derivable for this read; rendered as a dash, never as 0. */
+  count: number | null
   children: React.ReactNode
   defaultOpen?: boolean
 }) {
@@ -68,7 +62,7 @@ function Section({
         data-testid={`section-toggle-${id}`}
       >
         <span>{title}</span>
-        <span className="m-count">{count}</span>
+        <span className="m-count">{count ?? '—'}</span>
         <span className="m-caret">{open ? '−' : '+'}</span>
       </button>
       {open ? <div className="m-section-body">{children}</div> : null}
@@ -81,26 +75,41 @@ export interface ReportViewProps {
   entityId: string | null
   onSelectEntity: (id: string | null) => void
   onBack: () => void
-  cachedAt: string | null
+  /** M-0a — set when re-reading failed: "No connection. Showing what was loaded at …". */
+  offlineNote: string | null
+  /**
+   * The row an Assessment was written from (`assessment.spine_id`), when the
+   * caller has it. It supplies the signals the Assessment's own citations lack.
+   */
+  spineRow?: ReadFindingRow | null
+  /** Names a target id for the citation-only sections (the subject roster). */
+  nameOf?: TargetNamer
 }
 
-function ReportViewImpl({ row, entityId, onSelectEntity, onBack, cachedAt }: ReportViewProps) {
-  const assembly = useMemo(() => projectAssembly(row), [row])
-  const assessment = useMemo(() => projectAssessment(row), [row])
-  const arms = useMemo(() => projectArms(row), [row])
+function ReportViewImpl({
+  row,
+  entityId,
+  onSelectEntity,
+  onBack,
+  offlineNote,
+  spineRow = null,
+  nameOf,
+}: ReportViewProps) {
+  // One projection for every tier: an assembly row's own blocks, or an
+  // Assessment's cited spine blocks / own citations (see reportSections.ts).
+  const sections = useMemo(
+    () => reportSections(row, spineRow, nameOf),
+    [row, spineRow, nameOf],
+  )
+  const { assembly, entities, where } = sections
 
-  const allFindings = useMemo(() => reportFindings(assembly), [assembly])
-  const allSignals = useMemo(() => reportSignals(assembly), [assembly])
-  const entities = useMemo(() => reportEntities(assembly), [assembly])
-  const where = useMemo(() => reportWhere(assembly), [assembly])
-
+  // `null` signals = unavailable for this read (not zero); the filter treats it as empty.
+  const signalsKnown = sections.signals !== null
   const { findings, signals } = useMemo(
-    () => filterToEntity(entityId, allFindings, allSignals, entities),
-    [entityId, allFindings, allSignals, entities],
+    () => filterToEntity(entityId, sections.findings, sections.signals ?? [], entities),
+    [entityId, sections.findings, sections.signals, entities],
   )
 
-  const badge = assembly ? recordBadge(assembly, arms) : null
-  const counts = assembly?.drops?.counts ?? null
   const tier = tierOf(row)
   const selectedEntity = entities.find((e) => e.targetId === entityId) ?? null
 
@@ -110,27 +119,22 @@ function ReportViewImpl({ row, entityId, onSelectEntity, onBack, cachedAt }: Rep
         <button type="button" className="m-back" onClick={onBack} data-testid="report-back">
           ‹ Reports
         </button>
-        <h1 className="m-title">{row.title || 'Untitled read'}</h1>
+        <h1 className="m-title" data-testid="report-title">
+          {row.title ? readerReportTitle(row.title, row.target_id ?? null, nameOf) : 'Untitled read'}
+        </h1>
         <p className="m-sub">
-          {tier ? TIER_LABEL[tier] : 'Read'} · {longStamp(row.produced_at) ?? row.produced_at}
+          {tier ? tierLabel(tier) : 'Read'} · {longStamp(row.produced_at) ?? row.produced_at}
         </p>
-        {cachedAt ? (
-          <p className="m-cached" data-testid="cached-banner">
-            offline — {cachedAt}
+        {offlineNote ? (
+          <p className="m-cached" data-testid="offline-banner" role="status">
+            {offlineNote}
           </p>
         ) : null}
-        <p className="m-verify" data-testid="verify-line">
-          verify {score(badge?.quoteFidelity ?? null)}
-          {badge ? ` · gate ${badge.gate}` : ''}
-          {assembly ? ` · ${assembly.blocks.length} blocks` : ''}
-        </p>
-        {counts ? (
-          <p className="m-aperture" data-testid="drop-ledger">
-            {counts.shown} shown · {counts.not_selected} below the line · {counts.below_floor}{' '}
-            below floor
-            {counts.invisible_heads > 0 ? ` · ${counts.invisible_heads} outside the aperture` : ''}
-          </p>
-        ) : null}
+        {/* M-0a — the engine line ("verify 0.97 · gate failed · 4 blocks",
+            "35 shown · 20 below the line · 0 below floor", the floor
+            sentence) left the phone's reader header, as it left the desktop
+            reader pages on 11-13: unexplained numbers and pipeline words
+            are not a reader's. */}
       </header>
 
       {selectedEntity ? (
@@ -157,7 +161,7 @@ function ReportViewImpl({ row, entityId, onSelectEntity, onBack, cachedAt }: Rep
                 <article key={b.ordinal} className="m-block" data-testid="record-block">
                   <h2 className="m-block-head">
                     <span className="m-ordinal">{b.ordinal}</span>
-                    {b.target_name ?? b.desk}
+                    {readerBlockName(b.target_name, b.target_id ?? b.desk, nameOf)}
                   </h2>
                   <p className="m-block-q">{b.question}</p>
                   {head ? (
@@ -170,22 +174,23 @@ function ReportViewImpl({ row, entityId, onSelectEntity, onBack, cachedAt }: Rep
                       variant="block"
                     />
                   ) : null}
-                  <p className="m-block-meta">
-                    {b.severity ? `${b.severity} · ` : ''}
-                    verify {score(b.verify?.overall_score ?? null)}
-                    {b.evidence_age_h != null ? ` · ${age(b.evidence_age_h)}` : ''}
-                  </p>
+                  {b.severity || b.evidence_age_h != null ? (
+                    <p className="m-block-meta">
+                      {[
+                        b.severity,
+                        b.evidence_age_h != null ? `evidence ${age(b.evidence_age_h)} old` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </p>
+                  ) : null}
                 </article>
               )
             })}
         </div>
-      ) : assessment && row.body ? (
-        <div className="m-record">
-          <CitedProse text={row.body} citations={[]} variant="block" />
-        </div>
       ) : row.body ? (
         <div className="m-record">
-          <CitedProse text={row.body} citations={[]} variant="block" />
+          <CitedProse text={row.body} citations={sections.citations} variant="block" />
         </div>
       ) : (
         <p className="m-empty">This record carries no readable body.</p>
@@ -195,23 +200,24 @@ function ReportViewImpl({ row, entityId, onSelectEntity, onBack, cachedAt }: Rep
       <Section id="findings" title="Findings" count={findings.length}>
         <ul className="m-list">
           {findings.map((f) => (
-            <li key={f.findingId} className="m-item" data-testid="finding-item">
-              <span className="m-item-title">{f.targetName ?? f.desk}</span>
+            <li key={f.ordinal} className="m-item" data-testid="finding-item">
+              <span className="m-item-title">{readerBlockName(f.targetName, f.desk, nameOf)}</span>
               <span className="m-item-meta">
-                {f.desk} · verify {score(f.verifyScore)}
-                {f.severity ? ` · ${f.severity}` : ''} · {f.signalCount} signals
+                {humanizeId(f.desk)}
+                {f.severity ? ` · ${f.severity}` : ''}
+                {signalsKnown ? ` · ${f.signalCount} signals` : ''}
               </span>
               {f.bluf ? <span className="m-item-body">{f.bluf}</span> : null}
             </li>
           ))}
-          {findings.length === 0 ? <li className="m-quiet">No heads under this filter.</li> : null}
+          {findings.length === 0 ? <li className="m-quiet">No findings under this filter.</li> : null}
         </ul>
       </Section>
 
-      <Section id="entities" title="Targets named" count={entities.length}>
+      <Section id="entities" title={SUBJECTS_NAMED} count={entities.length}>
         <p className="m-note">
-          The targets this record speaks about. A substrate entity list per read is not
-          servable today — see the build note.
+          The subjects this record speaks about. A full list of the people and organisations it
+          names is not available yet.
         </p>
         <ul className="m-chips">
           {entities.map((e) => (
@@ -237,7 +243,13 @@ function ReportViewImpl({ row, entityId, onSelectEntity, onBack, cachedAt }: Rep
         </ul>
       </Section>
 
-      <Section id="signals" title="Signals cited" count={signals.length}>
+      <Section id="signals" title="Signals cited" count={signalsKnown ? signals.length : null}>
+        {signalsKnown ? null : (
+          <p className="m-note" data-testid="signals-unavailable">
+            This read quotes {findings.length} findings of the underlying record. That record is not
+            in the loaded window, so its signals are not listed here.
+          </p>
+        )}
         <ul className="m-list">
           {signals.map((s) => (
             <li key={s.signalId ?? s.marker} className="m-item" data-testid="signal-item">
@@ -258,7 +270,7 @@ function ReportViewImpl({ row, entityId, onSelectEntity, onBack, cachedAt }: Rep
               </span>
             </li>
           ))}
-          {signals.length === 0 ? (
+          {signalsKnown && signals.length === 0 ? (
             <li className="m-quiet">No signals under this filter.</li>
           ) : null}
         </ul>
@@ -266,8 +278,8 @@ function ReportViewImpl({ row, entityId, onSelectEntity, onBack, cachedAt }: Rep
 
       <Section id="where" title="Where" count={where.length}>
         <p className="m-note">
-          The record&rsquo;s geography as the targets it covers. No basemap on this surface —
-          see the build note.
+          The record&rsquo;s geography as the subjects it covers. There is no map on the phone
+          yet.
         </p>
         <ul className="m-chips">
           {where.map((w) => (

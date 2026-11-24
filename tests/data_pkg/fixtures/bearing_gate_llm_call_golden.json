@@ -1,0 +1,162 @@
+[
+ {
+  "kwargs": {
+   "max_tokens": 8,
+   "temperature": 1.0
+  },
+  "messages": [
+   {
+    "content": "Does this news item provide genuine evidence bearing on the thesis - supporting, refuting, or materially updating it? Being about the same country or actors is NOT enough; it must speak to what the thesis asserts. When a Desk is shown, the thesis belongs to THAT desk's country or theatre even if the thesis text does not name it - an item about a different country is NOT evidence, however similar the politics. If the thesis names a specific consequence for a specific actor, the signal must speak to THAT consequence, not only to the upstream event. Answer with exactly one word: YES or NO.",
+    "role": "system"
+   },
+   {
+    "content": "Question thesis: \"Collection gap: the leadership_transition dimension for desk country_g20_au is starved (low-faithfulness; persistent 2/2 cards). What sources would close it? Plausible source classes: official, reporting, analysis.\"\nNews item: \"'It was all about money': UK court convicts Norwegian teen 'hitman' in murder conspiracy linked to Iran-linked group - Natland was arrested in March last year from a hotel room in Huddersfield in northern England.\"",
+    "role": "user"
+   },
+   {
+    "content": "NO",
+    "role": "assistant"
+   },
+   {
+    "content": "Question thesis: \"How will continued monsoon flooding affect Pakistan's domestic power generation and fuel logistics?\"\nNews item: \"Govt aims to provide citizens access to all public facilities under single digital ID: PM Shehbaz - Prime Minister Shehbaz Sharif said on Wednesday that the government's vision for national digitalisation aims to provide citizens access to all public facilities under a single digital identity.\"",
+    "role": "user"
+   },
+   {
+    "content": "NO",
+    "role": "assistant"
+   },
+   {
+    "content": "Question thesis: \"Will the US proceed with airstrikes against JNIM in Mali, and how might that affect the insurgent dynamics?\"\nNews item: \"Trump Says USA Will Strike Iran Hard - President Donald Trump said the U.S. would hit Iran hard after a recent attack that targeted a military base in Jordan.\"",
+    "role": "user"
+   },
+   {
+    "content": "NO",
+    "role": "assistant"
+   },
+   {
+    "content": "Question thesis: \"Will Iran enact the announced gasoline price increase within the next month, and how will it affect domestic fuel consumption?\"\nNews item: \"2/3 of US adults say Iran war hasn't been worthwhile; 28% back Trump's handling of it - AP-NORC poll shows 61% of Republicans approve of conflict, down from 71% last month; 72% of US adults say it's extremely or very important to keep gas prices in check.\"",
+    "role": "user"
+   },
+   {
+    "content": "NO",
+    "role": "assistant"
+   },
+   {
+    "content": "Question thesis: \"Will Iran proceed with closing the Strait of Hormuz if diplomatic proposals fail?\"\nNews item: \"**Iran has rejected an Omani proposal for joint management of the Strait of Hormuz**, Reuters reported, citing sources. The initiative, supported by the Gulf countries, was modeled after the transit framework through the Strait of Malacca. Tehran disagreed with an equal share of control.\"",
+    "role": "user"
+   },
+   {
+    "content": "YES",
+    "role": "assistant"
+   },
+   {
+    "content": "Question thesis: \"Will continued elite reshuffles undermine cohesion within Ukraine's military leadership?\"\nNews item: \"The battlefield Ukraine's new commander-in-chief inherits as Russian troops push toward Ukraine's main defensive stronghold in Donbas - Ukraine's new commander-in-chief, Mykhailo Drapatyi, inherited a difficult situation on the front lines from his predecessor, Oleksandr Syrskyi.\"",
+    "role": "user"
+   },
+   {
+    "content": "YES",
+    "role": "assistant"
+   },
+   {
+    "content": "Question thesis: \"How long will the Jizan and Abqaiq facilities remain offline, and what impact will prolonged outages have on Saudi export capacity?\"\nNews item: \"Middle East war: US and Saudi Arabia take unprecedented step with joint strikes on Iraq - After accusing pro-Iranian armed groups of targeting its energy infrastructure with drones, Riyadh carried out a military operation alongside Washington against positions in Iraq.\"",
+    "role": "user"
+   },
+   {
+    "content": "YES",
+    "role": "assistant"
+   },
+   {
+    "content": "Desk: G20 — Türkiye [country_g20_tr]\nQuestion thesis: \"Is there emerging elite dissent within the ruling party that could accelerate a leadership challenge?\"\nNews item: \"US Senate rejects motion to halt Trump's Iran hostilities - The Senate's war powers resolution failed 49-50, with Republicans Collins, Murkowski and Paul crossing the aisle to back it.\"",
+    "role": "user"
+   },
+   {
+    "content": "NO",
+    "role": "assistant"
+   },
+   {
+    "content": "Desk: G20 — Türkiye [country_g20_tr]\nQuestion thesis: \"Will Iran close the Strait of Hormuz?\"\nNews item: \"Iran rejects the Omani proposal\"",
+    "role": "user"
+   }
+  ]
+ },
+ {
+  "kwargs": {
+   "max_tokens": 8,
+   "temperature": 1.0
+  },
+  "messages": [
+   {
+    "content": "Does this news item provide genuine evidence bearing on the thesis - supporting, refuting, or materially updating it? Being about the same country or actors is NOT enough; it must speak to what the thesis asserts. When a Desk is shown, the thesis belongs to THAT desk's country or theatre even if the thesis text does not name it - an item about a different country is NOT evidence, however similar the politics. If the thesis names a specific consequence for a specific actor, the signal must speak to THAT consequence, not only to the upstream event. Answer with exactly one word: YES or NO.",
+    "role": "system"
+   },
+   {
+    "content": "Question thesis: \"Collection gap: the leadership_transition dimension for desk country_g20_au is starved (low-faithfulness; persistent 2/2 cards). What sources would close it? Plausible source classes: official, reporting, analysis.\"\nNews item: \"'It was all about money': UK court convicts Norwegian teen 'hitman' in murder conspiracy linked to Iran-linked group - Natland was arrested in March last year from a hotel room in Huddersfield in northern England.\"",
+    "role": "user"
+   },
+   {
+    "content": "NO",
+    "role": "assistant"
+   },
+   {
+    "content": "Question thesis: \"How will continued monsoon flooding affect Pakistan's domestic power generation and fuel logistics?\"\nNews item: \"Govt aims to provide citizens access to all public facilities under single digital ID: PM Shehbaz - Prime Minister Shehbaz Sharif said on Wednesday that the government's vision for national digitalisation aims to provide citizens access to all public facilities under a single digital identity.\"",
+    "role": "user"
+   },
+   {
+    "content": "NO",
+    "role": "assistant"
+   },
+   {
+    "content": "Question thesis: \"Will the US proceed with airstrikes against JNIM in Mali, and how might that affect the insurgent dynamics?\"\nNews item: \"Trump Says USA Will Strike Iran Hard - President Donald Trump said the U.S. would hit Iran hard after a recent attack that targeted a military base in Jordan.\"",
+    "role": "user"
+   },
+   {
+    "content": "NO",
+    "role": "assistant"
+   },
+   {
+    "content": "Question thesis: \"Will Iran enact the announced gasoline price increase within the next month, and how will it affect domestic fuel consumption?\"\nNews item: \"2/3 of US adults say Iran war hasn't been worthwhile; 28% back Trump's handling of it - AP-NORC poll shows 61% of Republicans approve of conflict, down from 71% last month; 72% of US adults say it's extremely or very important to keep gas prices in check.\"",
+    "role": "user"
+   },
+   {
+    "content": "NO",
+    "role": "assistant"
+   },
+   {
+    "content": "Question thesis: \"Will Iran proceed with closing the Strait of Hormuz if diplomatic proposals fail?\"\nNews item: \"**Iran has rejected an Omani proposal for joint management of the Strait of Hormuz**, Reuters reported, citing sources. The initiative, supported by the Gulf countries, was modeled after the transit framework through the Strait of Malacca. Tehran disagreed with an equal share of control.\"",
+    "role": "user"
+   },
+   {
+    "content": "YES",
+    "role": "assistant"
+   },
+   {
+    "content": "Question thesis: \"Will continued elite reshuffles undermine cohesion within Ukraine's military leadership?\"\nNews item: \"The battlefield Ukraine's new commander-in-chief inherits as Russian troops push toward Ukraine's main defensive stronghold in Donbas - Ukraine's new commander-in-chief, Mykhailo Drapatyi, inherited a difficult situation on the front lines from his predecessor, Oleksandr Syrskyi.\"",
+    "role": "user"
+   },
+   {
+    "content": "YES",
+    "role": "assistant"
+   },
+   {
+    "content": "Question thesis: \"How long will the Jizan and Abqaiq facilities remain offline, and what impact will prolonged outages have on Saudi export capacity?\"\nNews item: \"Middle East war: US and Saudi Arabia take unprecedented step with joint strikes on Iraq - After accusing pro-Iranian armed groups of targeting its energy infrastructure with drones, Riyadh carried out a military operation alongside Washington against positions in Iraq.\"",
+    "role": "user"
+   },
+   {
+    "content": "YES",
+    "role": "assistant"
+   },
+   {
+    "content": "Desk: G20 — Türkiye [country_g20_tr]\nQuestion thesis: \"Is there emerging elite dissent within the ruling party that could accelerate a leadership challenge?\"\nNews item: \"US Senate rejects motion to halt Trump's Iran hostilities - The Senate's war powers resolution failed 49-50, with Republicans Collins, Murkowski and Paul crossing the aisle to back it.\"",
+    "role": "user"
+   },
+   {
+    "content": "NO",
+    "role": "assistant"
+   },
+   {
+    "content": "Question thesis: \"Will Iran close the Strait of Hormuz?\"\nNews item: \"Iran rejects the Omani proposal\"",
+    "role": "user"
+   }
+  ]
+ }
+]

@@ -39,7 +39,7 @@ RUN apt-get update \
 WORKDIR /build
 
 RUN pip install --prefix=/install \
-        "mcp>=1.0" \
+        "mcp>=1.0,<2" \
         "pydantic>=2.0" \
         "asyncpg>=0.29" \
         "redis[hiredis]>=5.0" \
@@ -55,7 +55,7 @@ RUN pip install --prefix=/install \
         # APIRouter at module level). MCP doesn't run an HTTP server but
         # the import path traverses the outputs surface for shared model
         # types. Light dep (~2 MB).
-        "fastapi>=0.115" \
+        "fastapi==0.142.2" \
         # stix2 eagerly imported by legba.data.outputs.__init__.
         "stix2>=3.0"
 

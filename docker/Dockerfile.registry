@@ -42,7 +42,7 @@ WORKDIR /build
 # so the runtime image stays out of the dapr / dspy / temporalio sets.
 # Versions match pyproject.toml — bump in lockstep.
 RUN pip install --prefix=/install \
-        "fastapi>=0.115" \
+        "fastapi==0.142.2" \
         "uvicorn[standard]>=0.32" \
         "pydantic>=2.0" \
         "asyncpg>=0.29" \
@@ -81,7 +81,17 @@ RUN pip install --prefix=/install \
         # that MODE from taking the registry down again; this line stops the
         # specific GAP existing at all. ~10 MB, no transitive deps.
         # docker/Dockerfile.runtime carries the same pin — bump in lockstep.
-        "pycountry>=24.6"
+        "pycountry>=24.6" \
+        # feedparser + networkx (W9-F11, roll 80): the descriptor REFERENCE
+        # CHECK (data/registry/descriptor_refs.load_palettes) imports the
+        # source-kind and analyst-kind registries — the rss kind imports
+        # feedparser and the graph_mining / structural_balance handlers import
+        # networkx at module level — so without them every registry write and
+        # every walker run logged registry.reference_check.unavailable and
+        # registered unchecked. The same pins as pyproject.toml and
+        # docker/Dockerfile.runtime — bump in lockstep. ~10 MB, pure Python.
+        "feedparser>=6.0" \
+        "networkx>=3.2"
 
 # Install the legba source tree without its declared deps (we already
 # pulled the subset we want). Using --no-deps + editable build wires
@@ -91,6 +101,19 @@ RUN pip install --prefix=/install \
 COPY pyproject.toml /build/pyproject.toml
 COPY src /build/src
 RUN pip install --prefix=/install --no-deps /build
+
+# W9 SPLIT-2 — the selected profile's prompt package, copied into
+# site-packages beside `legba` and imported at build. The registry needs it as
+# much as the runtime: registration resolves every analyst descriptor's
+# method.prompt_module (descriptor_refs) and refuses a dead one on a binding
+# state — without the package the six lean lenses could not register. Same
+# step as docker/Dockerfile.runtime; keep the two in lockstep.
+ARG LEGBA_PROFILE=profiles/geopolitics
+COPY ${LEGBA_PROFILE}/ /build/profile/
+RUN if [ -d /build/profile/prompts ]; then \
+      cp -r /build/profile/prompts/. /install/lib/python3.11/site-packages/ \
+      && PYTHONPATH=/install/lib/python3.11/site-packages python -c "import importlib, pkgutil; mods = [m.name for m in pkgutil.walk_packages(['/build/profile/prompts'])]; [importlib.import_module(m) for m in mods]; print('profile prompt modules:', ' '.join(mods) or 'none')"; \
+    else echo "profile ${LEGBA_PROFILE} declares no prompts/ directory"; fi
 
 # Strip bytecode caches + test fixtures from installed packages.
 # NB: strip only `tests` dirs, NOT `testing` — `numpy/testing` (and

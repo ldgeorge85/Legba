@@ -131,7 +131,7 @@ export default function TargetSituationsPanel({ registration, scope }: PanelProp
             if (bucketRows.length === 0) return null
             return (
               <section key={bucket} data-testid={`target-situations-bucket-${bucket}`}>
-                <h3 className="text-[11px] uppercase tracking-wider text-slate-400 mb-1">
+                <h3 className="text-label uppercase tracking-wider text-slate-400 mb-1">
                   {bucket} ({bucketRows.length})
                 </h3>
                 <ul className="space-y-1">
@@ -154,10 +154,10 @@ export default function TargetSituationsPanel({ registration, scope }: PanelProp
                             title={`intensity ${tier.label} (${s.intensity_score.toFixed(2)})`}
                           />
                           <span className="flex-1 truncate">{s.name}</span>
-                          <span className="text-[10px] text-slate-500 shrink-0">
+                          <span className="text-label text-slate-500 shrink-0">
                             {s.category}
                           </span>
-                          <span className="text-[10px] font-mono text-slate-400 shrink-0">
+                          <span className="text-label font-mono text-slate-400 shrink-0">
                             {s.event_count} ev
                           </span>
                         </button>
@@ -207,7 +207,7 @@ export default function TargetSituationsPanel({ registration, scope }: PanelProp
                                         e.stopPropagation()
                                         openLineage('finding', fid)
                                       }}
-                                      className="font-mono text-[10px] underline text-accent-info"
+                                      className="font-mono text-label underline text-accent-info"
                                     >
                                       {fid.slice(0, 8)}…
                                     </button>
@@ -225,7 +225,7 @@ export default function TargetSituationsPanel({ registration, scope }: PanelProp
                                   e.stopPropagation()
                                   openLineage('situation', s.id)
                                 }}
-                                className="text-[10px] underline text-accent-info"
+                                className="text-label underline text-accent-info"
                               >
                                 trace this situation →
                               </button>
@@ -248,7 +248,7 @@ export default function TargetSituationsPanel({ registration, scope }: PanelProp
                                       origin: 'target.situations',
                                     })
                                   }}
-                                  className="text-[10px] underline text-accent-info"
+                                  className="text-label underline text-accent-info"
                                   data-testid={`situation-cross-framing-${s.id}`}
                                   title="put this desk's claim against its other bounded units"
                                 >
@@ -319,7 +319,7 @@ function TrackedEvents({ situationId }: { situationId: string }) {
                 e.stopPropagation()
                 openLineage('event', ev.id)
               }}
-              className="font-mono text-[10px] underline text-accent-info"
+              className="font-mono text-label underline text-accent-info"
             >
               {ev.title.length > 40 ? `${ev.title.slice(0, 40)}…` : ev.title}
             </button>
@@ -350,11 +350,11 @@ function IntensityMeter({
   const pct = Math.max(0, Math.min(1, score)) * 100
   return (
     <div className="flex items-center gap-2 pb-1" data-testid="target-situation-intensity">
-      <span className="text-[10px] text-slate-400 w-16 shrink-0">intensity</span>
+      <span className="text-label text-slate-400 w-16 shrink-0">intensity</span>
       <div className="flex-1 h-1.5 bg-surface-200 rounded overflow-hidden">
         <div className={cn('h-full rounded', tier.dot)} style={{ width: `${pct}%` }} />
       </div>
-      <span className="font-mono text-[10px] text-slate-300 w-9 text-right">{pct.toFixed(0)}%</span>
+      <span className="font-mono text-label text-slate-300 w-9 text-right">{pct.toFixed(0)}%</span>
     </div>
   )
 }

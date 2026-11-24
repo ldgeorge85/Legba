@@ -265,6 +265,8 @@ async def test_findings_request_build_and_passthrough():
     assert req.url.params.get("target_id") == "brazil"
     assert req.url.params.get("severity") == "high"
     assert req.url.params.get("limit") == "10"
+    # P-8: the tool names the full weight (the route's default became summary).
+    assert req.url.params.get("fields") == "full"
     # A None-valued optional filter is dropped, never sent as "None".
     assert "cursor" not in req.url.params
     # Bearer is threaded.
@@ -304,6 +306,8 @@ async def test_signals_request_build():
     assert req.url.params.get("source_id") == "rss.example"
     assert req.url.params.get("language") == "en"
     assert req.url.params.get("limit") == "5"
+    # the list is light by default; the tool reads the item's text
+    assert req.url.params.get("fields") == "full"
 
 
 async def test_lineage_request_build_and_path():

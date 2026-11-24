@@ -128,6 +128,13 @@ _NON_ORIGIN_CLASSED_TABLE = frozenset({
     "src/legba/data/analysts/reifier_selection.py",
     "src/legba/data/analysts/situation_tracker.py",
     "src/legba/data/analysts/window_ledger.py",
+    # Lane N-A: the desk-head live predicate over ``analyst_outputs`` findings
+    # (no ``origin_class`` column; a head closed BY a failed parse is still live).
+    "src/legba/data/head_integrity.py",
+    # Lane N-G: the journal memory filter and the correction close, over
+    # ``journal_entries`` (no ``origin_class`` column; the open-row pair is the gate).
+    "src/legba/data/journal_evidence.py",
+    "src/legba/data/provenance/journal_correction.py",
     "src/legba/data/provenance/entity_edge_writes.py",
     "src/legba/data/registry/absence_api.py",
     "src/legba/data/registry/api.py",
@@ -150,6 +157,16 @@ _NON_ORIGIN_CLASSED_TABLE = frozenset({
     "src/legba/prompts/journal_assessor/__init__.py",
     "src/legba/runtime/dapr_workflow/gepa.py",
     "src/legba/runtime/grounding.py",
+    # W11-F102: the floor re-judge selects and closes ``analyst_outputs``
+    # critiques (no ``origin_class`` column; the open-row pair is the gate).
+    "src/legba/runtime/rejudge_floor.py",
+    # W11-F150: list_findings' survey mode reads ``analyst_outputs`` findings
+    # (``f.kind = 'finding'``; no ``origin_class`` column, the pair is the gate).
+    "src/legba/runtime/substrate_findings_reads.py",
+    # D-2 (c086aa1a): the intake drift batch re-checks first the pages that
+    # open ``analyst_outputs`` heads cite (no ``origin_class`` column; the
+    # open-row pair is the gate).
+    "src/legba/runtime/intake_drift.py",
 })
 
 #: Every file carrying the open-row literal, whatever its bucket.
@@ -161,10 +178,19 @@ _OPEN_ROW_SITES = (
 #: validity predicate and of its mentions in comments/docstrings.
 _AS_OF_SITES = frozenset({
     "src/legba/data/analysts/deterministic_handlers/_event_lifecycle.py",
+    # I-1 (ingestion intake): NOT an as-of predicate — the drain's claim query
+    # COALESCEs a host's newest ``ingestion_requests.claimed_at`` to
+    # ``'-infinity'`` (no prior claim = never rate-limited). ``ingestion_requests``
+    # is a work queue with no validity interval and no ``origin_class``.
+    "src/legba/data/intake_store.py",
     "src/legba/data/provenance/origin.py",
     "src/legba/data/registry/substrate_reads_api.py",
     "src/legba/runtime/substrate_query_port.py",
     "src/legba/runtime/substrate_temporal.py",
+    # D-2 (c086aa1a): NOT an as-of predicate — the drift batch COALESCEs an
+    # address's newest ``fetch_drift_observations.observed_at`` to
+    # ``'-infinity'`` (no drift seen = every done re-check counts as stable).
+    "src/legba/runtime/intake_drift.py",
 })
 
 
@@ -340,3 +366,93 @@ def test_reactive_triggers_gate_the_ROW_not_the_query() -> None:
     assert not is_live_origin({"origin_class": "backfill_native"})
     assert not is_live_origin({"origin_class": "backfill_reconstructed"})
     assert not is_live_origin({"origin_class": "a_class_from_the_future"})
+
+
+# ---------------------------------------------------------------------------
+# 4. The raw readers' RECORD-time cut (lane E0, ``known_at``)
+# ---------------------------------------------------------------------------
+#
+# A third clock beside validity (``as_of``) and decision (``believed_as_of``):
+# "entered the record before K", for evaluation arms that read the raw corpus
+# as it stood at K. It renders through the temporal leaf's existing half-open
+# anchor window (``substrate_temporal.anchor_window_clause``, upper bound only)
+# via ONE helper, and every raw reader is classified in
+# ``legba.data.raw_reader_known_at``. A file that starts rendering the cut, or a
+# raw reader added to arm B's pack without a classification, fails here.
+#
+# Lane E2 extends the cut to the RECORD readers (the record-only arm's tools)
+# and to ``live_series``: each is classified in the same module, and the record
+# arm's tool list, the live reader and the classification can never drift
+# apart (the tests below pin all three surfaces to their tables). The port
+# renders the record cut through ``substrate_record_known_at.created_before``,
+# so the port itself (which also spells validity predicates) is not a site.
+
+#: Files that render the record-time cut (``recorded_before_sql(``).
+_KNOWN_AT_CUT_SITES = frozenset({
+    "src/legba/runtime/substrate_known_at.py",
+    "src/legba/runtime/substrate_signal_search.py",
+    "src/legba/runtime/substrate_source_health.py",
+    # E2 — the record readers and the live-series reader.
+    "src/legba/runtime/substrate_record_known_at.py",
+    "src/legba/runtime/substrate_entity_reads.py",
+    "src/legba/runtime/substrate_frame_reads.py",
+    "src/legba/runtime/_observations_read.py",
+    "src/legba/runtime/_observations_live_read.py",
+})
+
+
+def test_known_at_cut_sites_are_pinned() -> None:
+    assert _files_containing("recorded_before_sql(") == _KNOWN_AT_CUT_SITES
+
+
+def test_known_at_cut_renders_through_the_temporal_leaf() -> None:
+    helper = (SRC / "legba/runtime/substrate_known_at.py").read_text()
+    assert "_temporal.anchor_window_clause(" in helper
+    # The cut never spells the validity predicate: a different clock.
+    for path in _KNOWN_AT_CUT_SITES:
+        assert "-infinity" not in (SRC.parent / path).read_text(), path
+
+
+def test_every_raw_reader_has_a_classified_known_at_cut() -> None:
+    from legba.data.analysts.consult_bakeoff import BAKEOFF_READ_PACKS, RAW_PACK_ID
+    from legba.data.raw_reader_known_at import CUT, EXEMPT, KNOWN_AT_CUTS, RAW_KNOWN_AT_CUTS
+
+    assert set(BAKEOFF_READ_PACKS[RAW_PACK_ID].tools) == set(RAW_KNOWN_AT_CUTS)
+    assert {c.kind for c in KNOWN_AT_CUTS.values()} <= {CUT, EXEMPT}
+
+
+def _record_arm_tools() -> tuple[str, ...]:
+    import sys
+
+    sys.path.insert(0, str(SRC.parent / "scripts" / "bakeoff"))
+    import arm_open
+
+    return arm_open.RECORD_TOOLS
+
+
+def test_every_record_reader_has_a_classified_known_at_cut() -> None:
+    """E2 — the record-only arm's tool list and the classification are one set,
+    and the merged table is exactly the three surfaces (no stray entry)."""
+    from legba.data.raw_reader_known_at import (
+        KNOWN_AT_CUTS, LIVE_KNOWN_AT_CUTS, RAW_KNOWN_AT_CUTS, RECORD_KNOWN_AT_CUTS,
+    )
+
+    assert set(_record_arm_tools()) == set(RECORD_KNOWN_AT_CUTS)
+    assert set(LIVE_KNOWN_AT_CUTS) == {"live_series"}
+    assert set(KNOWN_AT_CUTS) == set(RAW_KNOWN_AT_CUTS) | set(RECORD_KNOWN_AT_CUTS) | set(LIVE_KNOWN_AT_CUTS)
+    # A tool on two surfaces carries one classification.
+    for t in set(RAW_KNOWN_AT_CUTS) & set(RECORD_KNOWN_AT_CUTS):
+        assert RAW_KNOWN_AT_CUTS[t] is RECORD_KNOWN_AT_CUTS[t] is KNOWN_AT_CUTS[t], t
+
+
+def test_the_live_series_tool_is_a_pack_tool_with_a_classified_cut() -> None:
+    """The live reader is on the governed pack and in the classification, and
+    the history tools' reader never names the live collection prefix (the
+    0246 firewall: a history read can never select a live row)."""
+    from legba.data.analysts.agency.substrate_read import SUBSTRATE_READ_TOOLS
+    from legba.data.raw_reader_known_at import CUT, KNOWN_AT_CUTS
+
+    assert "live_series" in SUBSTRATE_READ_TOOLS
+    assert KNOWN_AT_CUTS["live_series"].kind == CUT
+    history = (SRC / "legba/runtime/_observations_read.py").read_text()
+    assert "'live'" not in history and "live:" not in history

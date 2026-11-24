@@ -1,0 +1,73 @@
+# sources_2026_11_13 — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# Federal Register — Office of Foreign Assets Control (Treasury) documents:
+# the published notices of OFAC sanctions actions (designations, removals),
+# general licences and regulation amendments. Closes the "OFAC/Treasury"
+# part of the loss-funnel S0 row (04_LOSS_FUNNEL.md §4) and gives the US desk
+# a primary source for the designations HE06 lost.
+# Federal Register agency feeds publish on business days (documents go out
+# ~06:00 ET); the feed holds the last ~30 days, newest first, at most 20
+# items, with the document abstract as the description (empty on some
+# notices and corrections). The Federal Register API/RSS needs no key. Probed 2026-11-13 through the platform's
+# guarded fetcher with the handler's default client identity: HTTP 200,
+# application/rss+xml, no challenge.
+# OFAC's own recent-actions page has no RSS (email subscription only); the
+# Federal Register notice is the published instrument of record.
+identity:
+  id: source.federalregister.ofac_feed
+  name: Federal Register — OFAC (Treasury) documents
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: sources_2026_11_13
+  created: "2026-11-13T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [US]
+  languages: [en]
+  tags: [gov, sanctions, federal_register, sources_2026_11_13]
+  source_class: official
+  access_class: public          # free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "43 1-23/6 * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.federalregister.gov/api/v1/documents.rss?conditions%5Bagencies%5D%5B%5D=foreign-assets-control-office"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor (the conservative default of the official-feed drafts).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

@@ -25,6 +25,16 @@ gate, per the ``v3_api`` / ``substrate_reads_api`` wiring convention):
     changed", so it deliberately ignores the cursor. Its SQL, model and
     reducer live in the ``forecasts_due`` leaf (the table's marks belong to
     ``forecast_acute``, which the registry image may not import).
+    S-1 (the phone's "what needs me", 2026-11-14): ``include=needs_you``
+    appends ONE section built from the single alert log (``alerts``, the
+    L-1 episode table — NOT ``analyst_outputs kind='alert'``, which is what
+    the ``alerts`` section above reads): the open episodes that PAGED (paged-only
+    since roll 84), opened or paged since the cursor, capped like the
+    rest. A non-admin caller sees the world topic's kinds only (the full log
+    is the admin route). Without ``include`` the response is the envelope
+    from before, byte for byte (pinned in the tests).
+  * ``GET /since/counts?cursor=<iso-ts>`` (S-1) — the same counts, no rows,
+    reused for 30 s per (cursor, channel, caller class): a badge's poll.
   * ``GET /eval/band_trajectory?target_id=<desk>&days=30`` — per desk ×
     dimension, the time-ordered band sequence projected from the persisted
     ``kind='scorecard'`` rows (superseded rows INCLUDED — old heads ARE the
@@ -66,12 +76,16 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from .. import critic_fold
 from ..provenance.kinds import STRUCTURAL_VERIFY_EXEMPT_ANALYSTS
+from .alert_log_api import NeedsYouSection, fetch_needs_you, needs_you_item
 from .api import RegistryAPIDeps, require_bearer
+from .read_latency import TTLCache
+from .route_roles import resolve_principal
 from .forecasts_due import (
     DUE_FORECAST_CAP,
     DUE_FORECASTS_SQL,
@@ -116,14 +130,34 @@ SECTION_CAP: int = 50
 MAX_TRAJECTORY_DAYS: int = 90
 TRAJECTORY_ROW_CAP: int = 5000
 
+#: Sort rank on the units' seven-word ladder (``agency/binding.py``
+#: ``_SEVERITY_RANK``). Before N-M (11-13) ``elevated`` and ``moderate`` fell
+#: to ELSE 0 and sorted with ``info``/null below ``low``.
 _SEVERITY_RANK_SQL = (
-    "CASE {col} WHEN 'critical' THEN 4 WHEN 'high' THEN 3 "
-    "WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END"
+    "CASE {col} WHEN 'critical' THEN 5 WHEN 'high' THEN 4 "
+    "WHEN 'elevated' THEN 3 WHEN 'medium' THEN 2 WHEN 'moderate' THEN 2 "
+    "WHEN 'low' THEN 1 ELSE 0 END"
 )
 
 #: The shape a ``channel=`` filter value must take — channels are identifier
 #: tokens (a routing_hint / trigger_class / analyst_id), never free text.
 _CHANNEL_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,64}$")
+
+#: S-1 — the opt-in sections ``include=`` may name. A caller that names none
+#: gets the envelope from before they existed, byte for byte.
+NEEDS_YOU = "needs_you"
+INCLUDABLE_SECTIONS: frozenset[str] = frozenset({NEEDS_YOU})
+
+#: S-1 — ``/since/counts``: seconds an answer is reused per (cursor, channel,
+#: caller class) — the ``/v3/counts`` precedent — and the most keys held.
+SINCE_COUNTS_TTL_S: float = 30.0
+SINCE_COUNTS_CACHE_MAX: int = 256
+
+#: The diff sections whose sum is ``/since/counts``'s ``changed`` (the raw row
+#: count of the Changed list before a reader folds alerts into their items).
+CHANGED_SECTIONS: tuple[str, ...] = (
+    "new_findings", "superseded", "band_changes", "situations", "alerts",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -294,13 +328,26 @@ class SituationChange(BaseModel):
 
 
 class SinceAlert(BaseModel):
-    """One ``kind='alert'`` row landed since the cursor."""
+    """One ``kind='alert'`` row landed since the cursor.
+
+    The four trailing fields are ADDITIVE (UI 5, "changed de-duplicated"):
+    what the alert points at, read verbatim from the alert's own payload
+    (``data.data``) — ``finding_id`` on a ``verified_finding`` page,
+    ``situation_id`` + ``state_from``/``state_to`` on a
+    ``situation_escalation`` page. None when the payload does not carry
+    them; never inferred. A reader folds the alert INTO the item it alerts
+    on, and drops a ``state_from == state_to`` page as no change.
+    """
     id: str
     severity: str | None
     channel: str
     summary: str
     target_id: str | None
     produced_at: datetime
+    finding_id: str | None = None
+    situation_id: str | None = None
+    state_from: str | None = None
+    state_to: str | None = None
 
 
 class FindingsSection(BaseModel):
@@ -360,6 +407,27 @@ class SinceResponse(BaseModel):
     situations: SituationsSection
     alerts: AlertsSection
     forecasts_due: ForecastsDueSection = Field(default_factory=ForecastsDueSection)
+
+
+class SinceCountsResponse(BaseModel):
+    """``GET /since/counts`` — the counts of ``/since?include=needs_you``
+    without a row (S-1, plan 4.2: a tab badge's poll).
+
+    ``counts`` carries every section's full total under the ``/since`` keys
+    plus ``needs_you``. The three flat figures are the plan's badge shape:
+    ``needs_you`` (the badge: open episodes that PAGED, opened or paged since
+    the cursor — the very ``NEEDS_YOU_SQL`` the list runs, so the badge and
+    the list cannot disagree; an episode open at medium or above that never
+    paged is in neither; roll 85 closed SEAMS #93 on it), ``changed`` (the sum of
+    :data:`CHANGED_SECTIONS`) and ``forecasts_due`` (cursor-independent).
+    ``server_now`` is when these counts were computed (reused up to
+    :data:`SINCE_COUNTS_TTL_S`)."""
+    cursor: datetime
+    server_now: datetime
+    counts: dict[str, int]
+    needs_you: int
+    changed: int
+    forecasts_due: int
 
 
 class TrajectoryPoint(BaseModel):
@@ -523,6 +591,10 @@ _ALERTS_SQL = f"""
            title            AS summary,
            target_id        AS target_id,
            produced_at      AS produced_at,
+           NULLIF(data->'data'->>'finding_id', '')   AS finding_id,
+           NULLIF(data->'data'->>'situation_id', '') AS situation_id,
+           NULLIF(data->'data'->>'state_from', '')   AS state_from,
+           NULLIF(data->'data'->>'state_to', '')     AS state_to,
            count(*) OVER () AS total
       FROM analyst_outputs
      WHERE kind = 'alert'
@@ -651,6 +723,28 @@ def trajectory_desks(
     return desks
 
 
+def since_alert_item(r: Mapping[str, Any]) -> SinceAlert:
+    """One alert row -> its ``SinceAlert``. Pure; the pointer columns are
+    read with ``.get`` so a row from an older projection (no pointer
+    columns) still builds, with the pointers None."""
+    def _opt(key: str) -> str | None:
+        v = r.get(key) if hasattr(r, "get") else None
+        return str(v) if v not in (None, "") else None
+
+    return SinceAlert(
+        id=r["id"],
+        severity=r["severity"],
+        channel=str(r["channel"] or ""),
+        summary=r["summary"],
+        target_id=r["target_id"],
+        produced_at=r["produced_at"],
+        finding_id=_opt("finding_id"),
+        situation_id=_opt("situation_id"),
+        state_from=_opt("state_from"),
+        state_to=_opt("state_to"),
+    )
+
+
 def _parse_cursor(raw: str, *, now: datetime) -> datetime:
     """Parse + validate the client cursor. Clear 400s, never a stack trace."""
     try:
@@ -695,6 +789,114 @@ def _parse_channel(raw: str | None) -> str | None:
     return chan
 
 
+def _parse_include(raw: str | None) -> frozenset[str]:
+    """Validate ``include=`` (comma-separated section names). Clear 400s."""
+    if raw is None:
+        return frozenset()
+    names = frozenset(p.strip() for p in raw.split(",") if p.strip())
+    unknown = sorted(names - INCLUDABLE_SECTIONS)
+    if unknown or len(raw) > 128:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"unknown include {unknown!r}; one or more of "
+                f"{sorted(INCLUDABLE_SECTIONS)}"
+            ),
+        )
+    return names
+
+
+def _caller_is_admin(request: Request) -> bool:
+    """Whether the caller is the top class (``operator`` switch off, ``admin``
+    on) — it sees every alert kind in ``needs_you``; anyone else the world's."""
+    return resolve_principal(request).is_operator
+
+
+def _total(rows: list[Any]) -> int:
+    return int(rows[0]["total"]) if rows else 0
+
+
+async def _fetch_section_rows(
+    conn: Any,
+    *,
+    cur: datetime,
+    chan: str | None,
+    server_now: datetime,
+    cap: int,
+    due_cap: int,
+) -> dict[str, list[Any]]:
+    """Every ``/since`` section's rows off one connection — the ONE place the
+    section SQL runs, so ``/since`` and ``/since/counts`` cannot drift."""
+    out: dict[str, list[Any]] = {}
+    out["new_findings"] = await conn.fetch(
+        _NEW_FINDINGS_SQL,
+        cur,
+        sorted(STRUCTURAL_VERIFY_EXEMPT_ANALYSTS),
+        float(EFFECTIVE_CONF_FLOOR),
+        cap,
+    )
+    out["superseded"] = await conn.fetch(_SUPERSEDED_SQL, cur, cap)
+    out["prev_cards"] = await conn.fetch(_PRE_CURSOR_SCORECARDS_SQL, cur)
+    out["head_cards"] = await conn.fetch(_HEAD_SCORECARDS_SQL)
+    out["situations"] = await conn.fetch(
+        _SITUATIONS_SQL,
+        cur,
+        SITUATION_ACTIVE_MAX_DAYS * 86400.0,
+        SITUATION_DORMANT_MAX_DAYS * 86400.0,
+        cap,
+    )
+    out["alerts"] = await conn.fetch(_ALERTS_SQL, cur, chan, cap)
+    # The DUE band (7b-iv) — cursor-INDEPENDENT by design: an outstanding
+    # obligation does not stop being owed because the reader looked
+    # yesterday. Bounded by the partial open-window index and its own cap.
+    out["forecasts_due"] = await conn.fetch(DUE_FORECASTS_SQL, server_now, due_cap)
+    return out
+
+
+def since_counts_from_rows(
+    rows: Mapping[str, list[Any]],
+    needs_you_rows: list[Any],
+    *,
+    cursor: datetime,
+    server_now: datetime,
+) -> SinceCountsResponse:
+    """The counts envelope from :func:`_fetch_section_rows` output. Pure."""
+    band_total = len(scorecard_band_changes(
+        [dict(r) for r in rows["prev_cards"]],
+        [dict(r) for r in rows["head_cards"]],
+        cursor=cursor,
+    ))
+    counts = {
+        "new_findings": _total(rows["new_findings"]),
+        "superseded": _total(rows["superseded"]),
+        "band_changes": band_total,
+        "situations": _total(rows["situations"]),
+        "alerts": _total(rows["alerts"]),
+        "forecasts_due": _total(rows["forecasts_due"]),
+        NEEDS_YOU: _total(needs_you_rows),
+    }
+    return SinceCountsResponse(
+        cursor=cursor,
+        server_now=server_now,
+        counts=counts,
+        needs_you=counts[NEEDS_YOU],
+        changed=sum(counts[k] for k in CHANGED_SECTIONS),
+        forecasts_due=counts["forecasts_due"],
+    )
+
+
+#: ``(cursor iso, channel, is_admin) → answer``, single flight per key.
+_COUNTS_CACHE: TTLCache[SinceCountsResponse] = TTLCache(
+    SINCE_COUNTS_TTL_S, max_entries=SINCE_COUNTS_CACHE_MAX,
+)
+
+
+def invalidate_since_counts() -> None:
+    """Drop every reused ``/since/counts`` answer in this process — called
+    after an acknowledge / snooze (S-2) so a badge does not lag the act."""
+    _COUNTS_CACHE.clear()
+
+
 # ---------------------------------------------------------------------------
 # Router factory
 # ---------------------------------------------------------------------------
@@ -711,10 +913,20 @@ def build_since_router(deps: RegistryAPIDeps) -> APIRouter:
 
     @router.get("/since", response_model=SinceResponse)
     async def since_diff(
+        request: Request,
         cursor: str = Query(...),
         channel: str | None = Query(default=None),
+        include: str | None = Query(
+            default=None,
+            description=(
+                "Opt-in extra sections, comma-separated. `needs_you`: the "
+                "alert log's open episodes that paged (paged-only), opened "
+                "or paged since the cursor (S-1). Absent: the "
+                "response is exactly the envelope from before it existed."
+            ),
+        ),
         principal: str = Depends(require_bearer),
-    ) -> SinceResponse:
+    ) -> Any:
         """One composed diff of what changed since ``cursor`` (see module doc).
 
         ``channel`` (additive, default unfiltered) scopes ONLY the ``alerts``
@@ -724,37 +936,27 @@ def build_since_router(deps: RegistryAPIDeps) -> APIRouter:
         server_now = datetime.now(timezone.utc)
         cur = _parse_cursor(cursor, now=server_now)
         chan = _parse_channel(channel)
+        sections = _parse_include(include)
         cap = int(SECTION_CAP)
 
         async with deps.descriptor_registry.pg.acquire() as conn:
-            finding_rows = await conn.fetch(
-                _NEW_FINDINGS_SQL,
-                cur,
-                sorted(STRUCTURAL_VERIFY_EXEMPT_ANALYSTS),
-                float(EFFECTIVE_CONF_FLOOR),
-                cap,
+            rows = await _fetch_section_rows(
+                conn, cur=cur, chan=chan, server_now=server_now, cap=cap,
+                due_cap=int(DUE_FORECAST_CAP),
             )
-            superseded_rows = await conn.fetch(_SUPERSEDED_SQL, cur, cap)
-            prev_cards = await conn.fetch(_PRE_CURSOR_SCORECARDS_SQL, cur)
-            head_cards = await conn.fetch(_HEAD_SCORECARDS_SQL)
-            situation_rows = await conn.fetch(
-                _SITUATIONS_SQL,
-                cur,
-                SITUATION_ACTIVE_MAX_DAYS * 86400.0,
-                SITUATION_DORMANT_MAX_DAYS * 86400.0,
-                cap,
+            needs_you_rows = (
+                await fetch_needs_you(
+                    conn, cur, is_admin=_caller_is_admin(request), cap=cap,
+                )
+                if NEEDS_YOU in sections else None
             )
-            alert_rows = await conn.fetch(_ALERTS_SQL, cur, chan, cap)
-            # The DUE band (7b-iv) — cursor-INDEPENDENT by design: an
-            # outstanding obligation does not stop being owed because the
-            # reader looked yesterday. Bounded by the partial open-window
-            # index and its own cap.
-            due_rows = await conn.fetch(
-                DUE_FORECASTS_SQL, server_now, int(DUE_FORECAST_CAP),
-            )
-
-        def _total(rows: list[Any]) -> int:
-            return int(rows[0]["total"]) if rows else 0
+        finding_rows = rows["new_findings"]
+        superseded_rows = rows["superseded"]
+        prev_cards = rows["prev_cards"]
+        head_cards = rows["head_cards"]
+        situation_rows = rows["situations"]
+        alert_rows = rows["alerts"]
+        due_rows = rows["forecasts_due"]
 
         new_findings = FindingsSection(
             items=[
@@ -842,17 +1044,7 @@ def build_since_router(deps: RegistryAPIDeps) -> APIRouter:
         )
 
         alerts = AlertsSection(
-            items=[
-                SinceAlert(
-                    id=r["id"],
-                    severity=r["severity"],
-                    channel=str(r["channel"] or ""),
-                    summary=r["summary"],
-                    target_id=r["target_id"],
-                    produced_at=r["produced_at"],
-                )
-                for r in alert_rows
-            ],
+            items=[since_alert_item(r) for r in alert_rows],
             total=_total(alert_rows),
             truncated=_total(alert_rows) > len(alert_rows),
         )
@@ -864,7 +1056,7 @@ def build_since_router(deps: RegistryAPIDeps) -> APIRouter:
             truncated=_total(due_rows) > len(due_rows),
         )
 
-        return SinceResponse(
+        response = SinceResponse(
             cursor=cur,
             server_now=server_now,
             counts={
@@ -882,6 +1074,61 @@ def build_since_router(deps: RegistryAPIDeps) -> APIRouter:
             alerts=alerts,
             forecasts_due=forecasts,
         )
+        if needs_you_rows is None:
+            # The pre-S-1 path, untouched: the same model through the same
+            # response_model serializer, byte for byte.
+            return response
+        # ``include=needs_you``: the same envelope with ONE section appended
+        # and its count added to ``counts`` (pinned in the tests: removing
+        # both yields the plain response exactly).
+        needs_you = NeedsYouSection(
+            items=[needs_you_item(r) for r in needs_you_rows],
+            total=_total(needs_you_rows),
+            truncated=_total(needs_you_rows) > len(needs_you_rows),
+        )
+        body = response.model_dump(mode="json")
+        body["counts"][NEEDS_YOU] = needs_you.total
+        body[NEEDS_YOU] = needs_you.model_dump(mode="json")
+        return JSONResponse(content=body)
+
+    @router.get("/since/counts", response_model=SinceCountsResponse)
+    async def since_counts(
+        request: Request,
+        cursor: str = Query(...),
+        channel: str | None = Query(default=None),
+        principal: str = Depends(require_bearer),
+    ) -> SinceCountsResponse:
+        """The counts ``/since?include=needs_you`` returns, without the rows.
+
+        For a tab badge: cheap to poll. An answer is reused for
+        :data:`SINCE_COUNTS_TTL_S` per (cursor, channel, caller class), so
+        ``server_now`` is when the counts were COMPUTED (at most that many
+        seconds old) — safe as a next cursor (it can only re-report)."""
+        server_now = datetime.now(timezone.utc)
+        cur = _parse_cursor(cursor, now=server_now)
+        chan = _parse_channel(channel)
+        is_admin = _caller_is_admin(request)
+
+        async def _compute() -> SinceCountsResponse:
+            async with deps.descriptor_registry.pg.acquire() as conn:
+                # cap=1: each section's ``total`` is its window count over
+                # the FULL match (the same SQL, so the same predicates as
+                # /since).
+                rows = await _fetch_section_rows(
+                    conn, cur=cur, chan=chan, server_now=server_now, cap=1,
+                    due_cap=1,
+                )
+                ny_rows = await fetch_needs_you(
+                    conn, cur, is_admin=is_admin, cap=1,
+                )
+            return since_counts_from_rows(
+                rows, ny_rows, cursor=cur, server_now=server_now,
+            )
+
+        cached = await _COUNTS_CACHE.get_or_compute(
+            (cur.isoformat(), chan, is_admin), _compute,
+        )
+        return cached.value
 
     @router.get("/eval/band_trajectory", response_model=BandTrajectoryResponse)
     async def band_trajectory(

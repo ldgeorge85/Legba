@@ -16,7 +16,11 @@ Shape (L-102 source-kind contract, mirroring the RSS / GeoJSON handlers):
     resolve the item array via a small dot/bracket JSONPath-lite resolver
     (``items_path``), then map each item to a :class:`Signal` through the
     configured field paths (``id_path`` / ``title_path`` / ``url_path`` /
-    ``timestamp_path`` / ``body_path`` / ``geo_path``).
+    ``timestamp_path`` / ``body_path`` / ``geo_path``). Two optional,
+    declarative additions (lane N-R, :mod:`.json_api_mapping`): a
+    ``title_template`` over several record fields and a ``geometry`` block
+    taking the record's own coordinates as the signal's point; lane K-1 adds
+    a ``body_template`` in the same grammar.
   * Cursor: ``state_store["json_api_cursor"] = {"last_pulled_at": iso}`` —
     the next window starts where the last successful pull ended. Items whose
     parsed timestamp is **not after** the window start are skipped; items
@@ -66,6 +70,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from ._contract import Signal, SourceContext, SourceHealth
 from ._egress import guarded_async_client
+from .json_api_mapping import (
+    JsonApiGeometry,
+    apply_geometry,
+    parse_title_template,
+    render_title,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -77,6 +87,9 @@ logger = logging.getLogger(__name__)
 
 
 _JSON_API_CURSOR_KEY = "json_api_cursor"
+#: W11-F151 — default cursor look-back (hours); the same value as
+#: ``rss.DEFAULT_LOOKBACK_HOURS`` / ``runtime.source_cursor.DEFAULT_LOOKBACK``.
+DEFAULT_LOOKBACK_HOURS = 72.0
 _JSON_API_HEALTH_KEY = "json_api_health"
 _DEFAULT_RETRIES_FOR_TRANSIENT = 1
 _TRANSIENT_STATUS = {502, 503, 504}
@@ -247,6 +260,21 @@ class JsonApiConfig(BaseModel):
     timestamp_path: str | None = Field(default=None, max_length=512)
     body_path: str | None = Field(default=None, max_length=512)
     geo_path: str | None = Field(default=None, max_length=512)
+    #: N-R — OPTIONAL title composed from several record fields
+    #: (``"{incidentTypeName}: {place} — {vesselType}"``); missing fields drop
+    #: cleanly and an all-missing render falls back to ``title_path``. Unset ⇒
+    #: the title is ``title_path`` exactly as before (json_api_mapping.py).
+    title_template: str | None = Field(default=None, min_length=1, max_length=512)
+    #: K-1 — OPTIONAL body composed from several record fields, same grammar
+    #: and missing-field rules as ``title_template`` (a missing field drops
+    #: itself and the label in front of it). For a REGISTER record whose
+    #: meaning is spread over fields (the KEV catalogue: description, vendor,
+    #: dates, ransomware use, required action). An all-missing render falls
+    #: back to ``body_path``. Unset ⇒ the body is ``body_path`` as before.
+    body_template: str | None = Field(default=None, min_length=1, max_length=2048)
+    #: N-R — OPTIONAL record coordinates as the signal's geometry
+    #: (``payload.geometry``, read first by the geocoder). Unset ⇒ unchanged.
+    geometry: JsonApiGeometry | None = None
 
     #: Stamped on every emitted signal (config flag per S-3).
     modality: Literal["text", "structured"] = "text"
@@ -259,9 +287,23 @@ class JsonApiConfig(BaseModel):
     #: First-run window: how far back ``window_start`` reaches when there is
     #: no cursor and no ``since``. Default 24h.
     lookback_minutes: int = Field(default=1440, ge=1, le=129_600)
+    #: W11-F151 — the pull cursor's look-back (hours): the source actor hands
+    #: the handler ``since - lookback`` and the window starts there when that
+    #: is earlier than the handler's own cursor, so an item dated before the
+    #: last poll but published after it is still fetched (the actor's ledger
+    #: skips items already judged). None = the 72 h default; 0 = off.
+    cursor_lookback_hours: float | None = Field(default=None, ge=0, le=168)
     #: Defensive per-poll cap. Default matches the source plane's hard
     #: per-poll count bound (``_MAX_ENTRIES_PER_POLL`` in the source actor).
     max_items_per_pull: int = Field(default=100, ge=1, le=10_000)
+    #: W11-F169 — OPTIONAL override of the SOURCE ACTOR's wall-clock budget
+    #: for one pull of this source, in seconds (``source_actor.
+    #: resolve_poll_bounds``: descriptor config > handler > the generic 30 s).
+    #: Declared HERE because the schema is ``extra='forbid'`` and the actor
+    #: reads the same descriptor block; this handler never reads it. Unset
+    #: (default) keeps the generic budget. The actor clamps to its 240 s
+    #: ceiling; the schema refuses above it so a typo fails registration.
+    poll_budget_seconds: float | None = Field(default=None, gt=0.0, le=240.0)
 
     user_agent: str = Field(default="Legba/2.0", max_length=256)
     timeout_seconds: int = Field(default=30, ge=1, le=300)
@@ -299,6 +341,13 @@ class JsonApiConfig(BaseModel):
         if v is None:
             return v
         parse_path(v)  # raises ValueError on junk
+        return v
+
+    @field_validator("title_template", "body_template")
+    @classmethod
+    def _validate_title_template(cls, v: str | None) -> str | None:
+        if v is not None:
+            parse_title_template(v)  # raises ValueError on a malformed template
         return v
 
     @model_validator(mode="after")
@@ -368,6 +417,18 @@ class JsonApiSourceHandler:
         self._config = config
         self._client = http_client
         self._secret_resolver = secret_resolver
+        #: P-5 — items THIS pull dropped as dated at or before the start of a
+        #: ``lookback_minutes`` window (a pull with no cursor yet). The source
+        #: actor reads it after the walk (``source_first_poll_age.
+        #: HANDLER_AGE_SKIPPED_ATTR``) and counts it on the poll row, the pull
+        #: summary and the ``pull.done`` line. The handler is built per poll.
+        self.age_skipped_this_pull = 0
+
+    @property
+    def cursor_lookback_seconds(self) -> float:
+        """W11-F151 — the look-back this feed's cursor gets (actor reads it)."""
+        hours = self._config.cursor_lookback_hours
+        return (DEFAULT_LOOKBACK_HOURS if hours is None else hours) * 3600.0
 
     # ------------------------------------------------------------------ pull
 
@@ -383,7 +444,10 @@ class JsonApiSourceHandler:
         The cursor advances to ``window_end`` only after a successful fetch
         + parse, so a failed pull retries the same window.
         """
-        window_start, window_end = await self._window(ctx, since)
+        window_start, window_end, from_lookback = await self._window_and_origin(
+            ctx, since,
+        )
+        self.age_skipped_this_pull = 0
         request_url = self._render_url(window_start, window_end)
         # Fail-loud auth resolution BEFORE any network traffic.
         auth_headers, auth_params = await self._resolve_auth(ctx)
@@ -432,6 +496,12 @@ class JsonApiSourceHandler:
             if signal is None:
                 continue
             if _is_not_after(signal, window_start):
+                # P-5: the same drop as before, now COUNTED when the window is
+                # the lookback window — an item older than it is the json_api
+                # equivalent of a first poll's too-old entry. At or before a
+                # cursor's start it is an item already seen: not counted.
+                if from_lookback:
+                    self.age_skipped_this_pull += 1
                 continue
             emitted += 1
             yield signal
@@ -575,10 +645,21 @@ class JsonApiSourceHandler:
     async def _window(
         self, ctx: SourceContext, since: datetime | None,
     ) -> tuple[datetime, datetime]:
-        """Compute the (start, end] poll window from the handler cursor.
+        """The (start, end] poll window (see :meth:`_window_and_origin`)."""
+        start, end, _from_lookback = await self._window_and_origin(ctx, since)
+        return start, end
+
+    async def _window_and_origin(
+        self, ctx: SourceContext, since: datetime | None,
+    ) -> tuple[datetime, datetime, bool]:
+        """Compute the (start, end] poll window from the handler cursor, and
+        whether ``start`` is the ``lookback_minutes`` floor (no cursor, no
+        ``since``) — P-5 counts the items dropped below THAT start only.
 
         Precedence for ``start`` (mirrors the ACLED floor): handler cursor
-        ``last_pulled_at`` → ``since`` → ``now - lookback_minutes``.
+        ``last_pulled_at`` → ``since`` → ``now - lookback_minutes``. W11-F151:
+        with a cursor look-back on, the actor's ``since`` (already reduced by
+        the look-back) wins when it is EARLIER than the handler cursor.
         """
         window_end = ctx.utcnow()
         if window_end.tzinfo is None:
@@ -593,15 +674,19 @@ class JsonApiSourceHandler:
                     start = datetime.fromisoformat(iso)
                 except ValueError:
                     start = None
-        if start is None and since is not None:
+        if since is not None and (
+            start is None
+            or (self.cursor_lookback_seconds > 0 and _as_utc(since) < _as_utc(start))
+        ):
             start = since
+        from_lookback = start is None
         if start is None:
             start = window_end - timedelta(minutes=self._config.lookback_minutes)
         if start.tzinfo is None:
             start = start.replace(tzinfo=timezone.utc)
         if start > window_end:
             start = window_end
-        return start, window_end
+        return start, window_end, from_lookback
 
     def _render_url(self, window_start: datetime, window_end: datetime) -> str:
         """Substitute the window placeholders into ``url_template``.
@@ -734,82 +819,15 @@ class JsonApiSourceHandler:
     ) -> Signal | None:
         """Map one item dict to a :class:`Signal` via the configured paths."""
         cfg = self._config
-
-        title = _resolve_str(item, cfg.title_path)
-        link = _resolve_str(item, cfg.url_path)
-        body = _resolve_str(item, cfg.body_path)
-        external_id = _resolve_str(item, cfg.id_path) or link
-        published_at = _parse_timestamp(_resolve_raw(item, cfg.timestamp_path))
-
-        if not external_id:
-            # Stable fallback: hash the item body so the same item gets the
-            # same id across pulls (dedupe key).
-            external_id = hashlib.sha256(
-                json.dumps(item, sort_keys=True, ensure_ascii=False, default=str)
-                .encode("utf-8")
-            ).hexdigest()[:24]
-
-        payload: dict[str, Any] = {
-            "external_id": external_id,
-            "title": title,
-            "link": link,
-            "raw_body": body,
-            "published_at": (
-                published_at.astimezone(timezone.utc).isoformat()
-                if published_at is not None
-                else None
-            ),
-            "item": item,
-            "source_url": request_url,
-        }
-        # Stash the parsed datetime so window filtering doesn't re-parse.
-        if published_at is not None:
-            payload["_published_at_dt"] = published_at
-
-        content_hash = hashlib.sha256(
-            (
-                (external_id or "")
-                + "\x1f"
-                + (title or "")
-                + "\x1f"
-                + (body or "")
-            ).encode("utf-8")
-        ).hexdigest()
-
-        geo = _extract_geo(_resolve_raw(item, cfg.geo_path))
-        if not geo:
-            geo = [c for c in ctx.scope_geo if _GEO_CODE_RE.match(c or "")]
-
-        language_hint = cfg.language
-        if language_hint is None and len(ctx.scope_languages) == 1:
-            language_hint = ctx.scope_languages[0]
-
-        mime_type: str | None = None
-        if cfg.modality == "structured":
-            mime_type = "text/csv" if cfg.response_format == "csv" else "application/json"
-
-        # Source-first pivot (P-06): the Signal is target-agnostic; stamp the
-        # ORIGIN source id + modality. Baseline enrichment fills the rest.
-        return Signal(
-            source_id=ctx.source_id,
-            modality=cfg.modality,
-            mime_type=mime_type,
-            payload=payload,
-            content_hash=content_hash,
-            canonical_url=link or None,
-            language_hint=language_hint,
-            geo=geo,
-            tags=list(cfg.static_tags),
-            raw_provenance={
-                "kind": self.kind,
-                "schema_version": self.schema_version,
-                "fetch_kind": "json_api",
-                "url_template": cfg.url_template,
-                "request_url": request_url,
-                "window_start": window_start.isoformat(),
-                "window_end": window_end.isoformat(),
-            },
-        )
+        return map_json_item(cfg, item, ctx=ctx, source_url=request_url, raw_provenance={
+            "kind": self.kind,
+            "schema_version": self.schema_version,
+            "fetch_kind": "json_api",
+            "url_template": cfg.url_template,
+            "request_url": request_url,
+            "window_start": window_start.isoformat(),
+            "window_end": window_end.isoformat(),
+        })
 
     async def _record_health(
         self,
@@ -836,9 +854,102 @@ class JsonApiSourceHandler:
             ctx.logger.warning("json_api.health.persist_failed", exc_info=True)
 
 
+def map_json_item(
+    cfg: Any, item: dict[str, Any], *, ctx: SourceContext, source_url: str,
+    raw_provenance: dict[str, Any],
+) -> Signal:
+    """Map one JSON item to a :class:`Signal` through ``cfg``'s field paths.
+
+    THE one item mapping: the polled ``json_api`` kind and the subscribed
+    ``stream_json`` kind (``stream_json.py``, lane I-4) both call it, so the
+    same record reaching Legba by a poll or over a held connection becomes
+    the same signal — same payload, same ``content_hash``, same dedupe key.
+    Only ``raw_provenance`` (how it arrived) differs, by construction.
+    ``cfg`` is any config carrying the mapping fields (``JsonApiConfig`` /
+    ``StreamJsonConfig``); ``source_url`` is stamped as ``payload.source_url``.
+    """
+    title = _resolve_str(item, cfg.title_path)
+    if cfg.title_template is not None:
+        title = render_title(cfg.title_template, item) or title
+    link = _resolve_str(item, cfg.url_path)
+    body = _resolve_str(item, cfg.body_path)
+    if cfg.body_template is not None:
+        body = render_title(cfg.body_template, item) or body
+    external_id = _resolve_str(item, cfg.id_path) or link
+    published_at = _parse_timestamp(_resolve_raw(item, cfg.timestamp_path))
+
+    if not external_id:
+        # Stable fallback: hash the item body so the same item gets the
+        # same id across pulls (dedupe key).
+        external_id = hashlib.sha256(
+            json.dumps(item, sort_keys=True, ensure_ascii=False, default=str)
+            .encode("utf-8")
+        ).hexdigest()[:24]
+
+    payload: dict[str, Any] = {
+        "external_id": external_id,
+        "title": title,
+        "link": link,
+        "raw_body": body,
+        "published_at": (
+            published_at.astimezone(timezone.utc).isoformat()
+            if published_at is not None
+            else None
+        ),
+        "item": item,
+        "source_url": source_url,
+    }
+    if cfg.geometry is not None:
+        apply_geometry(payload, item, cfg.geometry)
+    # Stash the parsed datetime so window filtering doesn't re-parse.
+    if published_at is not None:
+        payload["_published_at_dt"] = published_at
+
+    content_hash = hashlib.sha256(
+        (
+            (external_id or "")
+            + "\x1f"
+            + (title or "")
+            + "\x1f"
+            + (body or "")
+        ).encode("utf-8")
+    ).hexdigest()
+
+    geo = _extract_geo(_resolve_raw(item, cfg.geo_path))
+    if not geo:
+        geo = [c for c in ctx.scope_geo if _GEO_CODE_RE.match(c or "")]
+
+    language_hint = cfg.language
+    if language_hint is None and len(ctx.scope_languages) == 1:
+        language_hint = ctx.scope_languages[0]
+
+    mime_type: str | None = None
+    if cfg.modality == "structured":
+        mime_type = "text/csv" if getattr(cfg, "response_format", "json") == "csv" else "application/json"
+
+    # Source-first pivot (P-06): the Signal is target-agnostic; stamp the
+    # ORIGIN source id + modality. Baseline enrichment fills the rest.
+    return Signal(
+        source_id=ctx.source_id,
+        modality=cfg.modality,
+        mime_type=mime_type,
+        payload=payload,
+        content_hash=content_hash,
+        canonical_url=link or None,
+        language_hint=language_hint,
+        geo=geo,
+        tags=list(cfg.static_tags),
+        raw_provenance=raw_provenance,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _as_utc(ts: datetime) -> datetime:
+    return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
 
 
 def _resolve_raw(item: dict[str, Any], path: str | None) -> Any:

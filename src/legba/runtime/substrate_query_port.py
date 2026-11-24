@@ -114,12 +114,27 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from . import _observations_read as _observations
+from . import consult_health as _consult_health
+from . import substrate_calendar_reads as _calendar
+from . import substrate_cited_refs as _cited_refs
 from . import substrate_corpus_readers as _corpus
+from . import substrate_findings_reads as _findings
 from . import substrate_frame_reads as _frames
+from . import substrate_source_health as _source_health
+from . import substrate_signal_search as _signal_search
+from . import substrate_known_at as _known_at
+from . import substrate_record_known_at as _record_cut
+from . import substrate_entity_reads as _entity
+from . import _observations_live_read as _live_obs
+from . import substrate_due_resolvers as _due_resolvers
 from . import substrate_graph_walks as _walks
 from . import substrate_temporal as _temporal
 from .target_resolution import stamp_target_resolution, widen_to_member_targets
 from ..data import critic_fold as _critic_fold
+from ..data import verified_findings as _verified
+from ..data import rosters as _rosters
+from ..data.calibration_honesty import reduce_calibration
+from ..data.journal_evidence import MEMORY_ROW_FILTER_SQL
 from ..data.provenance import origin as _origin
 
 # Re-exported for existing consumers (tests/runtime/test_graph_walk_cutover.py
@@ -133,6 +148,7 @@ if TYPE_CHECKING:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 
+
 __all__ = ["PostgresQdrantSubstrateQueryPort"]
 
 
@@ -142,9 +158,18 @@ __all__ = ["PostgresQdrantSubstrateQueryPort"]
 # wedge a postgres connection.
 _MAX_ROW_LIMIT = 200
 
+# ``_FEED_EMPTY_SLACK`` and the source-health read live in
+# ``substrate_source_health`` (wave Q split); the slack is re-exported here
+# so its existing readers keep their import.
+from .substrate_source_health import _FEED_EMPTY_SLACK  # noqa: E402,F401
+from .substrate_cited_refs import CITED_REFS_CLASSIFY_CAP  # noqa: E402,F401
+# ``CITED_REFS_CLASSIFY_CAP`` (the census read's bound) lives with the read in
+# ``substrate_cited_refs``; re-exported so the port stays the one import.
+
 
 def critic_folded_findings_sql(
     where: str, limit_param: int, *, critic_as_of: str = "",
+    offset_param: int | None = None,
 ) -> str:
     """The critic-folded findings read, SET-BASED (2026-09-24, crossroads
     proof round).
@@ -170,6 +195,8 @@ def critic_folded_findings_sql(
 
     ``critic_as_of`` is the optional ``AND cr.produced_at <= $n`` fragment
     that dates the fold to a decision instant (``believed_as_of``).
+    ``offset_param`` (W11-F150) pages the read; without it the SQL is
+    byte-identical to the unpaged form.
 
     H17: the fold CTE itself is now built by
     :func:`legba.data.critic_fold.latest_critique_cte`, the ONE definition the
@@ -196,7 +223,8 @@ def critic_folded_findings_sql(
         f" WHERE {where} "
         "  ORDER BY f.produced_at DESC, f.id DESC "
         f" LIMIT ${limit_param} "
-        f"), {fold} "
+        + (f"OFFSET ${offset_param} " if offset_param is not None else "")
+        + f"), {fold} "
         "SELECT f.id, f.title, f.body, f.confidence, f.severity, "
         "       f.target_id, f.analyst_id, f.produced_at, "
         "       c.critic_score AS critic_score "
@@ -249,6 +277,9 @@ _ASSESSMENT_PRODUCER_ANALYSTS: tuple[str, ...] = (
     # which is a false sentence about a producer writing rows every cycle.
     "region_composition",
     "escalation_composition",
+    # W5 (2026-11-07): the second thematic composition, listed for the same
+    # reason escalation_composition is.
+    "hybrid_threat_composition",
     # The ASSESSMENT CHANNEL (D-1 §2). After the demotion this is the surface
     # that ARGUES; the compositions above carry their inputs' words. The journal
     # and consult read this list, and a reflection surface that cannot see the
@@ -260,24 +291,12 @@ _ASSESSMENT_PRODUCER_ANALYSTS: tuple[str, ...] = (
     # assessment producer", which is a false sentence the moment the channel is
     # transitioned active.
     "country_assessment",
-    # Bounded P2 units (first-order per-country reads the compositions fuse).
-    "leadership_transition",
-    "energy_security",
-    "escalation",
-    "narrative_coordination",
-    # S1-T4/T5/T7 units — broad (every desk), fused by country_composition +
-    # banded as fixed scorecard dimensions.
-    "internal_stability",
-    "military_posture",
-    "economic_coercion",
+    # The bounded units (first-order per-country reads the compositions fuse):
+    # the P2 four + the S1-T4/T5/T7 broad units, fused by country_composition +
+    # banded as fixed scorecard dimensions — the profile's ``rosters.scored_units``
+    # (ROSTER-1), the same helper scorecard_banding.DIMENSIONS reads.
+    *_rosters.scored_unit_roster(),
 )
-
-# Default number of recent signal mentions ``inspect_entity`` joins in.
-_INSPECT_RECENT_SIGNAL_MENTIONS = 10
-# Default number of entity_profile_versions rows surfaced by inspect_entity.
-_INSPECT_RECENT_VERSIONS = 5
-# Default number of current facts (keyed by subject) surfaced by inspect_entity.
-_INSPECT_RECENT_FACTS = 30
 
 # ``compare_targets`` clamps the number of target ids it rolls up in one
 # call so a runaway planner can't fan a rollup across the whole catalog.
@@ -354,6 +373,13 @@ class PostgresQdrantSubstrateQueryPort:
         self._opensearch = opensearch_store
         self._corpus_index = corpus_index
 
+    @property
+    def embedder(self) -> Any | None:
+        """The port-threaded hosted embedder (``embed.primary.openai_compat``),
+        or None. W4-F1: the consult watch mint's semantic fold reads it here —
+        the consult deps carry no other handle on the embed plane."""
+        return self._embedder
+
     # ------------------------------------------------------------------
     # search_signals
     # ------------------------------------------------------------------
@@ -364,87 +390,15 @@ class PostgresQdrantSubstrateQueryPort:
         query: str,
         limit: int = 20,
         scope_predicate: str | None = None,
+        known_at: datetime | None = None,
     ) -> dict[str, Any]:
-        """Full-text search over ``signals`` via Postgres ``to_tsvector``.
-
-        Returns rows ranked by ``ts_rank`` against
-        ``plainto_tsquery('simple', $1)``.  When ``query`` is
-        empty / whitespace we return an empty result (rather than
-        running an unbounded scan ranked at zero).
-
-        The old ``category`` filter parameter was removed (W2-T5
-        residual): no live signal carries the payload key, so the filter
-        could only turn every query into an honest-looking empty result.
-        """
-        clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
-        q = (query or "").strip()
-        if not q:
-            return {
-                "rows": [],
-                "refs": [],
-                "query": query,
-                "scope_predicate_applied": False,
-                "backing": "postgres_fts",
-                "note": "empty_query",
-            }
-
-        sql_parts = [
-            "SELECT id, payload->>'title' AS title, "
-            "payload->>'title_en' AS title_en, "
-            "payload->>'category' AS category, canonical_url, fetched_at,",
-            "       ts_rank(",
-            "         to_tsvector('simple', coalesce(payload->>'title','') || ' ' || ",
-            "                     coalesce(payload->>'summary','')),",
-            "         plainto_tsquery('simple', $1)",
-            "       ) AS rank",
-            "FROM signals",
-            "WHERE to_tsvector('simple', coalesce(payload->>'title','') || ' ' || ",
-            "                  coalesce(payload->>'summary','')) ",
-            "      @@ plainto_tsquery('simple', $1)",
-        ]
-        params: list[Any] = [q]
-        sql_parts.append("ORDER BY rank DESC, fetched_at DESC")
-        sql_parts.append(f"LIMIT ${len(params) + 1}")
-        params.append(clamped_limit)
-        sql = "\n".join(sql_parts)
-
-        async with self._pool.acquire() as conn:
-            records = await conn.fetch(sql, *params)
-
-        rows: list[dict[str, Any]] = []
-        refs: list[str] = []
-        for r in records:
-            rid = r["id"]
-            refs.append(str(rid))
-            rows.append({
-                "id": str(rid),
-                "title": r["title"],
-                # T-1b (M13): the stored English title, when the signal went
-                # through the translate route; absent otherwise. Readers prefer it.
-                "title_en": r["title_en"],
-                "category": r["category"],
-                "source_url": r["canonical_url"],
-                "produced_at": r["fetched_at"].isoformat()
-                    if isinstance(r["fetched_at"], datetime) else None,
-                "rank": float(r["rank"]) if r["rank"] is not None else 0.0,
-            })
-
-        result = {
-            "rows": rows,
-            "refs": refs,
-            "query": query,
-            "backing": "postgres_fts",
-            "scope_predicate_applied": False,
-        }
-        if scope_predicate:
-            # We accept the argument so the kind can pass it through, but
-            # we don't evaluate Starlark here yet — surface the deferral
-            # instead of silently filtering.  See module docstring.
-            result["scope_predicate_note"] = (
-                "scope_predicate received but not evaluated — Starlark "
-                "row-level evaluation is the L-104 follow-up."
-            )
-        return result
+        """Full-text search over ``signals`` — body in
+        :mod:`legba.runtime.substrate_signal_search` (``known_at``: lane E0's
+        record-time cut, evaluation harness only)."""
+        return await _signal_search.search_signals(
+            self._pool, query=query, limit=limit, scope_predicate=scope_predicate,
+            max_limit=_MAX_ROW_LIMIT, known_at=known_at,
+        )
 
     # ------------------------------------------------------------------
     # query_facts
@@ -459,6 +413,7 @@ class PostgresQdrantSubstrateQueryPort:
         limit: int = 30,
         as_of: str | None = None,
         include_origin: list[str] | None = None,
+        known_at: datetime | None = None,
     ) -> dict[str, Any]:
         """Search the ``facts`` table by subject / predicate / value.
 
@@ -491,6 +446,10 @@ class PostgresQdrantSubstrateQueryPort:
         means :data:`LIVE_CLASSES`, so a future backfill row is invisible to
         an as-of read unless the reader asks. An unknown class refuses loud
         rather than answering empty.
+
+        E2 — ``known_at`` (evaluation harness only): ``created_at < K``, and
+        the read becomes the as-of read at ``min(as_of, K)``
+        (:mod:`legba.data.raw_reader_known_at`).
         """
         if subject is None and predicate is None and value is None:
             return {
@@ -508,6 +467,8 @@ class PostgresQdrantSubstrateQueryPort:
             )
         except _temporal.TemporalParameterError as exc:
             return {"rows": [], "refs": [], "error": str(exc)}
+        if known_at is not None:
+            as_of_dt = _record_cut.clamp(as_of_dt, known_at)
         clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
 
         # Current-facts gate (Piece-B follow-up): never surface superseded
@@ -534,6 +495,9 @@ class PostgresQdrantSubstrateQueryPort:
             clauses.append(origin_clause)
         else:
             clauses.append(_origin.live_gate_sql(""))
+        if known_at is not None:
+            params.append(known_at)
+            clauses.append(_record_cut.created_before("created_at", len(params)))
         if subject is not None:
             params.append(f"%{subject}%")
             clauses.append(f"subject ILIKE ${len(params)}")
@@ -599,195 +563,28 @@ class PostgresQdrantSubstrateQueryPort:
             # over-included as '-infinity' by the predicate).
             out["as_of"] = as_of_dt.isoformat()
             out["unbounded_start"] = _temporal.unbounded_start(rows)
+        if known_at is not None:
+            return _record_cut.stamp(out, known_at, how="facts.created_at < K; validity at min(as_of, K)")
         return out
 
     # ------------------------------------------------------------------
     # inspect_entity
     # ------------------------------------------------------------------
 
-    async def inspect_entity(self, *, name: str) -> dict[str, Any]:
+    async def inspect_entity(
+        self, *, name: str, known_at: datetime | None = None,
+    ) -> dict[str, Any]:
         """Return the latest profile + recent versions + recent mentions.
 
         Matches on ``LOWER(canonical_name) = LOWER($1)`` per the unique
         index in migration 0002.  Returns an empty-but-shaped result when
         no entity is found (rather than raising) so the planner can fall
         back to ``search_signals`` / ``query_facts`` without a crash.
+
+        The body lives in :mod:`legba.runtime.substrate_entity_reads`
+        (``known_at``: lane E2's record-time cut, evaluation harness only).
         """
-        n = (name or "").strip()
-        if not n:
-            return {
-                "entity": name,
-                "found": False,
-                "facts": [],
-                "versions": [],
-                "recent_signal_mentions": [],
-                "refs": [],
-                "error": "name must be non-empty",
-            }
-
-        async with self._pool.acquire() as conn:
-            profile = await conn.fetchrow(
-                """
-                SELECT id, canonical_name, entity_type, entity_class,
-                       version, completeness_score, last_event_link_at,
-                       last_verified_at, geo_country, geo_region,
-                       produced_at, analyst_id, target_id
-                FROM entity_profiles
-                WHERE LOWER(canonical_name) = LOWER($1)
-                  -- E5: a merged loser is a tombstone, not a live entity (its
-                  -- surface is now an alias of the keeper). Exclude it so a
-                  -- merged fragment can't surface as a separate entity.
-                  AND merged_into IS NULL
-                """,
-                n,
-            )
-            if profile is None:
-                return {
-                    "entity": name,
-                    "found": False,
-                    "facts": [],
-                    "versions": [],
-                    "recent_signal_mentions": [],
-                    "refs": [],
-                }
-
-            entity_id = profile["id"]
-            version_rows = await conn.fetch(
-                """
-                SELECT id, version, cycle_number, analyst_id, created_at
-                FROM entity_profile_versions
-                WHERE entity_id = $1
-                ORDER BY version DESC, created_at DESC
-                LIMIT $2
-                """,
-                entity_id,
-                _INSPECT_RECENT_VERSIONS,
-            )
-            mention_rows = await conn.fetch(
-                """
-                SELECT sel.signal_id, sel.role, sel.confidence, sel.created_at,
-                       s.payload->>'title' AS title,
-                       s.payload->>'title_en' AS title_en,
-                       s.payload->>'category' AS category,
-                       s.fetched_at AS signal_produced_at
-                FROM signal_entity_links sel
-                LEFT JOIN signals s ON s.id = sel.signal_id
-                WHERE sel.entity_id = $1
-                ORDER BY sel.created_at DESC
-                LIMIT $2
-                """,
-                entity_id,
-                _INSPECT_RECENT_SIGNAL_MENTIONS,
-            )
-            # Current facts about this entity, keyed by subject = canonical
-            # name (the same enumerate-via-subject convention the prior
-            # facts_note pointed callers at).  Gated to OPEN rows only —
-            # the 0032 pair plus the P7 origin-class leg (live_gate_sql)
-            # — so inspect_entity never surfaces a replaced/expired/history fact.
-            fact_rows = await conn.fetch(
-                f"""
-                SELECT id, subject, predicate, value, confidence, source_type,
-                       valid_from, produced_at
-                FROM facts
-                WHERE LOWER(subject) = LOWER($1)
-                  AND {_origin.live_gate_sql("")}
-                ORDER BY produced_at DESC
-                LIMIT $2
-                """,
-                profile["canonical_name"],
-                _INSPECT_RECENT_FACTS,
-            )
-
-        refs: list[str] = [str(entity_id)]
-        versions: list[dict[str, Any]] = []
-        for v in version_rows:
-            refs.append(str(v["id"]))
-            versions.append({
-                "id": str(v["id"]),
-                "version": v["version"],
-                "cycle_number": v["cycle_number"],
-                "analyst_id": v["analyst_id"],
-                "created_at": v["created_at"].isoformat()
-                    if isinstance(v["created_at"], datetime) else None,
-            })
-
-        facts: list[dict[str, Any]] = []
-        for f in fact_rows:
-            fid = f["id"]
-            refs.append(str(fid))
-            facts.append({
-                "id": str(fid),
-                "subject": f["subject"],
-                "predicate": f["predicate"],
-                "value": f["value"],
-                "confidence": float(f["confidence"])
-                    if f["confidence"] is not None else None,
-                # source_type rides every fact row (mirrors query_facts F1) so a
-                # reader — consult LLM / agency read tools / UI — can discount an
-                # ingestion extraction (confidence is not a usable trust signal
-                # for ingestion; the uncited grounding preamble excludes it
-                # wholesale, this cited surface LABELS it).
-                "source_type": f["source_type"],
-                "valid_from": f["valid_from"].isoformat()
-                    if isinstance(f["valid_from"], datetime) else None,
-                "produced_at": f["produced_at"].isoformat()
-                    if isinstance(f["produced_at"], datetime) else None,
-            })
-
-        mentions: list[dict[str, Any]] = []
-        for m in mention_rows:
-            sid = m["signal_id"]
-            refs.append(str(sid))
-            mentions.append({
-                "signal_id": str(sid),
-                "role": m["role"],
-                "confidence": float(m["confidence"])
-                    if m["confidence"] is not None else None,
-                "linked_at": m["created_at"].isoformat()
-                    if isinstance(m["created_at"], datetime) else None,
-                "title": m["title"],
-                # T-1b (M13): stored English title (translate route); absent else.
-                "title_en": m["title_en"],
-                "category": m["category"],
-                "signal_produced_at": m["signal_produced_at"].isoformat()
-                    if isinstance(m["signal_produced_at"], datetime) else None,
-            })
-
-        return {
-            "entity": name,
-            "found": True,
-            "profile": {
-                "id": str(entity_id),
-                "canonical_name": profile["canonical_name"],
-                "entity_type": profile["entity_type"],
-                "entity_class": profile["entity_class"],
-                "version": profile["version"],
-                "completeness_score": float(profile["completeness_score"])
-                    if profile["completeness_score"] is not None else None,
-                "last_event_link_at": profile["last_event_link_at"].isoformat()
-                    if isinstance(profile["last_event_link_at"], datetime)
-                    else None,
-                "last_verified_at": profile["last_verified_at"].isoformat()
-                    if isinstance(profile["last_verified_at"], datetime)
-                    else None,
-                "geo_country": profile["geo_country"],
-                "geo_region": profile["geo_region"],
-                "produced_at": profile["produced_at"].isoformat()
-                    if isinstance(profile["produced_at"], datetime) else None,
-                "analyst_id": profile["analyst_id"],
-                "target_id": profile["target_id"],
-            },
-            "facts": facts,
-            "facts_note": (
-                "current facts keyed by subject = canonical_name "
-                "(superseded/expired rows excluded); for substring or "
-                "predicate-scoped enumeration call query_facts(subject="
-                f"{profile['canonical_name']!r})"
-            ),
-            "versions": versions,
-            "recent_signal_mentions": mentions,
-            "refs": refs,
-        }
+        return await _entity.inspect_entity(self._pool, name=name, known_at=known_at)
 
     # ------------------------------------------------------------------
     # vector_search
@@ -798,6 +595,7 @@ class PostgresQdrantSubstrateQueryPort:
         *,
         query: str,
         limit: int = 10,
+        known_at: datetime | None = None,
     ) -> dict[str, Any]:
         """Semantic similarity search over ``legba_signals`` in Qdrant.
 
@@ -870,12 +668,17 @@ class PostgresQdrantSubstrateQueryPort:
             }
 
         result = await self.vector_search_by_embedding(
-            query_embedding=vec, limit=clamped_limit,
+            query_embedding=vec,
+            limit=clamped_limit if known_at is None else _MAX_ROW_LIMIT,
         )
         # Carry the caller's original free-text query through + tag the
         # backing so the consult trace shows the semantic path ran.
         result["query"] = query
         result["backing"] = "qdrant_cosine"
+        if known_at is not None:  # E0: Qdrant has no record time — over-fetch, confirm
+            result = await _known_at.cut_result_rows(
+                self._pool, result, known_at, id_key="signal_id", limit=clamped_limit,
+                how="over-fetch, then signals.created_at < known_at")
         return result
 
     # ------------------------------------------------------------------
@@ -1154,6 +957,7 @@ class PostgresQdrantSubstrateQueryPort:
         query: str,
         filters: dict[str, Any] | None = None,
         size: int = _SEARCH_CORPUS_DEFAULT_SIZE,
+        known_at: datetime | None = None,
     ) -> dict[str, Any]:
         """BM25 lexical search over the OpenSearch signal corpus (Stage 1).
 
@@ -1167,9 +971,13 @@ class PostgresQdrantSubstrateQueryPort:
             query=query,
             filters=filters,
             size=size,
+            pool=self._pool,
+            known_at=known_at,
         )
 
-    async def read_document(self, *, doc_id: str) -> dict[str, Any]:
+    async def read_document(
+        self, *, doc_id: str, known_at: datetime | None = None,
+    ) -> dict[str, Any]:
         """Fetch one document's body by id, across every id namespace (Stage 1).
 
         Delegates to
@@ -1179,7 +987,23 @@ class PostgresQdrantSubstrateQueryPort:
         """
         return await _corpus.read_document(
             self._opensearch, self._corpus_index, self._pool, doc_id=doc_id,
+            known_at=known_at,
         )
+
+    async def verified_receipt(self, *, doc_id: str) -> bool:
+        """X3/G0 — is ``doc_id`` cited by an ADMITTED finding (arm C's scope)?
+
+        A malformed id is never a receipt. See
+        :func:`legba.data.verified_findings.verified_receipt_sql`.
+        """
+        try:
+            sid = UUID(str(doc_id).strip())
+        except (TypeError, ValueError):
+            return False
+        async with self._pool.acquire() as conn:
+            return bool(await conn.fetchval(
+                _verified.verified_receipt_sql(), sid, _verified.verify_floor(),
+            ))
 
     # ------------------------------------------------------------------
     # query_nexuses (S4-T6)
@@ -1437,8 +1261,13 @@ class PostgresQdrantSubstrateQueryPort:
         severity: str | None = None,
         since_hours: int | None = None,
         include_superseded: bool = False,
-        limit: int = 20,
+        limit: int | None = None,
         believed_as_of: str | None = None,
+        verified_only: bool = False,
+        mode: str | None = None,
+        target_ids: list[str] | None = None,
+        offset: int = 0,
+        known_at: datetime | None = None,
     ) -> dict[str, Any]:
         """The platform's own recent FINDINGS, with the critic-folded
         ``effective_confidence = min(confidence, critic_score)``.
@@ -1472,7 +1301,56 @@ class PostgresQdrantSubstrateQueryPort:
         is superseded TODAY — it was the live head on D). The critic fold
         also dates to D, so the answer carries the verdict Legba held at
         the time, not today's. A malformed value refuses.
+
+        X3/G0 — ``verified_only`` (default off): only the findings a
+        composition would ADMIT — the latest faithfulness verdict exists and
+        ``min(confidence, verdict) >= LEGBA_COMPOSITION_VERIFY_FLOOR``, the
+        same INNER-join rule (``legba.data.verified_findings``). The page limit
+        applies AFTER the floor; ``critic_score`` is then the faithfulness
+        verdict. The bake-off's arm C reads through it.
+
+        W11-F150 — ``mode="survey"``: ONE row per target, its newest LIVE
+        finding, ordered by target id, carrying a ``digest`` (at most 240
+        characters from the top of the body) and ``body_chars``, never the
+        body; drill with ``target_id`` or ``read_document(doc_id=<id>)``.
+        Filters: ``target_id``
+        / ``target_ids``, ``analyst_id``, ``severity``, ``since_hours``
+        (default 168). It reads live heads only, so ``include_superseded``,
+        ``believed_as_of`` and ``verified_only`` refuse. Both modes page:
+        ``offset`` with ``rows_total`` (the true count, capped and flagged at
+        2,000) and ``next_offset``. ``limit`` defaults to 20 rows (page) or 25
+        targets (survey). See :mod:`.substrate_findings_reads`.
+
+        E2 — ``known_at`` (evaluation harness only): ``created_at < K``; the
+        live-head gate becomes the decision predicate at
+        ``min(believed_as_of, K)``, the critic fold and ``since_hours`` date to
+        it, survey mode refuses (:mod:`legba.data.raw_reader_known_at`).
         """
+        read_mode = _findings.normalize_mode(mode)
+        if read_mode is None:
+            return {"rows": [], "refs": [], "count": 0, "error": (
+                f"mode must be one of {list(_findings.LIST_FINDINGS_MODES)}, "
+                f"got {mode!r}")}
+        if read_mode == "survey":
+            if known_at is not None:
+                return {"rows": [], "refs": [], "count": 0, "mode": "survey",
+                        "error": "survey mode reads today's live heads; this run "
+                        "reads the record as of a fixed instant — use the default "
+                        "page mode (list_findings(target_id=...))"}
+            if include_superseded or believed_as_of is not None or verified_only:
+                return {"rows": [], "refs": [], "count": 0, "mode": "survey",
+                        "error": "survey mode reads the LIVE head of each target; "
+                        "drop include_superseded / believed_as_of / verified_only, "
+                        "or use the default page mode for them"}
+            return await _findings.survey_findings(
+                self._pool, target_id=target_id, target_ids=target_ids,
+                analyst_id=analyst_id, severity=severity,
+                since_hours=since_hours, limit=limit, offset=offset,
+                max_row_limit=_MAX_ROW_LIMIT,
+            )
+        if limit is None:
+            limit = _findings.PAGE_DEFAULT_LIMIT
+        page_offset = _findings.clamp_offset(offset)
         try:
             believed_dt = (
                 _temporal.parse_instant(believed_as_of, name="believed_as_of")
@@ -1480,6 +1358,8 @@ class PostgresQdrantSubstrateQueryPort:
             )
         except _temporal.TemporalParameterError as exc:
             return {"rows": [], "refs": [], "error": str(exc)}
+        if known_at is not None and (believed_dt is not None or not include_superseded):
+            believed_dt = _record_cut.clamp(believed_dt, known_at)
         clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
         clauses: list[str] = ["f.kind = 'finding'"]
         params: list[Any] = []
@@ -1490,9 +1370,14 @@ class PostgresQdrantSubstrateQueryPort:
             clauses.append(_temporal.decision_predicate("f", believed_param))
         elif not include_superseded:
             clauses.append("f.superseded_by IS NULL")
+        if known_at is not None:
+            params.append(known_at)
+            clauses.append(_record_cut.created_before("f.created_at", len(params)))
+            believed_param = believed_param or len(params)  # dates the critic fold
         target_param: int | None = None
-        if target_id is not None:
-            params.append([str(target_id)])
+        targets = _findings.target_list(target_id, target_ids)
+        if targets:
+            params.append(targets)
             target_param = len(params)
             clauses.append(f"f.target_id = ANY(${len(params)}::text[])")
         if analyst_id is not None:
@@ -1502,8 +1387,9 @@ class PostgresQdrantSubstrateQueryPort:
             params.append(severity)
             clauses.append(f"f.severity = ${len(params)}")
         if since_hours is not None:
-            params.append(datetime.now(timezone.utc) - timedelta(hours=int(since_hours)))
+            params.append((known_at or datetime.now(timezone.utc)) - timedelta(hours=int(since_hours)))
             clauses.append(f"f.produced_at >= ${len(params)}")
+        where_params = list(params)
         params.append(clamped_limit)
         # believed_as_of dates the critic fold too: the verdict Legba HELD
         # on D (the latest critique produced by then), not today's.
@@ -1511,16 +1397,47 @@ class PostgresQdrantSubstrateQueryPort:
             f"AND cr.produced_at <= ${believed_param}"
             if believed_param is not None else ""
         )
-        sql = critic_folded_findings_sql(
-            " AND ".join(clauses), len(params), critic_as_of=critic_as_of,
-        )
+        limit_param = len(params)
+        if verified_only:
+            params.append(_verified.verify_floor())
+        offset_param: int | None = None
+        if page_offset:
+            params.append(page_offset)
+            offset_param = len(params)
+        if verified_only:
+            sql = _verified.verified_findings_sql(
+                " AND ".join(clauses), limit_param, limit_param + 1,
+                critic_as_of=critic_as_of, offset_param=offset_param,
+            )
+        else:
+            sql = critic_folded_findings_sql(
+                " AND ".join(clauses), limit_param, critic_as_of=critic_as_of,
+                offset_param=offset_param,
+            )
         resolution: dict[str, Any] | None = None
         async with self._pool.acquire() as conn:
             records = await conn.fetch(sql, *params)
-            if not records and target_param is not None:
+            if (not records and target_param is not None and len(targets) == 1
+                    and not page_offset):
                 records, resolution = await widen_to_member_targets(
-                    conn, sql, params, target_param, str(target_id),
+                    conn, sql, params, target_param, targets[0],
                 )
+                if resolution.get("members"):
+                    where_params[target_param - 1] = resolution["members"]
+            # The verified floor is a join, not a predicate on f, so its
+            # count runs through the same SQL, unpaged, up to the cap.
+            count_sql = (
+                _verified.verified_findings_sql(
+                    " AND ".join(clauses), len(where_params) + 1,
+                    len(where_params) + 2, critic_as_of=critic_as_of,
+                ) if verified_only else None
+            )
+            paging = await _findings.page_rows_total(
+                conn, " AND ".join(clauses), where_params,
+                offset=page_offset, count=len(records), limit=clamped_limit,
+                count_sql=count_sql,
+                count_tail=[params[limit_param]] if verified_only else [],
+            )
 
         rows: list[dict[str, Any]] = []
         refs: list[str] = []
@@ -1547,10 +1464,18 @@ class PostgresQdrantSubstrateQueryPort:
                 "produced_at": r["produced_at"].isoformat()
                     if isinstance(r["produced_at"], datetime) else None,
             })
-        out: dict[str, Any] = {"rows": rows, "refs": refs, "count": len(rows)}
+        out: dict[str, Any] = {
+            "rows": rows, "refs": refs, "count": len(rows), **paging,
+        }
         if believed_dt is not None:
             out["believed_as_of"] = believed_dt.isoformat()
-        stamp_target_resolution(out, str(target_id), resolution)
+        if verified_only:
+            out["verified_only"] = {"floor": params[limit_param]}
+        stamp_target_resolution(
+            out, targets[0] if targets else str(target_id), resolution,
+        )
+        if known_at is not None:
+            return _record_cut.stamp(out, known_at, how="analyst_outputs.created_at < K; heads and critic fold at K")
         return out
 
     async def list_situations(
@@ -1567,6 +1492,13 @@ class PostgresQdrantSubstrateQueryPort:
         Analysis-derived (clustered from findings), not operator-vetted ground
         truth. Pass a returned ``situation_id`` to ``query_hypotheses`` to pull
         the ACH rows hanging off a situation.
+
+        Ordered by ``intensity_score`` then ``last_event_at``, so a ``limit``
+        is the TOP frames rather than an arbitrary slice — ``updated_at``, the
+        previous key, is stamped on every row by the hourly re-cluster and
+        ordered by nothing at all. An empty read carries ``why_empty`` naming
+        the filters applied, and names a ``status`` outside the live
+        vocabulary as the reason when that is what emptied it.
 
         V3/P3 — ``as_of`` (ISO-8601, validity time) adds the canonical as-of
         predicate: the frames that held on date D, INCLUDING frames that have
@@ -1705,9 +1637,14 @@ class PostgresQdrantSubstrateQueryPort:
         target_id: str | None = None,
         fold_verdicts: str = "as_of",
         limit: int = 20,
+        verified_only: bool = False,
+        known_at: datetime | None = None,
     ) -> dict[str, Any]:
         """The findings Legba had published and not yet superseded on date D
         (DATA MODEL V3 §3.4) — a DECISION-time read on ``analyst_outputs``.
+
+        E2 — ``known_at`` (evaluation harness only): ``created_at < K`` and D
+        clamped to ``min(as_of, K)``; ``fold_verdicts='latest'`` refuses.
 
         ``analyst_outputs`` has no ``valid_*`` columns (§3.1's correction):
         its validity interval is ``[produced_at, superseded_at)``, which is
@@ -1726,6 +1663,10 @@ class PostgresQdrantSubstrateQueryPort:
 
         The fold NEVER pools into a single score — each row carries its own
         ``effective_confidence`` and the envelope carries none.
+
+        X3/G0 — ``verified_only`` (default off): only findings ADMISSIBLE under
+        the chosen fold's verdict (``legba.data.verified_findings``); a row
+        pending at D is not admissible under ``as_of`` and is excluded.
         """
         try:
             as_of_dt = _temporal.parse_instant(as_of, name="as_of")
@@ -1740,6 +1681,12 @@ class PostgresQdrantSubstrateQueryPort:
                     f"got {fold_verdicts!r}"
                 ),
             }
+        if known_at is not None:
+            if fold == "latest":
+                return {"rows": [], "refs": [], "error": (
+                    "fold_verdicts='latest' folds today's verdict; this run reads "
+                    "the record as of a fixed instant — use fold_verdicts='as_of'")}
+            as_of_dt = _record_cut.clamp(as_of_dt, known_at)
         clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
 
         clauses: list[str] = [
@@ -1747,6 +1694,9 @@ class PostgresQdrantSubstrateQueryPort:
             _temporal.decision_predicate("f", 1),
         ]
         params: list[Any] = [as_of_dt]
+        if known_at is not None:
+            params.append(known_at)
+            clauses.append(_record_cut.created_before("f.created_at", len(params)))
         if target_id is not None:
             params.append(target_id)
             clauses.append(f"f.target_id = ${len(params)}")
@@ -1757,9 +1707,16 @@ class PostgresQdrantSubstrateQueryPort:
         # `legba.data.critic_fold.dual_verdict_findings_sql`). Both are pinned
         # to `title LIKE 'Faithfulness verify%'` so a generic critique can never
         # win the produced_at race and mask the verify verdict.
-        sql = _critic_fold.dual_verdict_findings_sql(
-            " AND ".join(clauses), len(params),
-        )
+        if verified_only:
+            params.append(_verified.verify_floor())
+            sql = _verified.verified_belief_sql(
+                " AND ".join(clauses), len(params) - 1, len(params),
+                fold_verdicts=fold,
+            )
+        else:
+            sql = _critic_fold.dual_verdict_findings_sql(
+                " AND ".join(clauses), len(params),
+            )
 
         async with self._pool.acquire() as conn:
             records = await conn.fetch(sql, *params)
@@ -1810,7 +1767,7 @@ class PostgresQdrantSubstrateQueryPort:
                 "verdict_pending_at_as_of": row_pending,
             })
 
-        return {
+        out = {
             "rows": rows,
             "refs": refs,
             "count": len(rows),
@@ -1820,11 +1777,15 @@ class PostgresQdrantSubstrateQueryPort:
             # cannot mistake a latest-fold answer for an as-of one.
             "fold_verdicts": fold,
             "verdict_pending_at_as_of": pending,
+            **({"verified_only": {"floor": params[-1]}} if verified_only else {}),
             "note": (
                 "rows carry their own effective_confidence; no pooled score "
                 "is computed — a belief-as-of read is a register, not a number"
             ),
         }
+        if known_at is not None:
+            return _record_cut.stamp(out, known_at, how="analyst_outputs.created_at < K; as_of clamped to K")
+        return out
 
     # ------------------------------------------------------------------
     # NAVIGATION readers (resolve scope — targets / source coverage).
@@ -1867,6 +1828,7 @@ class PostgresQdrantSubstrateQueryPort:
         active_only: bool = True,
         silent_only: bool = False,
         silent_hours: int = 48,
+        known_at: datetime | None = None,
     ) -> dict[str, Any]:
         """The ingest sources and their freshness/coverage.
 
@@ -1875,47 +1837,43 @@ class PostgresQdrantSubstrateQueryPort:
         'success'|'empty'|'error' rollup — migration 0046, success added by
         0114). Use to qualify a 'no signal on X' answer — no coverage vs a quiet
         feed. ``silent_only`` filters to sources silent > ``silent_hours``.
-        """
-        clauses: list[str] = ["s.is_head = TRUE"]
-        if active_only:
-            clauses.append("s.state = 'active'")
-        sql = (
-            "SELECT s.descriptor_id AS source_id, "
-            "       s.body->'identity'->>'name' AS name, s.state, "
-            "       sig.last_signal_at, po.outcome AS last_poll_outcome, "
-            "       po.occurred_at AS last_poll_at "
-            "FROM source_descriptors s "
-            "LEFT JOIN LATERAL ( "
-            "  SELECT max(fetched_at) AS last_signal_at FROM signals WHERE source_id = s.descriptor_id "
-            ") sig ON TRUE "
-            "LEFT JOIN LATERAL ( "
-            "  SELECT outcome, occurred_at FROM source_poll_outcomes "
-            "  WHERE source_id = s.descriptor_id ORDER BY occurred_at DESC LIMIT 1 "
-            ") po ON TRUE "
-            f"WHERE {' AND '.join(clauses)} "
-            "ORDER BY sig.last_signal_at ASC NULLS FIRST"
-        )
-        async with self._pool.acquire() as conn:
-            records = await conn.fetch(sql)
 
-        now = datetime.now(timezone.utc)
-        rows: list[dict[str, Any]] = []
-        for r in records:
-            lsa = r["last_signal_at"]
-            silent_h: float | None = None
-            if isinstance(lsa, datetime):
-                silent_h = round((now - lsa).total_seconds() / 3600.0, 1)
-            if silent_only and (silent_h is None or silent_h < silent_hours):
-                continue
-            rows.append({
-                "source_id": r["source_id"],
-                "name": r["name"],
-                "state": r["state"],
-                "last_signal_at": lsa.isoformat() if isinstance(lsa, datetime) else None,
-                "silent_hours": silent_h,
-                "last_poll_outcome": r["last_poll_outcome"],
-            })
-        return {"rows": rows, "refs": [], "count": len(rows)}
+        W11-F152 -- the body lives in ``substrate_source_health.list_sources``:
+        freshest-first rows behind a whole-fleet ``summary`` (staleness and
+        last-poll-outcome counts, an attention roster), each row carrying
+        ``last_success_at`` and the ``staleness`` verdict; ``empty`` is
+        documented as "no new items on the latest poll", not dead.
+        """
+        return await _source_health.list_sources(
+            self._pool,
+            active_only=active_only,
+            silent_only=silent_only,
+            silent_hours=silent_hours,
+            known_at=known_at,
+        )
+
+    # ------------------------------------------------------------------
+    # list_scheduled_events (W11-F141) — the always-on calendar
+    # ------------------------------------------------------------------
+
+    async def list_scheduled_events(
+        self,
+        *,
+        window_start: str | None = None,
+        window_end: str | None = None,
+        scope: str | None = None,
+        subject_keys: list[str] | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """The scheduled-events calendar (migration 0240): FUTURE dated things
+        read by overlap over a window (default now → +14 days) with a
+        ``coverage`` block that tells "none held" from "calendar empty". See
+        :mod:`.substrate_calendar_reads` (the body lives there)."""
+        return await _calendar.list_scheduled_events(
+            self._pool, window_start=window_start, window_end=window_end,
+            scope=scope, subject_keys=subject_keys, limit=limit,
+            max_row_limit=_MAX_ROW_LIMIT,
+        )
 
     # ------------------------------------------------------------------
     # get_timeline (S4-T6)
@@ -1985,6 +1943,7 @@ class PostgresQdrantSubstrateQueryPort:
         include_origin: list[str] | None = None,
         situation_id: str | None = None,
         limit: int = 20,
+        known_at: datetime | None = None,
     ) -> dict[str, Any]:
         """The filtered event list (the V3 ``events`` table, migration 0202).
 
@@ -2007,7 +1966,8 @@ class PostgresQdrantSubstrateQueryPort:
         ``LIVE_CLASSES``; an unknown class refuses). ``unbounded_start``
         counts returned rows with no recorded ``valid_from``.
 
-        The body lives in ``substrate_frame_reads.query_events``.
+        The body lives in ``substrate_frame_reads.query_events`` (``known_at``:
+        lane E2's record-time cut, evaluation harness only).
         """
         return await _frames.query_events(
             self._pool,
@@ -2023,12 +1983,14 @@ class PostgresQdrantSubstrateQueryPort:
             situation_id=situation_id,
             limit=limit,
             max_row_limit=_MAX_ROW_LIMIT,
+            **({"known_at": known_at} if known_at is not None else {}),
         )
 
     async def inspect_event(
         self,
         *,
         event_id: str,
+        known_at: datetime | None = None,
     ) -> dict[str, Any]:
         """The one-event dossier (V3/P6 — spec §6.1).
 
@@ -2046,8 +2008,11 @@ class PostgresQdrantSubstrateQueryPort:
         A non-uuid ``event_id`` or a missing row returns ``found=False``
         with a named error — never an empty-looking success.
 
-        The body lives in ``substrate_frame_reads.inspect_event``.
+        The body lives in ``substrate_frame_reads.inspect_event`` (``known_at``:
+        lane E2's record-time cut, evaluation harness only).
         """
+        if known_at is not None:
+            return await _frames.inspect_event(self._pool, event_id=event_id, known_at=known_at)
         return await _frames.inspect_event(self._pool, event_id=event_id)
 
     # ------------------------------------------------------------------
@@ -2073,6 +2038,7 @@ class PostgresQdrantSubstrateQueryPort:
         as_of: Any = None,
         collection_id: str | None = None,
         limit: int = _observations.MAX_SERIES_ROWS,
+        known_at: datetime | None = None,
     ) -> dict[str, Any]:
         """One curated HISTORICAL series for one subject, over a valid window.
 
@@ -2088,6 +2054,9 @@ class PostgresQdrantSubstrateQueryPort:
         ``record_time``, the value with its ``unit``, the ``source_url`` and
         the ``sha256`` of the file the number was read out of, and a
         ``ref`` (``observation:<uuid>``) the citation builder resolves.
+
+        E2 — ``known_at`` (evaluation harness only): ``loaded_at < K`` and
+        ``as_of`` clamped to K.
         """
         return await _observations.read_series_history(
             self._pool,
@@ -2098,6 +2067,7 @@ class PostgresQdrantSubstrateQueryPort:
             as_of=as_of,
             collection_id=collection_id,
             limit=limit,
+            **({"known_at": known_at} if known_at is not None else {}),
         )
 
     async def series_compare(
@@ -2110,6 +2080,7 @@ class PostgresQdrantSubstrateQueryPort:
         as_of: Any = None,
         collection_id: str | None = None,
         limit: int = _observations.MAX_SERIES_ROWS,
+        known_at: datetime | None = None,
     ) -> dict[str, Any]:
         """The same series across several subjects over the same window.
 
@@ -2127,56 +2098,71 @@ class PostgresQdrantSubstrateQueryPort:
             as_of=as_of,
             collection_id=collection_id,
             limit=limit,
+            **({"known_at": known_at} if known_at is not None else {}),
         )
 
-    async def classify_cited_refs(self, *, refs: list[str]) -> dict[str, Any]:
-        """``origin_class`` counts for a bounded list of CITED substrate ids.
+    async def live_series(
+        self,
+        *,
+        series_id: str | None = None,
+        subject: str | None = None,
+        source_id: str | None = None,
+        since: Any = None,
+        until: Any = None,
+        limit: int = _live_obs.DEFAULT_ROWS,
+        known_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        """The LIVE numeric series (``origin_class='live'``, ``collection_id
+        'live:<source_id>'``) — a separate reader from the history tools, which
+        never read a live row (SEAMS #57/#62).
 
-        7g-2's provenance census: consult cites bare substrate uuids, and
-        "how much of this answer rests on live reporting, how much on a
-        curated holding, how much on a web retrieval" is a question the ids
-        alone cannot answer. Two indexed lookups answer it from the rows'
-        OWN ``origin_class`` column — never from which tool returned them,
-        which is a guess dressed as provenance.
-
-        A ref in NEITHER table is counted as ``unresolved`` rather than
-        assigned a class: a citation we cannot resolve is a fact about the
-        answer, and silently bucketing it would overstate whichever class
-        absorbed it. Measured live 2026-09-25: 1.7 ms for 20 signal ids
-        (``signals_pkey``), 1.6 ms for 12 observation ids (the per-partition
-        primary keys).
+        With no ``series_id`` it lists the live series held (id, subject, unit,
+        period, newest observation, source). With ``series_id`` and ``subject``
+        it reads that series over a bounded valid window, every revision with
+        its two timestamps (``record_time``, ``loaded_at``), each row labelled
+        ``live`` with its source id. Body and bounds in
+        :mod:`legba.runtime._observations_live_read`; ``known_at`` (lane E2)
+        keeps rows loaded and recorded before K.
         """
-        wanted: list[UUID] = []
-        seen: set[str] = set()
-        for raw in refs or ():
-            text = str(raw).strip()
-            if not text or text in seen:
-                continue
-            seen.add(text)
-            try:
-                wanted.append(UUID(text))
-            except (AttributeError, TypeError, ValueError):
-                continue
-        by_class: dict[str, int] = {}
-        resolved = 0
-        if wanted:
-            async with self._pool.acquire() as conn:
-                for table in ("signals", "observations"):
-                    rows = await conn.fetch(
-                        f"SELECT origin_class, count(*) AS n FROM {table} "
-                        "WHERE id = ANY($1::uuid[]) GROUP BY origin_class",
-                        wanted,
-                    )
-                    for r in rows:
-                        klass = str(r["origin_class"] or "unknown")
-                        by_class[klass] = by_class.get(klass, 0) + int(r["n"])
-                        resolved += int(r["n"])
+        return await _live_obs.read_live_series(
+            self._pool, series_id=series_id, subject=subject, source_id=source_id,
+            since=since, until=until, limit=limit, known_at=known_at,
+        )
+
+    async def series_holdings(self, *, limit: int = 200) -> dict[str, Any]:
+        """WHAT curated history exists at all — the catalogue, not the numbers.
+
+        One line per series across every LOADED holding, with the subjects
+        that series carries. The consult prompt renders this at the start of
+        a run so the planner knows the series tools have something to read
+        BEFORE it decides to answer a historical question from memory; the
+        review found ``series_history`` / ``series_compare`` registered,
+        granted, on the wire and invoked zero times, because nothing ever
+        told the model the holdings existed.
+
+        ``series: []`` with ``series_count: 0`` means no collection is
+        loaded. That is an answer, and the renderer prints it as one.
+        """
+        async with self._pool.acquire() as conn:
+            series = await _observations.series_holdings(conn, limit=limit)
+        subjects = sorted({s for row in series for s in row.get("subjects", [])})
         return {
-            "by_origin_class": by_class,
-            "resolved": resolved,
-            "unresolved": max(0, len(wanted) - resolved),
-            "asked": len(wanted),
+            "series": series,
+            "series_count": len(series),
+            "subjects": subjects,
+            "count": len(series),
         }
+
+    async def classify_cited_refs(self, *, refs: list[str]) -> dict[str, Any]:
+        """What a consult answer's CITED ids actually are — by class and by kind.
+
+        7g-2's provenance census read. The body lives in
+        ``substrate_cited_refs.classify_cited_refs`` (split out in W4b F-9 at
+        the size ceiling, when it gained the ``events`` fold and the
+        :data:`CITED_REFS_CLASSIFY_CAP` bound); this method is the port's
+        surface for it and keeps the signature every caller binds.
+        """
+        return await _cited_refs.classify_cited_refs(self._pool, refs=refs)
 
     # ------------------------------------------------------------------
     # compare_targets (S4-T6)
@@ -2295,6 +2281,10 @@ class PostgresQdrantSubstrateQueryPort:
         return {
             "targets": targets,
             "refs": refs,
+            # The consult trace probes ``count`` first and this read never
+            # carried one, so every compare_targets call in the ledger reads
+            # as count 0 — a six-target comparison included (2026-09-28).
+            "count": len(targets),
             "compared": [t["target_id"] for t in targets],
         }
 
@@ -3010,43 +3000,27 @@ class PostgresQdrantSubstrateQueryPort:
         # calibration metrics are its free-form `data` dict.
         data = payload.get("data") if isinstance(payload, dict) else None
         data = data if isinstance(data, dict) else {}
-        bss = data.get("brier_skill_score")
-        ready = bool(data.get("forecast_acute_ready"))
-        degenerate = bool(data.get("forecast_acute_degenerate"))
-        # The honesty verdict, computed deterministically from the substrate (NOT
-        # self-reported): the forecast leg counts as PROVEN only if it is ready,
-        # non-degenerate, and has earned positive skill.
-        forecast_proven = (
-            ready and not degenerate and isinstance(bss, (int, float)) and bss > 0.0
-        )
-        exo_n = data.get("exogenous_sample_size")
-        calibration_thin = not isinstance(exo_n, int) or exo_n < 5
+        # Lane E: ONE shared reducer (data/calibration_honesty.py, a stdlib leaf)
+        # — every Brier is returned with ITS OWN n, the pooled count is named
+        # `pooled_sample_size`, stale populations say so, and the whole read
+        # carries the legacy/untrusted label (and is NOT the sealed ledger).
+        red = reduce_calibration(data)
         return {
             "available": True,
             "id": str(row["id"]),
             "produced_at": row["produced_at"].isoformat()
                 if isinstance(row["produced_at"], datetime) else None,
-            # Headline calibration (exogenous-only).
-            "brier": data.get("brier"),
-            "brier_exogenous": data.get("brier_exogenous"),
-            "exogenous_sample_size": exo_n,
-            "sample_size": data.get("sample_size"),
-            "insufficient_exogenous": data.get("insufficient_exogenous"),
-            "self_consistency_only": data.get("self_consistency_only"),
-            # Segregated acute-forecast pilot (n<30, reported honestly).
+            **red,
+            # Segregated acute-forecast pilot (n < ACUTE_PILOT_MIN_SAMPLE,
+            # reported honestly).
             "brier_forecast_acute": data.get("brier_forecast_acute"),
             "brier_forecast_acute_raw": data.get("brier_forecast_acute_raw"),
             "brier_climatology": data.get("brier_climatology"),
-            "brier_skill_score": bss,
+            "brier_skill_score": data.get("brier_skill_score"),
             "forecast_acute_sample_size": data.get("forecast_acute_sample_size"),
-            "forecast_acute_ready": ready,
-            "forecast_acute_degenerate": degenerate,
+            "forecast_acute_ready": bool(data.get("forecast_acute_ready")),
+            "forecast_acute_degenerate": bool(data.get("forecast_acute_degenerate")),
             "forecast_acute_status": data.get("forecast_acute_status"),
-            # The deterministic honesty verdict — the journal's §10 post-step
-            # reads these directly so it can flag the unproven legs even if the
-            # narrative omits them.
-            "forecast_unproven": not forecast_proven,
-            "calibration_thin": calibration_thin,
             "refs": [str(row["id"])],
         }
 
@@ -3151,6 +3125,8 @@ class PostgresQdrantSubstrateQueryPort:
             result["analysts_scanned"] = len(rows)
             result["analysts_total"] = total
             result["truncated"] = len(rows) < total
+        await _consult_health.overlay_run_health(
+            self._pool, result, analyst_id=analyst_id)
         return result
 
     async def get_source_health(
@@ -3162,154 +3138,23 @@ class PostgresQdrantSubstrateQueryPort:
     ) -> dict[str, Any]:
         """Source-poll HEALTH — which feeds are quiet or erroring (plan §5).
 
-        Joins each head source descriptor to its most-recent ``signals`` time and
-        its most-recent ``source_poll_outcomes`` row (migration 0046 + 0114: one
-        row per poll, 'success' | 'empty' | 'error'). Lets the journal tell "no
-        coverage on X" apart from "a quiet feed" and narrate the platform's
-        intake honestly. ``refs`` is empty (source rows are descriptors, not
-        chip-linked substrate rows).
-
-        The ``erroring`` aggregate below counts sources whose NEWEST outcome row
-        is 'error'. Before 0114 that over-counted structurally: a productive
-        poll wrote no row, so a source that failed once and then recovered kept
-        reporting its old error as the newest outcome forever. Now the first
-        productive poll writes 'success' and the count self-corrects.
-
-        HEAD COVERAGE (W2-T6 / M4): the old ``LIMIT 40`` default scanned 40
-        of ~48 active heads, so the row list (and its silent/error tallies)
-        silently undercounted. The default now covers the whole fleet
-        (clamped at ``_MAX_ROW_LIMIT``); rows were already staleness-ordered
-        (silent-first), so any explicit smaller limit only sheds the
-        freshest feeds — and the response states ``scanned`` /
-        ``truncated`` explicitly. The H-1 ``summary`` block remains the
-        denominator-honest whole-fleet aggregate.
+        The body lives in ``substrate_source_health.get_source_health`` (split
+        out on 2026-09-28, wave Q, at the size ceiling); this method is the
+        port's surface for it and keeps the signature every caller binds.
         """
-        clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
-        sql = (
-            "SELECT s.descriptor_id AS source_id, "
-            "       s.body->'identity'->>'name' AS name, s.state, "
-            "       sig.last_signal_at, po.outcome AS last_poll_outcome, "
-            "       po.health_state AS last_health_state, "
-            "       po.occurred_at AS last_poll_at "
-            "FROM source_descriptors s "
-            "LEFT JOIN LATERAL ( "
-            "  SELECT max(fetched_at) AS last_signal_at FROM signals "
-            "  WHERE source_id = s.descriptor_id "
-            ") sig ON TRUE "
-            "LEFT JOIN LATERAL ( "
-            "  SELECT outcome, health_state, occurred_at FROM source_poll_outcomes "
-            "  WHERE source_id = s.descriptor_id "
-            "  ORDER BY occurred_at DESC LIMIT 1 "
-            ") po ON TRUE "
-            "WHERE s.is_head = TRUE AND s.state = 'active' "
-            "ORDER BY sig.last_signal_at ASC NULLS FIRST "
-            f"LIMIT {clamped_limit}"
+        return await _source_health.get_source_health(
+            self._pool,
+            silent_only=silent_only,
+            silent_hours=silent_hours,
+            limit=limit,
         )
-        now = datetime.now(timezone.utc)
-        silent_cutoff = now - timedelta(hours=silent_hours)
-        async with self._pool.acquire() as conn:
-            records = await conn.fetch(sql)
-            # H-1 (MASTER_PLAN 2026-07-13, DENOMINATOR HONESTY): accurate aggregate
-            # counts across ALL wired head sources — NOT derived from `rows` (which
-            # lists only ACTIVE sources, capped at `limit`, so its silent/error
-            # tallies undercount and it can never see paused/retired). The journal's
-            # "all active feeds fresh" hid the denominator (a critique found the
-            # honest shape is ~37 fresh / 48 active / 58 wired). These give the
-            # journal the true "N fresh / M active / K wired" + the paused/retired
-            # roster to name (apparatus quiet, not world silence).
-            state_records = await conn.fetch(
-                "SELECT state, count(*) AS n FROM source_descriptors "
-                "WHERE is_head = TRUE GROUP BY state"
-            )
-            active_agg = await conn.fetchrow(
-                "SELECT count(*) AS active_total, "
-                "  count(*) FILTER (WHERE sig.last_signal_at IS NOT NULL "
-                "    AND sig.last_signal_at >= $1) AS fresh, "
-                "  count(*) FILTER (WHERE sig.last_signal_at IS NULL "
-                "    OR sig.last_signal_at < $1) AS stalled, "
-                "  count(*) FILTER (WHERE po.outcome = 'error') AS erroring "
-                "FROM source_descriptors s "
-                "LEFT JOIN LATERAL (SELECT max(fetched_at) AS last_signal_at FROM signals "
-                "  WHERE source_id = s.descriptor_id) sig ON TRUE "
-                "LEFT JOIN LATERAL (SELECT outcome FROM source_poll_outcomes "
-                "  WHERE source_id = s.descriptor_id ORDER BY occurred_at DESC LIMIT 1) po ON TRUE "
-                "WHERE s.is_head = TRUE AND s.state = 'active'",
-                silent_cutoff,
-            )
-            non_active_records = await conn.fetch(
-                "SELECT s.descriptor_id AS source_id, "
-                "  s.body->'identity'->>'name' AS name, s.state "
-                "FROM source_descriptors s "
-                "WHERE s.is_head = TRUE AND s.state <> 'active' "
-                "ORDER BY s.state, name "
-                f"LIMIT {clamped_limit}"
-            )
-        rows: list[dict[str, Any]] = []
-        silent_count = 0
-        error_count = 0
-        for r in records:
-            lsa = r["last_signal_at"]
-            silent_h: float | None = None
-            if isinstance(lsa, datetime):
-                silent_h = round((now - lsa).total_seconds() / 3600.0, 1)
-            is_silent = silent_h is None or silent_h >= silent_hours
-            if r["last_poll_outcome"] == "error":
-                error_count += 1
-            if is_silent:
-                silent_count += 1
-            if silent_only and not is_silent:
-                continue
-            rows.append({
-                "source_id": r["source_id"],
-                "name": r["name"],
-                "state": r["state"],
-                "last_signal_at": lsa.isoformat() if isinstance(lsa, datetime) else None,
-                "silent_hours": silent_h,
-                "last_poll_outcome": r["last_poll_outcome"],
-                "last_health_state": r["last_health_state"],
-            })
-        by_state = {str(r["state"]): int(r["n"]) for r in state_records}
-        summary = {
-            "total_wired": sum(by_state.values()),
-            "by_state": by_state,
-            "active_total": int(active_agg["active_total"]) if active_agg else 0,
-            "active_fresh": int(active_agg["fresh"]) if active_agg else 0,
-            "active_stalled": int(active_agg["stalled"]) if active_agg else 0,
-            "active_erroring": int(active_agg["erroring"]) if active_agg else 0,
-            "silent_threshold_hours": silent_hours,
-        }
-        non_active = [
-            {"source_id": r["source_id"], "name": r["name"], "state": r["state"]}
-            for r in non_active_records
-        ]
-        # KEY ORDER IS LOAD-BEARING (2026-09-25, the lens "three active feeds"
-        # fabrication). The GATHER preamble renders a non-signal tool result as
-        # ``json.dumps(result)[:600]`` (inline_target's ``tool_summaries``): with
-        # ``rows`` first, those 600 characters were two rows cut mid-JSON and the
-        # ``summary`` at the tail never reached the narrator — every lens then
-        # spoke the rows it saw as the fleet ("active_total = 3 … total_wired =
-        # 3"; the honesty phase stamped ``source_health_fabricated`` on each).
-        # The NARRATE loop's ``_bounded_tool_json`` (4,000 chars) sheds whole
-        # rows and keeps the other keys, so it was never the site. The
-        # denominator-honest aggregate goes FIRST so ANY prefix keeps it; the
-        # row list and the non-active roster are what a bound sheds.
-        return {
-            # H-1 denominator-honest aggregates (whole-fleet, not row-capped).
-            "summary": summary,
-            "count": len(rows),
-            # Coverage honesty (W2-T6): how many ACTIVE heads the row scan
-            # actually covered vs the fleet; rows are staleness-ordered so a
-            # truncated scan only sheds the freshest feeds.
-            "scanned": len(records),
-            "truncated": len(records) < summary["active_total"],
-            # Capped/active-only view (back-compat). Prefer `summary` for the truth.
-            "silent_count": silent_count,
-            "error_count": error_count,
-            "silent_threshold_hours": silent_hours,
-            "refs": [],
-            "rows": rows,
-            "non_active": non_active,
-        }
+
+    async def list_due_resolvers(self, *, horizon_days: int = 14,
+                                 include_closed: bool = False, limit: int = 50) -> dict[str, Any]:
+        """Forecast-ledger questions due within the horizon (W11-F162); body in
+        ``substrate_due_resolvers``."""
+        return await _due_resolvers.list_due_resolvers(
+            self._pool, horizon_days=horizon_days, include_closed=include_closed, limit=limit)
 
     async def get_budget_status(
         self,
@@ -3427,14 +3272,14 @@ class PostgresQdrantSubstrateQueryPort:
             prior_entry = await conn.fetchrow(
                 "SELECT id, title, body, period_start, period_end, produced_at "
                 "FROM journal_entries WHERE entry_kind = 'entry' "
-                "  AND valid_until IS NULL "
+                f"  AND {MEMORY_ROW_FILTER_SQL} "
                 "ORDER BY period_end DESC, produced_at DESC LIMIT 1"
             )
             consolidation = await conn.fetchrow(
                 "SELECT id, title, body, period_start, period_end, produced_at "
                 "FROM journal_entries "
                 "WHERE entry_kind = 'consolidation' "
-                "  AND valid_until IS NULL AND superseded_by IS NULL "
+                f"  AND {MEMORY_ROW_FILTER_SQL} "
                 "ORDER BY produced_at DESC LIMIT 1"
             )
             # Resolve the delta window.
@@ -3493,7 +3338,7 @@ class PostgresQdrantSubstrateQueryPort:
             history_rows = await conn.fetch(
                 "SELECT id, title, body, period_end, produced_at "
                 "FROM journal_entries WHERE entry_kind = 'entry' "
-                "  AND valid_until IS NULL "
+                f"  AND {MEMORY_ROW_FILTER_SQL} "
                 "ORDER BY period_end DESC, produced_at DESC LIMIT $1",
                 min(clamped_limit, 8),
             )
@@ -3597,7 +3442,7 @@ class PostgresQdrantSubstrateQueryPort:
                     "WHERE entry_kind = 'lens' AND analyst_id = ANY($1::text[]) "
                     # Soft-closed lens rows (mig 0120 empty stubs) stay out of
                     # the chorus the diff reads — same rule as the entry tier.
-                    "  AND valid_until IS NULL "
+                    f"  AND {MEMORY_ROW_FILTER_SQL} "
                     "  AND produced_at >= $2 "
                     "ORDER BY produced_at DESC "
                     "LIMIT $3",

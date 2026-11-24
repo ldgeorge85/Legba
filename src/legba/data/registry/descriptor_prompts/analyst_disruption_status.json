@@ -1,0 +1,15 @@
+{
+  "prompts": {
+    "disruption_status": {
+      "chars": 26424,
+      "sha256": "a6142b5fc551aefcb81bc8b6437d5a9a33b6e8c7cc6706b640622564380657af",
+      "source": "analyst_disruption_status.yaml"
+    }
+  },
+  "states": {
+    "analyst:disruption_status": {
+      "source": "analyst_disruption_status.yaml",
+      "state": "draft"
+    }
+  }
+}

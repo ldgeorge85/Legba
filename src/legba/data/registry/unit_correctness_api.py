@@ -64,7 +64,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from ..correctness_reference_currency import (
@@ -73,6 +73,7 @@ from ..correctness_reference_currency import (
     reference_is_stale,
 )
 from .api import RegistryAPIDeps, require_bearer
+from .route_roles import resolve_principal
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -607,6 +608,7 @@ def build_unit_correctness_router(deps: RegistryAPIDeps) -> APIRouter:
         response_model=UnitCorrectnessPage,
     )
     async def unit_correctness(
+        request: Request,
         target_id: str,
         analyst_id: str | None = Query(
             default=None,
@@ -676,8 +678,18 @@ def build_unit_correctness_router(deps: RegistryAPIDeps) -> APIRouter:
                     by_unit[str(cr["correctness_id"])].append(
                         _hydrate_claim(cr)
                     )
+                # RA-1: the route is a reader's (the shares and the claim
+                # ledger); the decisive spans quote the reference text, which
+                # stays an admin's — a non-admin's ledger carries none. (An
+                # UNRESOLVED caller never reaches here behind the app's gate;
+                # only a bare test app mounts the router without it.)
+                who = resolve_principal(request)
+                strip_spans = who.resolved and not who.is_operator
                 for unit in out:
                     unit.claims = by_unit[unit.id]
+                    if strip_spans:
+                        for c in unit.claims:
+                            c.spans = {}
 
         next_cursor: str | None = None
         if len(rows) > limit and out:

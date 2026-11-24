@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.ecdc.threats_report": {
+      "source": "source_ecdc_threats.yaml",
+      "state": "draft"
+    }
+  }
+}

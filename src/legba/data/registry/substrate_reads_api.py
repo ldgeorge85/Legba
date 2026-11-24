@@ -33,6 +33,11 @@ Design rules (Lewis's no-stub/no-fake rule):
 
   * All filters are optional. `since` is ISO-8601 datetime; `limit`
     defaults to 50 with a hard cap of 500.
+
+  * These are the OPERATOR rows. A reader-class caller never sees them
+    verbatim: the app's `display_class.DisplayPolicyMiddleware` projects every
+    response (a signal's `data` → `display_policy.display_projection`;
+    `source_text` / `archived_text` / `raw_body` withheld anywhere) (X2-B4).
 """
 from __future__ import annotations
 
@@ -42,23 +47,29 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 
 from ..archive import sha256_from_object_ref
+from ..claim_support import claim_fields
+from .signal_list_weight import SIGNALS_DEFAULT_FIELDS, SignalsFields, SignalsSummaryPage, summary_row
 from ..findings_projection import project_citations
 from ..provenance import access as _access
 from ..provenance.kinds import structural_badge
 from ..provenance.verify import structural_verify_gate_enabled
+from ..signal_slice_scope import CANONICAL_ONLY_SQL
 from .api import RegistryAPIDeps, require_bearer
+from .read_latency import fast_json_response, page_json_response_off_loop
 from .substrate_reads_folds import (
-    CRITIC_SCORE_CTE as _CRITIC_SCORE_CTE,
     FACET_SCAN_CAP as _FACET_SCAN_CAP,
     FAITHFULNESS_VERIFICATION_CTE as _FAITHFULNESS_VERIFICATION_CTE,
-    STRUCTURAL_BADGE_CTE as _STRUCTURAL_BADGE_CTE,
     STRUCTURAL_VERIFICATION_CTE as _STRUCTURAL_VERIFICATION_CTE,
 )
+from .substrate_reads_folds import full_row_sql as _full_row_sql
+from .substrate_reads_folds import parse_full_row as _parse_full_row
 from .unit_correctness_api import build_unit_correctness_router
+from .findings_by_id_api import build_finding_by_id_router
+from .verification_state import unverified_state
 
 # E-1 — the system-wide verification floor (the 0.50 decision), MIRRORED from
 # ``analysts.deterministic_handlers.scorecard_banding.FAITH_FLOOR``. A local
@@ -75,6 +86,13 @@ _FAITH_FLOOR = 0.50
 
 
 DEFAULT_LIMIT = 50
+
+#: The weights `GET /findings` answers at (P-8). `full` is the whole row;
+#: `summary` and `judgment` are the declared light projections.
+FindingsFields = Literal["summary", "judgment", "full"]
+#: What an omitted `fields` means — the light list weight. Flip to "full" to
+#: restore the pre-P-8 default (one line; see the route's note).
+FINDINGS_DEFAULT_FIELDS: FindingsFields = "summary"
 MAX_LIMIT = 500
 
 
@@ -194,6 +212,8 @@ class FindingRow(BaseModel):
     # P0-4 (additive, nullable): "structural" for verify-exempt deterministic
     # structural/mining analysts — the honest badge stamp, never fabricated.
     verify_exempt: str | None = None
+    # X4 READPATH: set ONLY when `verification` is null — pending|absent (verification_state.py).
+    verification_state: dict[str, Any] | None = None
     # E-1 (2026-07-27 sweep item 3, additive, nullable): the EXPLICIT
     # below-floor mark. ``True`` = a graded finding whose surfaced
     # ``effective_confidence`` sits under the system-wide 0.50 floor
@@ -266,6 +286,8 @@ class SignalRow(BaseModel):
     # sidecar join. False/None for un-archived rows — never fabricated.
     archived: bool = False
     archive_sha256: str | None = None
+    evidence_class: str | None = None  # C-1: 'claim' on a claim-source row (+ claimant)
+    claimant: str | None = None
 
 
 class ContentionValueRow(BaseModel):
@@ -403,6 +425,7 @@ class CitationJudgmentEntry(BaseModel):
     single_source: bool = False
     wire_folded: bool = False
     marker_class: str | None = None
+    claimant: str | None = None  # C-1: set when the cited row is a CLAIM
 
 
 class FindingJudgmentRow(BaseModel):
@@ -551,6 +574,10 @@ def _hydrate_finding(row: Any) -> FindingRow:
         # from the ONE registry: ``structural`` (unverified) or, when a passing
         # structural critique exists for this finding, ``structural-verified``.
         verify_exempt=verify_exempt,
+        verification_state=(
+            unverified_state(row["produced_at"], row["analyst_id"], exempt=verify_exempt is not None)
+            if verification is None else None
+        ),
         below_floor=below_floor,
     )
 
@@ -616,7 +643,9 @@ def _hydrate_finding_judgment(row: Any) -> FindingJudgmentRow:
         severity=row["severity"],
         confidence=float(row["confidence"]),
         schema_uri=row["schema_uri"],
-        verification=_load_jsonb_opt(row.get("verification")),
+        # X4 READPATH: no block → the pending|absent state block, never null.
+        verification=_load_jsonb_opt(row.get("verification"))
+        or unverified_state(row["produced_at"], row["analyst_id"]),
         citations=[
             CitationJudgmentEntry(**entry)
             for entry in project_citations(row.get("citations_raw"))
@@ -774,6 +803,7 @@ def _hydrate_signal(row: Any, *, target_id: str | None = None) -> SignalRow:
         # alone (cas:sha256/<hex>); never fabricated for foreign ref shapes.
         archived=row.get("object_ref") is not None,
         archive_sha256=sha256_from_object_ref(row.get("object_ref")),
+        **claim_fields(payload),
     )
 
 
@@ -853,6 +883,8 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
     # rather than in `server.py` so the route inherits this router's prefix and
     # `require_bearer` posture without a second wiring site to keep in step.
     router.include_router(build_unit_correctness_router(deps))
+    # P-8 — one finding at full weight by id (the list is light by default).
+    router.include_router(build_finding_by_id_router(deps, hydrate=_hydrate_finding))
 
     # ---------------- findings ----------------
 
@@ -877,12 +909,14 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
         access_class_in: str | None = Query(default=None),
         limit: int = Query(default=DEFAULT_LIMIT),
         cursor: str | None = Query(default=None),
+        # P-8 — LISTS ARE LIGHT BY DEFAULT. Omitted, `fields` is `summary`
+        # (measured live 2026-11-14 at the default 50 rows: 2,748 KB full vs
+        # 27 KB summary). The full row (`FindingsPage`: `data`, `body`,
+        # `derived_from`, both verification folds) is `fields=full` by name,
+        # or one record at `GET /findings/{finding_id}`. The switch back is
+        # this one default (`FINDINGS_DEFAULT_FIELDS`).
         # P-mobile — the list-view weight (build report
-        # "findings fields=summary"). Omitted (the default) is BYTE-IDENTICAL to
-        # the route's pre-existing behavior — same SQL, same hydration, same
-        # `FindingsPage` shape — so every existing caller (MorningRead, the
-        # workstation Feed, the mobile navigator's current full-row fetch) is
-        # unaffected. `fields=summary` opts into `FindingsSummaryPage`: the nine
+        # "findings fields=summary"). `fields=summary` is `FindingsSummaryPage`: the nine
         # scalar columns every list row needs (§ below) plus the handful of
         # `assembly`/`verification`/`drops` leaves MorningRead's history rail and
         # the mobile navigator actually read — never the full `body`, the
@@ -896,9 +930,9 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
         # included — exactly what `fields=summary` drops) plus a `citations`
         # list reduced to `findings_projection.JUDGMENT_FIELDS` — never the
         # finding's full `data`, `derived_from`, or `body`.
-        fields: Literal["summary", "judgment"] | None = Query(default=None),
+        fields: FindingsFields = Query(default=FINDINGS_DEFAULT_FIELDS),
         principal: str = Depends(require_bearer),
-    ) -> FindingsPage | FindingsSummaryPage | FindingsJudgmentPage:
+    ) -> Response:  # R-1: a page model's bytes via read_latency.fast_json_response
         limit = _validate_limit(limit)
 
         # Findings are aliased ``f`` because S3 LEFT JOINs each finding to its
@@ -1112,7 +1146,7 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
                 summary_next_cursor = _encode_cursor(
                     last_summary.produced_at, last_summary.id,
                 )
-            return FindingsSummaryPage(data=out_summary, next_cursor=summary_next_cursor)
+            return fast_json_response(FindingsSummaryPage(data=out_summary, next_cursor=summary_next_cursor))
 
         if fields == "judgment":
             # 7b-v — the CHECKED band's weight. The SAME two laterals as
@@ -1161,70 +1195,26 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
                 judgment_next_cursor = _encode_cursor(
                     last_judgment.produced_at, last_judgment.id,
                 )
-            return FindingsJudgmentPage(
+            return fast_json_response(FindingsJudgmentPage(
                 data=out_judgment, next_cursor=judgment_next_cursor,
-            )
+            ))
 
-        # The lateral picks the LATEST faithfulness-verify critique per finding
-        # and surfaces BOTH the gate input (overall_score) AND the P0-T3
-        # faithfulness-verify detail block (cr.data->'data'->'verification' —
-        # written by the verify pass via CritiquePayload.data). The verification
-        # block is NULL for a finding with no faithfulness critique, so the API
-        # surfaces no fabricated block and effective_confidence stays ==
-        # confidence (no regression).
-        #
-        # S8-T2 — PIN to the faithfulness critique (``title LIKE
-        # 'Faithfulness verify%'``), not just any newest ``overall_score``
-        # critique. Without the pin a later GENERIC critique (e.g. a
-        # country_critic that also stamps ``overall_score``) would win the
-        # ``produced_at DESC`` race and OVERWRITE the faithfulness demotion,
-        # un-demoting a finding the verify pass floored. Mirrors the composition
-        # GATHER lateral (meta_findings_synthesizer) + gepa parent SQL, which
-        # already pin.
-        # C2b (P4-6) — a SECOND lateral picks the latest STRUCTURAL verify
-        # critique (``title LIKE 'Structural verify%'``, DISTINCT from the
-        # faithfulness lateral above — a structural finding never has a
-        # faithfulness critique). It surfaces the ``structural_verified`` marker
-        # (flips the badge to ``structural-verified``), the structural
-        # verification detail (shown when no faithfulness block exists), and the
-        # structural score (folded into effective_confidence ONLY when the gate
-        # flag is on — see _hydrate_finding). Pinned by title so it can never
-        # shadow the faithfulness demotion.
-        sql = f"""
-            WITH f AS MATERIALIZED (
-                SELECT f.id, f.kind, f.title, f.body, f.confidence, f.severity,
-                       f.data, f.target_id, f.target_version, f.analyst_id,
-                       f.analyst_version, f.produced_at, f.derived_from,
-                       f.schema_uri, f.run_id, f.created_at
-                  FROM analyst_outputs f
-                 WHERE {' AND '.join(where)}
-                 ORDER BY f.produced_at DESC, f.id DESC
-                 {page_limit}
-            ), {_CRITIC_SCORE_CTE}, {_STRUCTURAL_BADGE_CTE}
-            SELECT f.id, f.kind, f.title, f.body, f.confidence, f.severity,
-                   f.data, f.target_id, f.target_version, f.analyst_id,
-                   f.analyst_version, f.produced_at, f.derived_from,
-                   f.schema_uri, f.run_id, f.created_at,
-                   c.critic_score AS critic_score,
-                   c.verification AS verification,
-                   s.structural_verified AS structural_verified,
-                   s.structural_score AS structural_score,
-                   s.structural_verification AS structural_verification
-              FROM f
-              LEFT JOIN c ON c.fid = f.id::text
-              LEFT JOIN s ON s.fid = f.id::text
-             {after_fold}
-        """
-
+        # The full row: the gate input, both verification folds, the badge —
+        # substrate_reads_folds.full_row_sql (the S8-T2 / C2b pins; P-5: the
+        # jsonb columns as text, parsed with the page bytes off the loop).
+        sql = _full_row_sql(" AND ".join(where), page_limit, after_fold)
         async with deps.descriptor_registry.pg.acquire() as conn:
             rows = await conn.fetch(sql, *args)
             next_cursor = await _facet_next_cursor(conn, rows)
 
-        out = [_hydrate_finding(r) for r in rows[:limit]]
-        if len(rows) > limit and out:
-            last = out[-1]
-            next_cursor = _encode_cursor(last.produced_at, last.id)
-        return FindingsPage(data=out, next_cursor=next_cursor)
+        def _page() -> FindingsPage:
+            out = [_hydrate_finding(_parse_full_row(r)) for r in rows[:limit]]
+            page_cursor = next_cursor
+            if len(rows) > limit and out:
+                page_cursor = _encode_cursor(out[-1].produced_at, out[-1].id)
+            return FindingsPage(data=out, next_cursor=page_cursor)
+
+        return await page_json_response_off_loop(_page)
 
     # ---------------- situations ----------------
 
@@ -1261,10 +1251,12 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
         # 0216). Unset (the default) is BYTE-IDENTICAL to today's behaviour
         # — no clause is added and every existing caller is unaffected.
         access_class_in: str | None = Query(default=None),
+        # Light by default (``signal_list_weight``); the payload is fields=full.
+        fields: SignalsFields = Query(default=SIGNALS_DEFAULT_FIELDS),
         limit: int = Query(default=DEFAULT_LIMIT),
         cursor: str | None = Query(default=None),
         principal: str = Depends(require_bearer),
-    ) -> SignalsPage:
+    ) -> SignalsPage | Response:
         limit = _validate_limit(limit)
 
         where: list[str] = []
@@ -1275,7 +1267,7 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
         # dup's ``canonical_signal_id`` to the kept row. Show only canonical
         # signals (self-pointer or not-yet-deduped) so the read surface isn't ~4x
         # the real volume.
-        where.append("(canonical_signal_id IS NULL OR canonical_signal_id = id)")
+        where.append(CANONICAL_ONLY_SQL)
 
         # Source-first: signals are TARGET-AGNOSTIC. A ``target_id`` filter is
         # resolved to the target's scope.geo (the per-target discriminator, the
@@ -1341,6 +1333,9 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
         if len(rows) > limit and out:
             last = out[-1]
             next_cursor = _encode_cursor(last.produced_at, last.id)
+        if fields == "summary":
+            return fast_json_response(SignalsSummaryPage(
+                data=[summary_row(o) for o in out], next_cursor=next_cursor))
         return SignalsPage(data=out, next_cursor=next_cursor)
 
     # ---------------- contention (Holes-B Wave 5, #101) ----------------

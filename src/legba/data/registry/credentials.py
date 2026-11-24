@@ -58,6 +58,7 @@ from nacl.utils import random as nacl_random
 
 from ..config import PostgresConfig
 from ..postgres import PostgresStore
+from ..principals import handle_for_actor
 from .emitter import NullEventEmitter, RegistryEventEmitter
 from .vault_events import vault_event_payload, vault_subject
 
@@ -250,8 +251,8 @@ class CredentialVault:
                 """
                 INSERT INTO stack_credentials
                     (secret_id, version, is_current, nonce, ciphertext,
-                     created_by, notes)
-                VALUES ($1, $2, TRUE, $3, $4, $5, $6)
+                     created_by, notes, written_by)
+                VALUES ($1, $2, TRUE, $3, $4, $5, $6, legba_principal($7))
                 """,
                 secret_id,
                 next_version,
@@ -259,6 +260,7 @@ class CredentialVault:
                 ciphertext,
                 actor,
                 notes,
+                handle_for_actor(actor),
             )
         logger.info(
             "stored credential secret_id=%s version=%d actor=%s",

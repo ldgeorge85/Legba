@@ -32,6 +32,13 @@ const EXPLAIN =
   'with faithfulness. "Indicative" means too few verdicts exist to call it a ' +
   "rate; the number is shown with its n rather than withheld."
 
+/** What the badge's figures are taken over: the unit, across its reads. */
+export function unitScope(score: Pick<UnitEvalScore, 'n_findings'>): string {
+  return Number.isFinite(score.n_findings)
+    ? `unit, over ${score.n_findings} read${score.n_findings === 1 ? '' : 's'}:`
+    : 'unit, all reads:'
+}
+
 export function UnitEvalBadge({ analystId }: { analystId: string | null | undefined }) {
   const [score, setScore] = useState<UnitEvalScore | null>(null)
 
@@ -63,6 +70,12 @@ export function UnitEvalBadge({ analystId }: { analystId: string | null | undefi
       testId="unit-eval-badge"
     >
       <Gauge className="h-3 w-3" aria-hidden />
+      {/* C2 — the badge's faithfulness is the UNIT's, over its reads, not this
+          record's; beside a record it read as the record's own score and
+          contradicted the record's verdict. The scope is named in front. */}
+      <span className="text-ink-3" data-testid="unit-eval-scope">
+        {unitScope(score)}
+      </span>
       {score.badge}
     </InfoTip>
   )

@@ -226,7 +226,7 @@ async def test_run_method_happy_path():
     # Single LLM call.
     assert len(llm.calls) == 1
     assert llm.calls[0]["max_tokens"] == 1024
-    assert llm.calls[0]["temperature"] == 0.2
+    assert llm.calls[0]["temperature"] == 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -1984,17 +1984,34 @@ def test_prior_read_reference_leaves_ordinary_prose_alone():
         assert _normalize_citation_markers(raw) == raw
 
 
-def test_prior_read_reference_has_exactly_one_definition():
-    """The write-time and verify-time normalizers are MIRRORED copies by
-    necessity (verify.py stays stdlib-only and must not import the analysts
-    package) — but this syntax was born after that constraint was already paid
-    for in the other direction: analysts MAY import provenance. So it is
-    IMPORTED, and a drift guard is unnecessary because there is nothing to
-    drift. This pins that it stays that way."""
+def test_the_write_time_normalizer_has_exactly_one_definition():
+    """The write-time rules are IMPORTED from ``provenance.citation_markers``,
+    not mirrored into this module.
+
+    The constraint that once forced a mirror runs one way only — verify.py
+    stays stdlib-only and must not import the analysts package — and analysts
+    MAY import provenance. The mirror was kept anyway until 2026-09-28, when it
+    became a defect of its own: the rule sat in a module the CONSULT path
+    cannot import (``inline_target`` imports ``consult_on_demand``, which
+    imports the consult census), so consult answers full of ``【…】`` were never
+    normalized and their census graded cited sentences as model knowledge. The
+    rules moved down to the leaf and this pins that they stay there — a
+    re-mirrored copy is a regression, not a refactor.
+    """
     from legba.data.analysts import inline_target
     from legba.data.provenance import citation_markers
 
-    assert inline_target._PRIOR_READ_REF_RE is citation_markers._PRIOR_READ_REF_RE
+    assert (
+        inline_target.normalize_inline_citation_markers
+        is citation_markers.normalize_inline_citation_markers
+    )
+    assert inline_target._normalize_citation_markers("x 【7】") == "x [7]"
+    # No private copy of any drift regex is left behind to drift.
+    assert not [
+        name
+        for name in vars(inline_target)
+        if name.startswith("_VARIANT_") or name.startswith("_COMPOUND_REF")
+    ]
 
 
 def test_normalize_annotation_allowlist_is_not_a_catch_all():

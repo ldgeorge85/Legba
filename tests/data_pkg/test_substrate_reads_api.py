@@ -336,7 +336,7 @@ async def _insert_signal(
 async def test_findings_empty(substrate_app, client: AsyncClient):
     # Query a target_id no row exists for → guaranteed-empty result.
     tid = _unique_target_id("findings-empty")
-    r = await client.get("/api/v1/findings", params={"target_id": tid})
+    r = await client.get("/api/v1/findings", params={"fields": "full", "target_id": tid})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body == {"data": [], "next_cursor": None}
@@ -357,7 +357,7 @@ async def test_findings_single_row_shape(substrate_app, client: AsyncClient):
         analyst_id="trend_synth",
     )
 
-    r = await client.get("/api/v1/findings", params={"target_id": tid})
+    r = await client.get("/api/v1/findings", params={"fields": "full", "target_id": tid})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["next_cursor"] is None
@@ -395,7 +395,7 @@ async def test_findings_structural_analyst_stamped_verify_exempt(
         analyst_id="graph_mining",
     )
 
-    r = await client.get("/api/v1/findings", params={"target_id": tid})
+    r = await client.get("/api/v1/findings", params={"fields": "full", "target_id": tid})
     assert r.status_code == 200, r.text
     rows = {row["id"]: row for row in r.json()["data"]}
     assert rows[str(row_id)]["verify_exempt"] == "structural"
@@ -446,7 +446,7 @@ async def test_findings_structural_verified_badge_and_off_safe(
         }},
     )
 
-    r = await client.get("/api/v1/findings", params={"target_id": tid})
+    r = await client.get("/api/v1/findings", params={"fields": "full", "target_id": tid})
     assert r.status_code == 200, r.text
     rows = {row["id"]: row for row in r.json()["data"]}
 
@@ -599,7 +599,7 @@ def test_findings_projection_judgment_fields_pinned():
 
     assert JUDGMENT_FIELDS == {
         "ordinal", "source", "source_id", "produced_at",
-        "single_source", "wire_folded", "marker_class",
+        "single_source", "wire_folded", "marker_class", "claimant",
     }
 
 
@@ -652,6 +652,7 @@ def test_findings_projection_absent_leaves_default_never_fabricate():
     assert reduced == {
         "ordinal": 2, "source": None, "source_id": None, "produced_at": None,
         "single_source": False, "wire_folded": False, "marker_class": None,
+        "claimant": None,
     }
 
 
@@ -669,7 +670,7 @@ def test_findings_projection_handles_string_and_malformed_input():
         {
             "ordinal": 1, "source": None, "source_id": None,
             "produced_at": None, "single_source": False,
-            "wire_folded": False, "marker_class": None,
+            "wire_folded": False, "marker_class": None, "claimant": None,
         },
     ]
     import json
@@ -732,9 +733,10 @@ def test_hydrate_finding_judgment_shape():
         assert absent not in dumped
 
 
-def test_hydrate_finding_judgment_legacy_row_has_null_verification_empty_citations():
-    """A pre-assembly / unverified / uncited row → `verification` is `null`
-    (never fabricated) and `citations` is `[]` (never guessed)."""
+def test_hydrate_finding_judgment_legacy_row_has_state_block_empty_citations():
+    """A pre-assembly / unverified / uncited row → `verification` is the
+    pending|absent STATE block (X4 READPATH, W11-F53: never null, never a
+    fabricated score) and `citations` is `[]` (never guessed)."""
     from legba.data.registry.substrate_reads_api import _hydrate_finding_judgment
 
     now = datetime.now(timezone.utc)
@@ -747,8 +749,80 @@ def test_hydrate_finding_judgment_legacy_row_has_null_verification_empty_citatio
         "verification": None, "citations_raw": None,
     }
     out = _hydrate_finding_judgment(row)
-    assert out.verification is None
+    assert out.verification is not None
+    assert out.verification["score_state"] == "pending"
+    assert out.verification["since"] == now.isoformat()
+    assert "faithfulness_score" not in out.verification
     assert out.citations == []
+
+
+def test_hydrate_finding_judgment_state_pending_absent_exempt():
+    """X4 READPATH — the three answers a block-less row gets: younger than the
+    judge window → `pending`; older → `absent` (`no_verdict`); a verify-EXEMPT
+    analyst → `absent` (`verify_exempt`) at ANY age, because the pass never
+    runs for it. A row WITH a block keeps it untouched."""
+    from legba.data.registry.substrate_reads_api import _hydrate_finding_judgment
+    from legba.data.registry.verification_state import JUDGE_PENDING_WINDOW_S
+
+    def _row(produced_at, analyst_id="escalation", verification=None):
+        return {
+            "id": uuid4(), "kind": "finding", "title": "t",
+            "analyst_id": analyst_id, "analyst_version": None,
+            "target_id": "country_g20_jp", "target_version": None,
+            "produced_at": produced_at, "severity": "elevated", "confidence": 0.87,
+            "schema_uri": "iglu:legba/finding/jsonschema/1-0-0",
+            "verification": verification, "citations_raw": None,
+        }
+
+    now = datetime.now(timezone.utc)
+    young = _hydrate_finding_judgment(_row(now - timedelta(seconds=60))).verification
+    assert young["score_state"] == "pending" and young["reason"] == "awaiting_verify"
+    assert young["judge_window_s"] == JUDGE_PENDING_WINDOW_S
+    old = _hydrate_finding_judgment(
+        _row(now - timedelta(seconds=JUDGE_PENDING_WINDOW_S + 1))
+    ).verification
+    assert old["score_state"] == "absent" and old["reason"] == "no_verdict"
+    exempt = _hydrate_finding_judgment(_row(now, analyst_id="graph_mining")).verification
+    assert exempt["score_state"] == "absent" and exempt["reason"] == "verify_exempt"
+    judged = _hydrate_finding_judgment(
+        _row(now, verification=json.dumps({"faithfulness_score": 0.5, "judge_status": "llm"}))
+    ).verification
+    assert judged == {"faithfulness_score": 0.5, "judge_status": "llm"}
+
+
+def test_hydrate_finding_full_row_carries_verification_state_only_without_block():
+    """X4 READPATH — the FULL weight keeps `verification: null` (two dozen
+    clients read it) and adds `verification_state` beside it; a judged row
+    carries no state block."""
+    from legba.data.registry.substrate_reads_api import _hydrate_finding
+
+    def _row(produced_at, verification=None):
+        return {
+            "id": uuid4(), "kind": "finding", "title": "t", "body": "",
+            "confidence": 0.9, "severity": None, "data": "{}",
+            "target_id": None, "target_version": None, "analyst_id": "military_posture",
+            "analyst_version": None, "produced_at": produced_at, "derived_from": [],
+            "schema_uri": "iglu:legba/finding/jsonschema/1-0-0", "run_id": None,
+            "created_at": produced_at, "critic_score": None, "verification": verification,
+            "structural_verified": None, "structural_score": None,
+            "structural_verification": None,
+        }
+
+    now = datetime.now(timezone.utc)
+    fresh = _hydrate_finding(_row(now))
+    assert fresh.verification is None
+    assert fresh.verification_state["score_state"] == "pending"
+    stale = _hydrate_finding(_row(now - timedelta(hours=1)))
+    assert stale.verification_state["score_state"] == "absent"
+    judged = _hydrate_finding(_row(now, verification=json.dumps({"faithfulness_score": 0.8})))
+    assert judged.verification == {"faithfulness_score": 0.8}
+    assert judged.verification_state is None
+    # The row's own exemption stamp decides: a structural producer is `absent`
+    # at once, never `pending` for a verdict that will not come.
+    structural = _hydrate_finding({**_row(now), "analyst_id": "graph_mining"})
+    assert structural.verify_exempt == "structural"
+    assert structural.verification_state["score_state"] == "absent"
+    assert structural.verification_state["reason"] == "verify_exempt"
 
 
 @pytest.mark.integration
@@ -777,7 +851,7 @@ async def test_findings_pagination_walks_cursor(
     cursor: str | None = None
     page_count = 0
     while True:
-        params: dict[str, Any] = {"limit": 3, "target_id": tid}
+        params: dict[str, Any] = {"limit": 3, "target_id": tid, "fields": "full"}
         if cursor:
             params["cursor"] = cursor
         r = await client.get("/api/v1/findings", params=params)
@@ -818,7 +892,7 @@ async def test_findings_filter_target_and_since(
 
     r = await client.get(
         "/api/v1/findings",
-        params={
+        params={"fields": "full", 
             "target_id": tid_a,
             "since": (base - timedelta(hours=1)).isoformat(),
         },
@@ -843,7 +917,7 @@ async def test_findings_filter_severity(
 
     r = await client.get(
         "/api/v1/findings",
-        params={"severity": "high", "target_id": tid},
+        params={"fields": "full", "severity": "high", "target_id": tid},
     )
     assert r.status_code == 200
     ids = [row["id"] for row in r.json()["data"]]
@@ -853,9 +927,9 @@ async def test_findings_filter_severity(
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_findings_limit_validation(client: AsyncClient):
-    r = await client.get("/api/v1/findings", params={"limit": 0})
+    r = await client.get("/api/v1/findings", params={"fields": "full", "limit": 0})
     assert r.status_code == 400
-    r = await client.get("/api/v1/findings", params={"limit": 501})
+    r = await client.get("/api/v1/findings", params={"fields": "full", "limit": 501})
     assert r.status_code == 400
 
 
@@ -884,7 +958,7 @@ async def test_findings_uncritiqued_has_null_critic_score(
     await _insert_finding(
         pg_store, title="uncritiqued", confidence=0.8, target_id=tid,
     )
-    r = await client.get("/api/v1/findings", params={"target_id": tid})
+    r = await client.get("/api/v1/findings", params={"fields": "full", "target_id": tid})
     assert r.status_code == 200, r.text
     row = r.json()["data"][0]
     assert row["critic_score"] is None
@@ -906,7 +980,7 @@ async def test_findings_critic_score_folds_confidence_down(
     )
     await _insert_critique(pg_store, analyzed_output_id=fid, overall_score=0.3)
 
-    r = await client.get("/api/v1/findings", params={"target_id": tid})
+    r = await client.get("/api/v1/findings", params={"fields": "full", "target_id": tid})
     assert r.status_code == 200, r.text
     row = r.json()["data"][0]
     assert row["id"] == str(fid)
@@ -930,7 +1004,7 @@ async def test_findings_high_critic_score_does_not_inflate(
     )
     await _insert_critique(pg_store, analyzed_output_id=fid, overall_score=0.95)
 
-    r = await client.get("/api/v1/findings", params={"target_id": tid})
+    r = await client.get("/api/v1/findings", params={"fields": "full", "target_id": tid})
     row = r.json()["data"][0]
     assert row["critic_score"] == pytest.approx(0.95, abs=1e-4)
     assert row["effective_confidence"] == pytest.approx(0.5, abs=1e-4)
@@ -954,7 +1028,7 @@ async def test_findings_latest_critique_wins(
     )
     await _insert_critique(pg_store, analyzed_output_id=fid, overall_score=0.6)
 
-    r = await client.get("/api/v1/findings", params={"target_id": tid})
+    r = await client.get("/api/v1/findings", params={"fields": "full", "target_id": tid})
     row = r.json()["data"][0]
     assert row["critic_score"] == pytest.approx(0.6, abs=1e-4)
     assert row["effective_confidence"] == pytest.approx(0.6, abs=1e-4)
@@ -989,7 +1063,7 @@ async def test_findings_faithfulness_verification_block_surfaces(
         pg_store, analyzed_output_id=fid, overall_score=0.5, data_extra=verification,
     )
 
-    r = await client.get("/api/v1/findings", params={"target_id": tid})
+    r = await client.get("/api/v1/findings", params={"fields": "full", "target_id": tid})
     assert r.status_code == 200, r.text
     row = r.json()["data"][0]
     assert row["id"] == str(fid)
@@ -1039,7 +1113,7 @@ async def test_findings_generic_critique_cannot_overwrite_faithfulness_demotion(
         pg_store, analyzed_output_id=fid, overall_score=0.9, title="critique",
     )
 
-    r = await client.get("/api/v1/findings", params={"target_id": tid})
+    r = await client.get("/api/v1/findings", params={"fields": "full", "target_id": tid})
     assert r.status_code == 200, r.text
     row = r.json()["data"][0]
     assert row["id"] == str(fid)
@@ -1065,7 +1139,7 @@ async def test_findings_unverified_has_no_verification_block(
     await _insert_finding(
         pg_store, title="legacy unverified", confidence=0.7, target_id=tid,
     )
-    r = await client.get("/api/v1/findings", params={"target_id": tid})
+    r = await client.get("/api/v1/findings", params={"fields": "full", "target_id": tid})
     row = r.json()["data"][0]
     assert row["verification"] is None
     assert row["effective_confidence"] == pytest.approx(0.7, abs=1e-4)
@@ -1103,7 +1177,7 @@ async def test_findings_target_id_null_returns_only_orphans(
 
     r = await client.get(
         "/api/v1/findings",
-        params={"target_id_null": "true", "analyst_id": analyst},
+        params={"fields": "full", "target_id_null": "true", "analyst_id": analyst},
     )
     assert r.status_code == 200, r.text
     rows = r.json()["data"]
@@ -1138,7 +1212,7 @@ async def test_findings_q_matches_title_or_body_keyword(
 
     r = await client.get(
         "/api/v1/findings",
-        params={"q": "insurgency", "analyst_id": analyst},
+        params={"fields": "full", "q": "insurgency", "analyst_id": analyst},
     )
     assert r.status_code == 200, r.text
     ids = {row["id"] for row in r.json()["data"]}
@@ -1164,7 +1238,7 @@ async def test_findings_analyst_id_in_returns_union(
 
     r = await client.get(
         "/api/v1/findings",
-        params={"analyst_id_in": f"{a1},{a2}", "target_id": tid},
+        params={"fields": "full", "analyst_id_in": f"{a1},{a2}", "target_id": tid},
     )
     assert r.status_code == 200, r.text
     ids = {row["id"] for row in r.json()["data"]}
@@ -1200,7 +1274,7 @@ async def test_findings_q_filter_composes_with_cursor_pagination(
     page_count = 0
     while True:
         params: dict[str, Any] = {
-            "limit": 2, "q": "drought", "analyst_id": analyst,
+            "limit": 2, "q": "drought", "analyst_id": analyst, "fields": "full",
         }
         if cursor:
             params["cursor"] = cursor
@@ -1250,7 +1324,7 @@ async def test_findings_reachability_facets_preserve_verification_fold(
 
     r = await client.get(
         "/api/v1/findings",
-        params={"target_id_null": "true", "analyst_id": analyst},
+        params={"fields": "full", "target_id_null": "true", "analyst_id": analyst},
     )
     assert r.status_code == 200, r.text
     rows = r.json()["data"]
@@ -1323,13 +1397,13 @@ async def test_findings_filter_verified_true_and_false(
     )
 
     r = await client.get(
-        "/api/v1/findings", params={"target_id": tid, "verified": "true"},
+        "/api/v1/findings", params={"fields": "full", "target_id": tid, "verified": "true"},
     )
     assert r.status_code == 200, r.text
     assert {row["id"] for row in r.json()["data"]} == {str(verified_fid)}
 
     r = await client.get(
-        "/api/v1/findings", params={"target_id": tid, "verified": "false"},
+        "/api/v1/findings", params={"fields": "full", "target_id": tid, "verified": "false"},
     )
     assert r.status_code == 200, r.text
     assert {row["id"] for row in r.json()["data"]} == {
@@ -1370,7 +1444,7 @@ async def test_findings_filter_judge_status_each_value(
     for status_val, fid in by_status.items():
         r = await client.get(
             "/api/v1/findings",
-            params={"target_id": tid, "judge_status": status_val},
+            params={"fields": "full", "target_id": tid, "judge_status": status_val},
         )
         assert r.status_code == 200, r.text
         assert {row["id"] for row in r.json()["data"]} == {str(fid)}, status_val
@@ -1378,7 +1452,7 @@ async def test_findings_filter_judge_status_each_value(
     # The unsampled row IS verified — the floor measured a faithfulness score.
     r = await client.get(
         "/api/v1/findings",
-        params={"target_id": tid, "verified": "true", "judge_status": "unsampled"},
+        params={"fields": "full", "target_id": tid, "verified": "true", "judge_status": "unsampled"},
     )
     assert r.status_code == 200, r.text
     assert {row["id"] for row in r.json()["data"]} == {str(by_status["unsampled"])}
@@ -1389,7 +1463,7 @@ async def test_findings_filter_judge_status_each_value(
 async def test_findings_judge_status_rejects_unknown_value(client: AsyncClient):
     """The `JudgeStatus` enum is closed — an unknown value is a request error,
     never a silent empty page."""
-    r = await client.get("/api/v1/findings", params={"judge_status": "bogus"})
+    r = await client.get("/api/v1/findings", params={"fields": "full", "judge_status": "bogus"})
     assert r.status_code == 422
 
 
@@ -1426,7 +1500,7 @@ async def test_findings_verified_filter_composes_with_cursor_pagination(
     page_count = 0
     while True:
         params: dict[str, Any] = {
-            "limit": 2, "target_id": tid, "verified": "true",
+            "limit": 2, "target_id": tid, "verified": "true", "fields": "full",
         }
         if cursor:
             params["cursor"] = cursor
@@ -1577,7 +1651,7 @@ async def test_signals_single_row_shape(
         pg_store, title="Reuters headline", language="en",
         source_id=src,
     )
-    r = await client.get("/api/v1/signals", params={"source_id": src})
+    r = await client.get("/api/v1/signals", params={"source_id": src, "fields": "full"})
     assert r.status_code == 200
     body = r.json()
     assert body["next_cursor"] is None
@@ -1590,6 +1664,35 @@ async def test_signals_single_row_shape(
     # Source-first: signals are target-agnostic; source_id is the origin.
     assert row["source_id"] == src
     assert row["classification_scores"] is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_signals_are_light_by_default(
+    substrate_app, client: AsyncClient,
+):
+    """W11 walk fix: an omitted ``fields`` answers ``SignalSummaryRow`` — the
+    columns a list draws and ``data`` cut to a title and its clock; the
+    payload is ``fields=full`` by name (roll 84 live: 2.21 MB at 500 rows)."""
+    from legba.data.registry.list_weights import LIST_ROUTES
+    from legba.data.registry.signal_list_weight import LIGHT_DATA_KEYS, SignalSummaryRow
+
+    _, _, pg_store = substrate_app
+    src = _unique_source_id("sig-light")
+    for i in range(50):
+        await _insert_signal(pg_store, title=f"light {i}", language="en", source_id=src)
+    light = await client.get("/api/v1/signals", params={"source_id": src})
+    full = await client.get("/api/v1/signals", params={"source_id": src, "fields": "full"})
+    assert light.status_code == full.status_code == 200
+    rows = light.json()["data"]
+    assert len(rows) == 50
+    assert set(rows[0]) == set(SignalSummaryRow.model_fields)
+    assert set(rows[0]["data"]) <= set(LIGHT_DATA_KEYS)
+    assert rows[0]["title"].startswith("light ")
+    assert [r["id"] for r in rows] == [r["id"] for r in full.json()["data"]]
+    assert "classification_scores" in full.json()["data"][0]
+    assert len(light.content) < len(full.content)
+    assert len(light.content) <= LIST_ROUTES["/api/v1/signals"].page_budget
 
 
 @pytest.mark.integration
@@ -1777,7 +1880,7 @@ async def test_findings_access_class_in_filters_and_is_byte_identical_absent(
         )
 
     # Absent — both findings: the pre-Wave-E behaviour, unchanged.
-    r_absent = await client.get("/api/v1/findings", params={"target_id": tid})
+    r_absent = await client.get("/api/v1/findings", params={"fields": "full", "target_id": tid})
     assert r_absent.status_code == 200
     ids_absent = {row["id"] for row in r_absent.json()["data"]}
     assert ids_absent == {str(finding_id), str(other_id)}
@@ -1785,7 +1888,7 @@ async def test_findings_access_class_in_filters_and_is_byte_identical_absent(
     # Present — only the finding whose derived_from signal matches.
     r_filtered = await client.get(
         "/api/v1/findings",
-        params={"target_id": tid, "access_class_in": "internal"},
+        params={"fields": "full", "target_id": tid, "access_class_in": "internal"},
     )
     assert r_filtered.status_code == 200
     ids_filtered = [row["id"] for row in r_filtered.json()["data"]]
@@ -1798,7 +1901,7 @@ async def test_findings_access_class_in_unknown_value_400(
     client: AsyncClient,
 ):
     r = await client.get(
-        "/api/v1/findings", params={"access_class_in": "nonsense"},
+        "/api/v1/findings", params={"fields": "full", "access_class_in": "nonsense"},
     )
     assert r.status_code == 400
     assert "nonsense" in r.json()["detail"]
@@ -1991,7 +2094,7 @@ async def test_findings_default_omits_fields_stays_full_shape(
         data_extra={"verification": {"faithfulness_score": 0.9, "score_state": "scored"}},
     )
 
-    r = await client.get("/api/v1/findings", params={"target_id": tid})
+    r = await client.get("/api/v1/findings", params={"fields": "full", "target_id": tid})
     assert r.status_code == 200, r.text
     row = r.json()["data"][0]
 
@@ -2002,7 +2105,11 @@ async def test_findings_default_omits_fields_stays_full_shape(
         "produced_at", "derived_from", "schema_uri", "run_id", "created_at",
         "critic_score", "effective_confidence", "verification",
         "verify_exempt", "below_floor",
+        # X4 READPATH — additive: the pending|absent state, set ONLY when
+        # `verification` is null (a judged row, like this one, carries None).
+        "verification_state",
     }
+    assert row["verification_state"] is None
     assert row["body"] == "Full composed prose the summary weight never carries."
     assert row["data"] == _SUMMARY_ASSEMBLY_DATA
     assert row["verification"]["faithfulness_score"] == pytest.approx(0.9, abs=1e-4)
@@ -2173,13 +2280,56 @@ async def test_findings_fields_unknown_value_422(client: AsyncClient):
     routes deliberately disagree here."""
     r = await client.get("/api/v1/findings", params={"fields": "bogus"})
     assert r.status_code == 422
-    r = await client.get("/api/v1/findings", params={"fields": "full"})
-    assert r.status_code == 422  # "full" is not a valid value on THIS route — only the default (omitted) is full weight.
-    # Both real spellings still work.
+    # P-8: "full" is asked for BY NAME; omitted is the light summary weight.
+    for spelling in ("full", "summary", "judgment"):
+        r = await client.get("/api/v1/findings", params={"fields": spelling})
+        assert r.status_code == 200, spelling
     r = await client.get("/api/v1/findings")
     assert r.status_code == 200
-    r = await client.get("/api/v1/findings", params={"fields": "summary"})
-    assert r.status_code == 200
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_default_is_the_summary_weight_and_full_is_by_name(
+    substrate_app, client: AsyncClient,
+):
+    """P-8 — lists are light by default: an omitted `fields` answers exactly
+    what `fields=summary` answers; `fields=full` is the whole row."""
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("p8default")
+    await _insert_finding(pg_store, target_id=tid, title="p8 default")
+    omitted = await client.get("/api/v1/findings", params={"target_id": tid})
+    summary = await client.get(
+        "/api/v1/findings", params={"target_id": tid, "fields": "summary"})
+    full = await client.get(
+        "/api/v1/findings", params={"target_id": tid, "fields": "full"})
+    assert omitted.status_code == summary.status_code == full.status_code == 200
+    assert omitted.json() == summary.json()
+    row = omitted.json()["data"][0]
+    assert "data" not in row and "body" not in row and "derived_from" not in row
+    assert {"data", "body", "derived_from"} <= set(full.json()["data"][0])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_finding_by_id_is_the_full_row(substrate_app, client: AsyncClient):
+    """P-8 — `GET /findings/{id}` answers ONE finding at full weight, the
+    same row a `fields=full` page carries; 404 for an unknown id or a row of
+    another kind; 400 for a malformed id."""
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("p8byid")
+    fid = await _insert_finding(pg_store, target_id=tid, title="p8 by id")
+    await _insert_critique(pg_store, analyzed_output_id=fid, overall_score=0.42)
+    page = await client.get(
+        "/api/v1/findings", params={"target_id": tid, "fields": "full"})
+    by_id = await client.get(f"/api/v1/findings/{fid}")
+    assert by_id.status_code == 200, by_id.text
+    assert by_id.json() == page.json()["data"][0]
+    assert by_id.json()["critic_score"] == pytest.approx(0.42)
+    missing = await client.get(f"/api/v1/findings/{uuid4()}")
+    assert missing.status_code == 404
+    bad = await client.get("/api/v1/findings/not-a-uuid")
+    assert bad.status_code == 400
 
 
 @pytest.mark.integration
@@ -2297,7 +2447,7 @@ async def test_findings_summary_row_under_2kb(substrate_app, client: AsyncClient
         data_extra=heavy_verification,
     )
 
-    r_full = await client.get("/api/v1/findings", params={"target_id": tid})
+    r_full = await client.get("/api/v1/findings", params={"fields": "full", "target_id": tid})
     assert r_full.status_code == 200, r_full.text
     full_row_bytes = len(json.dumps(r_full.json()["data"][0]).encode("utf-8"))
 
@@ -2424,7 +2574,7 @@ async def test_findings_judgment_shape(substrate_app, client: AsyncClient):
     citation = row["citations"][0]
     assert set(citation.keys()) == {
         "ordinal", "source", "source_id", "produced_at",
-        "single_source", "wire_folded", "marker_class",
+        "single_source", "wire_folded", "marker_class", "claimant",
     }
     assert citation["ordinal"] == 1
     assert citation["source"] == "security_desk"
@@ -2460,18 +2610,18 @@ async def test_findings_judgment_flat_citations_fallback(
     assert row["citations"] == [{
         "ordinal": 5, "source": "flat_source", "source_id": None,
         "produced_at": None, "single_source": False, "wire_folded": False,
-        "marker_class": None,
+        "marker_class": None, "claimant": None,
     }]
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_findings_judgment_legacy_row_has_null_verification_empty_citations(
+async def test_findings_judgment_legacy_row_has_state_block_empty_citations(
     substrate_app, client: AsyncClient,
 ):
-    """A pre-assembly / unverified / uncited row → `verification` is `null`
-    and `citations` is `[]` — the same honesty rule every other weight on
-    this route follows."""
+    """A pre-assembly / unverified / uncited row → `verification` is the
+    pending|absent STATE block (X4 READPATH — never null, never a score) and
+    `citations` is `[]`."""
     _, _, pg_store = substrate_app
     tid = _unique_target_id("judgment-legacy")
     fid = await _insert_finding(pg_store, title="legacy composed read", target_id=tid)
@@ -2482,8 +2632,63 @@ async def test_findings_judgment_legacy_row_has_null_verification_empty_citation
     assert r.status_code == 200, r.text
     row = r.json()["data"][0]
     assert row["id"] == str(fid)
-    assert row["verification"] is None
+    assert row["verification"]["score_state"] == "pending"
+    assert "faithfulness_score" not in row["verification"]
     assert row["citations"] == []
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_judgment_score_state_pending_absent_on_real_rows(
+    substrate_app, client: AsyncClient,
+):
+    """X4 READPATH (W11-F53) — on REAL rows through the ASGI route: a finding
+    written a minute ago with no critique reads `pending`; one written an hour
+    ago with no critique reads `absent`; a judged neighbour keeps its real
+    block. `since` is the row's own `produced_at`. The full weight says the
+    same thing in `verification_state`, beside its unchanged `null`."""
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("judgment-state")
+    now = datetime.now(timezone.utc)
+    fresh = await _insert_finding(
+        pg_store, title="fresh unit read", target_id=tid, analyst_id="escalation",
+        produced_at=now - timedelta(seconds=60),
+    )
+    lost = await _insert_finding(
+        pg_store, title="read whose verify pass was lost", target_id=tid,
+        analyst_id="military_posture", produced_at=now - timedelta(hours=1),
+    )
+    judged = await _insert_finding(
+        pg_store, title="judged neighbour", target_id=tid, analyst_id="escalation",
+        produced_at=now - timedelta(seconds=30),
+    )
+    await _insert_critique(
+        pg_store, analyzed_output_id=judged, overall_score=0.9,
+        data_extra={"verification": {"faithfulness_score": 0.9, "judge_status": "llm"}},
+    )
+
+    r = await client.get(
+        "/api/v1/findings", params={"target_id": tid, "fields": "judgment"},
+    )
+    assert r.status_code == 200, r.text
+    rows = {row["id"]: row for row in r.json()["data"]}
+    assert rows[str(fresh)]["verification"]["score_state"] == "pending"
+    assert rows[str(fresh)]["verification"]["reason"] == "awaiting_verify"
+    assert datetime.fromisoformat(rows[str(fresh)]["verification"]["since"]) == datetime.fromisoformat(
+        rows[str(fresh)]["produced_at"]
+    )
+    assert rows[str(lost)]["verification"]["score_state"] == "absent"
+    assert rows[str(lost)]["verification"]["reason"] == "no_verdict"
+    assert rows[str(judged)]["verification"]["judge_status"] == "llm"
+    assert "score_state" not in rows[str(judged)]["verification"]
+
+    full = await client.get("/api/v1/findings", params={"fields": "full", "target_id": tid})
+    assert full.status_code == 200, full.text
+    frows = {row["id"]: row for row in full.json()["data"]}
+    assert frows[str(fresh)]["verification"] is None
+    assert frows[str(fresh)]["verification_state"]["score_state"] == "pending"
+    assert frows[str(lost)]["verification_state"]["score_state"] == "absent"
+    assert frows[str(judged)]["verification_state"] is None
 
 
 @pytest.mark.integration
@@ -2639,7 +2844,7 @@ async def test_findings_judgment_row_far_smaller_than_default(
         data_extra=heavy_verification,
     )
 
-    r_full = await client.get("/api/v1/findings", params={"target_id": tid})
+    r_full = await client.get("/api/v1/findings", params={"fields": "full", "target_id": tid})
     assert r_full.status_code == 200, r_full.text
     full_row_bytes = len(json.dumps(r_full.json()["data"][0]).encode("utf-8"))
 
@@ -2668,3 +2873,56 @@ async def test_findings_judgment_row_far_smaller_than_default(
         f"judgment={judgment_row_bytes}B "
         f"ratio={judgment_row_bytes / full_row_bytes:.2f}",
     )
+
+
+# ---------------------------------------------------------------------------
+# P-8 — the default page's byte budget (registry/list_weights.py).
+# ---------------------------------------------------------------------------
+
+
+def _realistic_finding_data(i: int) -> dict[str, Any]:
+    """A desk read's width on live (~14 KB stored): quoted assembly blocks
+    with spans and signals, citations with evidence text."""
+    blocks = [
+        {"target_name": f"Subject {b}", "text": "Quoted prose of the block. " * 40,
+         "spans": [{"start": 0, "end": 120,
+                    "signals": [str(uuid4()) for _ in range(6)]}]}
+        for b in range(6)
+    ]
+    citations = [
+        {"marker": f"[{c}]", "ordinal": c, "signal_id": str(uuid4()),
+         "title": "A cited article title", "evidence_text": "Evidence text. " * 30}
+        for c in range(1, 13)
+    ]
+    return {"data": {"assembly": {"tier": "country", "regime": "steady",
+                                  "lead": {"kind": "thread"}, "blocks": blocks,
+                                  "drops": {"counts": {"trimmed": 2}}},
+                     "citations": citations, "n": i}}
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_default_page_stays_under_its_byte_budget(
+    substrate_app, client: AsyncClient,
+):
+    from legba.data.registry.list_weights import LIST_ROUTES
+    from legba.data.registry.substrate_reads_api import DEFAULT_LIMIT
+
+    route = "/api/v1/findings"
+    budget = LIST_ROUTES[route].page_budget
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("p8budget")
+    for i in range(DEFAULT_LIMIT):
+        fid = await _insert_finding(
+            pg_store, target_id=tid, title=f"A desk read headline {i}",
+            body="Body prose of a desk read. " * 80, data=_realistic_finding_data(i),
+        )
+        await _insert_critique(pg_store, analyzed_output_id=fid, overall_score=0.8)
+    r = await client.get(route, params={"target_id": tid})
+    assert r.status_code == 200, r.text
+    assert len(r.json()["data"]) == DEFAULT_LIMIT
+    assert len(r.content) <= budget, (
+        f"{route}: default page is {len(r.content)} bytes, budget {budget}")
+    full = await client.get(route, params={"target_id": tid, "fields": "full"})
+    assert len(full.content) > 10 * len(r.content), (
+        "fixture not realistic: the full page should dwarf the light one")

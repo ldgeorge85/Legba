@@ -52,7 +52,10 @@ from .absence_api import ABSENCE_KINDS, AbsenceItem, AbsenceOut, read_absences
 #: Desk Brief's situations/tracked-events section, A10/7b-iii), never a row
 #: the export route reads itself. Bounded so the honest-cap discipline that
 #: already governs ``EXPORT_MAX_ITEMS`` covers this free-text field too.
-APPENDIX_MAX_CHARS = 20_000
+# W11-F78: 20,000 refused every G20 desk's brief (20 situations × 20 events ran
+# to 23,000 chars); the client now caps itself at 30,000 and names what it
+# withheld — this is the DoS guard above that, never the document's shape.
+APPENDIX_MAX_CHARS = 40_000
 
 
 class ExportAppendixIn(BaseModel):

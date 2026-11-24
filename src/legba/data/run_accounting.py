@@ -133,6 +133,12 @@ _MAX_FIELD_CHARS = 500
 #: (see :func:`current_prompt_rendered`) — never a silent cut.
 _MAX_PROMPT_RENDERED_CHARS = 32_000
 
+#: W2-F1: the persisted ``prompt_tail`` — the LAST this-many chars of the full
+#: prompt, kept beside the head-capped ``prompt_rendered`` so the grounding
+#: block's ordinals (rendered at the END of the prompt) stay visible on the
+#: trace without storing the middle and without raising the head cap.
+_PROMPT_TAIL_CHARS = 4_000
+
 #: Cap on the per-call ``completion_text`` receipt. Far above
 #: :data:`_MAX_FIELD_CHARS` (which exists to backstop error strings and block
 #: causes) because this field's whole job is to make a bad answer readable:
@@ -248,6 +254,22 @@ def bind_run_steps(
     return out
 
 
+def append_run_step(step: dict[str, Any]) -> bool:
+    """Append ``step`` to the bound run's steps list (T-2: the provider plane's
+    ``thinking_fallback``). ``False`` (nothing written) when no account is
+    bound or the kind registered no steps list — the call's receipt still
+    carries the fact."""
+    try:
+        acct = _account.get()
+        if acct is None or acct.steps is None:
+            return False
+        acct.steps.append(dict(step))
+        return True
+    except Exception:  # pragma: no cover — instrumentation must never fail a run
+        logger.debug("run_accounting.append_run_step failed", exc_info=True)
+        return False
+
+
 def current_steps() -> list[dict[str, Any]]:
     """The steps the bound run has appended so far — ``[]`` when unbound or
     when the kind never registered a list."""
@@ -337,6 +359,34 @@ def current_prompt_rendered() -> tuple[str | None, str | None]:
               f"full sha256={sha}]"
         )
     return text, sha
+
+
+def current_prompt_tail() -> dict[str, Any] | None:
+    """The ``analyst_traces.input_payload`` for a head-capped prompt (W2-F1).
+
+    ``{"prompt_tail": {"text", "chars", "total_chars", "sha256"}}`` — the LAST
+    :data:`_PROMPT_TAIL_CHARS` chars of the run's most recent LLM-call prompt,
+    its FULL length in chars and the sha256 of the full text (the same value
+    as ``prompt_sha256``). ``None`` when nothing is bound / recorded, or when
+    the prompt fits under the head cap: ``prompt_rendered`` then already holds
+    all of it and a tail would only be a duplicate. Together with the head in
+    ``prompt_rendered`` the two ends are readable; only the middle is dropped.
+    """
+    acct = _account.get()
+    if acct is None or acct.last_prompt_rendered is None:
+        return None
+    text = acct.last_prompt_rendered
+    if len(text) <= _MAX_PROMPT_RENDERED_CHARS:
+        return None
+    tail = text[-_PROMPT_TAIL_CHARS:]
+    return {
+        "prompt_tail": {
+            "text": tail,
+            "chars": len(tail),
+            "total_chars": len(text),
+            "sha256": acct.last_prompt_sha256,
+        }
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -653,12 +703,14 @@ def prompt_digest(messages: Any, system: Any = None) -> tuple[str | None, int]:
 
 __all__ = [
     "COMPLETION_TEXT_FIELD",
+    "append_run_step",
     "bind_run_accounting",
     "bind_run_steps",
     "clip_completion_text",
     "reset_run_accounting",
     "current_llm_calls",
     "current_prompt_rendered",
+    "current_prompt_tail",
     "current_steps",
     "current_tool_calls",
     "llm_call_watermark",

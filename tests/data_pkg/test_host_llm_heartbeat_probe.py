@@ -277,7 +277,6 @@ def test_probe_broken_and_container_unreachable_stay_distinct(tmp_path: Path):
 # check exists to give an operator runway ahead of.
 # ---------------------------------------------------------------------------
 
-_DiskUsage = namedtuple("usage", "total used free")
 
 
 def _extract_disk_probe() -> str:
@@ -290,20 +289,41 @@ def _extract_disk_probe() -> str:
     return m.group(1)
 
 
-def test_disk_probe_prints_pct_used_total_with_monkeypatched_disk_usage(monkeypatch, capsys):
+_StatVfs = namedtuple("statvfs", "f_frsize f_blocks f_bfree f_bavail")
+
+
+@pytest.mark.parametrize(
+    "blocks,bfree,bavail,expect_pct",
+    [
+        # 11-06 03:00Z shape: 5 % root-reserved. used/total = 89.x (what
+        # shutil read); df's used/(used+avail) = 94.x → 95, what paged nowhere.
+        (1000, 105, 55, 95),
+        (1000, 400, 350, 64),   # 600/950 = 63.16 → df rounds UP
+        (1000, 1000, 950, 0),   # empty
+        (100, 0, 0, 100),       # full, nothing available
+    ],
+)
+def test_disk_probe_is_df_use_percent_with_fake_statvfs(
+    monkeypatch, capsys, blocks, bfree, bavail, expect_pct
+):
     """Drives the REAL disk-probe body (extracted from the live script) with
-    shutil.disk_usage monkeypatched to a fixed 93.0% — hermetic, no real
-    filesystem state required to hit a specific percentage."""
+    os.statvfs faked — the figure must be df's Use%: ceil(used*100/(used+avail)),
+    never used/total (N-M, 11-13)."""
+    import math
+
     monkeypatch.setattr(
-        shutil, "disk_usage", lambda path="/": _DiskUsage(total=1000, used=930, free=70)
+        os, "statvfs", lambda path="/": _StatVfs(4096, blocks, bfree, bavail)
     )
     src = _extract_disk_probe()
     exec(compile(src, "<disk_probe>", "exec"), {"__name__": "__main__"})
-    out = capsys.readouterr().out.strip()
-    pct, used, total = out.split()
-    assert pct == "93.0"
-    assert used == "930"
-    assert total == "1000"
+    pct, used, avail = capsys.readouterr().out.strip().split()
+    used_b = (blocks - bfree) * 4096
+    avail_b = bavail * 4096
+    assert int(used) == used_b and int(avail) == avail_b
+    want = math.ceil(used_b * 100 / (used_b + avail_b)) if used_b + avail_b else 0
+    assert int(pct) == want == expect_pct
+    if bfree == 105:
+        assert used_b / (blocks * 4096) * 100 < 90  # the old shutil reading
 
 
 def _sourceable_heartbeat_lib() -> str:
@@ -326,7 +346,7 @@ echo "${STUB_DISK_OUT:-50.0 500 1000}"
 def _run_check_disk_usage(tmp_path: Path, *, stub_out: str, extra_env: dict | None = None):
     """Source the real check_disk_usage() (and its helpers) out of the live
     script, override `page` to record calls instead of hitting ntfy, stub
-    python3 on PATH to return a fixed pct/used/total, and call the real
+    python3 on PATH to return a fixed pct/used/avail, and call the real
     function. Returns (log_text, page_calls_text)."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()

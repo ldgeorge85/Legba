@@ -40,6 +40,7 @@ __all__ = [
     "SPAN_ROLE_BLUF",
     "SPAN_ROLE_CONTEXT_BODY",
     "SPAN_ROLE_WHAT_CHANGED",
+    "SPAN_ROLE_WINDOW_ADDS",
     "SPAN_ROLE_BODY",
     "SPAN_ROLE_INDICATOR",
     "SPAN_ROLES",
@@ -115,12 +116,21 @@ SPAN_ROLE_INDICATOR: str = "indicator"
 #: two origins, named as two, never merged into one claim of provenance.
 SPAN_ROLE_CONTEXT_BODY: str = "context_body"
 
+#: N-C (2026-11-11) — THE NEW-MATERIAL BULLET, a QUOTED span beside the BLUF. A
+#: desk writes what this window ADDS as one bullet ("…this window adds the
+#: multi-substation strike of 10 November…", "the new material is …"), and the
+#: world read quoted the BLUF only, so material in a body never reached the page
+#: (the EU budget fight in the UA block, the Fairford indictment in the US one).
+#: Same gate as every quoted span; ``world_block_evidence.window_adds_span``.
+SPAN_ROLE_WINDOW_ADDS: str = "window_adds"
+
 SPAN_ROLES: tuple[str, ...] = (
     SPAN_ROLE_BLUF,
     SPAN_ROLE_WHAT_CHANGED,
     SPAN_ROLE_BODY,
     SPAN_ROLE_INDICATOR,
     SPAN_ROLE_CONTEXT_BODY,
+    SPAN_ROLE_WINDOW_ADDS,
 )
 
 #: The roles that are CONTEXT rather than quotation. A frozenset rather than a

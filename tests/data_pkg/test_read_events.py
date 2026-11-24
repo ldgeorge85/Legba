@@ -192,6 +192,8 @@ async def test_migration_0189_created_the_table_and_its_indexes(pg_pool):
             "workspace",
             "session_nonce",
             "dwell_ms",
+            # lane 9: whose reading it was (nullable principal reference)
+            "written_by",
         }
         # subject_* are the nullable pair; the rest of the spine is NOT NULL.
         assert cols["subject_kind"]["is_nullable"] == "YES"

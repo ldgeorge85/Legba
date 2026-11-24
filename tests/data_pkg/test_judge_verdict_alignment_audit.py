@@ -29,7 +29,6 @@ from datetime import date, datetime, timezone
 from uuid import uuid4
 
 from legba.data.provenance.judge_pipeline_version import (
-    JUDGE_PIPELINE_VERSION,
     METRIC_FAITHFULNESS_SCORE,
     METRIC_REASON_CENSUS,
     METRIC_SEVERITY_SPLIT,
@@ -229,8 +228,13 @@ def test_stamp_copies_the_miscount_onto_the_report_only_when_a_call_was_made():
 
 
 def test_the_pipeline_version_bumped_for_this_train():
-    assert JUDGE_PIPELINE_VERSION == "2026-09-25/1"
-    assert JUDGE_PIPELINE_VERSION == STAMP_LINEAGE[-1]
+    """H3-MEASURE's OWN stamp, pinned by literal string: a later lane
+    (``2026-09-28/1``, carried_unsupported) has since become the current
+    head, so this no longer reads off ``JUDGE_PIPELINE_VERSION`` (see that
+    stamp's own test for the current-head assertions)."""
+    assert "2026-09-25/1" in STAMP_LINEAGE
+    assert STAMP_LINEAGE[STAMP_LINEAGE.index("2026-09-25/1") - 1] == "2026-09-24/1"
+    assert STAMP_LINEAGE[STAMP_LINEAGE.index("2026-09-25/1") + 1] == "2026-09-28/1"
 
 
 def test_the_lineage_declares_no_shift_on_any_family():

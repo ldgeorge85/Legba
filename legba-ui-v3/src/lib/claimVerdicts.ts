@@ -50,12 +50,64 @@ export const CLAIM_REASON_LABELS: Record<string, string> = {
   indicator_uncited_triggered: 'triggered indicator carries no citation',
   stale_leader: 'stale-cutoff officeholder reference',
   cross_target_leak: 'names only other countries than its desk target',
+  off_subject: 'is about a different place that shares its desk subject code (a homonym)',
   unhedged_periphery_citation: 'rests on periphery evidence without a hedge',
   unscoped_absence_claim: 'states an absence without scoping it to collection',
+  // Q4 (2026-09-28) — the CARRIED DATED ANCHOR. A date or figure asserted on
+  // this desk's own memory (prior read / window ledger) and on no cited
+  // signal. The reader has to be told WHICH kind of unsupported this is:
+  // nothing was fabricated at write time, the sentence simply stopped being
+  // checked, which is why it gets more confident every cycle it survives.
+  carried_unsupported:
+    'asserts a date or figure carried from the prior read / window ledger, not re-sourced from a signal this window',
+  // C-1 — a clause resting only on CLAIM rows (a party's own claim) that
+  // states the claimed event instead of the claim.
+  claim_as_fact:
+    'states as fact what its only source is a party claiming (a claim supports only "X claimed Y")',
   metadata_mismatch: 'misquotes its own recorded confidence/tier value',
   judge_contradicted_unquoted: 'judge contradiction lacked a verbatim quote (demoted to soft)',
   absence_slice_contradicted: 'scoped absence contradicted by an item in the full input slice',
   absence_slice_unresolved: 'scoped-absence check could not resolve a verdict',
+  // F-5 (W1) — the rest of verify._FAIL_CLASS_BY_REASON, so the table above
+  // is the superset it claims to be (a Python test pins the two together).
+  // Facts / register / world-knowledge flags.
+  stale_leader_vs_facts: 'officeholder named differs from the current facts-table officeholder',
+  register_self_corroboration: 'rests only on the open-situation register, stated as corroboration',
+  uncited_world_knowledge: 'states a historical or structural baseline no cited row contains',
+  // Judge demotions: the judge flagged the claim but its refutation did not hold.
+  judge_contradicted_unrefuted: 'judge contradiction restates the claim or quotes the prior read (demoted to soft)',
+  judge_prior_read_conflict: 'judge quote comes from a finding the claim never cited, usually the prior read (soft)',
+  judge_contradicted_off_scope: 'judge quote evidences something the claim did not deny (demoted to soft)',
+  judge_quote_confirms_claim: 'judge quote states the claim\'s own numbers back to it (demoted to soft)',
+  judge_contradicted_machine_row: 'judge quote is a machine-coded event record, not testimony (demoted to soft)',
+  judge_contradicted_route_excluded: 'judge contradiction on a claim already routed out of slice checking (soft)',
+  judge_contradicted_hedged_conflict: 'judge contradiction is the weak side the claim itself disclosed (soft)',
+  judge_nonpropositional_unearned: 'judge declined to grade a span that does assert a checkable particular',
+  // Composition checks.
+  buried_lead_salience: 'leads on an input much less consequential than the top one',
+  unsurfaced_input_contradiction: 'inputs disagree and the composition merged them without saying so',
+  absence_scope_laundered: 'a desk-scoped absence republished as a world-wide one',
+  attribution_direction_conflict: 'attributed to a desk whose own verdict says the opposite',
+  attribution_asserts_desk_negative: 'asserts presence of something the cited desk recorded as absent',
+  attribution_ungrounded_quote: 'quotes a phrase the named desk never wrote',
+  // Assembly arms (record-vs-source checks on a generated payload).
+  quote_not_contained: 'quoted text does not occur in its origin body',
+  quote_offset_mismatch: 'quoted text is real but not at the recorded offsets',
+  quote_origin_drift: 'quote is anchored to a body other than the one it names',
+  quote_origin_truncated: 'quote reaches past the captured evidence text',
+  scope_truncated: 'drops the collection bound its source sentence carried',
+  scope_widened: 'declares a collection bound its source sentence does not have',
+  attribution_desk_mismatch: 'attributed desk is not the producer of the cited head',
+  attribution_date_mismatch: 'attribution date differs from the cited head\'s timestamp',
+  attribution_target_mismatch: 'attributed target differs from the cited head\'s target',
+  attribution_head_unresolved: 'cited head resolves to nothing, so the block cannot be traced',
+  coverage_unit_missing: 'a declared unit has no coverage row',
+  coverage_unit_duplicated: 'a unit has two coverage rows',
+  coverage_status_invalid: 'coverage status is outside the allowed set',
+  drop_count_mismatch: 'the drop ledger\'s counts do not add up',
+  drop_why_unknown: 'a drop carries a reason outside the allowed set',
+  drop_order_violation: 'a dropped candidate ranks above a carried block',
+  drop_floor_violation: 'the selection floor\'s ledger does not add up',
 }
 
 export function claimReasonLabel(reason: string): string {

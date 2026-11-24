@@ -136,6 +136,54 @@ describe('TargetClaimsPanel', () => {
     expect(screen.getByText('Single-source rumor of a coup')).toBeInTheDocument()
   })
 
+  it('hides engine tag facets, labels topics in words and offers one severity scale (U-1)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          data: [
+            finding({
+              id: 'f1',
+              severity: 'medium',
+              data: {
+                corroboration_sources: 2,
+                tags: ['severity_delta:steady', 'severity:moderate', 'meta', 'spine:x_composition', 'topic:trade_pressure'],
+              },
+            }),
+            finding({ id: 'f2', title: 'Second claim', severity: 'moderate', data: { tags: ['topic:trade_pressure'] } }),
+          ],
+          next_cursor: null,
+        }),
+      })),
+    )
+    render(wrap(<TargetClaimsPanel registration={reg()} scope={{ target_id: 'brazil' }} mode="personal" />))
+    await waitFor(() => {
+      expect(screen.getByTestId('target-claims-tag-chips')).toBeInTheDocument()
+    })
+    const chips = screen.getByTestId('target-claims-tag-chips').textContent ?? ''
+    expect(chips).toMatch(/Trade pressure/)
+    expect(chips).not.toMatch(/severity_delta|severity:|spine|meta|topic:/)
+    // The facet list is folded behind a disclosure, closed until a topic is picked.
+    expect(screen.getByTestId('target-claims-topics').hasAttribute('open')).toBe(false)
+    // Per-claim tag chips (on the expanded claim) speak the same words.
+    fireEvent.click(screen.getByText('Troops massing near the border'))
+    expect(screen.getByTestId('target-claim-tags-f1').textContent).toBe('Trade pressure')
+
+    const opts = Array.from(
+      (screen.getByTestId('target-claims-severity') as HTMLSelectElement).options,
+    ).map((o) => o.value)
+    expect(opts).toContain('moderate')
+    expect(opts).not.toContain('medium')
+    expect(opts.filter((o) => o === 'moderate')).toHaveLength(1)
+    // `medium` and `moderate` are one rung: filtering on it keeps both claims.
+    fireEvent.change(screen.getByTestId('target-claims-severity'), { target: { value: 'moderate' } })
+    await waitFor(() => {
+      expect(screen.getByText('Second claim')).toBeInTheDocument()
+      expect(screen.getByText('Troops massing near the border')).toBeInTheDocument()
+    })
+  })
+
   it('degrades to the empty state on a 404', async () => {
     vi.stubGlobal(
       'fetch',

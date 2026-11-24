@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.jma.quake_list": {
+      "source": "source_jma_quake_list.yaml",
+      "state": "draft"
+    }
+  }
+}

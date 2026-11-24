@@ -344,6 +344,8 @@ WIDTH_READ_ANALYST_IDS: tuple[str, ...] = (
     "world_assessor",
     "country_composition",
     "escalation_composition",
+    # W5 (2026-11-07): the second thematic composition asserts the same way.
+    "hybrid_threat_composition",
     "world_assessment",
 )
 

@@ -43,7 +43,7 @@ method:
   sub_handler: event_reconciler
   budget_tokens_per_day: 0
   options:
-    max_events: 5000
+    max_events: 20000
     evolves_min_actors: 2
     evolves_max_gap_hours: 168
     # P1b (2026-09-23): the same turn-budget discipline as event_clustering —

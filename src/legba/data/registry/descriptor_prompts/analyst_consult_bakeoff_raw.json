@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:consult_bakeoff_raw": {
+      "source": "analyst_consult_bakeoff_raw.yaml",
+      "state": "draft"
+    }
+  }
+}

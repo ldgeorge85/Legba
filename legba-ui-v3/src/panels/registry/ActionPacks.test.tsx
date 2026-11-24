@@ -12,6 +12,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactElement } from 'react'
 import RegistryActionPacksPanel from './ActionPacks'
 import type { PanelRegistration } from '@/types'
+import { pickScopeOption } from '@/test/pickScope'
 
 function reg(): PanelRegistration {
   return {
@@ -124,10 +125,10 @@ function mockFetch() {
       return { ok: true, json: async () => TARGET_ROW }
     }
     // ScopePicker descriptor lists
-    if (u.includes('/registry/descriptors?family=analyst')) {
+    if ((u.includes('/registry/descriptors?family=analyst') || u.includes('/v3/roster?family=analyst'))) {
       return { ok: true, json: async () => [{ descriptor_id: 'analyst.osint', state: 'active' }] }
     }
-    if (u.includes('/registry/descriptors?family=target')) {
+    if ((u.includes('/registry/descriptors?family=target') || u.includes('/v3/roster?family=target'))) {
       return {
         ok: true,
         json: async () => [{ descriptor_id: 'target.geo.brazil', state: 'active' }],
@@ -181,12 +182,8 @@ describe('RegistryActionPacksPanel', () => {
     render(wrap(<RegistryActionPacksPanel registration={reg()} scope={{}} mode="personal" />))
     await waitFor(() => screen.getByTestId('action-pack-row-discovery'))
 
-    fireEvent.change(screen.getByTestId('action-pack-analyst-picker'), {
-      target: { value: 'analyst.osint' },
-    })
-    fireEvent.change(screen.getByTestId('action-pack-target-picker'), {
-      target: { value: 'target.geo.brazil' },
-    })
+    await pickScopeOption('action-pack-analyst-picker', 'analyst.osint')
+    await pickScopeOption('action-pack-target-picker', 'target.geo.brazil')
 
     // `discovery` is granted by the analyst, allowed by the target, and its
     // applies_to_tags=['news'] overlaps the target scope tags=['news'] → EFFECTIVE.
@@ -206,9 +203,7 @@ describe('RegistryActionPacksPanel', () => {
     render(wrap(<RegistryActionPacksPanel registration={reg()} scope={{}} mode="personal" />))
     await waitFor(() => screen.getByTestId('action-pack-row-media_processing'))
 
-    fireEvent.change(screen.getByTestId('action-pack-target-picker'), {
-      target: { value: 'target.geo.brazil' },
-    })
+    await pickScopeOption('action-pack-target-picker', 'target.geo.brazil')
     // wait for the target body to load (target tags chip appears)
     await screen.findByTestId('action-pack-target-tags')
 
@@ -233,9 +228,7 @@ describe('RegistryActionPacksPanel', () => {
     render(wrap(<RegistryActionPacksPanel registration={reg()} scope={{}} mode="personal" />))
     await waitFor(() => screen.getByTestId('action-pack-row-discovery'))
 
-    fireEvent.change(screen.getByTestId('action-pack-target-picker'), {
-      target: { value: 'target.geo.brazil' },
-    })
+    await pickScopeOption('action-pack-target-picker', 'target.geo.brazil')
     await screen.findByTestId('action-pack-target-tags')
 
     fireEvent.click(screen.getByTestId('action-pack-row-discovery').querySelector('button')!)

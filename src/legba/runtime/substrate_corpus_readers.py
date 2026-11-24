@@ -25,8 +25,10 @@ into the consult loop.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Any
 
+from . import substrate_known_at as _known_at
 from .corpus_read_projection import (
     citable_ref,
     project_corpus_document,
@@ -65,6 +67,8 @@ async def search_corpus(
     query: str,
     filters: dict[str, Any] | None = None,
     size: int = SEARCH_CORPUS_DEFAULT_SIZE,
+    pool: Any = None,
+    known_at: datetime | None = None,
 ) -> dict[str, Any]:
     """BM25 lexical search over the OpenSearch signal corpus (Stage 1).
 
@@ -86,8 +90,17 @@ async def search_corpus(
     no corpus wired → the honest ``no_corpus_wired`` shape (never connects);
     a transport/search failure is logged and folded into an ``error`` field
     rather than raising into the consult loop.
+
+    ``known_at`` (lane E0, evaluation harness only): the query carries an index
+    range ``fetched_at < known_at``, and every hit is then confirmed in Postgres
+    (``pool``) as a ``signals`` row created before ``known_at``; the rest are
+    dropped and counted in ``known_at_cut``. A cut with no pool refuses rather
+    than returning unconfirmed hits.
     """
     clamped = max(1, min(int(size), SEARCH_CORPUS_MAX_SIZE))
+    if known_at is not None and pool is None:
+        return {"rows": [], "refs": [], "count": 0, "query": query,
+                "error": "known_at cut needs the record pool to confirm hits; refused"}
 
     # No OpenSearch store threaded through the port — honest unavailable
     # shape, never a connect attempt (the same contract the embedder readers
@@ -122,6 +135,7 @@ async def search_corpus(
             (query or "").strip() or None,
             filters=clean or None,
             size=clamped,
+            **({"before": {"fetched_at": known_at}} if known_at is not None else {}),
         )
     except Exception as exc:  # noqa: BLE001 — corpus backend surface
         logger.warning(
@@ -151,9 +165,49 @@ async def search_corpus(
         "filters": clean,
         "size": clamped,
     })
+    if known_at is not None:
+        projected = await _known_at.cut_result_rows(
+            pool, projected, known_at, id_key="id",
+            how="index fetched_at < known_at, then signals.created_at < known_at",
+        )
     return projected
 
 async def read_document(
+    store: Any, index: str, pool: Any, *, doc_id: str,
+    known_at: datetime | None = None,
+) -> dict[str, Any]:
+    """One document's body by id (see :func:`_read_document_any`).
+
+    ``known_at`` (lane E0, evaluation harness only): the id must name a
+    ``signals`` or ``analyst_outputs`` row created before ``known_at``, and so
+    must every ref the read resolves to (a canonical twin); otherwise no body is
+    returned — the status says the document was not in the record at that
+    instant. A cut with no pool refuses.
+    """
+    if known_at is None:
+        return await _read_document_any(store, index, pool, doc_id=doc_id)
+    refused = {"doc_id": doc_id, "refs": [], "count": 0}
+    if pool is None:
+        return {**refused, "status": "error",
+                "error": "known_at cut needs the record pool; refused"}
+    ref = citable_ref(doc_id)
+    how = "id and resolved refs: signals/analyst_outputs.created_at < known_at"
+    if ref is not None:
+        _kept, late = await _known_at.confirm_recorded_before(pool, [ref], known_at)
+        if late:
+            return {**refused, "status": "not_in_record_at_known_at",
+                    "known_at_cut": _known_at.cut_stamp(known_at, dropped=1, how=how)}
+    out = await _read_document_any(store, index, pool, doc_id=doc_id)
+    refs = [r for r in (out.get("refs") or []) if r]
+    if refs:
+        _kept, late = await _known_at.confirm_recorded_before(pool, refs, known_at)
+        if late:
+            return {**refused, "status": "not_in_record_at_known_at",
+                    "known_at_cut": _known_at.cut_stamp(known_at, dropped=len(late), how=how)}
+    return {**out, "known_at_cut": _known_at.cut_stamp(known_at, dropped=0, how=how)}
+
+
+async def _read_document_any(
     store: Any, index: str, pool: Any, *, doc_id: str,
 ) -> dict[str, Any]:
     """Fetch one document's body by id, across every id NAMESPACE the

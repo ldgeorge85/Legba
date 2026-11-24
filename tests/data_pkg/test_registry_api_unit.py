@@ -255,12 +255,19 @@ def _make_row(
 # ---------------------------------------------------------------------------
 
 
-def _build_app(token: str | None = None) -> tuple[FastAPI, RegistryAPIDeps]:
-    # Reset the env-gated token between tests.
+def _build_app(
+    token: str | None = None, *, service_token: str | None = None,
+) -> tuple[FastAPI, RegistryAPIDeps]:
+    # Reset the env-gated tokens between tests: the operator's and (X2-B1)
+    # the fleet's service token.
     if token is None:
         os.environ.pop(API_TOKEN_ENV, None)
     else:
         os.environ[API_TOKEN_ENV] = token
+    if service_token is None:
+        os.environ.pop("LEGBA_REGISTRY_SERVICE_TOKEN", None)
+    else:
+        os.environ["LEGBA_REGISTRY_SERVICE_TOKEN"] = service_token
 
     descriptor = _StubDescriptorRegistry()
     deps = RegistryAPIDeps(

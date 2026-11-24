@@ -1,0 +1,15 @@
+{
+  "prompts": {
+    "entity_researcher": {
+      "chars": 581,
+      "sha256": "3edcd951476d8b01e6ec5fd64e063967d11c3dd4d859af996b052b828fd0c5e6",
+      "source": "analyst_entity_researcher.yaml"
+    }
+  },
+  "states": {
+    "analyst:entity_researcher": {
+      "source": "analyst_entity_researcher.yaml",
+      "state": "active"
+    }
+  }
+}

@@ -455,7 +455,12 @@ async def test_settle_stamps_duration_ms_on_success_and_crash(pool, clean_tables
             conn, pack=pack,
             call=ToolCall(
                 pack_id="substrate_read", tool_name="query_paths",
-                budget_account=account, requested_by="t", args={},
+                budget_account=account, requested_by="t",
+                # The gauge is what this test is about, but the arguments
+                # still have to be the ones the tool declares: since the
+                # 2026-09-28 tool seam a call missing a required argument is
+                # blocked before dispatch and never settles a row at all.
+                args={"subject": "A", "object": "B"},
             ),
             analyst_grants=[ActionPackRef(pack_id="substrate_read")],
             target_allows=[ActionPackRef(pack_id="substrate_read")],
@@ -465,7 +470,8 @@ async def test_settle_stamps_duration_ms_on_success_and_crash(pool, clean_tables
             conn, pack=pack,
             call=ToolCall(
                 pack_id="substrate_read", tool_name="query_brokers",
-                budget_account=account, requested_by="t", args={},
+                budget_account=account, requested_by="t",
+                args={"camp_a": ["A"], "camp_b": ["B"]},
             ),
             analyst_grants=[ActionPackRef(pack_id="substrate_read")],
             target_allows=[ActionPackRef(pack_id="substrate_read")],

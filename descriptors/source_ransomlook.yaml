@@ -1,0 +1,98 @@
+# C-3 claims sources (2026-11-15) — draft SourceDescriptor. Ships DRAFT.
+# A claim source cannot go `active` until `scope.claim.sign_off` (who, when,
+# note) is recorded; the lifecycle route refuses the flip without it.
+#
+# RansomLook — an open-source leak-site claim AGGREGATOR (maintainers include
+# CERT-AG). It scrapes ransomware groups' data-leak sites and lists, per post,
+# the victim name, the group, a sector line and a discovery time. What it
+# publishes is a LISTING OF CLAIMS: "group G posted victim V on its leak
+# site". The gangs exaggerate, recycle and invent; the tracker inherits that.
+#
+# THE CLASS. `source_class: claim` — a row from here can ground only
+# "RansomLook listed ..." (attributed, dated); never that V was breached,
+# never a corroboration of anything, never a credibility input
+# (legba.data.claim_support; docs/DATA_SOURCES.md "Claim sources").
+#
+# Endpoint: the site's RSS feed https://www.ransomlook.io/rss.xml (probed
+# 2026-11-15, one GET, generic client identity: HTTP 200, RSS 2.0, newest
+# items minutes old). Each item is `<victim> By <group>` in the title, a
+# sector line in the description, a group-page link (on ransomlook.io, never a
+# leak-site address) and a pubDate. The group is in the title text only, not a
+# separate field, so no `claim.claimant_path` is declared: every row is
+# attributed to the declared claimant (the tracker). The public JSON API
+# (/api/recent) answers too and carries a group_name field, but it also carries
+# screenshot and magnet fields; the RSS feed is the text-only surface.
+#
+# Text only. No media: `pipeline.media: reference`, no object store, no follow
+# policy; the document sink strips any media reference from a claim row. Links
+# in a row are never followed (the intake refuses a request whose parent is a
+# claim row unless the target host is an ordinary registered source). No leak
+# files, no screenshot or torrent endpoints, no onion fetches. No
+# fact_extractor (refused at save for this class); no geocode (a victim's
+# country in a listing is not an event location).
+#
+# robots.txt answers 404 (no rules). Access: `public` (free no-auth feed).
+
+identity:
+  id: source.ransomlook.claims
+  name: RansomLook — leak-site claim listings
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: claims_c3
+  created: "2026-11-15T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [cyber, ransomware, claim, tracker]
+  classifications: ["geopolitics.topic:cyber"]
+  source_class: claim
+  claim:
+    claimant: "RansomLook (leak-site tracker)"
+    verb: listed
+    sign_off:
+      by: owner
+      at: "2026-11-16T08:05:00Z"
+      note: "Collected as claims only: the tracker listed X as a victim of Y; never as a confirmed incident."
+  license_class: permissive_feed_unreviewed
+  access_class: public          # free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "29 */3 * * *"
+  cooldown_seconds: 300
+  jitter_seconds: 120
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.ransomlook.io/rss.xml"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

@@ -68,6 +68,7 @@ assembled" (env) and "does this analyst exist yet" (descriptor state).
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any, Mapping, Sequence
 from uuid import UUID
@@ -124,6 +125,8 @@ __all__ = [
     "resolve_markers",
     "run_assessment",
 ]
+
+logger = logging.getLogger(__name__)
 
 
 class AssessmentConstructionError(RuntimeError):
@@ -484,6 +487,56 @@ def normalize_ref_markers(body: str) -> tuple[str, int]:
         total += n
     text = re.sub(r"\x00(\d+)\x00", lambda m: stashed[int(m.group(1))], text)
     return text, total
+
+
+#: N-T (2026-11-13) — the share of CITED sentences that may be withheld for an
+#: out-of-range ordinal before the run fails as it always did. Above it the
+#: voice was not writing from the record and nothing it wrote is publishable.
+STRAY_ORDINAL_MAX_SHARE: float = 1 / 3
+
+
+def withhold_stray_ordinal_sentences(
+    body: str, spine_ordinals: Sequence[int],
+) -> tuple[str, list[dict[str, Any]]]:
+    """``(body, withheld)`` — every sentence citing an ordinal the spine does not
+    carry is WITHHELD from the published body and returned verbatim, so the rest
+    of the Assessment publishes with the defect on the record (the journal
+    evidence gate's proportion) instead of one invented ``[[ref:N+1]]`` failing
+    the whole run and paging (KR 7e52999f / ZA 4442e7ef, 13 Nov; 8 and 11 Nov).
+
+    A withheld sentence is removed, not marked: it names a page that does not
+    exist, so no mark could make it a claim about the record. A bullet left
+    empty is dropped with it. When more than :data:`STRAY_ORDINAL_MAX_SHARE` of
+    the cited sentences are stray, nothing is withheld and
+    :func:`resolve_markers` fails the run exactly as before.
+    """
+    known = {int(o) for o in spine_ordinals}
+    sentences = segment_sentences(body)
+    cited = [s for s in sentences if _REF_RE.search(s.text)]
+    stray = [
+        s for s in cited
+        if any(int(m.group(1)) not in known for m in _REF_RE.finditer(s.text))
+    ]
+    if not stray or len(stray) > len(cited) * STRAY_ORDINAL_MAX_SHARE:
+        return body, []
+    withheld = [
+        {
+            "ordinals": sorted({
+                int(m.group(1)) for m in _REF_RE.finditer(s.text)
+                if int(m.group(1)) not in known
+            }),
+            "text": s.text,
+        }
+        for s in stray
+    ]
+    out = body
+    for s in sorted(stray, key=lambda x: -x.start):
+        out = out[: s.start] + out[s.end:]
+    lines = [
+        ln.rstrip() for ln in out.split("\n")
+        if not re.fullmatch(r"\s*[-*]\s*", ln)
+    ]
+    return re.sub(r"[ \t]{2,}", " ", "\n".join(lines)).strip(), withheld
 
 
 def resolve_markers(
@@ -878,6 +931,15 @@ async def run_assessment(
     title, body, title_source = parse_assessment_prose(content)
     body, normalised = normalize_ref_markers(body)
     ordinals = [int(b.get("ordinal") or 0) for b in (payload.get("blocks") or [])]
+    body, withheld = withhold_stray_ordinal_sentences(body, ordinals)
+    if withheld:
+        logger.warning(
+            "assessment.stray_ordinal_withheld sentences=%d ordinals=%s carried=%s",
+            len(withheld), sorted({o for w in withheld for o in w["ordinals"]}),
+            sorted(ordinals),
+        )
+        steps.append({"phase": "reflect", "kind": "stray_ordinal_withheld",
+                      "sentences": len(withheld)})
     markers = resolve_markers(body, ordinals)
     assessment = build_assessment_payload(
         payload=payload,
@@ -887,6 +949,9 @@ async def run_assessment(
         title_source=title_source,
         markers_normalized=normalised,
     )
+    if withheld:
+        # N-T — the defect rides the row: what was withheld, verbatim.
+        assessment["withheld_stray_ordinals"] = withheld
     citations = build_assessment_citations(
         payload,
         spine_id=str(spine_uuid),

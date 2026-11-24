@@ -1,0 +1,49 @@
+{
+  "_provenance": "GET /api/v1/findings on the live registry, 2026-10-08 (X1/D1, W11-F9). Trimmed to the keys the stamp reader and the brief headline read; every kept value is verbatim. composition = ?target_id=country_g20_br&analyst_id_in=country_composition&limit=1; instrument = ?analyst_id=indicator_tracker&limit=1 (no target: /findings serves no scorecard_producer row, and indicator_tracker writes one world row per run).",
+  "composition": {
+    "id": "fe0264c2-3af2-4551-883c-18929b7a2d8f",
+    "kind": "finding",
+    "title": "country_g20_br, 2026-10-08 — “A change in Brazil’s top leadership is likely within about three weeks (by 25 October), contingent on the outcome of…”",
+    "target_id": "country_g20_br",
+    "analyst_id": "country_composition",
+    "analyst_version": "7ef9f359ae0b70256d279d3371e7cb516a736a1b35e41486702167f4a7910719",
+    "produced_at": "2026-10-08T11:30:02.837972Z",
+    "created_at": "2026-10-08T11:30:02.839538Z",
+    "schema_uri": "iglu:legba/finding/jsonschema/1-0-0",
+    "confidence": 0.5,
+    "severity": "elevated",
+    "data": {
+      "title": "country_g20_br, 2026-10-08 — “A change in Brazil’s top leadership is likely within about three weeks (by 25 October), contingent on the outcome of…”",
+      "kind_marker": "finding",
+      "confidence": 0.5,
+      "data": {
+        "meta": true,
+        "assembly": {
+          "as_of": "2026-10-08T11:30:02.680467+00:00"
+        }
+      }
+    }
+  },
+  "instrument": {
+    "id": "cbe17cb3-90c3-4b06-b179-e2bdd96498f9",
+    "kind": "finding",
+    "title": "Indicator tracker: 48 indicator flip(s), 22 newly triggered, across 42 unit-run(s)",
+    "target_id": null,
+    "analyst_id": "indicator_tracker",
+    "analyst_version": "a0a91e360a5e2e1b45280e3742fb20dc7a6e5355da822b4d956595f1fd034d2b",
+    "produced_at": "2026-10-08T21:15:13.162014Z",
+    "created_at": "2026-10-08T21:15:13.163153Z",
+    "schema_uri": "iglu:legba/finding/jsonschema/1-0-0",
+    "confidence": 1.0,
+    "severity": null,
+    "data": {
+      "title": "Indicator tracker: 48 indicator flip(s), 22 newly triggered, across 42 unit-run(s)",
+      "kind_marker": "finding",
+      "confidence": 1.0,
+      "data": {
+        "method_version": "indicator_tracker/2026-09.1",
+        "scale_version": "indicator_status/2026-07"
+      }
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:lens_centre": {
+      "source": "analyst_lens_centre.yaml",
+      "state": "draft"
+    }
+  }
+}

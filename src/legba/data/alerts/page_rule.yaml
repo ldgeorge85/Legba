@@ -1,0 +1,64 @@
+# THE page rule (L-1, single alert path). Plain and readable on purpose.
+#
+# Every alert is logged. An alert PAGES (goes to the push service) only when an
+# entry below matches it:
+#
+#   kind          one kind from the closed list (legba/data/alerts/kinds.py)
+#   min_severity  info < low < medium < high < critical; the alert's severity
+#                 must be at least this
+#   subject       optional: only alerts about this subject. Either a plain id
+#                 ("US", "source.bbc.world") or a pattern with * ("source.usgs.*").
+#                 Leave it out to match every subject.
+#
+# Nothing else decides paging: no escalation chains, no per-producer cases.
+# The one place that stops repeats is the alert episode: an open episode pages
+# once, and again only when its severity rises (a critical episode re-pages
+# every LEGBA_ALERT_CRITICAL_REPAGE_HOURS, 6 by default, while it stays open).
+# A recovery pages only for an episode that paged.
+#
+# To change what pages: edit this list (or point LEGBA_ALERT_PAGE_RULE_PATH at
+# your own copy) and roll the runtime. docs/ALERTING.md has worked examples.
+#
+# This initial rule is today's paging behaviour after the 2026-11-13 fixes
+# (the ntfy floor was medium; the watchdog paged its kinds at high only; the
+# host scripts paged every notice they sent).
+#
+# 2026-11-14 (the owner, "surge then"): volume_surge pages at medium, and
+# baseline_deviation is logged only, never paged — the surge is the page for an
+# unusual volume of reporting on a country; the slower baseline deviation stays
+# on the log and the Watch surface.
+version: 2026-11-14/1
+page:
+  # -- the world -------------------------------------------------------------
+  - {kind: escalations,          min_severity: medium}
+  - {kind: verified_finding,     min_severity: medium}
+  - {kind: band_crossing,        min_severity: medium}
+  - {kind: situation_escalation, min_severity: medium}
+  - {kind: volume_surge,         min_severity: medium}
+  - {kind: watchlist_hit,        min_severity: medium}
+  - {kind: contention_flip,      min_severity: medium}
+  - {kind: geo_convergence,      min_severity: medium}
+  - {kind: rollup,               min_severity: medium}
+  # -- the engine ------------------------------------------------------------
+  - {kind: production_deficit,   min_severity: medium}
+  - {kind: coverage_floor,       min_severity: medium}
+  - {kind: external_audit,       min_severity: medium}
+  - {kind: forecast_resolution,  min_severity: medium}
+  - {kind: liveness_stall,       min_severity: high}
+  - {kind: analyst_cadence_stall, min_severity: high}
+  - {kind: analyst_cursor_lag,   min_severity: high}
+  - {kind: analyst_hard_fail,    min_severity: high}
+  - {kind: source_cadence_stall, min_severity: high}
+  - {kind: source_degraded,      min_severity: high}
+  - {kind: source_staleness_stale, min_severity: high}
+  - {kind: source_staleness_dead, min_severity: high}
+  - {kind: llm_route_dead,       min_severity: high}
+  - {kind: llm_route_auth_failed, min_severity: high}
+  - {kind: search_degraded,      min_severity: high}
+  - {kind: consult_unhealthy,    min_severity: high}
+  - {kind: alert_volume_high,    min_severity: high}
+  # -- the host --------------------------------------------------------------
+  - {kind: host_disk,            min_severity: low}
+  - {kind: host_llm_heartbeat,   min_severity: high}
+  - {kind: host_search_canary,   min_severity: high}
+  - {kind: nightly_suite,        min_severity: low}

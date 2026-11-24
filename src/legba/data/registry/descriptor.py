@@ -55,6 +55,7 @@ from ..outputs.ui_panel import (
     UIPanelRegistry,
     register_from_descriptor as _register_ui_panels_from_descriptor,
 )
+from ..principals import handle_for_actor
 from ..provenance import canonical_json
 from ..schemas import (
     ALLOWED_TRANSITIONS,
@@ -67,6 +68,9 @@ from ..schemas import (
 )
 from ..schemas.analyst import ANALYST_KIND_REGISTRY
 from ..schemas.collection import CollectionDescriptor
+from ..signal_slice_scope import declared_signal_tags, signal_tag_refusals
+from ..source_classification import declared_source_classifications
+from ..tags import VocabularyIndex
 from .audit import AuditLogger
 from .descriptor_families import (
     insert_descriptor_row,
@@ -336,7 +340,8 @@ class DescriptorRegistry:
         descriptor: DescriptorT,
         actor: str,
         *,
-        actor_role: str = "operator",
+        actor_role: str | None = None,
+        in_tx: Any | None = None,
     ) -> DescriptorRow:
         """Insert a brand-new descriptor head row.
 
@@ -369,7 +374,8 @@ class DescriptorRegistry:
                     f"{family.value} descriptor {descriptor_id!r} already "
                     f"registered (head version={existing['version']}); use update()"
                 )
-            await self._insert_row(conn, family, descriptor, hash_hex, body)
+            await self._insert_row(conn, family, descriptor, hash_hex, body,
+                                   written_by=handle_for_actor(actor))
             await self._sync_ui_panels(
                 conn,
                 family=family,
@@ -386,6 +392,7 @@ class DescriptorRegistry:
                 from_version=None,
                 to_version=hash_hex,
                 change_summary={"event": "initial_register"},
+                in_tx=in_tx,
             )
 
         await self._publish_descriptor_event(
@@ -412,7 +419,7 @@ class DescriptorRegistry:
         actor: str,
         *,
         family: Family,
-        actor_role: str = "operator",
+        actor_role: str | None = None,
     ) -> DescriptorRow:
         """Register a descriptor from a raw dict body (L-112 entry point).
 
@@ -512,7 +519,8 @@ class DescriptorRegistry:
         new_descriptor: DescriptorT,
         actor: str,
         *,
-        actor_role: str = "operator",
+        actor_role: str | None = None,
+        in_tx: Any | None = None,
     ) -> DescriptorRow:
         """Replace the current head with a new content-hash version.
 
@@ -633,7 +641,8 @@ class DescriptorRegistry:
                     new_hash,
                 )
             else:
-                await self._insert_row(conn, family, new_descriptor, new_hash, body)
+                await self._insert_row(conn, family, new_descriptor, new_hash, body,
+                                       written_by=handle_for_actor(actor))
             # L-192: refresh the UI panel registrations. With
             # retire_prior_versions=True (the default), this also retires
             # any active panel rows owned by the prior content-hash. Idempotent
@@ -661,6 +670,7 @@ class DescriptorRegistry:
                 from_version=from_version,
                 to_version=new_hash,
                 change_summary=change_summary,
+                in_tx=in_tx,
             )
 
         await self._publish_descriptor_event(
@@ -687,8 +697,9 @@ class DescriptorRegistry:
         actor: str,
         *,
         family: Family,
-        actor_role: str = "operator",
+        actor_role: str | None = None,
         reason: str | None = None,
+        in_tx: Any | None = None,
     ) -> DescriptorRow:
         """Mark the head row as `retired`. The descriptor history stays
         intact; rolling back from `retired` is not legal (terminal state)."""
@@ -738,6 +749,7 @@ class DescriptorRegistry:
                     "to_state": new.value,
                     "reason": reason,
                 },
+                in_tx=in_tx,
             )
 
         await self._publish_descriptor_event(
@@ -761,7 +773,7 @@ class DescriptorRegistry:
         actor: str,
         *,
         family: Family,
-        actor_role: str = "operator",
+        actor_role: str | None = None,
     ) -> DescriptorRow:
         """Make `candidate_version` the new head (per L-176 optimizer flow).
 
@@ -789,8 +801,9 @@ class DescriptorRegistry:
         actor: str,
         *,
         family: Family,
-        actor_role: str = "operator",
+        actor_role: str | None = None,
         reason: str | None = None,
+        in_tx: Any | None = None,
     ) -> DescriptorRow:
         """Restore a prior version as head.
 
@@ -806,6 +819,7 @@ class DescriptorRegistry:
             actor_role=actor_role,
             action="rollback",
             extra_summary={"reason": reason} if reason else None,
+            in_tx=in_tx,
         )
 
     async def _set_head(
@@ -815,9 +829,10 @@ class DescriptorRegistry:
         actor: str,
         *,
         family: Family,
-        actor_role: str,
+        actor_role: str | None,
         action: Literal["promote", "rollback"],
         extra_summary: dict[str, Any] | None = None,
+        in_tx: Any | None = None,
     ) -> DescriptorRow:
         async with self._pg.transaction() as conn:
             cur_head = await conn.fetchrow(
@@ -872,6 +887,7 @@ class DescriptorRegistry:
                 from_version=cur_head["version"],
                 to_version=target_version,
                 change_summary=summary,
+                in_tx=in_tx,
             )
 
         event_action = "promoted" if action == "promote" else "rolled_back"
@@ -1082,6 +1098,21 @@ class DescriptorRegistry:
                 rt_validator = self._vocab.make_validator("relationship_type")
                 ec_validator(descriptor.scope.entity_classes)
                 rt_validator(descriptor.scope.relationship_types)
+            # W8 TAX-1 — a declared signal tag (target scope.signal_tags /
+            # exclude_signal_tags, analyst subscription.substrate.signal_tags)
+            # must bind: an unloaded family is refused BY NAME, then an
+            # unknown value of a loaded one. A bare tag (`src:`) always passes.
+            # W10 TAX-2 — a source's scope.classifications, the same rule.
+            if isinstance(descriptor, (TargetDescriptor, AnalystDescriptor, SourceDescriptor)):
+                declared = declared_signal_tags(descriptor) + declared_source_classifications(descriptor)
+                if declared:
+                    fams, vals = signal_tag_refusals(
+                        declared, VocabularyIndex.from_cache(self._vocab),
+                    )
+                    if fams:
+                        raise UnknownVocabularyValue("family", fams)
+                    for fam, unknown in vals.items():
+                        raise UnknownVocabularyValue(fam, unknown)
         except UnknownVocabularyValue as exc:
             payload = descriptor.model_dump(mode="json", by_alias=True)
             dl_id = await self._write_dead_letter(
@@ -1428,10 +1459,15 @@ class DescriptorRegistry:
         descriptor: DescriptorT,
         version: str,
         body: dict[str, Any],
+        *,
+        written_by: str | None = None,
     ) -> None:
         """INSERT the new head row — the per-family SQL lives in
-        :mod:`legba.data.registry.descriptor_families`."""
-        await insert_descriptor_row(conn, family.value, descriptor, version, body)
+        :mod:`legba.data.registry.descriptor_families`. ``written_by`` is the
+        writing principal's handle (lane 9): the version's author; head and
+        lifecycle moves are the audit log's (``descriptor_audit_log.actor_id``)."""
+        await insert_descriptor_row(conn, family.value, descriptor, version, body,
+                                    written_by=written_by)
 
     async def _write_audit(
         self,
@@ -1441,14 +1477,24 @@ class DescriptorRegistry:
         family: Family,
         descriptor_id: str,
         actor: str,
-        actor_role: str,
+        actor_role: str | None,
         from_version: str | None,
         to_version: str | None,
         change_summary: dict[str, Any] | None,
+        in_tx: Any | None = None,
     ) -> None:
+        # ``in_tx`` (C-2a §3 — a consult write): its receipt rides the
+        # signed change_summary, and it is awaited on THIS connection after the
+        # audit row, so the mutation, the ledger row and the audit row commit
+        # (or roll back) as one transaction. It may raise to abort all three.
+        if in_tx is not None:
+            change_summary = {
+                **(change_summary or {}),
+                "receipt": in_tx.receipt_for(from_version=from_version, to_version=to_version),
+            }
         # Delegated to the shared AuditLogger so signing identity, payload
         # shape and signature scheme are consistent across L-110 + L-111.
-        await self._audit.record(
+        entry = await self._audit.record(
             conn,
             actor_id=actor,
             actor_role=actor_role,
@@ -1459,6 +1505,8 @@ class DescriptorRegistry:
             to_version=to_version,
             change_summary=change_summary,
         )
+        if in_tx is not None:
+            await in_tx(conn, audit_id=entry.id, from_version=from_version, to_version=to_version)
 
     # ------------------------------------------------------------------
     # Fetch helpers

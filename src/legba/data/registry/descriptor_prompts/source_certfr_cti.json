@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.certfr.cti": {
+      "source": "source_certfr_cti.yaml",
+      "state": "draft"
+    }
+  }
+}

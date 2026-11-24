@@ -44,10 +44,16 @@ _ANALYST = "collection_gap_r2_test"
 # ---------------------------------------------------------------------------
 
 
-def test_desk_iso2_extracts_from_country_target_id():
-    assert cg._desk_iso2("country_g20_ml") == "ML"
+def test_desk_iso2_is_the_desks_declared_subject_code():
+    # W10 SUBJECT-1: the subject ladder — the ONE geo code the profile declares
+    # for the desk, never a code parsed out of the id.
+    assert cg._desk_iso2("country_watch_ml") == "ML"
     assert cg._desk_iso2("country_watch_ir") == "IR"
     assert cg._desk_iso2("country_g20_us") == "US"
+    # No such desk is declared: its id's tail is not evidence of a country.
+    assert cg._desk_iso2("country_g20_ml") is None
+    # Several declared geo codes and no subject code: no single ISO2.
+    assert cg._desk_iso2("lane_hormuz") is None
 
 
 def test_desk_iso2_none_for_non_country_or_malformed():

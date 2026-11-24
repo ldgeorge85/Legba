@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.armscontrol.news": {
+      "source": "source_armscontrol.yaml",
+      "state": "draft"
+    }
+  }
+}

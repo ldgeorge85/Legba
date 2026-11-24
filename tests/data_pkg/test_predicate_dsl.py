@@ -207,18 +207,21 @@ def test_org_match_refused_under_production_contract():
 
 
 def test_has_tag_unions_across_contexts():
-    # Same helper available on every surface; tags from any ctx slot count.
+    # Same helper available on every surface; tags from any ctx slot count —
+    # a SIGNAL tag under its namespaced key (W7 TAG-1): bare → src:<tag>.
     ctx_signal = {"signal": {"tags": ["energy"]}}
-    assert _eval_scope('has_tag("energy")', ctx_signal) is True
-    assert _eval_scope('has_tag("steel")', ctx_signal) is False
-    # Subscription surface: target.tags
+    assert _eval_scope('has_tag("src:energy")', ctx_signal) is True
+    assert _eval_scope('has_tag("energy")', ctx_signal) is False
+    assert _eval_scope('has_tag("src:steel")', ctx_signal) is False
+    # Subscription surface: target.tags compare verbatim
     ctx_target = {"target": {"tags": ["energy"]}}
     assert _eval_sub('has_tag("energy")', ctx_target) is True
 
 
 def test_has_any_tag():
     ctx = {"signal": {"tags": ["press_release", "energy"]}}
-    assert _eval_scope('has_any_tag(["x", "energy"])', ctx) is True
+    assert _eval_scope('has_any_tag(["x", "src:energy"])', ctx) is True
+    assert _eval_scope('has_any_tag(["x", "energy"])', ctx) is False
     assert _eval_scope('has_any_tag(["x", "y"])', ctx) is False
 
 

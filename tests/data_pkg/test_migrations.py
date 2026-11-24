@@ -13,7 +13,7 @@ import pytest
 from legba.data.config import PostgresConfig
 from legba.data.postgres import PostgresStore
 from legba.data.smoke import RETIRED_TABLES
-from legba.data.vocabulary import ENTITY_CLASSES, RELATIONSHIP_TYPES, vertex_label
+from legba.data.vocabulary import ENTITY_CLASSES, RELATIONSHIP_TYPES
 
 # NOTE (C-1): the retired pre-pivot tests that asserted the OLD substrate
 # shape (legacy `sources`/`predictions` tables, analyst-provenance columns
@@ -41,24 +41,20 @@ async def test_retired_tables_absent(migrated_pg: PostgresConfig):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_age_vocabulary_loaded(migrated_pg: PostgresConfig):
-    store = PostgresStore(migrated_pg)
-    await store.connect()
+async def test_empty_age_graph_is_dropped_but_the_extension_stays(
+    migrated_pg: PostgresConfig,
+):
+    """0001 creates the (empty) AGE graph; 20261115T1829_drop_empty_age_graph
+    drops it. The extension and ag_catalog stay (the pool still loads them)."""
+    conn = await asyncpg.connect(migrated_pg.dsn)
     try:
-        labels = await store.graph_labels()
+        assert await conn.fetchval("SELECT extversion FROM pg_extension WHERE extname='age'")
+        assert await conn.fetchval(
+            "SELECT count(*) FROM ag_catalog.ag_graph WHERE name = 'legba_graph'"
+        ) == 0
+        assert await conn.fetchval("SELECT to_regnamespace('legba_graph')") is None
     finally:
-        await store.close()
-
-    vertices = set(labels["vertex"])
-    edges = set(labels["edge"])
-
-    expected_vertices = {vertex_label(ec) for ec in ENTITY_CLASSES}
-    expected_edges = set(RELATIONSHIP_TYPES)
-
-    missing_v = sorted(expected_vertices - vertices)
-    missing_e = sorted(expected_edges - edges)
-    assert not missing_v, f"missing AGE vertex labels: {missing_v}"
-    assert not missing_e, f"missing AGE edge labels: {missing_e}"
+        await conn.close()
 
 
 @pytest.mark.integration

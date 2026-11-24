@@ -17,6 +17,7 @@ import type {
   SourceQualityRow,
   SourceRating,
   StalenessDebtResponse,
+  StalenessQuality,
 } from '@/lib/api'
 import {
   ABSENT,
@@ -33,6 +34,7 @@ import {
   earnedSummary,
   formatPercent,
   formatRate,
+  formatUtcMinute,
   hasAssertion,
   isFreshnessAbsence,
   lastSignalText,
@@ -42,7 +44,9 @@ import {
   signalVolumeText,
   sortRatings,
   sortSourceQuality,
+  enrichmentLine,
   stalenessHeadline,
+  stalenessPill,
   winRateDisplay,
   winRateLowerDisplay,
   winRateRawDisplay,
@@ -604,5 +608,120 @@ describe('drill-down helpers', () => {
 
   it('says "no references cited" rather than showing a bare 0', () => {
     expect(describeRating(rating())).toContain('no references cited')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The staleness tripwire pill (W3 SRC-2): server state verbatim, absence as absence.
+// ---------------------------------------------------------------------------
+
+const STALE: StalenessQuality = {
+  state: 'stale',
+  factor: 9.2,
+  reason: 'stale · 9.2× its 1.0h expected interval (wall clock)',
+  age_s: 33120,
+  expected_interval_s: 3600,
+  weekday_only: false,
+  upstream_quiet: false,
+  last_new_item_at: '2026-10-01T06:12:00+00:00',
+  last_poll_ok_at: null,
+}
+
+describe('stalenessPill', () => {
+  it('renders state, factor and the last new item instant', () => {
+    const p = stalenessPill(STALE)
+    expect(p.label).toBe('stale · 9.2× expected interval')
+    expect(p.detail).toBe('last new item 2026-10-01 06:12Z')
+    expect(p.tone).toBe('bad')
+    expect(p.measured).toBe(true)
+    expect(p.title).toContain('Expected interval 60min')
+  })
+
+  it('names a gated last poll in the detail line (feed delivered, all off-topic)', () => {
+    expect(stalenessPill({ ...STALE, last_poll_gated: true }).detail).toBe(
+      'last new item 2026-10-01 06:12Z · last poll gated',
+    )
+    // never delivered but gated: the word still shows, no phantom instant
+    expect(
+      stalenessPill({ ...STALE, last_poll_gated: true, last_new_item_at: null }).detail,
+    ).toBe('last poll gated')
+    // absent / false flag leaves the line exactly as before
+    expect(stalenessPill({ ...STALE, last_poll_gated: false }).detail).toBe(
+      'last new item 2026-10-01 06:12Z',
+    )
+  })
+
+  it('maps fresh/quiet/stale/dead to ok/watch/bad/bad', () => {
+    const tone = (state: StalenessQuality['state']) =>
+      stalenessPill({ ...STALE, state, factor: 1 }).tone
+    expect(tone('fresh')).toBe('ok')
+    expect(tone('quiet')).toBe('watch')
+    expect(tone('stale')).toBe('bad')
+    expect(tone('dead')).toBe('bad')
+  })
+
+  it('names a weekday publisher in the title', () => {
+    expect(stalenessPill({ ...STALE, weekday_only: true }).title).toContain('weekends do not count')
+  })
+
+  it('unknown is a muted absence carrying the server reason, never a factor', () => {
+    const p = stalenessPill({ ...STALE, state: 'unknown', factor: null, reason: 'never delivered', last_new_item_at: null })
+    expect(p.label).toBe('unknown')
+    expect(p.tone).toBe('muted')
+    expect(p.measured).toBe(false)
+    expect(p.detail).toBeNull()
+    expect(p.title).toBe('never delivered')
+  })
+
+  it('a missing block is NOT MEASURED, not unknown and not zero', () => {
+    for (const none of [null, undefined]) {
+      const p = stalenessPill(none)
+      expect(p.label).toBe(`${ABSENT} staleness not measured`)
+      expect(p.tone).toBe('muted')
+      expect(p.measured).toBe(false)
+    }
+  })
+
+  it('formatUtcMinute is UTC, minute precision, and leaves garbage as given', () => {
+    expect(formatUtcMinute('2026-10-01T06:12:59+00:00')).toBe('2026-10-01 06:12Z')
+    expect(formatUtcMinute('2026-10-01T23:30:00-02:00')).toBe('2026-10-02 01:30Z')
+    expect(formatUtcMinute('not-a-date')).toBe('not-a-date')
+  })
+})
+
+describe('enrichmentLine — per-stage latency of the newest enriched poll (W5 SRC-4)', () => {
+  const NOW = Date.parse('2026-10-04T12:00:00Z')
+
+  it('renders stage, total seconds and calls, with the as-of', () => {
+    const line = enrichmentLine(
+      {
+        stages: {
+          ner_multilingual: { calls: 3, total_ms: 1234, max_ms: 600, errors: 0 },
+          geocode: { calls: 3, total_ms: 310, max_ms: 120, errors: 1 },
+        },
+        polled_at: '2026-10-04T09:00:00Z',
+      },
+      NOW,
+    )
+    expect(line.measured).toBe(true)
+    expect(line.text).toBe('last poll: geocode 0.3 s/3 (1 err) · ner 1.2 s/3 · 3h ago')
+    expect(line.title).toContain('ner_multilingual: 3 calls, 1.2 s total')
+  })
+
+  it('a sub-50 ms total is never rendered as 0', () => {
+    const line = enrichmentLine(
+      { stages: { geocode: { calls: 2, total_ms: 12, max_ms: 8, errors: 0 } }, polled_at: null },
+      NOW,
+    )
+    expect(line.text).toBe('last poll: geocode <0.1 s/2')
+  })
+
+  it('absent or empty is "enrichment not measured", never a number', () => {
+    for (const e of [null, undefined, { stages: {}, polled_at: null }]) {
+      const line = enrichmentLine(e, NOW)
+      expect(line.text).toBe('enrichment not measured')
+      expect(line.measured).toBe(false)
+      expect(line.text).not.toMatch(/\d/)
+    }
   })
 })

@@ -1,0 +1,15 @@
+{
+  "prompts": {
+    "leadership_transition": {
+      "chars": 23560,
+      "sha256": "3dcdfb7a37aedd0069ecf7bfd85de2fe67b0e6ff01bfb21264bd1e4a49473b14",
+      "source": "analyst_leadership_transition.yaml"
+    }
+  },
+  "states": {
+    "analyst:leadership_transition": {
+      "source": "analyst_leadership_transition.yaml",
+      "state": "active"
+    }
+  }
+}

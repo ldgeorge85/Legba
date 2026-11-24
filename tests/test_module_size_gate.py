@@ -261,9 +261,9 @@ CEILINGS: dict[str, int] = {
     # ``PolitySurfaceIndex`` is self-contained and moves next door cleanly.
     "data/_frame_anchor.py": 790,  # 718 @ 2026-09-06 (R1-a, birth)
     "runtime/dapr_actors.py": 4110,  # 3735 @ 2026-08-02
-    "runtime/liveness_watchdog.py": 1660,  # 1507 @ 2026-08-30 — merge-wave entrant (honest-quiet dynamic window + prolonged-streak escalation)
+    "runtime/liveness_watchdog.py": 1501,  # roll-86 follow-up: _evaluate_empty_streaks -> source_quiet_evidence.py (1604 before); roll 86: honest-quiet rules -> source_quiet_evidence.py; 1507 @ 2026-08-30 — merge-wave entrant (honest-quiet dynamic window + prolonged-streak escalation)
     "data/analysts/inline_target.py": 3915,  # 3909 @ 2026-08-25 — the per-clean render RECEIPT (_slice_render_stats) extracted to slice_render.py beside the render it describes, paying for the task-#57 wire-pair collapse hook; ceiling re-seeded down again (was 3930)
-    "runtime/substrate_query_port.py": 3910,  # 3551 @ 2026-08-02
+    "runtime/substrate_query_port.py": 3840,  # 3800 @ 2026-09-28 (wave Q) — get_source_health extracted to substrate_source_health.py; re-seeded down from 3910
     "data/analysts/journal_assessor.py": 3000,  # 2723 @ 2026-09-23 (H10 — the PROPOSE phase [_propose_phase/_propose_phase_prompt], its constants, and _JOURNAL_PROPOSE_TOOL_SCHEMAS extracted verbatim to journal_propose_phase.py and re-exported, after H10's write-time shape-validator prompt text pushed the module 9 lines past the ceiling); 2859 @ 2026-09-09 (B5 — the ref-repair pre-REFLECT step + its honesty-flag/data wiring); 2828 @ 2026-09-09 (B2 — the [routine] DISCIPLINE line + honesty-flag wiring for T1.4); 2813 @ 2026-09-09 (B1 — the [instrument] window tag + DISCIPLINE line + the honesty-flag wiring for T1.2); 2767 @ 2026-09-09 (B0 — the priming-slice SELECTION machinery extracted verbatim to journal_slice.py and re-exported); 2831 @ 2026-09-09 (T1.0 — the REFLECT claim machinery extracted verbatim to journal_reflect.py and re-exported); 2965 @ 2026-08-11 (leak guards extracted)
     # BIRTH 2026-09-09 (T1.0): the REFLECT claim machinery pulled out of
     # journal_assessor.py (see its ceiling comment above) when three follow-on
@@ -318,7 +318,7 @@ CEILINGS: dict[str, int] = {
     # already uses) rather than imported back, so the new module depends on
     # nothing in this one. Ratchet closes on the new floor.
     "runtime/analyst_deps_builder.py": 3000,  # 2984 @ 2026-09-06 (standing_auditor + desk_reference WIRING extracted to analyst_deps_kinds.py); 2715 @ 08-02; 3035 @ 09-05 merge wave (W-4 grader + A-1 desk_reference wiring)
-    "runtime/dapr_host.py": 2950,  # 2676 @ 2026-08-02
+    "runtime/dapr_host.py": 2909,  # roll 86: /healthz -> runtime_healthz.py; 2676 @ 2026-08-02
     # LOWERED 2026-08-03 (K-2): the API KERNEL — the B-2 bearer gate, the C3
     # ``sunset_headers`` stamp and the ``RegistryAPIDeps`` bundle + ``_get_deps``
     # — moved to the leaf ``data/registry/_deps.py`` (254 lines), which this
@@ -354,7 +354,7 @@ CEILINGS: dict[str, int] = {
     # holding its actor turn for a median 651 s. +170 over the old ceiling's
     # headroom, re-seeded once at the new measurement.
     "data/analysts/deterministic_handlers/fact_contention_arbiter.py": 2070,  # 1968 @ 2026-09-20 (was 1980, # 1798 @ 2026-08-02)
-    "runtime/source_actor.py": 1895,  # 1872 @ 2026-08-04 — discovery dispatch extracted to source_discovery_dispatch.py, ceiling re-seeded down
+    "runtime/source_actor.py": 1580,  # 1487 @ 2026-11-13 — N-L moved the write path to runtime/sinks/signal.py (was 1895 @ 2026-08-04), ceiling re-seeded down
     "data/registry/descriptor.py": 1880,  # 1706 @ 2026-08-02
     "data/analysts/competing_hypotheses.py": 1840,  # 1666 @ 2026-08-02
     "data/filters/geocode.py": 1740,  # 1580 @ 2026-08-02
@@ -415,7 +415,7 @@ CEILINGS: dict[str, int] = {
     # the new floor (362 @ 2026-09-24, seeded +~10% rounded to a multiple of
     # 10). DO NOT re-widen this file with catalog entries — they belong in
     # `handler_options_catalog.py` now.
-    "data/analysts/handler_options.py": 400,  # 362 @ 2026-09-24 (H15 — HANDLER_OPTIONS/ANALYST_KIND_OPTIONS assembly extracted to handler_options_catalog.py); 1630 @ 2026-09-06 (width + desk_reference + research_measurement extracted to handler_options_programs.py); 1518 @ 08-29; 1699 @ 09-05 merge wave (width + desk_reference + research_measurement knobs)
+    "data/option_catalog/handler_options.py": 400,  # MOVED 2026-10-03 (W3-F17: data/analysts/ -> data/option_catalog/, a leaf package the slim registry can import; ceiling unchanged, 363 lines); 362 @ 2026-09-24 (H15 — HANDLER_OPTIONS/ANALYST_KIND_OPTIONS assembly extracted to handler_options_catalog.py); 1630 @ 2026-09-06 (width + desk_reference + research_measurement extracted to handler_options_programs.py); 1518 @ 08-29; 1699 @ 09-05 merge wave (width + desk_reference + research_measurement knobs)
     # NEW ENTRANT 2026-08-28 (V-J1). This module is itself the K-1 extraction of
     # verify.py's absence subsystem (903 lines then), and the hedged-conflict
     # guard put it over the 1,500 threshold: the predicate is ~45 lines and its
@@ -502,6 +502,18 @@ CEILINGS: dict[str, int] = {
     # both. ~75 lines of headroom, which is half a stamp entry — the next train
     # that needs the other half is the one that should take the seam.
     "data/provenance/judge_pipeline_version.py": 1930,  # 1855 @ 2026-09-20
+    # NEW ENTRANT 2026-11-04 (W11-F139, the ACH diagnosticity_mode knob). The
+    # spec + its doc carried this from 1,499 to 1,515 — the 1,500 threshold by
+    # 16 lines. NOT split for the same reason the handler_options.py entrant
+    # above gives: this module is a flat catalog of OptionSpec tuples where
+    # every knob already lives beside its own handler's other options and the
+    # section banners are the only seams (the H15 split left the assembled
+    # dicts here precisely so knob lanes stop fighting the line count — the
+    # module docstring says so). The named seam if it grows again: the
+    # per-kind ANALYST_KIND_OPTIONS block can splice out to a sibling the same
+    # way the events/inquiry/programs catalogs already do. Seeded at the
+    # measured count + ~10%, the first-touch allowance.
+    "data/option_catalog/handler_options_catalog.py": 1670,  # 1515 @ 2026-11-04
 }
 
 _EXTRACT_DONT_RAISE = (

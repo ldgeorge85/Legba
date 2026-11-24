@@ -188,11 +188,16 @@ def test_a_claim_that_enumerates_countries_scopes_itself() -> None:
 
 
 def test_irregular_demonyms_count_as_naming_the_country() -> None:
-    """"Spanish enclave Ceuta" names Spain; "Italian troop movements" names Italy."""
-    assert V._names_country("spain", "migrants at the spanish enclave of ceuta")
-    assert V._names_country("italy", "no confirmed italian troop deployments")
-    assert V._names_country("haiti", "three haitian gang financiers sanctioned")
-    assert not V._names_country("spain", "no material change was observed")
+    """"Spanish enclave Ceuta" names Spain; "Italian troop movements" names Italy.
+
+    W10 CANON-1: the matcher is read from ``absence_slice`` (verify no longer
+    re-exports country symbols; the tables are the profile's gazetteer)."""
+    from legba.data.provenance import absence_slice as AS
+
+    assert AS._names_country("spain", "migrants at the spanish enclave of ceuta")
+    assert AS._names_country("italy", "no confirmed italian troop deployments")
+    assert AS._names_country("haiti", "three haitian gang financiers sanctioned")
+    assert not AS._names_country("spain", "no material change was observed")
 
 
 async def test_off_target_row_no_longer_earns_a_hard_fail(monkeypatch) -> None:

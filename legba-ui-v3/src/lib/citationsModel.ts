@@ -165,6 +165,12 @@ export interface Citation {
    */
   singleSource?: boolean
   /**
+   * C-1 — the claimant when the cited row came from a CLAIM source (the
+   * stamp `citation.claim`). Present only on claim rows; the chip reads
+   * "claim" instead of "signal" (`citationKindLabel`).
+   */
+  claimant?: string
+  /**
    * 7d — at least one outlet behind this claim was absorbed by the wire /
    * same-publisher fold. The citation carries the BOOLEAN; the COUNT lives on
    * the rendered record's corroboration block (see `lib/claimFold.ts`), which
@@ -359,6 +365,10 @@ export function extractCitations(body: Record<string, unknown> | null | undefine
     // and both are read as "true when present", never defaulted to false: a
     // composition origin's independence is UNKNOWN, not cleared.
     if (o['single_source'] === true) cite.singleSource = true
+    const claim = o['claim'] as Record<string, unknown> | undefined
+    if (claim && typeof claim === 'object' && claim['source_class'] === 'claim') {
+      cite.claimant = str(claim['claimant']) ?? 'unnamed claimant'
+    }
     const folded = o['wire_folded']
     // `composition_citations` stamps the citation's key as a BOOLEAN while the
     // record's corroboration block stamps a COUNT; a positive number here is
@@ -493,6 +503,7 @@ export function isGroundingCitation(c: Citation): boolean {
  */
 export function citationKindLabel(c: Citation): string {
   if (c.refKind === 'finding') return 'sub-claim'
+  if (c.claimant) return `claim · ${c.claimant}`
   if (c.refKind === 'signal') return 'signal'
   return GROUNDING_LABEL[c.refKind as GroundingKind] ?? c.refKind
 }
@@ -713,4 +724,36 @@ export function tokenizeProse(text: string, byMarker: Map<string, Citation>): Pr
   }
   if (last < text.length) tokens.push({ kind: 'text', text: text.slice(last) })
   return tokens
+}
+
+/**
+ * The CLAIM a resolved marker closes: the sentence of prose that runs up to
+ * token `index` within the same tokenized run. Earlier markers are skipped (so
+ * every chip of a `[3][4]` run names the same sentence), the text is read back
+ * to the previous sentence end, and one trailing `.`/`!`/`?` is dropped so
+ * "rose 4%.[2]" and "rose 4% [2]." name the same claim.
+ *
+ * `null` when the run carries no prose before the marker (a marker that opens
+ * a markdown leaf) — the caller then asks for the desk's default claim rather
+ * than inventing one. Used by the chip's "cross-framing" action, whose panel
+ * matches this text against the record's own spans.
+ */
+export function claimSentenceBefore(
+  tokens: readonly ProseTokenEx[],
+  index: number,
+): string | null {
+  let prose = ''
+  for (let k = Math.min(index, tokens.length) - 1; k >= 0; k--) {
+    const t = tokens[k]
+    if (t.kind === 'text') prose = t.text + prose
+  }
+  const body = prose.trimEnd().replace(/[.!?]+$/, '').trimEnd()
+  if (!body) return null
+  // The last sentence boundary: terminal punctuation (optionally closed by a
+  // quote/bracket) followed by whitespace.
+  const boundary = /[.!?]["'\u201d\u2019)\]]*\s+/g
+  let start = 0
+  for (const m of body.matchAll(boundary)) start = (m.index ?? 0) + m[0].length
+  const sentence = body.slice(start).replace(/\s+/g, ' ').trim()
+  return sentence.length >= 3 ? sentence : null
 }

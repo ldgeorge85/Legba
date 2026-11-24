@@ -3,7 +3,7 @@
 # The source-first pivot's first-class acquisition unit (PIVOT §4.1–§4.4).
 # ONE poll/connection for this RSS feed regardless of how many country
 # targets consume it.  Every G20 country target wires to this source by
-# PREDICATE (a tags/kind source_selector — see descriptors/target_country_g20.yaml
+# PREDICATE (a tags/kind source_selector — see descriptors/target_country_g20_br.yaml
 # + scripts/bringup_register_g20_country_targets.py), then narrows the shared
 # raw pool to its own country via a per-target Subscription.geo filter.  No
 # per-target source duplication — that is the whole point of the model.

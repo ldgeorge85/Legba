@@ -65,6 +65,18 @@ deployments hit ``http://legba-models:8700`` with no auth).  Absent or
 without a BasicAuth wrapper — matching the
 :class:`NlpServiceClient` contract.
 
+Provider switch (W11-F107)
+--------------------------
+
+``config.provider`` picks the implementation: absent / ``legba_models`` builds
+the :class:`NlpServiceClient` exactly as before; ``innoai_gateway`` builds the
+:class:`~legba.data.stack.nlp_service.gateway.GatewayNlpClient` (Bearer
+``api_key`` vault ref, ``/relations`` · ``/entities`` · ``/classify``, and
+translation on the chat model ``translate_model`` — absent = ``"fast"``, an
+explicit blank = off, W11-F109). WHICH component the runtime binds is
+:func:`resolve_nlp_component_id` — ``LEGBA_NLP_COMPONENT_ID``, default
+``nlp.local.legba_models``.
+
 Errors
 ------
 
@@ -95,7 +107,7 @@ from .registry_client import RegistryClientError, RegistryHTTPClient
 from .source_factory import _unwrap_factory_dict
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from ..data.stack.nlp_service import NlpServiceClient
+    from ..data.stack.nlp_service import GatewayNlpClient, NlpServiceClient
 
 
 logger = logging.getLogger(__name__)
@@ -138,15 +150,15 @@ class LazyNlpClient:
         self._registry_client = registry_client
         self._secrets_resolve = secrets_resolve
         self._component_id = component_id
-        self._client: "NlpServiceClient | None" = None
+        self._client: "NlpServiceClient | GatewayNlpClient | None" = None
         self._lock = asyncio.Lock()
 
     @property
-    def cached(self) -> "NlpServiceClient | None":
+    def cached(self) -> "NlpServiceClient | GatewayNlpClient | None":
         """The currently-cached client, or ``None`` if not yet resolved."""
         return self._client
 
-    async def get(self) -> "NlpServiceClient":
+    async def get(self) -> "NlpServiceClient | GatewayNlpClient":
         """Return the cached client, building (or re-building) it on demand.
 
         Raises :class:`NlpClientFactoryError` on a build failure WITHOUT
@@ -189,7 +201,7 @@ async def build_nlp_client_from_stack_component(
     *,
     registry_client: RegistryHTTPClient,
     secrets_resolve: Callable[[str], Awaitable[bytes]],
-) -> "NlpServiceClient":
+) -> "NlpServiceClient | GatewayNlpClient":
     """Build a configured :class:`NlpServiceClient` from registry data.
 
     Steps:
@@ -240,6 +252,18 @@ async def build_nlp_client_from_stack_component(
         raise NlpClientFactoryError(
             f"nlp stack-component {component_id!r}: config.endpoint is "
             f"missing or non-string after unwrap (got {endpoint!r})"
+        )
+
+    # ---- 3a'. Provider switch (W11-F107). Absent = legba_models, unchanged.
+    provider = cfg.get("provider") or "legba_models"
+    if provider == "innoai_gateway":
+        return await _build_gateway_client(
+            component_id, endpoint, raw_config, cfg, secrets_resolve,
+        )
+    if provider != "legba_models":
+        raise NlpClientFactoryError(
+            f"nlp stack-component {component_id!r}: unknown provider "
+            f"{provider!r} (expected 'legba_models' or 'innoai_gateway')"
         )
 
     # ---- 3b. Secret refs (both-or-neither).
@@ -294,9 +318,100 @@ async def build_nlp_client_from_stack_component(
     return client
 
 
+async def _build_gateway_client(
+    component_id: str,
+    endpoint: str,
+    raw_config: Mapping[str, Any],
+    cfg: Mapping[str, Any],
+    secrets_resolve: Callable[[str], Awaitable[bytes]],
+) -> "GatewayNlpClient":
+    """The ``provider: innoai_gateway`` branch: Bearer ``api_key`` (required,
+    a vault ref), the gateway paths and label sets, no health probe."""
+    key_secret_id = _coerce_secret_ref(raw_config.get("api_key"))
+    if not key_secret_id:
+        raise NlpClientFactoryError(
+            f"nlp stack-component {component_id!r}: provider 'innoai_gateway' "
+            "requires an api_key secret ref (Bearer)"
+        )
+    if _coerce_secret_ref(raw_config.get("api_user")) or _coerce_secret_ref(
+        raw_config.get("api_pass")
+    ):
+        raise NlpClientFactoryError(
+            f"nlp stack-component {component_id!r}: provider 'innoai_gateway' "
+            "is Bearer-only; api_user/api_pass must be absent"
+        )
+    api_key = await _resolve_secret_text(secrets_resolve, key_secret_id, field="api_key")
+
+    from ..data.stack.nlp_service.gateway import GatewayNlpClient
+
+    try:
+        client = GatewayNlpClient(
+            endpoint=endpoint,
+            api_key=api_key,
+            timeout_seconds=_coerce_timeout(cfg.get("timeout_seconds")),
+            classify_path=_coerce_path(cfg.get("classify_path"), "/classify"),
+            entities_path=_coerce_path(cfg.get("entities_path"), "/entities"),
+            relations_path=_coerce_path(cfg.get("relations_path"), "/relations"),
+            health_path=_coerce_path(cfg.get("health_path"), "/models"),
+            relation_labels=_coerce_labels(cfg.get("relation_labels")),
+            entity_labels=_coerce_labels(cfg.get("entity_labels")),
+            translate_model=_coerce_translate_model(cfg),
+            # W11-F113: absent = the client defaults ("min", 0.5); a bad value
+            # fails the build loud (NlpClientFactoryError), never a call.
+            relation_confidence=cfg.get("relation_confidence"),
+            relation_threshold=cfg.get("relation_threshold"),
+        )
+    except ValueError as exc:
+        raise NlpClientFactoryError(
+            f"nlp stack-component {component_id!r}: {exc}"
+        ) from None
+    logger.info(
+        "nlp_client_factory.built component_id=%s endpoint=%s auth=bearer "
+        "provider=innoai_gateway translate_model=%s relation_confidence=%s "
+        "relation_threshold=%s",
+        component_id, endpoint, client.translate_model or "off",
+        client.relation_confidence,
+        "off" if client.relation_threshold is None else client.relation_threshold,
+    )
+    return client
+
+
+def resolve_nlp_component_id() -> str:
+    """The NLP stack component the runtime binds (W11-F107).
+
+    ``LEGBA_NLP_COMPONENT_ID`` names it (e.g. ``nlp.innoai.gateway``); unset or
+    blank = :data:`DEFAULT_NLP_COMPONENT_ID`. Read once at host bring-up, so a
+    switch is one env line and a runtime restart. A wrong id fails loud at the
+    first filter build (component not found), never silently.
+    """
+    value = os.environ.get("LEGBA_NLP_COMPONENT_ID", "").strip()
+    return value or DEFAULT_NLP_COMPONENT_ID
+
+
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
+
+
+def _coerce_translate_model(cfg: Mapping[str, Any]) -> str | None:
+    """The gateway translate alias: key absent = the default ``"fast"``; an
+    explicit blank (or non-string) = ``None``, translation off."""
+    from ..data.stack.nlp_service.gateway import DEFAULT_TRANSLATE_MODEL
+
+    value = cfg.get("translate_model")
+    if value is None:
+        return DEFAULT_TRANSLATE_MODEL
+    if not isinstance(value, str):
+        return None
+    return value.strip() or None
+
+
+def _coerce_labels(value: Any) -> list[str] | None:
+    """A label-list override: non-empty strings, else ``None`` (the default)."""
+    if not isinstance(value, (list, tuple)):
+        return None
+    labels = [str(v).strip() for v in value if isinstance(v, str) and v.strip()]
+    return labels or None
 
 
 async def _fetch_stack_component(
@@ -334,13 +449,12 @@ async def _fetch_stack_component(
     base_url = os.environ.get(
         "LEGBA_REGISTRY_API_URL", "http://localhost:8090",
     ).rstrip("/")
-    token = (os.environ.get("LEGBA_REGISTRY_API_TOKEN") or "").strip() or None
+    from legba.shared.registry_principal import service_auth_headers
+
     timeout = float(
         os.environ.get("LEGBA_REGISTRY_API_TIMEOUT", "10")
     )
-    headers: dict[str, str] = {}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
+    headers = service_auth_headers()  # X2-B1: the fleet's principal
     url = f"{base_url}/api/v1/registry/stack/{component_id}"
     try:
         async with httpx.AsyncClient(timeout=timeout) as c:
@@ -442,4 +556,5 @@ __all__ = [
     "LazyNlpClient",
     "NlpClientFactoryError",
     "build_nlp_client_from_stack_component",
+    "resolve_nlp_component_id",
 ]

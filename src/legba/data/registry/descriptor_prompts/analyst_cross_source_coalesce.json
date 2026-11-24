@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:cross_source_coalesce": {
+      "source": "analyst_cross_source_coalesce.yaml",
+      "state": "active"
+    }
+  }
+}

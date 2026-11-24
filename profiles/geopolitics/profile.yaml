@@ -1,0 +1,329 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# THE MANIFEST of the geopolitics exemplar — the instance the reference host
+# runs. Its paths point at today's tree (descriptors/), except prompts/, which
+# holds the profile's own prose (W9 SPLIT-2 moved the six lean lenses here).
+# Loaded by src/legba/data/profile.py (closed: an unknown key is refused).
+# docs/PROFILES.md explains each key.
+
+id: geopolitics
+
+# The walker (scripts/bringup_register_descriptors.py) registers every
+# action_pack / source / target / analyst file here, minus its RETIRED.md.
+descriptors_dir: ../../descriptors
+# The reference host's live-state overlay (activations, pauses).
+lifecycle: ../../descriptors/LIFECYCLE.md
+
+# deploy.sh --seed runs these adapters in order (LEGBA_SEED_SOURCES overrides).
+seeds: [world_baseline, sipri_arms_transfers]
+
+rosters:
+  # The code reads every roster below through src/legba/data/rosters.py
+  # (ROSTER-1); the runtime images read the packaged copy of this block,
+  # src/legba/data/profile_rosters.json (scripts/gen_profile_rosters.py).
+  #
+  # The desk-roster tag array: the desk-coverage roster
+  # (composition_slice._DESK_ROSTER_SQL) and the crossroads silences
+  # denominator.
+  subject_tags: [g20, watch, supply_chain]
+  # The scored legs (scorecard_producer, alert_trigger_scan, desk_baseline,
+  # the crossroads country silences).
+  scored_subject_tags: [g20, watch]
+  # The nine bounded units, display order (absence_api.BOUNDED_UNITS). Their
+  # questions live in descriptors/analyst_<id>.yaml method.bounded_question.
+  # ROSTER-2: each unit carries its own data inline (docs/PROFILES.md "Units"):
+  #   label / short      the workstation's label and chip glyph
+  #   scope_tag / _note  the tag its descriptor predicate narrows to, and why
+  #                      it has no read on most desks
+  #   query_terms        desk_reference's web-search terms
+  #   title_terms        the title-frame gauge's vocabulary (lower-case stems)
+  #   reference_queries  the reference builder's query patterns ({country})
+  #   structural         the status is a standing condition, measured by the
+  #                      descriptor's level-shaped indicators (W11-F36)
+  # A unit that declares none of them degrades by name, never by KeyError.
+  units:
+    - id: leadership_transition
+      label: Leadership transition
+      short: LT
+      query_terms: leadership succession election cabinet resignation
+      title_terms: [succession, election, leadership, transition, president,
+                    prime minister, resign, cabinet, handover, inaugurat,
+                    impeach, term limit, junta leader]
+      reference_queries:
+        - "{country} cabinet reshuffle minister appointed"
+        - "{country} prime minister resignation no-confidence vote"
+        - "{country} election result coalition talks"
+        - "{country} central bank governor appointed replaced"
+    - id: energy_security
+      label: Energy security
+      short: ES
+      structural: true
+      query_terms: energy security oil gas electricity supply
+      title_terms: [oil, gas, energy, chokepoint, refinery, pipeline, lng,
+                    crude, barrel, tanker, strait, blockade, power grid,
+                    electricity, fuel supply]
+      reference_queries:
+        - "{country} gas supply pipeline outage"
+        - "{country} electricity grid blackout capacity"
+        - "{country} LNG contract export terminal"
+        - "{country} fuel price cap subsidy decision"
+    - id: escalation
+      label: Escalation
+      short: ESC
+      query_terms: escalation risk military tension conflict
+      title_terms: [escalat, strike, offensive, clash, shelling, missile,
+                    airstrike, air strike, war, militant, insurgen, attack,
+                    bombard, ceasefire, front line, frontline]
+      reference_queries:
+        - "{country} border incident troops clash"
+        - "{country} strike attack casualties"
+        - "{country} airspace violation intercepted"
+        - "{country} summons ambassador protest diplomatic"
+    - id: narrative_coordination
+      label: Narrative / coordination
+      short: NC
+      query_terms: state media propaganda disinformation narrative
+      title_terms: [disinformation, propaganda, narrative, influence operation,
+                    bot network, coordinated messaging, information campaign]
+      reference_queries:
+        - "{country} foreign ministry statement condemns"
+        - "{country} joint statement allies communique"
+        - "{country} disinformation campaign attributed"
+        - "{country} state media coordinated messaging"
+    - id: internal_stability
+      label: Internal stability
+      short: IS
+      query_terms: political stability protests unrest government crisis
+      title_terms: [protest, unrest, riot, crackdown, repression, coup, gang,
+                    civil disorder, curfew, detention, purge, state of emergency]
+      reference_queries:
+        - "{country} protest thousands police"
+        - "{country} strike union industrial action"
+        - "{country} court ruling government challenge"
+        - "{country} arrests crackdown opposition"
+    - id: military_posture
+      label: Military posture
+      short: MP
+      structural: true
+      query_terms: military deployment forces exercise posture
+      title_terms: [deployment, deploy, mobiliz, mobilis, exercise, drill,
+                    procurement, basing, buildup, build-up, posture, troop,
+                    naval, fleet, brigade, garrison, rearm]
+      reference_queries:
+        - "{country} defence spending budget announcement"
+        - "{country} military exercise deployment"
+        - "{country} arms purchase procurement contract"
+        - "{country} troops deployed reinforcements"
+    - id: economic_coercion
+      label: Economic coercion
+      short: EC
+      query_terms: sanctions tariffs export controls trade restrictions
+      title_terms: [sanction, tariff, embargo, export control, blacklist,
+                    asset freeze, coercion, boycott, trade ban, import ban]
+      reference_queries:
+        - "{country} tariffs imposed imports"
+        - "{country} sanctions export ban trade"
+        - "{country} investment screening blocked deal"
+        - "{country} IMF review forecast downgrade"
+    - id: proliferation_watch
+      label: Proliferation watch
+      short: PW
+      scope_tag: nuclear_watch
+      scope_note: only nuclear-relevant desks run this unit
+      query_terms: nuclear weapons enrichment missile programme
+      title_terms: [nuclear, enrichment, uranium, warhead, iaea, safeguards,
+                    centrifuge, proliferation, weapons-grade, fissile]
+      reference_queries:
+        - "{country} IAEA inspection enrichment"
+        - "{country} missile test launch"
+        - "{country} nuclear programme agreement"
+        - "{country} export controls dual-use technology"
+    - id: disruption_status
+      label: Disruption status
+      short: DS
+      scope_tag: supply_chain
+      query_terms: shipping traffic disruption closure transit flow
+  # The fixed scorecard dimensions, which the correctness plane also measures
+  # unit by unit (scorecard_banding.DIMENSIONS, unit_correctness_scorer,
+  # goldset_sampling, the assessment producers): the BROAD units every scored
+  # desk fires. proliferation_watch (watch desks only) and disruption_status
+  # (supply-chain desks) are not on the card.
+  scored_units:
+    - leadership_transition
+    - energy_security
+    - escalation
+    - narrative_coordination
+    - internal_stability
+    - military_posture
+    - economic_coercion
+  # The source catalog the walker registers beside the descriptor files: one
+  # entry per verified feed, loaded by scripts/bringup_register_source_catalog.py.
+  source_catalog: rosters/source_catalog.yaml
+  # The gazetteer: the tables of names and codes the guards, the polity canon
+  # and the entity canon read (W10 CANON-1, docs/PROFILES.md "The gazetteer"),
+  # through src/legba/data/gazetteer.py; the runtime images read the packaged
+  # copy, src/legba/data/profile_gazetteer.json
+  # (scripts/gen_profile_gazetteer.py).
+  gazetteer: rosters/gazetteer.yaml
+  # The source-batch modules whose seed_credibility the walker runs.
+  credibility_seeds:
+    - bringup_register_source_catalog
+    - bringup_register_wave_a_sources
+    - bringup_register_rsshub_sources
+    - bringup_register_source_batch_2026_08
+    - bringup_register_source_batch_2026_09
+    - bringup_register_supply_chain_sources
+
+# The profile's own prompt prose: ONE package, legba_geopolitics (the six
+# political-lean lenses, DEC-14 taken 2026-10-04). The registry and runtime
+# image builds copy this directory into site-packages; a checkout puts it on
+# PYTHONPATH (docs/PROFILES.md "Prompt packages").
+prompts: prompts
+
+top_floor: world_assessor
+
+# The constants the platform's mechanisms key on (SPLIT-3), read through
+# src/legba/data/profile_constants.py and shipped in the package as
+# src/legba/data/profile_constants.json (scripts/gen_profile_constants.py).
+# Every value below is the literal the code spelled at fcbafb2e
+# (tests/data_pkg/test_profile_constants.py pins each one by sha256).
+# docs/PROFILES.md "Constants".
+constants:
+  # The external-audit drain's tier order, highest first (ui.frames ids; the
+  # producer of each is ranked). World first (the widest audience, the fewest
+  # claims), thematic next, the voice above the desks; region carries no
+  # claims of its own (a deterministic rollup) and ranks 0.
+  audit_tier_order: [world, thematic, assessment, country]
+  # The external-truth stratum per producer (external_truth's desk tier).
+  # `voice` is the Assessment channel, kept apart from the record it reads.
+  desk_tiers:
+    - {analyst: world_assessor, tier: world}
+    - {analyst: country_composition, tier: country}
+    - {analyst: region_composition, tier: region}
+    - {analyst: escalation_composition, tier: thematic}
+    - {analyst: world_assessment, tier: voice}
+    - {analyst: country_assessment, tier: voice}
+  # The per-subject tier: its producer (country_composition) is the subject
+  # read the scorecard reconciles against, and a situation whose topic starts
+  # with `country` is homed on that desk (situation_clustering).
+  subject_frame: country
+  # The frame anchor's class gate and the coverage floor's fold: a frame is
+  # anchored on a foreign POLITY (design §3.2 refuses an ORG anchor).
+  anchor_class: country
+  # A curated alias pair of two `country`-typed rows merges without the
+  # adjudicator; any other class mix stays gray.
+  auto_merge_class: country
+  # The non-Latin NLLB source languages translated before NER (the forward
+  # NER filter, the two backfill sweeps, the journal's raw-language warning).
+  translation_languages: [ar, fa, he, ru, uk, zh, ja, ko, hi, th, ur]
+  # A coarse land-border graph among the desk countries (the desk baselines'
+  # neighbour-spillover feature input, never a geo claim). Listed once,
+  # expanded symmetrically. A desk with no desk neighbour carries no edge.
+  adjacency:
+    land_border:
+      - [AR, BR]
+      - [CA, US]
+      - [MX, US]
+      - [DE, FR]
+      - [FR, IT]
+      - [CN, RU]
+      - [CN, IN]
+      - [CN, KP]
+      - [CN, PK]
+      - [CN, MM]
+      - [IN, PK]
+      - [IN, MM]
+      - [RU, UA]
+      - [RU, KP]
+      - [KR, KP]
+      - [IR, TR]
+      - [IR, PK]
+      - [ML, BF]
+      - [ML, NE]
+      - [BF, NE]
+  # The applicability tags a desk's own target file carries (the unit
+  # fan-out narrowing matrix, S1-T3); scripts/bringup_tag_targets.py merges
+  # them, with the desk's region frame tag, onto a live head.
+  applicability_tags: [nuclear_watch, conflict_active, sanctions_regime]
+  # INST-1: the non-scored subject-roster tags whose subjects the CORRECTNESS
+  # roster also covers. The reference builder builds each tagged subject a
+  # reference over the units scoped to the tag (disruption_status here), and
+  # the correctness grader grades it — the supply-chain lanes and flows are
+  # graded desks. docs/CORRECTNESS_GRADER.md "The roster".
+  reference_subject_tags: [supply_chain]
+
+# The profile's read-time view (VIEW-1): the declared shape the projector
+# (deterministic_handlers/profile_projector.py) materializes into the
+# profile_projection table under this plane, read at
+# GET /api/v1/registry/projection/<plane>. docs/PROFILES.md "The projection".
+# The subject ladder's data (src/legba/data/subject.py, W10 SUBJECT-1).
+# label: how a subject's display name joins its tier and its name
+# ("Watch — Pakistan"): unit_names.unit_label is the one producer and the one
+# parser of that label, in Python and in the SQL it renders.
+subjects:
+  label:
+    separator: "—"
+    separator_aliases: ["–", "-"]
+    order: [tier, name]
+
+projection:
+  view: projection/view.yaml
+  plane: geopolitics
+
+# The workstation's labels, exported to legba-ui-v3/src/lib/profile_ui.json by
+# scripts/gen_profile_ui.py. The workstation READS every string below (UI-B2):
+# no TypeScript site spells one (tests/test_profile.py checks both), and the
+# shell's label snapshot (lib/profileUi.test.ts) pins today's bytes. The file
+# names beside each key are where the string renders.
+ui:
+  subject:
+    singular: Desk                 # lib/workspaces.ts (the stance label)
+    plural: Desks                  # components/Sidebar.tsx (the Desks section)
+  unit_noun:
+    singular: unit
+    plural: units
+  # mobile/mobileModel.ts TIER_ORDER / TIER_LABEL / READ_ANALYSTS
+  frames:
+    - {id: world, label: World, producer: world_assessor}
+    - {id: assessment, label: Assessment, producer: world_assessment}
+    - {id: region, label: Region, parent: world, producer: region_composition}
+    - {id: country, label: Country, parent: region, producer: country_composition}
+    - {id: thematic, label: Thematic, producer: escalation_composition}
+  landing: morning_read            # lib/workspaces.ts LANDING_WORKSPACE
+  # lib/workspaces.ts WORKSPACES (ids are the shell's slot keys)
+  stances:
+    - id: morning_read
+      label: Morning Read
+      question: What happened, what moved, what does it mean?
+    - id: desk
+      label: Desk
+      question: Everything about the one place or lane I have selected.
+    - id: investigate
+      label: Investigate
+      question: Follow this one thing to the bottom.
+    - id: trust
+      label: Trust
+      question: Is what it produced any good?
+    - id: gate
+      label: The Gate
+      question: Work the human queues — journal proposals, grading, optimizer candidates.
+    - id: engine
+      label: Engine
+      question: Is the machine running, and what is it configured as?
+  # lib/missions.ts MISSIONS
+  missions:
+    - {id: morning_read, label: Morning Read}
+    - {id: desk_watch, label: Desk Watch}
+    - {id: crisis, label: Crisis}
+    - {id: release, label: Release}
+  map:
+    geometry: iso2
+    title: World Map               # panel-registry/registry.ts (v4.map)
+  labels:
+    read_title: World Assessment   # panel-registry/registry.ts (v4.assessment)
+    overview_title: World at a glance          # panels/system/Wall.tsx
+    unscoped_subject: No desk (world / unscoped)  # lib/morningReadBands.ts
+    roster:                        # mobile/components/ReportsList.tsx
+      g20: G20
+      watch: Watch list

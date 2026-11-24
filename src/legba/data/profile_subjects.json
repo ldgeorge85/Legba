@@ -1,0 +1,482 @@
+{
+  "frames": {
+    "escalation_composition": "thematic",
+    "hybrid_threat_composition": "thematic",
+    "region_africa": "region",
+    "region_americas": "region",
+    "region_europe": "region",
+    "region_indo_pacific": "region",
+    "region_mena": "region"
+  },
+  "label": {
+    "order": [
+      "tier",
+      "name"
+    ],
+    "separator": "—",
+    "separator_aliases": [
+      "–",
+      "-"
+    ]
+  },
+  "profile": "geopolitics",
+  "schema": "legba/profile_subjects/1",
+  "subjects": [
+    {
+      "domain": "geo",
+      "geo": [
+        "AR"
+      ],
+      "id": "country_g20_ar",
+      "name": "G20 — Argentina"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "AU"
+      ],
+      "id": "country_g20_au",
+      "name": "G20 — Australia"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "BR"
+      ],
+      "id": "country_g20_br",
+      "name": "G20 — Brazil"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "CA"
+      ],
+      "id": "country_g20_ca",
+      "name": "G20 — Canada"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "CN"
+      ],
+      "id": "country_g20_cn",
+      "name": "G20 — China"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "DE"
+      ],
+      "id": "country_g20_de",
+      "name": "G20 — Germany"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "FR"
+      ],
+      "id": "country_g20_fr",
+      "name": "G20 — France"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "GB"
+      ],
+      "id": "country_g20_gb",
+      "name": "G20 — United Kingdom"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "ID"
+      ],
+      "id": "country_g20_id",
+      "name": "G20 — Indonesia"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "IN"
+      ],
+      "id": "country_g20_in",
+      "name": "G20 — India"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "IT"
+      ],
+      "id": "country_g20_it",
+      "name": "G20 — Italy"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "JP"
+      ],
+      "id": "country_g20_jp",
+      "name": "G20 — Japan"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "KR"
+      ],
+      "id": "country_g20_kr",
+      "name": "G20 — Korea, Republic of"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "MX"
+      ],
+      "id": "country_g20_mx",
+      "name": "G20 — Mexico"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "RU"
+      ],
+      "id": "country_g20_ru",
+      "name": "G20 — Russian Federation"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "SA"
+      ],
+      "id": "country_g20_sa",
+      "name": "G20 — Saudi Arabia"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "TR"
+      ],
+      "id": "country_g20_tr",
+      "name": "G20 — Türkiye"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "US"
+      ],
+      "id": "country_g20_us",
+      "name": "G20 — United States"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "ZA"
+      ],
+      "id": "country_g20_za",
+      "name": "G20 — South Africa"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "BF"
+      ],
+      "id": "country_watch_bf",
+      "name": "Watch — Burkina Faso"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "CD"
+      ],
+      "id": "country_watch_cd",
+      "name": "Watch — Congo, The Democratic Republic of the"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "HT"
+      ],
+      "id": "country_watch_ht",
+      "name": "Watch — Haiti"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "IL"
+      ],
+      "id": "country_watch_il",
+      "name": "Watch — Israel"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "IR"
+      ],
+      "id": "country_watch_ir",
+      "name": "Watch — Iran, Islamic Republic of"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "KP"
+      ],
+      "id": "country_watch_kp",
+      "name": "Watch — Korea, Democratic People's Republic of"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "ML"
+      ],
+      "id": "country_watch_ml",
+      "name": "Watch — Mali"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "MM"
+      ],
+      "id": "country_watch_mm",
+      "name": "Watch — Myanmar"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "NE"
+      ],
+      "id": "country_watch_ne",
+      "name": "Watch — Niger"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "PK"
+      ],
+      "id": "country_watch_pk",
+      "name": "Watch — Pakistan"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "SD"
+      ],
+      "id": "country_watch_sd",
+      "name": "Watch — Sudan"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "TW"
+      ],
+      "id": "country_watch_tw",
+      "name": "Watch — Taiwan, Province of China"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "UA"
+      ],
+      "id": "country_watch_ua",
+      "name": "Watch — Ukraine"
+    },
+    {
+      "domain": "thematic",
+      "id": "flow_container_freight",
+      "name": "Flow — Container Freight & Logistics"
+    },
+    {
+      "domain": "thematic",
+      "geo": [
+        "CD",
+        "ZM",
+        "ID",
+        "AU",
+        "CL",
+        "ZA",
+        "MN"
+      ],
+      "id": "flow_critical_minerals",
+      "name": "Flow — Critical Minerals"
+    },
+    {
+      "domain": "thematic",
+      "geo": [
+        "NG",
+        "AO",
+        "DZ",
+        "LY",
+        "QA",
+        "AU",
+        "NO",
+        "KZ"
+      ],
+      "id": "flow_energy_shipping",
+      "name": "Flow — Energy Shipping (producer-side export flow)"
+    },
+    {
+      "domain": "thematic",
+      "geo": [
+        "TW",
+        "KR",
+        "JP",
+        "NL",
+        "SG"
+      ],
+      "id": "flow_semiconductors",
+      "name": "Flow — Semiconductors"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "DE"
+      ],
+      "id": "germany_news",
+      "name": "Germany News"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "JP"
+      ],
+      "id": "japan_news",
+      "name": "Japan News"
+    },
+    {
+      "domain": "thematic",
+      "geo": [
+        "SE",
+        "FI",
+        "EE",
+        "LV",
+        "LT",
+        "DK",
+        "NO",
+        "PL"
+      ],
+      "id": "lane_baltic_north_sea",
+      "name": "Lane — Baltic & North Sea"
+    },
+    {
+      "domain": "thematic",
+      "geo": [
+        "UA",
+        "RU",
+        "TR",
+        "RO",
+        "BG",
+        "GE"
+      ],
+      "id": "lane_black_sea",
+      "name": "Lane — Black Sea & Turkish Straits"
+    },
+    {
+      "domain": "thematic",
+      "geo": [
+        "IR",
+        "OM",
+        "AE",
+        "QA",
+        "KW",
+        "IQ",
+        "BH"
+      ],
+      "id": "lane_hormuz",
+      "name": "Lane — Strait of Hormuz"
+    },
+    {
+      "domain": "thematic",
+      "geo": [
+        "SG",
+        "MY",
+        "ID",
+        "PH",
+        "VN",
+        "TW",
+        "CN"
+      ],
+      "id": "lane_malacca_south_china_sea",
+      "name": "Lane — Malacca Strait & South China Sea"
+    },
+    {
+      "domain": "thematic",
+      "geo": [
+        "PA",
+        "CR",
+        "CO"
+      ],
+      "id": "lane_panama",
+      "name": "Lane — Panama Canal"
+    },
+    {
+      "domain": "thematic",
+      "geo": [
+        "YE",
+        "ER",
+        "DJ",
+        "EG",
+        "SD",
+        "SO"
+      ],
+      "id": "lane_red_sea",
+      "name": "Lane — Red Sea / Bab el-Mandeb / Suez"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "MX"
+      ],
+      "id": "mexico_news",
+      "name": "Mexico News"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "NG"
+      ],
+      "id": "nigeria_news",
+      "name": "Nigeria News"
+    },
+    {
+      "domain": "thematic",
+      "id": "region_africa",
+      "name": "Region — Africa"
+    },
+    {
+      "domain": "thematic",
+      "id": "region_americas",
+      "name": "Region — Americas"
+    },
+    {
+      "domain": "thematic",
+      "id": "region_europe",
+      "name": "Region — Europe"
+    },
+    {
+      "domain": "thematic",
+      "id": "region_indo_pacific",
+      "name": "Region — Indo-Pacific"
+    },
+    {
+      "domain": "thematic",
+      "id": "region_mena",
+      "name": "Region — Middle East & North Africa"
+    },
+    {
+      "domain": "thematic",
+      "id": "situation_iran_war",
+      "name": "Situation — US–Iran War"
+    },
+    {
+      "domain": "thematic",
+      "id": "theme_cyber",
+      "name": "Theme — Cyber (operations, vulnerabilities, advisories, outages)"
+    },
+    {
+      "domain": "geo",
+      "geo": [
+        "TR"
+      ],
+      "id": "turkey_news",
+      "name": "Turkey News"
+    }
+  ]
+}

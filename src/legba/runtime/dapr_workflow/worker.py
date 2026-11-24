@@ -229,6 +229,9 @@ def run_worker() -> None:
 def main() -> None:
     """Console-script entry point (``legba-dapr-workflow-worker``)."""
     _configure_logging()
+    from legba.shared.registry_principal import check_service_principal
+
+    check_service_principal("dapr_workflow_worker")  # X2-B1: loud when unset
     try:
         run_worker()
     except KeyboardInterrupt:  # pragma: no cover

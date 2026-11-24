@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.canada.sema_sanctions_list": {
+      "source": "source_canada_sema_sanctions_list.yaml",
+      "state": "draft"
+    }
+  }
+}

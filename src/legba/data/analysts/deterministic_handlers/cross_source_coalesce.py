@@ -85,6 +85,7 @@ from uuid import UUID
 
 from ...filters.dedupe import Dedupe4TierHandler, _normalized_levenshtein
 from ...provenance.models import FindingPayload
+from ...signal_slice_scope import CANONICAL_ONLY_SQL
 from ....runtime.analyst_method import AnalystMethodResult
 
 logger = logging.getLogger(__name__)
@@ -462,7 +463,7 @@ async def _fetch_window_rows(
             SELECT id, source_id, fetched_at, payload, content_hash
             FROM signals
             WHERE fetched_at > NOW() - INTERVAL '{int(window_hours)} hours'
-              AND (canonical_signal_id IS NULL OR canonical_signal_id = id)
+              AND {CANONICAL_ONLY_SQL}
               AND COALESCE(payload->>'title', '') <> ''
               {tenant_clause}
             ORDER BY fetched_at ASC, id ASC

@@ -1168,10 +1168,16 @@ async def test_real_head_pool_is_disclosed_exactly(pg_pool, clean_slate):
     So the readout had to say "NO widening" about the real head, and say it in
     terms rather than by omission.
 
-    2026-09-25/1 (H3-MEASURE, wave F) declares ``SHIFT_NONE`` on all three
-    families — a pure readout addition — so it POOLS with 2026-09-24/1 (H3) and
-    the real head is a declared pair again: the readout must now disclose both
-    stamps and a widening of one."""
+    2026-09-25/1 (H3-MEASURE, wave F) declared ``SHIFT_NONE`` on all three
+    families — a pure readout addition — so it POOLED with 2026-09-24/1 (H3)
+    and the real head was a declared pair, briefly.
+
+    2026-09-28/1 (carried_unsupported) declares ``moves`` on all three
+    families — a new counted soft reason that can only ADD soft spans on the
+    memory-citing population, but that is still a real, one-directional MOVE
+    — so the boundary it opens is HARD and **the head is a singleton again**.
+    The 09-24/09-25 pair below it is untouched: a later moving boundary never
+    retracts an earlier declared-none one."""
     desk = f"desk_bc_{uuid4().hex[:8]}"
     t0 = datetime.now(timezone.utc) - timedelta(days=20)
     async with pg_pool.acquire() as conn:
@@ -1185,10 +1191,10 @@ async def test_real_head_pool_is_disclosed_exactly(pg_pool, clean_slate):
     r = await _run(pg_pool)
     pop = _bc(r)["population"]
 
-    assert pop["judge_pipeline_versions"] == ["2026-09-24/1", bct.JUDGE_PIPELINE_VERSION]
-    assert pop["pooling"]["widened_by"] == 1
-    assert pop["pooling"]["stamp_count"] == 2
-    assert "NO widening" not in r.finding.body
+    assert pop["judge_pipeline_versions"] == [bct.JUDGE_PIPELINE_VERSION]
+    assert pop["pooling"]["widened_by"] == 0
+    assert pop["pooling"]["stamp_count"] == 1
+    assert "NO widening" in r.finding.body
 
 
 @pytest.mark.asyncio

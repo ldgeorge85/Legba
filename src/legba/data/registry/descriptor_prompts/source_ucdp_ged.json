@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.ucdp.ged": {
+      "source": "source_ucdp_ged.yaml",
+      "state": "retired"
+    }
+  }
+}

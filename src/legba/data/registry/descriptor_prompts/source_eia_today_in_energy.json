@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.eia.today_in_energy": {
+      "source": "source_eia_today_in_energy.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -122,7 +122,8 @@ from ..provenance.composition_integrity import (
 from ..provenance.text_fold import normalize_for_match
 from .assembly_spans import first_sentence_end
 from .assessment_prompts import declared_aperture, record_arithmetic
-from .unit_names import payload_names, unit_label
+from .off_roster_aperture import off_roster_names
+from .unit_names import label_name, payload_names, unit_label
 
 __all__ = [
     "DETECTOR_DETERMINISTIC",
@@ -1063,8 +1064,9 @@ def _aperture_marks(
 #: the human name, the handle. The voice writes the HUMAN HALF ("Argentina"),
 #: so the tail after the separator is a unit name in its own right and has to
 #: be admitted as one; without it the honest sentence that names twenty-six
-#: countries in the world's nouns would be marked as naming none of them.
-_UNIT_LABEL_SPLIT_RE = re.compile(r"\s+[\u2014\u2013-]\s+")
+#: countries in the world's nouns would be marked as naming none of them. The
+#: split is ``unit_names.label_name`` — the label's one parser, profile-styled
+#: (W10 SUBJECT-1).
 
 
 def aperture_declared_units(spine: Mapping[str, Any]) -> frozenset[str]:
@@ -1113,7 +1115,7 @@ def aperture_declared_units(spine: Mapping[str, Any]) -> frozenset[str]:
         # record groups by them and a sentence naming one has still named no
         # place — so the split keeps the last segment ("Argentina", "Sudan")
         # and drops the frame in front of the separator.
-        _add(_UNIT_LABEL_SPLIT_RE.split(human)[-1])
+        _add(label_name(human))
 
     drops = spine.get("drops") or {}
     for key in ("not_selected", "shown_not_carried", "trimmed", "below_floor"):
@@ -1127,6 +1129,12 @@ def aperture_declared_units(spine: Mapping[str, Any]) -> frozenset[str]:
         _unit(entry.get("unit"))
     for block in spine.get("blocks") or []:
         _unit(block.get("target_id"), block.get("target_name"))
+    # W5 — the off-roster countries the aperture names BY NAME (``declared_aperture``
+    # renders them, so ``aperture_vocabulary`` already has their words): a
+    # sentence saying one of them is active outside the roster has named a place
+    # the record declared, which is not a guess about a topic class.
+    for name in off_roster_names(spine):
+        _add(name)
     return frozenset(out)
 
 

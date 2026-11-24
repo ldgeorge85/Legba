@@ -5,85 +5,89 @@
  * phone has room for one of those at a time, so the split becomes a push: this
  * list, then the report, with Back as the way home.
  *
- * Every row answers the four questions the operator asks before deciding to
- * read: what tier, about what, from when, and does it hold up (verify). The
- * lead thread is the fifth line only because it is the one that decides.
+ * Every row answers the questions a reader asks before deciding to read: what
+ * tier, about what, from when — and the lead, the line that decides. (M-0a: the
+ * unexplained verify pill left the card; it was an engine figure.)
  */
 
 import { memo } from 'react'
 import {
   groupByTier,
+  PROFILE_TIERS,
+  readerSubjectName,
   rowsForDay,
-  TIER_LABEL,
+  tierLabel,
   type ReportRow,
-  type ReportTier,
 } from '../mobileModel'
-import { score } from '@/v4/read/readFormat'
-
-/** The roster class a country target id carries (`country_g20_sa` → `g20`). */
-export function rosterClass(targetId: string | null): string | null {
-  if (!targetId) return null
-  const m = /^country_([a-z0-9]+)_/.exec(targetId)
-  return m ? m[1] : null
-}
-
-const ROSTER_LABEL: Record<string, string> = {
-  g20: 'G20',
-  watch: 'Watch list',
-}
+import { rosterTagOf, type SubjectIndex } from '@/lib/deskNames'
+import { rosterLabel, subjectTierIds, type ProfileFrame } from '@/lib/profileUi'
 
 /**
- * Verify, as a chip.
- *
- * `score()` renders an absent number as an em dash rather than `0.00`, which is
- * the difference between "unmeasured" and "measured as bad" — a distinction the
- * whole verify apparatus exists to preserve.
+ * The roster leg a read's subject sits on — read off the subject's declared
+ * tags against the profile's `rosters.subject_tags` (`lib/deskNames.ts`), never
+ * out of its id. Null when the subject is on no declared leg.
  */
-function VerifyChip({ row }: { row: ReportRow }) {
-  const value = row.verifyScore
-  const tone = value == null ? 'm-chip-quiet' : value >= 0.8 ? 'm-chip-ok' : 'm-chip-warn'
-  return (
-    <span
-      className={`m-chip ${tone}`}
-      title={row.verifyState ? `verify: ${row.verifyState}` : 'not scored'}
-    >
-      {score(value)}
-    </span>
-  )
+export function rosterClass(targetId: string | null, subjects?: SubjectIndex): string | null {
+  return rosterTagOf(targetId, subjects)
 }
 
-function ReportRowItem({ row, onOpen }: { row: ReportRow; onOpen: (id: string) => void }) {
+/** The sub-group heading of a subject on no declared roster leg. */
+const OFF_ROSTER = 'other'
+
+function ReportRowItem({
+  row,
+  onOpen,
+  tiers,
+}: {
+  row: ReportRow
+  onOpen: (id: string) => void
+  tiers: readonly ProfileFrame[]
+}) {
   return (
     <li>
       <button
         type="button"
-        className="m-row"
+        className="m-card"
         data-testid="report-row"
         data-report-id={row.id}
         onClick={() => onOpen(row.id)}
       >
         <span className="m-row-head">
-          <span className="m-row-target">{row.target}</span>
-          <VerifyChip row={row} />
+          {/* U-1 — a list cached before rows were named may still carry the
+              machine id as the title; name it here too. */}
+          <span className="m-row-target">
+            {row.targetId && row.target === row.targetId ? readerSubjectName(row.targetId) : row.target}
+          </span>
         </span>
         <span className="m-row-meta">
-          {TIER_LABEL[row.tier]} · {row.day || 'undated'}
+          {tierLabel(row.tier, tiers)} · {row.day || 'undated'}
         </span>
-        {row.leadThread ? (
-          <span className="m-row-lead">{row.leadThread}</span>
-        ) : (
-          <span className="m-row-lead m-quiet">no lead recorded</span>
-        )}
+        {/* M-0a — the summary row's lead is its title's headline; a title
+            that is only a subject and a date has none, and nothing is drawn. */}
+        {row.leadThread ? <span className="m-row-lead">{row.leadThread}</span> : null}
       </button>
     </li>
   )
 }
 
-/** Country reads, sub-grouped by roster class — the one grouping the row carries. */
-function CountryGroup({ rows, onOpen }: { rows: ReportRow[]; onOpen: (id: string) => void }) {
+/**
+ * A per-subject tier's reads (the exemplar's country tier), sub-grouped by the
+ * roster leg each subject declares, headed by the profile's roster label.
+ */
+function RosterGroup({
+  rows,
+  onOpen,
+  tiers,
+  subjects,
+}: {
+  rows: ReportRow[]
+  onOpen: (id: string) => void
+  tiers: readonly ProfileFrame[]
+  subjects?: SubjectIndex
+}) {
   const byRoster = new Map<string, ReportRow[]>()
   for (const r of rows) {
-    const key = rosterClass(r.targetId) ?? 'other'
+    const key = rosterClass(r.targetId, subjects) ?? OFF_ROSTER
     const list = byRoster.get(key)
     if (list) list.push(r)
     else byRoster.set(key, [r])
@@ -91,13 +95,13 @@ function CountryGroup({ rows, onOpen }: { rows: ReportRow[]; onOpen: (id: string
   return (
     <>
       {[...byRoster.entries()].map(([roster, group]) => (
-        <div key={roster} className="m-subgroup">
+        <div key={roster} className="m-subgroup" data-testid={`roster-group-${roster}`}>
           <h3 className="m-subheading">
-            {ROSTER_LABEL[roster] ?? roster} <span className="m-count">{group.length}</span>
+            {roster === OFF_ROSTER ? OFF_ROSTER : rosterLabel(roster)} <span className="m-count">{group.length}</span>
           </h3>
           <ul className="m-list">
             {group.map((r) => (
-              <ReportRowItem key={r.id} row={r} onOpen={onOpen} />
+              <ReportRowItem key={r.id} row={r} onOpen={onOpen} tiers={tiers} />
             ))}
           </ul>
         </div>
@@ -115,7 +119,12 @@ export interface ReportsListProps {
   /** The journal's latest consolidation, rendered as its own row when present. */
   consolidation: { id: string; title: string; producedAt: string } | null
   onOpenConsolidation: () => void
-  cachedAt: string | null
+  /** M-0a — set when a refetch failed: "No connection. Showing what was loaded at …". */
+  offlineNote: string | null
+  /** The read tiers (the projection's when the plane answers; the profile's otherwise). */
+  tiers?: readonly ProfileFrame[]
+  /** The subject roster (`useSubjectIndex`); the session's index when omitted. */
+  subjects?: SubjectIndex
 }
 
 function ReportsListImpl({
@@ -126,10 +135,13 @@ function ReportsListImpl({
   onDay,
   consolidation,
   onOpenConsolidation,
-  cachedAt,
+  offlineNote,
+  tiers = PROFILE_TIERS,
+  subjects,
 }: ReportsListProps) {
   const visible = rowsForDay(rows, day)
-  const groups = groupByTier(visible)
+  const groups = groupByTier(visible, tiers)
+  const rosterTiers = subjectTierIds(tiers)
   const dayIndex = day ? days.indexOf(day) : 0
   const olderDay = days[dayIndex + 1] ?? null
   const newerDay = dayIndex > 0 ? days[dayIndex - 1] : null
@@ -142,11 +154,16 @@ function ReportsListImpl({
           {visible.length} read{visible.length === 1 ? '' : 's'}
           {day ? ` · ${day}` : ''}
         </p>
-        {cachedAt ? (
-          <p className="m-cached" data-testid="cached-banner">
-            offline — {cachedAt}
+        {offlineNote ? (
+          <p className="m-cached" data-testid="offline-banner" role="status">
+            {offlineNote}
           </p>
         ) : null}
+        {/* The workstation redirects a phone here (`lib/phoneSurface.ts`); this
+            is the way back to the desk, remembered for the tab's session. */}
+        <a className="m-desktop" href="/?desktop=1" data-testid="desktop-view">
+          Desktop view
+        </a>
       </header>
 
       <nav className="m-datenav" aria-label="Date navigation">
@@ -181,12 +198,12 @@ function ReportsListImpl({
             <h2 className="m-heading">
               {g.label} <span className="m-count">{g.rows.length}</span>
             </h2>
-            {g.tier === ('country' as ReportTier) ? (
-              <CountryGroup rows={g.rows} onOpen={onOpen} />
+            {rosterTiers.has(g.tier) ? (
+              <RosterGroup rows={g.rows} onOpen={onOpen} tiers={tiers} subjects={subjects} />
             ) : (
               <ul className="m-list">
                 {g.rows.map((r) => (
-                  <ReportRowItem key={r.id} row={r} onOpen={onOpen} />
+                  <ReportRowItem key={r.id} row={r} onOpen={onOpen} tiers={tiers} />
                 ))}
               </ul>
             )}
@@ -199,7 +216,7 @@ function ReportsListImpl({
           <h2 className="m-heading">Journal</h2>
           <ul className="m-list">
             <li>
-              <button type="button" className="m-row" onClick={onOpenConsolidation}>
+              <button type="button" className="m-card" onClick={onOpenConsolidation}>
                 <span className="m-row-head">
                   <span className="m-row-target">Latest consolidation</span>
                 </span>

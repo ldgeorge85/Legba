@@ -50,6 +50,8 @@ from legba.data.outputs.nats_stream import (
     resolve_subject,
 )
 
+from tests._isolated_nats_gate import clear_streams_capturing, requires_isolated_nats
+
 
 pytestmark = [pytest.mark.integration]
 
@@ -493,9 +495,10 @@ async def test_retry_then_success(
         pass
 
 
-@pytest.mark.skip(
-    reason="needs isolated rig; collides with live runtime on --network host"
-)
+# X1-A4: was a bare ``@pytest.mark.skip`` ("needs isolated rig") — the isolated
+# rig now exists (deploy/compose.test.yml), so it runs there and stays off the
+# production bus everywhere else.
+@requires_isolated_nats("the live runtime's legba.dlq.> stream")
 async def test_retry_exhausted_routes_to_dlq(
     nats_store: NatsStore, session_prefix: str
 ):
@@ -505,6 +508,7 @@ async def test_retry_exhausted_routes_to_dlq(
     # we need a stream that covers that subject so we can pull from it.
     dlq_full = dlq_subject(analyst_id)
     dlq_stream = f"{session_prefix}_t4_dlq_stream"
+    await clear_streams_capturing(nats_store.js, dlq_full)
     await nats_store.ensure_stream(
         name=dlq_stream,
         subjects=[dlq_full],

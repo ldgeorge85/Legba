@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:calibration_tracking": {
+      "source": "analyst_calibration_tracking.yaml",
+      "state": "active"
+    }
+  }
+}

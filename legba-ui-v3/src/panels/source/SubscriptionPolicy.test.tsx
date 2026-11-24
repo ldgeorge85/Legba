@@ -101,11 +101,11 @@ function mockFetch(putCapture?: (body: unknown) => void) {
       return Promise.resolve({ ok: true, json: async () => ({ version: 'b'.repeat(64) }) })
     }
     // targets list (must check BEFORE the generic descriptors match)
-    if (url.includes('/registry/descriptors') && url.includes('family=target')) {
+    if ((url.includes('/registry/descriptors') || url.includes('/v3/roster')) && url.includes('family=target')) {
       return Promise.resolve({ ok: true, json: async () => TARGETS })
     }
     // ScopePicker's source list (GET /registry/descriptors?family=source)
-    if (url.includes('/registry/descriptors') && url.includes('family=source')) {
+    if ((url.includes('/registry/descriptors') || url.includes('/v3/roster')) && url.includes('family=source')) {
       return Promise.resolve({
         ok: true,
         json: async () => [{ descriptor_id: SOURCE.descriptor_id, name: SOURCE.name, state: 'active' }],
@@ -222,7 +222,7 @@ describe('SubscriptionPolicyPanel', () => {
         captured = JSON.parse(String(init.body))
         return Promise.resolve({ ok: true, json: async () => ({ version: 'b'.repeat(64) }) })
       }
-      if (url.includes('/registry/descriptors') && url.includes('family=target')) {
+      if ((url.includes('/registry/descriptors') || url.includes('/v3/roster')) && url.includes('family=target')) {
         return Promise.resolve({ ok: true, json: async () => TARGETS })
       }
       if (/\/registry\/sources\//.test(url)) {

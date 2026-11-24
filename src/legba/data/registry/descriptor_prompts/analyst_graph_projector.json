@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:graph_projector": {
+      "source": "analyst_graph_projector.yaml",
+      "state": "draft"
+    }
+  }
+}

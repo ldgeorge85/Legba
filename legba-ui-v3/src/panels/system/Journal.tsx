@@ -79,6 +79,22 @@ const HONESTY_FLAG_LABELS: Record<string, string> = {
     'Forecast skill is unproven — the acute-forecast pilot has not earned positive skill (BSS not yet > 0).',
   calibration_thin:
     'Exogenous calibration is thin — too few resolved exogenous outcomes to calibrate against reality.',
+  unsupported_claims:
+    'The verify pass ran before publish and found sentences its cited sources do not support — marked in place.',
+  number_unsupported: 'A number in this entry is not stated by the sources its clause cites — marked in place.',
+  duplicate_event_citations:
+    'Two citations in one sentence report the same incident — the duplicate is marked; count events, not citations.',
+  outcome_overstated: 'An outcome word (sunk / killed / destroyed) is stronger than any cited source states.',
+  evidence_unavailable:
+    'No entry this window: the evidence handoff failed, so the draft was withheld rather than published.',
+}
+
+/** N-G — the flag the publish gate stamps on its declared "no entry" row. */
+export const EVIDENCE_UNAVAILABLE_FLAG = 'evidence_unavailable'
+
+/** True when the row is the publish gate's declared "no entry this window". */
+export function isDeclaredUnavailable(entry: { honesty_flags: string[] }): boolean {
+  return entry.honesty_flags.includes(EVIDENCE_UNAVAILABLE_FLAG)
 }
 
 function flagLabel(flag: string): string {
@@ -154,7 +170,19 @@ function openRef(ref: JournalRef): void {
  *  server deliberately KEEPS (never strips) — appendix §5.2. Mirrors
  *  `journal_assessor.py`'s `_SPECULATION_RE`. */
 const SPECULATION_MARKER_RE =
-  /\[\[(spec|speculation|perspective|wonder|inference|unverified|instrument)\]\]/gi
+  /\[\[(spec|speculation|perspective|wonder|inference|unverified|instrument|unsupported|number_unsupported|duplicate_citation|outcome_overstated)\]\]/gi
+
+/** Lane N-D — the PRE-PUBLISH verify marks (`journal_prepublish.VERIFY_MARKS`):
+ *  the verify pass ran before the entry published and marked, in place, what
+ *  its cited sources do not bear out. Rendered as rose pills, never hidden. */
+const VERIFY_MARK_LABELS: Record<string, string> = {
+  unsupported: 'the verify judge found this sentence unsupported by its cited sources',
+  number_unsupported: 'no source this clause cites states this number',
+  duplicate_citation: 'this citation reports the same incident as an earlier one in the sentence',
+  outcome_overstated: 'no cited source states this outcome (e.g. sunk / killed / destroyed)',
+}
+const VERIFY_MARK_IN_SPAN_RE =
+  /\[\[(unsupported|number_unsupported|duplicate_citation|outcome_overstated)\]\]/
 
 /** Normalize inline body markers for the human-readable markdown render
  *  (appendix §5.2, renamed from `stripRefMarkers` now that it does more than
@@ -176,7 +204,7 @@ function normalizeMarkers(body: string): string {
  *  small pill for each speculation/instrument marker in its original position. */
 function splitOnSpeculationTags(text: string): Array<{ text: string } | { tag: string }> {
   const parts: Array<{ text: string } | { tag: string }> = []
-  const re = /\{\{spec:([a-z]+)\}\}/g
+  const re = /\{\{spec:([a-z_]+)\}\}/g
   let last = 0
   let m: RegExpExecArray | null
   while ((m = re.exec(text)) !== null) {
@@ -191,6 +219,19 @@ function splitOnSpeculationTags(text: string): Array<{ text: string } | { tag: s
 /** One `[[instrument]]`-family inline pill — reuses `ClaimRow`'s amber/slate
  *  unverified palette for visual family consistency (appendix §5.2). */
 function SpeculationTag({ tag }: { tag: string }) {
+  const verifyLabel = VERIFY_MARK_LABELS[tag]
+  if (verifyLabel) {
+    return (
+      <span
+        className="mx-0.5 inline-flex items-center gap-0.5 rounded border border-rose-700/60 bg-rose-950/30 px-1 align-middle text-[10px] leading-none text-rose-200"
+        title={`${verifyLabel} — marked before publish, kept, never hidden`}
+        data-testid="journal-verify-mark"
+        data-tag={tag}
+      >
+        ⚠ {tag.replace(/_/g, ' ')}
+      </span>
+    )
+  }
   return (
     <span
       className="mx-0.5 inline-flex items-center gap-0.5 rounded border border-dashed border-amber-700/60 bg-amber-950/20 px-1 align-middle text-[10px] leading-none text-amber-300/90"
@@ -209,7 +250,8 @@ function ClaimRow({ claim }: { claim: JournalClaim }) {
   const needsCitation = span.startsWith(NEEDS_CITATION_PREFIX)
   // An uncited assertion (`[needs_citation]`) OR a perspective span is the
   // "unverified perspective" style: visible, distinct, never hidden (§4.5).
-  const unverified = needsCitation || claim.kind === 'perspective'
+  const verifyMark = VERIFY_MARK_IN_SPAN_RE.exec(span)?.[1] ?? null
+  const unverified = needsCitation || claim.kind === 'perspective' || verifyMark !== null
   const display = needsCitation ? span.slice(NEEDS_CITATION_PREFIX.length).trim() : span
 
   return (
@@ -230,10 +272,13 @@ function ClaimRow({ claim }: { claim: JournalClaim }) {
             title={
               needsCitation
                 ? 'Uncited factual span — flagged, shown verbatim, never hidden (§4.5)'
-                : 'Perspective / inference — the voice, not a cited fact'
+                : verifyMark !== null
+                  ? `Marked before publish: ${VERIFY_MARK_LABELS[verifyMark]}`
+                  : 'Perspective / inference — the voice, not a cited fact'
             }
+            data-verify-mark={verifyMark ?? undefined}
           >
-            {needsCitation ? 'uncited' : 'perspective'}
+            {needsCitation ? 'uncited' : verifyMark !== null ? 'verify flag' : 'perspective'}
           </span>
         )}
         <p
@@ -428,6 +473,41 @@ function EntryCard({
       </header>
 
       <div className="mb-2 text-[11px] text-slate-500">reflecting on {period}</div>
+      {/* A lens read names the declared prior it was written under, as the row
+          stamped it (`data.lens_prior`); an unstamped row shows nothing. */}
+      {entry.lens_prior && (
+        <div className="mb-2 text-[11px] text-slate-500" data-testid="journal-entry-lens-prior">
+          prior: {entry.lens_prior}
+        </div>
+      )}
+
+      {/* N-G — the publish gate's declared "no entry this window": the draft
+          was withheld, so say so plainly instead of rendering it as prose. */}
+      {isDeclaredUnavailable(entry) && (
+        <div
+          className="mb-2 rounded border border-line bg-surf-3 px-2 py-1.5 text-[12px] text-ink-2"
+          data-testid="journal-entry-declared-unavailable"
+        >
+          No entry this window — the evidence handoff failed and the draft was withheld.
+        </div>
+      )}
+      {/* N-G — a row withdrawn by a correction stays readable by id, with the
+          link to the correction that withdrew it. */}
+      {entry.corrected_by && (
+        <div className="mb-2 text-[11px] text-ink-3" data-testid="journal-entry-corrected-by">
+          corrected by{' '}
+          <button
+            type="button"
+            className="underline decoration-dotted"
+            title={entry.corrected_by}
+            onClick={() =>
+              openRef({ id: entry.corrected_by as string, kind: 'journal', title: 'correction' })
+            }
+          >
+            {entry.corrected_by.slice(0, 8)}
+          </button>
+        </div>
+      )}
 
       {/* Per-entry honesty pills — the deterministic flags forced from the live
           calibration metric at write time (§10). */}
@@ -515,7 +595,7 @@ function HonestyBanner({
         data-banner-state="clear"
       >
         Calibration posture: both legs currently pass (forecast skill earned + exogenous
-        calibration sufficient).
+        calibration sufficient). [{calibration.label || 'untrusted — legacy, under diagnosis'}]
         {!calibration.available && ' (no calibration finding computed yet — read defaulted clear)'}
       </div>
     )
@@ -542,6 +622,12 @@ function HonestyBanner({
         ))}
       </ul>
       <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] text-amber-300/80">
+        <span data-testid="journal-calibration-legacy-label">
+          {calibration.label || 'untrusted — legacy, under diagnosis'} — not the sealed forecast ledger
+        </span>
+        {calibration.stale === true && (
+          <span>stale — newest member {calibration.newest_member_at ?? 'date unknown'}</span>
+        )}
         {calibration.brier_skill_score != null && (
           <span>BSS {calibration.brier_skill_score.toFixed(3)}</span>
         )}
@@ -582,6 +668,7 @@ const KIND_LABELS: Record<string, string> = {
   lens_diff: 'Lens diff',
   inquiry: 'Inquiry',
   crossroads: 'Crossroads',
+  correction: 'Correction',
 }
 
 function kindLabel(kind: string): string {
@@ -617,6 +704,7 @@ const KIND_BADGE_CLASSES: Record<string, string> = {
   // lens pair already holds, so a badge still cannot be misread as a verdict.
   inquiry: 'border-indigo-800/50 bg-indigo-950/40 text-indigo-300',
   crossroads: 'border-teal-800/50 bg-teal-950/40 text-teal-300',
+  correction: 'border-line bg-surf-3 text-ink-2',
 }
 
 /** An unforeseen kind still gets a badge — the neutral one, labelled with its
@@ -636,6 +724,7 @@ const KIND_DESCRIPTIONS: Record<string, string> = {
     'Inquiry — a standing investigation, carrying its own ledger across cycles',
   crossroads:
     'Crossroads — cross-desk patterns, drifts, contradictions and silences',
+  correction: 'Correction — withdraws earlier rows that were published without evidence',
 }
 
 /** The badge's text AND colour for one `entry_kind`, returned together so the

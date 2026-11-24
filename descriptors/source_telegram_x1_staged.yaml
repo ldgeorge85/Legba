@@ -1,0 +1,183 @@
+# X-1 source expansion (2026-11-14) — STAGED Telegram channels.
+#
+# ROLL 83 (2026-11-14): all ten channels below were MOVED
+# into source_telegram_monitor.yaml (handles and classes, labels kept). This
+# file now holds none; the review notes below stay as the record of why each
+# was added and how it is classed.
+# kind: telegram_channel, the SAME platform account (the same three vault refs)
+# as source.telegram.org_channels. Ships DRAFT; the reference host walks it to
+# CONFIGURED (descriptors/LIFECYCLE.md) and it must NEVER go active as itself.
+#
+# WHY A SEPARATE, NEVER-ACTIVE DESCRIPTOR. One descriptor per Telegram session
+# is a protocol constraint (docs/DATA_SOURCES.md): a second concurrent client on
+# the same session trips Telegram's AUTH_KEY_DUPLICATED and kills the session.
+# The 28 live channels therefore ride ONE descriptor
+# (source_telegram_monitor.yaml), and the 2026-07-29 Ansar Allah decision
+# retired the separate-descriptor-per-batch approach for anything that RUNS.
+# But adding these handles to that live descriptor would activate all ten on
+# the next roll, and activation is the owner's call per channel. So the ten
+# reviewed channels are held here, registered and configured (a configured
+# head creates no actor and opens no client — runtime/dapr_host.py skips
+# draft/configured), with their classes already decided:
+#
+#   ACTIVATING A CHANNEL = moving its handle (and its `classes` entry) from
+#   this file into source_telegram_monitor.yaml's config.channels / classes.
+#   Never transition THIS descriptor to active: it would be a second client
+#   on the live session. tests/data_pkg/test_source_expansion_x1.py pins that
+#   its lifecycle row stays `configured`.
+#
+# Reviewed 2026-11-14 by the source-expansion review on each channel's public
+# web preview (t.me/s/<handle>: existence, subscribers, timestamps of the
+# newest <=20 posts). Read as TEXT only (include_media: false — media is
+# never downloaded), exactly as the live channels are.
+#
+# CLASSES (config.classes overrides the batch default `reporting`):
+#   OFFICIAL — a government body's own channel, read as THAT government's
+#   official position (primary source of what it says, never independent
+#   confirmation; the parties to a war are labelled as such):
+#     GeneralStaffZSU    General Staff of the Armed Forces of Ukraine — the
+#                        Ukrainian government's military command (party to
+#                        the war); daily operational summary and the
+#                        Russian-losses table. uk, ~10/day, 64.7K subs.
+#     kpszsu             Ukrainian Air Force — Ukrainian government military
+#                        (party to the war); air-threat bulletins and the
+#                        morning launched/shot-down tally. uk, bursty (~20 in
+#                        3 h), 938K subs; per-channel limit below applies.
+#     mod_russia         Ministry of Defence of the Russian Federation — the
+#                        Russian government (party to the war); MoD
+#                        communiqués. ru, ~20/day, 649K subs.
+#     medvedev_telegram  Dmitry Medvedev, Deputy Chairman of Russia's Security
+#                        Council — a Russian government official's channel
+#                        (party to the war). ru, ~2/month, 1.69M subs.
+#     idfofficial        Israel Defense Forces — the Israeli government's
+#                        military (party to conflict). en, ~4/day, 157K subs.
+#     SyPresidency       Presidency of the Syrian Arab Republic — the Syrian
+#                        government's head-of-state office. ar, ~4/week,
+#                        181K subs.
+#   ANALYSIS —
+#     DeepStateUA        DeepState, a Ukrainian volunteer front-line mapping
+#                        and analysis project. uk, ~3/day, 751K subs.
+#   REPORTING (the batch default, no override) —
+#     suspilnenews       Suspilne — Ukraine's public broadcaster's news service
+#                        (state-funded public broadcaster: reporting with a
+#                        state-affiliation flag, the DATA_SOURCES.md rule).
+#                        uk, ~25/day, 262K subs.
+#     zerkalo_io         Zerkalo — Belarusian independent outlet in exile
+#                        (former TUT.BY team). ru, ~25/day, 102K subs.
+#     agentstvonews      Agentstvo — independent Russian investigative outlet.
+#                        ru, ~8/day, 104K subs.
+#
+# The platform reads them as the 28 live channels are read, through its one
+# existing user account, text only. No credibility row: the host (t.me) is shared by every
+# channel, and a host row would score them all alike.
+#
+# Region: Ukraine, Russia, Israel, Syria, Belarus (scope.geo lists them as
+# selector keys; per-message geo comes from the body — tld_fallback is off as
+# on the live descriptor). Languages: uk, ru, ar, en.
+
+identity:
+  id: source.telegram.x1_staged_channels
+  name: Telegram — staged channels (X-1, configured only; activate by moving into org_channels)
+  kind: telegram_channel
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft                       # LIFECYCLE walks it to configured — never active
+  owner: x1_source_expansion
+  created: "2026-11-14T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [UA, RU, IL, SY, BY]
+  languages: [uk, ru, ar, en]
+  tags: [social, messaging, official, military, ukraine, russia, israel, syria, belarus, osint]
+  source_class: reporting           # batch default; per-channel classes below
+  access_class: public              # same as the live monitor: public channels, no reuse agreement
+
+acquisition: poll
+
+cadence:
+  # The live monitor's softened footprint, verbatim — this descriptor is never
+  # scheduled, but if its channels move they keep this rhythm.
+  schedule:
+    factory_kind: cron
+    raw: "*/30 * * * *"
+  cooldown_seconds: 120
+  jitter_seconds: 120
+
+config:
+  api_id_secret:
+    factory_kind: secret
+    raw: "source.telegram.api_id"
+  api_hash_secret:
+    factory_kind: secret
+    raw: "source.telegram.api_hash"
+  session_secret:
+    factory_kind: secret
+    raw: "source.telegram.session"
+  # 2026-11-14 (roll 83): all ten channels moved into
+  # source_telegram_monitor.yaml; this descriptor holds
+  # none now and stays configured, ready for the next reviewed batch.
+  channels:
+    factory_kind: list
+    item_kind: text
+    raw: []
+  classes:
+    factory_kind: dict
+    key_kind: text
+    value_kind: text
+    raw: {}
+  lookback_hours:
+    factory_kind: number
+    raw: 12
+  per_channel_timeout_seconds:
+    factory_kind: number
+    raw: 45
+  cycle_timeout_seconds:
+    factory_kind: number
+    raw: 360
+  poll_budget_seconds:
+    factory_kind: number
+    raw: 240
+  max_entries_per_poll:
+    factory_kind: number
+    raw: 1000
+  include_media: false
+  per_channel_message_limit:
+    factory_kind: number
+    raw: 50
+
+pipeline:
+  # The live monitor's pipeline, verbatim.
+  ingestion_filters:
+    - kind: dedupe_tier_1            # channel+message_id canonical
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: fact_extractor
+      config:
+        backend: relation
+        emit_graph_edges: false
+        max_facts_per_signal: 30
+    - kind: geocode
+      config:
+        tld_fallback: false          # t.me's .me is Montenegro — never a publisher origin
+  media: reference
+
+deps:
+  vault_secrets:
+    - source.telegram.api_id
+    - source.telegram.api_hash
+    - source.telegram.session
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

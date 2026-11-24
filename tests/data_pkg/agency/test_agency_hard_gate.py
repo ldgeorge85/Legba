@@ -639,3 +639,180 @@ async def test_a_budget_account_override_can_never_LOOSEN_a_cap(pool):
                 ctx=ToolContext())
             admitted.append(o.admitted)
     assert admitted == [True, True, False], f"the pack's own cap was loosened: {admitted}"
+
+
+# ---------------------------------------------------------------------------
+# Step 2.5 — the ARGUMENTS the model wrote must match the grammar it was
+# shown. Before this the schemas were rendered outbound and never checked
+# inbound, so a call could carry anything and the dispatchers' ``args.get``
+# reads took what they recognized and dropped the rest in silence. Live,
+# 2026-09-28 00:58Z: ``list_situations`` arrived carrying six FABRICATED
+# situation rows under ``result`` plus ``status: "ok"``; the fabrication went
+# on the floor, ``status`` ran as a SQL predicate no row can match, the read
+# came back count 0, and the answer cited the six invented ids.
+#
+# These drive the REAL ``run_pack_tool`` pipeline, so they pin the whole
+# outcome and not just the validator: the tool does not run, the block is
+# operator-visible in ``governor_events``, no ledger row is spent, and the
+# cause is one the loops already know how to hand back to the model.
+# ---------------------------------------------------------------------------
+
+
+async def test_a_fabricated_result_in_the_args_is_blocked_before_the_tool_runs(pool):
+    """The live call, verbatim, through the gate."""
+    pack = _pack("substrate_read", tools=["list_situations"], tags=["news"],
+                 governor={"max_invocations_per_hour": 100})
+    scope = TargetScopeView(target_id="t_frames", tags=["news"])
+    account = f"acct-{uuid4().hex[:8]}"
+    agency = Agency()
+
+    call = ToolCall(
+        pack_id="substrate_read", tool_name="list_situations",
+        budget_account=account, requested_by="analyst.consult",
+        args={
+            "result": [{"id": "sit-001", "name": "fabricated frame"}],
+            "status": "ok",
+            "metadata": {},
+        },
+    )
+    async with pool.acquire() as conn:
+        outcome = await agency.run_pack_tool(
+            conn, pack=pack, call=call,
+            analyst_grants=[_ref("substrate_read")],
+            target_allows=[_ref("substrate_read")],
+            # No SubstrateQueryPort is wired: if the block ever stopped
+            # working the handler would fail loudly rather than pass.
+            scope=scope, ctx=ToolContext(),
+        )
+
+    assert outcome.admitted is False
+    assert outcome.block_cause == "result_shaped_arg"
+    assert outcome.tool_result is None
+    # The detail is written FOR THE MODEL — it names what was done, not just
+    # that an argument was unknown, and restates the real grammar.
+    assert "result" in outcome.detail and "metadata" in outcome.detail
+    assert "OUTPUT" in outcome.detail and "INPUT" in outcome.detail
+    assert "since_hours" in outcome.detail
+
+    async with pool.acquire() as conn:
+        evs = await recent_events(conn, pack_id="substrate_read", decision="block")
+        # Blocked BEFORE the governor: nothing was spent on a malformed call.
+        invs = await conn.fetchval(
+            "SELECT COUNT(*) FROM action_pack_invocations WHERE budget_account=$1",
+            account,
+        )
+    assert any(e["cause"] == "result_shaped_arg" for e in evs)
+    assert invs == 0
+
+
+async def test_a_bad_argument_is_blocked_as_invalid_arg_with_the_grammar(pool):
+    """The other three nets — an argument that does not exist, a required one
+    missing, and a value outside a declared enum — share the ``invalid_arg``
+    cause and each carry the declared set in the detail."""
+    pack = _pack("substrate_read",
+                 tools=["list_situations", "search_signals"], tags=["news"],
+                 governor={"max_invocations_per_hour": 100})
+    scope = TargetScopeView(target_id="t_frames", tags=["news"])
+    agency = Agency()
+    grants, allows = [_ref("substrate_read")], [_ref("substrate_read")]
+
+    cases = [
+        ("list_situations", {"status": "active", "top_k": 5}, "top_k"),
+        ("search_signals", {"limit": 5}, "requires query"),
+        ("list_situations", {"status": "ok"}, "dormant"),
+    ]
+    for tool_name, args, expected in cases:
+        account = f"acct-{uuid4().hex[:8]}"
+        async with pool.acquire() as conn:
+            outcome = await agency.run_pack_tool(
+                conn, pack=pack,
+                call=ToolCall(
+                    pack_id="substrate_read", tool_name=tool_name,
+                    budget_account=account, requested_by="analyst.consult",
+                    args=args,
+                ),
+                analyst_grants=grants, target_allows=allows,
+                scope=scope, ctx=ToolContext(),
+            )
+            invs = await conn.fetchval(
+                "SELECT COUNT(*) FROM action_pack_invocations "
+                "WHERE budget_account=$1",
+                account,
+            )
+        assert outcome.admitted is False, (tool_name, args)
+        assert outcome.block_cause == "invalid_arg", (tool_name, args)
+        assert expected in outcome.detail, (tool_name, args, outcome.detail)
+        assert invs == 0
+
+    async with pool.acquire() as conn:
+        evs = await recent_events(conn, pack_id="substrate_read", decision="block")
+    assert sum(1 for e in evs if e["cause"] == "invalid_arg") >= 3
+
+
+async def test_the_blocked_arguments_reach_the_run_receipt(pool):
+    """A block is when you most want the arguments, and the fabricated ones
+    most of all — the accounting wrapper is around the whole pipeline, so the
+    new step inherits it rather than needing its own."""
+    from legba.data import run_accounting
+
+    pack = _pack("substrate_read", tools=["list_situations"], tags=["news"],
+                 governor={"max_invocations_per_hour": 100})
+    agency = Agency()
+    token = run_accounting.bind_run_accounting()
+    try:
+        async with pool.acquire() as conn:
+            await agency.run_pack_tool(
+                conn, pack=pack,
+                call=ToolCall(
+                    pack_id="substrate_read", tool_name="list_situations",
+                    budget_account=f"acct-{uuid4().hex[:8]}",
+                    requested_by="analyst.consult",
+                    args={"result": [{"id": "sit-001"}], "status": "ok"},
+                ),
+                analyst_grants=[_ref("substrate_read")],
+                target_allows=[_ref("substrate_read")],
+                scope=TargetScopeView(target_id="t_frames", tags=["news"]),
+                ctx=ToolContext(),
+            )
+        tool_calls = run_accounting.current_tool_calls()
+    finally:
+        run_accounting.reset_run_accounting(token)
+
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["status"] == "blocked"
+    assert tool_calls[0]["block_cause"] == "result_shaped_arg"
+    assert tool_calls[0]["args"]["status"] == "ok"
+
+
+async def test_a_tool_with_no_declared_schema_still_runs(pool):
+    """The gate must not turn "no authored grammar" into "blocked". The seed
+    pack tools have no TOOL_SCHEMAS entry and their arguments are their
+    handlers' business, exactly as before."""
+    from legba.data.stack.llm.tool_rounds import TOOL_SCHEMAS
+
+    assert "create_incident" not in TOOL_SCHEMAS
+    pack = _pack(
+        "incident_response", tools=["create_incident"], tags=["incident"],
+        channels=[{"name": "ops_alert", "kind": "alert",
+                   "config": {"subject": "channels.ops"}}],
+        governor={"max_invocations_per_hour": 60},
+    )
+    async with pool.acquire() as conn:
+        outcome = await Agency().run_pack_tool(
+            conn, pack=pack,
+            call=ToolCall(
+                pack_id="incident_response", tool_name="create_incident",
+                budget_account=f"acct-{uuid4().hex[:8]}",
+                requested_by="analyst.soc",
+                # Nothing here is declared anywhere, including a result-shaped
+                # key: an undeclared grammar is not validated at all.
+                args={"title": "Active exfil", "severity": "critical",
+                      "rows": ["not the models fault"]},
+            ),
+            analyst_grants=[_ref("incident_response")],
+            target_allows=[_ref("incident_response")],
+            scope=TargetScopeView(target_id="t_inc", tags=["incident"]),
+            ctx=ToolContext(emit=ChannelEmitter(nats_publish=None)),
+        )
+    assert outcome.admitted is True
+    assert outcome.tool_result.status == "emitted"

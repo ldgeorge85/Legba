@@ -101,7 +101,8 @@ describe('GovernorEventsPanel', () => {
     stubFetch()
     render(wrap(<GovernorEventsPanel registration={reg()} scope={{}} mode="personal" />))
     await waitFor(() => expect(screen.getByTestId('governor-list')).toBeInTheDocument())
-    expect(screen.getByTestId('governor-row-block')).toBeInTheDocument()
+    // The list can paint (empty) a frame before its rows on a loaded runner.
+    await waitFor(() => expect(screen.getByTestId('governor-row-block')).toBeInTheDocument())
     expect(screen.getByTestId('governor-row-allow')).toBeInTheDocument()
     expect(screen.getByTestId('governor-causes')).toHaveTextContent('over_budget: 1')
   })

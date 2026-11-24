@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:signal_summarizer": {
+      "source": "analyst_signal_summarizer.yaml",
+      "state": "active"
+    }
+  }
+}

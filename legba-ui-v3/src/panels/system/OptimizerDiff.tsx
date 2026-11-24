@@ -18,11 +18,10 @@
  * existed return an empty `current_text` (the candidate side still renders).
  *
  * Candidate selection:
- *   - the `legba:open-optimizer-diff` cross-panel event (fired by the
- *     Optimizer Candidates queue "diff" button) while this panel is mounted, OR
- *   - the durable `window.__legbaPendingOptimizerDiff` slot the same button
- *     parks the request in, drained on mount so the FIRST open (which missed
- *     the live event — there was no listener yet) still loads the candidate, OR
+ *   - the `open_panel` that opened this drill (the Optimizer Candidates queue
+ *     "diff" button), whose `candidate_id` param reaches the tile through
+ *     `state/panelParams` — on first open and while mounted alike (UI-B1/shell
+ *     retired the DOM event and the `window` park), OR
  *   - `data_query.candidate_id` on the registration, OR
  *   - a manual candidate-id input (operator escape hatch).
  *
@@ -30,57 +29,27 @@
  */
 
 import { useQuery } from '@tanstack/react-query'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { PanelChrome } from '@/components/PanelChrome'
 import { apiGet, ApiError } from '@/lib/api'
 import { diffLines, diffStat, type PromptModuleDiff } from '@/lib/evalOps'
 import type { PanelProps } from '@/types'
-
-/** Shared with `Optimizer.tsx` — kept in sync by literal. */
-const OPEN_DIFF_EVENT = 'legba:open-optimizer-diff'
-const PENDING_DIFF_KEY = '__legbaPendingOptimizerDiff'
-
-/**
- * Read + clear the durable pending-diff request the "view diff" button parks on
- * `window`. Consuming it (deleting the slot) means a remount doesn't replay a
- * stale candidate — a fresh click re-parks a fresh one.
- */
-function drainPendingDiff(): string | null {
-  const w = window as unknown as Record<string, string | undefined>
-  const id = w[PENDING_DIFF_KEY]
-  if (id) {
-    delete w[PENDING_DIFF_KEY]
-    return id
-  }
-  return null
-}
+import { usePanelOpenParams } from '@/state/panelParams'
 
 export default function OptimizerDiffPanel({ registration }: PanelProps) {
-  // Initial candidate: registration deep-link wins, else a pending request the
-  // queue parked before this panel mounted (the first-open case). Resolved in a
-  // lazy initializer so the pending slot is drained exactly once at mount, not
-  // on every render.
+  // Initial candidate: the registration's deep-link; then whatever the
+  // `open_panel` that opened (or re-focused) this drill carried.
   const [candidateId, setCandidateId] = useState(
-    () =>
-      (registration.data_query?.candidate_id as string | undefined) ??
-      drainPendingDiff() ??
-      '',
+    () => (registration.data_query?.candidate_id as string | undefined) ?? '',
   )
   const [draft, setDraft] = useState(candidateId)
-
-  // Cross-panel deep-link from the Optimizer Candidates queue. The live event
-  // covers the already-open case; the mount drain above covers first-open.
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const ev = e as CustomEvent<{ candidate_id: string }>
-      if (ev.detail?.candidate_id) {
-        setCandidateId(ev.detail.candidate_id)
-        setDraft(ev.detail.candidate_id)
-      }
+  usePanelOpenParams('system.optimizer.diff', (params) => {
+    const id = typeof params.candidate_id === 'string' ? params.candidate_id : ''
+    if (id) {
+      setCandidateId(id)
+      setDraft(id)
     }
-    window.addEventListener(OPEN_DIFF_EVENT, handler)
-    return () => window.removeEventListener(OPEN_DIFF_EVENT, handler)
-  }, [])
+  })
 
   const enabled = candidateId.trim().length > 0
 

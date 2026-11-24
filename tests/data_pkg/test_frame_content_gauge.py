@@ -387,7 +387,7 @@ def test_the_knobs_are_declared_handler_options():
     catalog, which is also what makes the registry rebuild on deploy real."""
     from dataclasses import fields as dc_fields
 
-    from legba.data.analysts.handler_options import HANDLER_OPTIONS
+    from legba.data.option_catalog.handler_options import HANDLER_OPTIONS
 
     declared = {
         s.name for s in HANDLER_OPTIONS["situation_clustering"]

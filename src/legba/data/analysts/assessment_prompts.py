@@ -136,10 +136,13 @@ from .assessment_prompt_world_v4 import (  # noqa: F401 — re-exported surface
     COUNTRY_SECTION_HEADER,
     PROMPT_VERSION_V4,
     PROMPT_VERSION_V5,
+    PROMPT_VERSION_V6,
     WORLD_ASSESSMENT_BODY_SHAPE_V4,
     WORLD_ASSESSMENT_SYSTEM_V4,
     WORLD_ASSESSMENT_SYSTEM_V5,
+    WORLD_ASSESSMENT_SYSTEM_V6,
 )
+from .off_roster_aperture import off_roster_lines
 from .unit_names import payload_names, unit_label
 
 __all__ = [
@@ -159,13 +162,16 @@ __all__ = [
     "PROMPT_VERSION",
     "PROMPT_VERSION_V4",
     "PROMPT_VERSION_V5",
+    "PROMPT_VERSION_V6",
     "WORLD_ASSESSMENT_BODY_SHAPE_V4",
     "WORLD_ASSESSMENT_SYSTEM_V4",
     "WORLD_ASSESSMENT_SYSTEM_V5",
+    "WORLD_ASSESSMENT_SYSTEM_V6",
     "TENSION_BUDGET_CHARS",
     "TENSION_RENDER_CAP",
     "TENSION_SPAN_CHARS",
     "build_assessment_prompt",
+    "carried_unit",
     "declared_aperture",
     "declared_tensions",
     "record_arithmetic",
@@ -473,7 +479,7 @@ def system_prompt_for(payload: Mapping[str, Any]) -> str:
     if str((payload or {}).get("tier") or "") == TIER_COUNTRY:
         return COUNTRY_ASSESSMENT_SYSTEM
     if has_context_spans(payload):
-        return WORLD_ASSESSMENT_SYSTEM_V5
+        return WORLD_ASSESSMENT_SYSTEM_V6
     return ASSESSMENT_SYSTEM
 
 
@@ -488,7 +494,7 @@ def prompt_version_for(payload: Mapping[str, Any]) -> str:
     if str((payload or {}).get("tier") or "") == TIER_COUNTRY:
         return COUNTRY_PROMPT_VERSION
     if has_context_spans(payload):
-        return PROMPT_VERSION_V5
+        return PROMPT_VERSION_V6
     return PROMPT_VERSION
 
 
@@ -1159,6 +1165,30 @@ def _named_units(units: Sequence[str]) -> str:
     return "; ".join(str(u) for u in units if u)
 
 
+def carried_unit(payload: Mapping[str, Any], block: Mapping[str, Any]) -> str:
+    """The ROSTER UNIT a carried block came through (W1, 2026-11-07).
+
+    ``via_unit`` where the world plan stamped it. On a record written before
+    the stamp, a thematic carry is recovered from the subject-group floor: the
+    ``thematic:<unit>`` group's ``best_order_rank`` is the ``order_rank`` of the
+    block that group carried. Otherwise the block's own target, as shipped.
+    """
+    unit = str(block.get("via_unit") or "").strip()
+    if unit:
+        return unit
+    floor = payload.get("floor") if isinstance(payload.get("floor"), Mapping) else {}
+    rank = block.get("order_rank")
+    for g in floor.get("groups") or []:
+        gid = str((g or {}).get("group_id") or "")
+        if (
+            gid.startswith("thematic:") and rank is not None
+            and (g or {}).get("best_order_rank") == rank
+            and int((g or {}).get("carried") or 0) >= 1
+        ):
+            return gid.split(":", 1)[1]
+    return str(block.get("target_id") or block.get("desk") or "").strip()
+
+
 def declared_aperture(payload: Mapping[str, Any]) -> str:
     """THE DECLARED APERTURE — what this record could have carried, BY NAME.
 
@@ -1222,11 +1252,19 @@ def declared_aperture(payload: Mapping[str, Any]) -> str:
     # below are the only place the map states the carried set as a set — which
     # is what makes "the roster minus these" a subtraction the voice can show
     # its working for and the judge can check.
-    carried_units = [
-        str(b.get("target_id") or b.get("desk") or "").strip()
-        for b in (payload.get("blocks") or [])
-    ]
-    carried_units = [u for u in carried_units if u]
+    #
+    # W1 (2026-11-07) — keyed by the ROSTER UNIT each block was carried
+    # THROUGH (:func:`carried_unit`), not by the block's own target: a thematic
+    # carry's target is its child's, so e30e67d3 printed Russia twice, never
+    # ``escalation_composition``, and "the other 33 - 15 = 18" beside a list of
+    # 17. Distinct units, and the aperture is the roster minus them, so the two
+    # counts add up to the roster by construction.
+    carried_units: list[str] = []
+    for b in payload.get("blocks") or []:
+        unit = carried_unit(payload, b)
+        if unit and unit not in carried_units:
+            carried_units.append(unit)
+    n_blocks = len(payload.get("blocks") or [])
     not_selected = [
         _drop_name(r) for r in (drops.get("not_selected") or [])
     ] or [_drop_name(r) for r in (drops.get("shown_not_carried") or [])]
@@ -1246,11 +1284,16 @@ def declared_aperture(payload: Mapping[str, Any]) -> str:
             f"{_named_units([_label(u) for u in roster])}."
         )
         if carried_units:
+            in_roster = [u for u in carried_units if u in set(roster)]
+            off = len(carried_units) - len(in_roster)
             parts.append(
-                f"  * of those, this record CARRIED {len(carried_units)}: "
-                f"{_named_units([_label(u) for u in carried_units])}. The other "
-                f"{len(roster) - len(set(carried_units) & set(roster))} are its "
-                f"aperture, each one named on the roster line above."
+                f"  * of those, this record CARRIED {len(in_roster)} — "
+                f"{n_blocks} blocks over {len(carried_units)} units: "
+                f"{_named_units([_label(u) for u in carried_units])}"
+                + (f" ({off} of them not on the roster)" if off else "")
+                + f". The other {len(roster) - len(in_roster)} are its aperture "
+                f"({len(in_roster)} + {len(roster) - len(in_roster)} = "
+                f"{len(roster)}), each one named on the roster line above."
             )
         parts.append(
             f"  * of those, NOT in the basis this cycle: "
@@ -1286,6 +1329,22 @@ def declared_aperture(payload: Mapping[str, Any]) -> str:
         parts.append(
             f"  * seen and ranked BELOW THE CUT: {_named(not_selected)}."
         )
+    # W4 F-3 — a block the subject-group floor KEPT is carried, but the order
+    # had ranked it below the cut. Named so the voice does not read its
+    # presence as the order's verdict. Present only when the floor promoted
+    # something; phrased as carriage, never as a desk negative (see the
+    # roster-absent note above for why that shape matters in this block).
+    floor = payload.get("floor") if isinstance(payload.get("floor"), Mapping) else {}
+    promoted = {str(x) for x in (floor.get("promoted") or [])}
+    if promoted:
+        kept = [
+            _drop_name(b) for b in (payload.get("blocks") or [])
+            if str(b.get("via_head_id") or b.get("finding_id") or "") in promoted
+        ]
+        parts.append(
+            f"  * carried by the {floor.get('grain') or 'group'} floor, below the "
+            f"cut it would have ranked at: {_named(kept)}."
+        )
     if below_floor:
         parts.append(
             f"  * below the verification floor: {_named(below_floor)}."
@@ -1305,6 +1364,7 @@ def declared_aperture(payload: Mapping[str, Any]) -> str:
         else "  * how many desk reads never reached this surface at all was "
         "NOT measured this run."
     )
+    parts.extend(off_roster_lines(payload))   # W5: strong activity outside the roster
     return "\n".join(parts)
 
 

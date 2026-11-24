@@ -56,6 +56,7 @@ from ._contract import (
     SourceHealth,
 )
 from ._egress import guarded_async_client
+from .fetch_capture import fetch_role
 
 
 logger = logging.getLogger(__name__)
@@ -504,12 +505,16 @@ class MediaCloudSourceHandler:
         enrichers (trafilatura, L-141) re-attempt with smarter extraction
         if needed."""
         try:
-            resp = await client.get(
-                url,
-                timeout=self._config.full_text_timeout_seconds,
-                follow_redirects=True,
-                headers={"User-Agent": "legba-source-mediacloud/0.1"},
-            )
+            # N-L: the article page is this signal's ingest-time copy (role
+            # "page" — kept and linked by the fetch receipts, read by the
+            # archiver instead of a later re-fetch).
+            with fetch_role("page"):
+                resp = await client.get(
+                    url,
+                    timeout=self._config.full_text_timeout_seconds,
+                    follow_redirects=True,
+                    headers={"User-Agent": "legba-source-mediacloud/0.1"},
+                )
             if resp.status_code == 200 and resp.text:
                 # We deliberately do NOT parse HTML here — keep raw_body as
                 # the source server returned it. Phase 4 enrichers (NER /

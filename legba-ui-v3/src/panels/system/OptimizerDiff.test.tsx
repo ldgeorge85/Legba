@@ -3,7 +3,8 @@
  *
  * Asserts:
  *  - empty state when no candidate is selected
- *  - the `legba:open-optimizer-diff` cross-panel event loads + renders a diff
+ *  - an `open_panel` carrying `candidate_id` (the retired event's successor)
+ *    loads + renders a diff, whether it lands before or after the mount
  *  - added / deleted lines are marked, and the +/- stat shows in the subtitle
  */
 
@@ -12,6 +13,10 @@ import { render, screen, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactElement } from 'react'
 import OptimizerDiffPanel from './OptimizerDiff'
+import OptimizerMerged from '@/panels/merged/Optimizer'
+import { drive } from '@/lib/applyAction'
+import { bridgeActions } from '@/lib/commands'
+import { resetPanelParams } from '@/state/panelParams'
 import type { PanelRegistration } from '@/types'
 
 function reg(): PanelRegistration {
@@ -57,6 +62,7 @@ function stubFetch() {
 beforeEach(() => {
   vi.restoreAllMocks()
   localStorage.clear()
+  resetPanelParams()
 })
 
 describe('OptimizerDiffPanel', () => {
@@ -66,18 +72,37 @@ describe('OptimizerDiffPanel', () => {
     expect(screen.getByTestId('optdiff-empty')).toBeInTheDocument()
   })
 
-  it('loads + renders a diff from the cross-panel event', async () => {
+  // UI-B1/merges: the diff is the Optimizer's Diff tab. `open_panel` on the
+  // retired id resolves onto `system.optimizer`, so the candidate reaches this
+  // (unmodified) component THROUGH the wrapper's relay — the binding path these
+  // three tests now traverse.
+  it('loads + renders a diff from an open_panel while mounted', async () => {
     stubFetch()
-    render(wrap(<OptimizerDiffPanel registration={reg()} scope={{}} mode="personal" />))
+    render(wrap(<OptimizerMerged registration={reg()} scope={{}} mode="personal" initialTab="diff" />))
+    expect(screen.getByTestId('optdiff-empty')).toBeInTheDocument()
     act(() => {
-      window.dispatchEvent(
-        new CustomEvent('legba:open-optimizer-diff', { detail: { candidate_id: 'cand-1' } }),
-      )
+      drive(bridgeActions.optimizerDiff('cand-1'))
     })
     await waitFor(() => expect(screen.getByTestId('optdiff-body')).toBeInTheDocument())
     // 'old tail' deleted, 'new tail' + 'extra' added, 'line one'→'line ONE' (del+add)
     expect(screen.getAllByTestId('optdiff-line-add').length).toBeGreaterThan(0)
     expect(screen.getAllByTestId('optdiff-line-del').length).toBeGreaterThan(0)
+  })
+
+  it('loads the candidate an open_panel carried BEFORE the tile mounted (first open)', async () => {
+    stubFetch()
+    drive(bridgeActions.optimizerDiff('cand-1'))
+    render(wrap(<OptimizerMerged registration={reg()} scope={{}} mode="personal" initialTab="diff" />))
+    await waitFor(() => expect(screen.getByTestId('optdiff-body')).toBeInTheDocument())
+  })
+
+  it('a remount does not replay a request it already consumed', () => {
+    stubFetch()
+    drive(bridgeActions.optimizerDiff('cand-1'))
+    const first = render(wrap(<OptimizerMerged registration={reg()} scope={{}} mode="personal" initialTab="diff" />))
+    first.unmount()
+    render(wrap(<OptimizerMerged registration={reg()} scope={{}} mode="personal" initialTab="diff" />))
+    expect(screen.getByTestId('optdiff-empty')).toBeInTheDocument()
   })
 
   it('loads via data_query.candidate_id', async () => {

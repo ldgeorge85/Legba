@@ -105,7 +105,7 @@ export default function TargetTimelinePanel({ registration, scope }: PanelProps)
     enabled: !!target_id,
     queryKey: ['target-timeline-signals', target_id],
     queryFn: () =>
-      apiGet<Page<TLSignal>>(`/signals?target_id=${encodeURIComponent(target_id)}&limit=200`),
+      apiGet<Page<TLSignal>>(`/signals?target_id=${encodeURIComponent(target_id)}&limit=200&fields=full`),
     refetchInterval: 60_000,
   })
 
@@ -113,7 +113,7 @@ export default function TargetTimelinePanel({ registration, scope }: PanelProps)
     enabled: !!target_id,
     queryKey: ['target-timeline-findings', target_id],
     queryFn: () =>
-      apiGet<Page<TLFinding>>(`/findings?target_id=${encodeURIComponent(target_id)}&limit=100`),
+      apiGet<Page<TLFinding>>(`/findings?target_id=${encodeURIComponent(target_id)}&limit=100&fields=summary`),
     refetchInterval: 60_000,
   })
 

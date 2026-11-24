@@ -260,7 +260,10 @@ async def test_a_live_origin_class_is_refused_at_the_table(conn, live) -> None:
         await _insert(
             conn, collection_id=f"{_TAG}_cls", origin_class=live,
         )
-    assert "observations_origin_class_history_only" in str(exc.value)
+    # 0246 replaced the history-only CHECK with the origin/source PAIRING: a
+    # live-class row with no source_id, live:<source> collection id and fetch
+    # receipt is still refused — under the new constraint's name.
+    assert "observations_origin_class_pairing" in str(exc.value)
 
 
 @pytest.mark.asyncio
@@ -479,6 +482,10 @@ async def test_the_facts_open_triple_index_is_why_the_fact_guard_stays(
 async def test_second_apply_is_a_noop(conn) -> None:
     async with conn.transaction():
         await conn.execute(_migration_sql())
+        # Re-applying 0220 re-creates the index 0264 dropped on a small
+        # database; put the session DB back to the fully migrated shape so a
+        # later schema-hygiene check does not read this test's leftover.
+        await conn.execute("DROP INDEX IF EXISTS public.collection_descriptors_schema_idx")
     for table in ("signals", "facts", "events"):
         names = await _constraint_names(conn, table)
         assert f"{table}_origin_class_history_writer_not_built" in names

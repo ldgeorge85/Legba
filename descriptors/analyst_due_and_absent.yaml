@@ -1,0 +1,94 @@
+# Due-and-absent analyst descriptor (lane E-1 — "what was expected and has no
+# record").
+#
+# A `deterministic`-kind META analyst, NO LLM, no paid route, no token budget.
+# It reads only rows of the record that carry an EXPLICIT date and reports the
+# ones whose date (plus a declared tolerance) has passed with no matching
+# record in this collection:
+#
+#   forecast_question    sealed exogenous-ledger questions open past due + grace,
+#                        with no resolution and no yes / no / void proposal;
+#   acute_forecast       acute hazard forecasts with no graded outcome
+#                        acute_grace_hours after the window closed;
+#   scheduled_event      calendar rows past their date + tolerance with no
+#                        signal carrying the row's own declared subject keys;
+#   inquiry_expectation  inquiry ledger rows still open past resolves_by;
+#   series_period        live series whose next period is past its declared
+#                        period + its source's declared lag_days + tolerance.
+#
+# Rule due_and_absent/2026-11.1 (stamped in every finding). An absence in this
+# collection is not proof of absence in the world: every line says "no row or
+# signal matching it has been collected", what was looked for, which sources
+# would have carried it and whether those sources were silent or failing in the
+# window (poll outcomes + the watchdog's source-health episodes). The handler
+# refuses its own text if it ever says something did not happen
+# (due_and_absent.check_wording).
+#
+# Dedupe: the finding's data.ledger holds every expectation currently due and
+# absent; a line is written only when a state changes (newly overdue, resolved
+# late, voided). A run with no change is trace-only (no feed row).
+#
+# Alerts: one `due_and_absent` raise per change through the one alert path, at
+# low; page rule 2026-11-14/1 has no entry for the kind, so it is LOGGED, never
+# paged. A series row whose source's own polls were silent or failing raises
+# nothing: the liveness watchdog's source-health alerts own that.
+#
+# Where it reads: GET /api/v1/findings?analyst_id=due_and_absent, with the
+# `unverified — structural` badge (provenance/kinds.py
+# STRUCTURAL_VERIFY_EXEMPT_ANALYSTS). No new table, route or panel.
+#
+# Cadence: once a day at 07:48 UTC. Every overdue measure is in hours to days,
+# so a daily read loses nothing. The slot is quiet: no other analyst
+# descriptor in the tree fires at 07:48 (none of the every-N-minute sweeps
+# lands on :48 either); it follows the forecast resolver's 06:25 tick (a
+# question past due has had its resolver read before it can be reported
+# absent) and the BIS series poll at 07:13; and it sits clear of the 03-05 UTC
+# maintenance band (retention, baselines, scorers) and of the :00/:30
+# composition beats.
+#
+# State: draft in-tree; descriptors/LIFECYCLE.md records it `configured` on
+# the reference host. Activation is the orchestrator's flip at the roll
+# (docs/BRINGUP.md "The due-and-absent check (lane E-1)").
+
+identity:
+  id: due_and_absent
+  name: Due and Absent
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: expectations_e1
+
+subscription:
+  # No `targets` block -> META analyst: one run per cadence tick. The handler
+  # reads the dated rows directly via deps.pg_pool.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: due_and_absent
+  budget_tokens_per_day: 0
+  options:
+    acute_grace_hours: 24
+    scheduled_tolerance_hours: 48
+    scheduled_lookback_days: 14
+    scheduled_min_key_hits: 2
+    series_tolerance: ["day=3", "week=3", "month=7", "quarter=14", "year=30"]
+    max_rows_per_type: 500
+
+cadence:
+  fallback_schedule: "48 7 * * *"
+  cooldown_seconds: 79200
+
+outputs: []

@@ -46,6 +46,11 @@ from typing import Any, Mapping, Type
 
 from pydantic import BaseModel
 
+from ..type_registry.deterministic_handlers import (
+    structural_claims_ids as _structural_claims_ids,
+    structural_exempt_ids as _structural_exempt_ids,
+)
+
 from .models import (
     AlertPayload,
     CritiquePayload,
@@ -120,8 +125,9 @@ class OutputKind(str, Enum):
     # The 14th kind — DATA MODEL V3 / P0's bounded occurrence. Lands in the
     # dedicated `events` table (migration 0202), keyed by
     # (event_signature, analyst_id). Every live write is gated behind
-    # LEGBA_EVENTS (writes._insert_event refuses while it is off); P0 ships no
-    # consumer — nothing reads this kind yet.
+    # LEGBA_EVENTS (writes._insert_event refuses while it is off). Read by
+    # /v3/events, the timeline, the graph projection, unit grounding (OPEN
+    # EVENTS) and Consult (P0 shipped without a consumer; they came later).
     EVENT = "event"
 
 
@@ -172,87 +178,14 @@ TRACE_ONLY = _TraceOnly()
 # instead of a quiet nothing.
 #
 # By convention each deterministic descriptor's identity.id == its
-# options.sub_handler, so these double as analyst_ids. The set MUST stay equal
-# to the FINDING-emitting sub-handlers — the drift guard in
-# tests/data_pkg/test_trace_only_output_split.py asserts equality. Mirror:
+# options.sub_handler, so these double as analyst_ids. R-1: the set is DERIVED
+# from the type registry — it IS the declared deterministic handlers whose
+# ``output`` is ``finding`` (each declaration module carries the reason it
+# emits a finding, which used to be a comment here). Mirror:
 # legba-ui-v3/src/lib/verdictModel.ts STRUCTURAL_VERIFY_EXEMPT_ANALYSTS (the
-# live-tail rows never pass through the reads-API stamp).
-STRUCTURAL_VERIFY_EXEMPT_ANALYSTS: frozenset[str] = frozenset({
-    "graph_mining",
-    "anomaly_detection",
-    "band_calibration_tracker",
-    "calibration_tracking",
-    "unit_correctness_scorer",
-    "composition_lineage_sweep",
-    "adversarial_signals",
-    "situation_clustering",
-    "thematic_proposal",
-    "indicator_tracker",
-    "collection_gap",
-    "hypothesis_lifecycle",
-    "signals_retention",
-    "analyst_traces_retention",
-    "geo_convergence_scan",
-    "fact_decay_scan",
-    "source_track_record",
-    "narrative_mapper",
-    "desk_baseline",
-    # A-1 (ATTENTION_MEASUREMENT_DESIGN §3.1) — the attention instrument is an
-    # INSTRUMENT, not a claim about the world, and it must never enter the
-    # verify/judge population: this design would otherwise itself add to the
-    # ~84% of LLM calls that are the system watching itself. It is also required
-    # here by the drift guard, which asserts this set EQUALS the FINDING-emitting
-    # deterministic sub-handlers.
-    "desk_reference",
-    # R-D: the research program's three counters. Pure SQL arithmetic over the
-    # research signals — there is no model prose in the row to grade, and its
-    # own honest-null discipline (every rate beside its n, null below gate G9's
-    # floor) is a stronger statement than a faithfulness score would be. Added
-    # here because OUTPUT_KIND_BY_SUB_HANDLER marks it FINDING and this set
-    # MUST stay equal to the FINDING emitters; it changes no existing analyst's
-    # verify routing.
-    "research_measurement",
-    # G1 (LEDGER_RESET_2026-09-16 §3, Program 2): the correctness grader is an
-    # INSTRUMENT. Its receipt reports what the instrument did — which units it
-    # graded, against which reference, under which calibration, at what cost —
-    # and asserts nothing about the world that a faithfulness judge could grade.
-    # Routing it into the verify population would also be circular in the worst
-    # way: the pass that measures groundedness would be scoring the output of
-    # the pass that exists because groundedness is not truth. Added here because
-    # OUTPUT_KIND_BY_SUB_HANDLER marks it FINDING and this set MUST stay equal
-    # to the FINDING emitters.
-    "correctness_grader",
-    # R2 (LEDGER_RESET_2026-09-16 §3, Program 2): the reference builder is the
-    # correctness grader's other half and the same argument binds. Its receipt
-    # reports what the instrument did — which target it built, how many
-    # committed developments survived which fence, which dimensions came out
-    # thin, what it cost the core plane — and asserts nothing about the world a
-    # faithfulness judge could grade. The REFERENCE it writes is deliberately
-    # not a finding at all: it is an INPUT to a measurement, and routing it
-    # through the pass that scores our prose against our own citations is
-    # exactly the circularity the reference exists to escape. Added here
-    # because OUTPUT_KIND_BY_SUB_HANDLER marks it FINDING and this set MUST
-    # stay equal to the FINDING emitters.
-    "reference_builder",
-    # H12 (Program 5 lane 1, PROGRAM5_INQUIRY_DESIGN_2026-09-24.md §4):
-    # inquiry_yield is a deterministic weekly COUNT over the inquiry_ledger —
-    # hypotheses opened/confirmed/refuted/expired, questions dispatched/
-    # answered, observations later carried forward, blind spots — no model
-    # prose in the row to grade. Added here because OUTPUT_KIND_BY_SUB_HANDLER
-    # marks it FINDING and this set MUST stay equal to the FINDING emitters.
-    "inquiry_yield",
-    # Program 6 L2: the layer-divergence unit is an INSTRUMENT over counts.
-    # Its finding asserts arithmetic — this layer carried N folded dispatches
-    # on this day, that ratio sits Z MAD-scaled deviations from its own
-    # fortnight — and every sentence of its body is generated FROM those
-    # numbers, so there is no model prose in the row for a faithfulness judge
-    # to grade. It does carry re-derivable identities, which is why it also
-    # joins STRUCTURAL_CLAIMS_VERIFY_ANALYSTS below: the honest badge and a
-    # REAL re-derivation, rather than the badge alone. Added here because
-    # OUTPUT_KIND_BY_SUB_HANDLER marks it FINDING and this set MUST stay equal
-    # to the FINDING emitters.
-    "layer_divergence",
-})
+# live-tail rows never pass through the reads-API stamp), GENERATED from the
+# same declarations by scripts/gen_type_tables.py (``--check`` in the gate).
+STRUCTURAL_VERIFY_EXEMPT_ANALYSTS: frozenset[str] = _structural_exempt_ids()
 
 
 def verify_exempt_reason(analyst_id: str | None) -> str | None:
@@ -281,30 +214,15 @@ def verify_exempt_reason(analyst_id: str | None) -> str | None:
 # of the exempt set (retention scans, honest-summary-only handlers) stay OUT —
 # their findings are non-verifiable aggregates and keep the plain badge.
 #
-# ONE declared place (mirrors the STRUCTURAL_VERIFY_EXEMPT_ANALYSTS precedent),
-# NOT scattered per call-site. A drift guard
-# (tests/data_pkg/test_structural_claims_verify.py) asserts this stays a SUBSET
-# of the exempt set — you cannot structurally-verify a non-structural analyst.
+# ONE declared place: R-1 derives it from the handlers whose declaration says
+# ``structural_claims=True`` (the registry refuses that flag on a trace-only
+# handler). A drift guard (tests/data_pkg/test_structural_claims_verify.py)
+# asserts this stays a SUBSET of the exempt set — you cannot
+# structurally-verify a non-structural analyst.
 # An opted-in analyst whose finding carries no ``data['structural_claims']``
 # block is a NO-OP (no critique written; the row keeps its honest structural
 # badge), so listing an analyst here before it emits the block is harmless.
-STRUCTURAL_CLAIMS_VERIFY_ANALYSTS: frozenset[str] = frozenset({
-    "geo_convergence_scan",
-    "indicator_tracker",
-    "thematic_proposal",
-    # narrative_mapper landed in STRUCTURAL_VERIFY_EXEMPT_ANALYSTS (P4-1 wave)
-    # and emits a re-derivable rollup identity (narratives_total = contested +
-    # surfaced, always true by REIFIED_STATUSES construction) — so it joins the
-    # claims-verified set per the C2b merge note. Subset drift guard holds.
-    "narrative_mapper",
-    # Program 6 L2 — the layer-divergence unit asserts two identities that are
-    # re-derivable from its own payload with no DB access: the divergence
-    # partition (total = widening + narrowing, true by construction of
-    # `evaluate_pair`'s single direction label) and the distinct-desk count
-    # over its per-desk receipts. A partition bug in either would surface as a
-    # flagged critique rather than as a number nobody checked.
-    "layer_divergence",
-})
+STRUCTURAL_CLAIMS_VERIFY_ANALYSTS: frozenset[str] = _structural_claims_ids()
 
 
 # ---------------------------------------------------------------------------

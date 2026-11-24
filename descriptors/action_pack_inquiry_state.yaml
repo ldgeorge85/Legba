@@ -55,6 +55,8 @@ prompt_fragments:
   - >-
     A hypothesis needs a resolution_test at write — a test you decide later is
     a test you can soften to fit the outcome, so it is refused, not optional.
+    It also needs a resolves_by date in the future — a hypothesis with no
+    horizon can never be scored, so it is refused the same way.
     A question you dispatch (into an open question / a contention / a desk)
     names WHERE in dispatched_to — dispatch itself still goes through your
     existing journal_propose / substrate faucets; this only records it.
@@ -67,6 +69,7 @@ prompt_fragments:
 rules:
   - "ledger_read / ledger_write / ledger_close touch ONLY your own inquiry_ledger rows — never another inquiry's."
   - "A hypothesis without a resolution_test is refused at write, not accepted and softened later."
+  - "A hypothesis without a future resolves_by horizon is refused at write (hypothesis_refused_no_resolves_by)."
   - "cited_refs is set ONLY at ledger_close — the warrant for HOW a row was settled, never a decoration at open."
 
 governor:

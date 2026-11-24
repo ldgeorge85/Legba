@@ -130,22 +130,51 @@ class ProvisioningSource(Protocol):
     async def on_retire(self, ctx: SourceContext) -> None: ...
 
 
+# ---------------------------------------------------------------------------
+# Subscribe (I-4)
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class SubscribeSource(Protocol):
+    """A source Legba holds a connection open to (``acquisition: subscribe``).
+
+    The connection is NOT the handler's: the stream connector
+    (``runtime/stream_connector.py``) owns the transport, the cursor, the
+    bounds and the receipts, and hands the handler one received event at a
+    time. ``parse_event`` turns it into records (or raises
+    :class:`~legba.data.sources.stream_event.MalformedStreamEvent`).
+    """
+
+    kind: str
+    config_schema: type
+
+    def parse_event(self, ctx: SourceContext, event: Any, *, stream_url: str,
+                    transport: str) -> list[Any]: ...
+
+    async def health_check(self, ctx: SourceContext) -> SourceHealth: ...
+
+
 def acquisition_protocol_for(mode: str) -> type:
     """Map a descriptor ``acquisition`` mode to its protocol type.
 
-    ``"poll" -> PollSource``, ``"push" -> PushSource``. Used by the actor
-    + tests to assert a handler can serve the descriptor's declared mode.
+    ``"poll" -> PollSource``, ``"push" -> PushSource``, ``"subscribe" ->
+    SubscribeSource``. Used by the actor, the stream connector and tests to
+    assert a handler can serve the descriptor's declared mode.
     """
     if mode == "poll":
         return PollSource
     if mode == "push":
         return PushSource
-    raise ValueError(f"unknown acquisition mode {mode!r}; expected poll|push")
+    if mode == "subscribe":
+        return SubscribeSource
+    raise ValueError(f"unknown acquisition mode {mode!r}; expected poll|push|subscribe")
 
 
 __all__ = [
     "PollSource",
     "PushSource",
     "ProvisioningSource",
+    "SubscribeSource",
     "acquisition_protocol_for",
 ]

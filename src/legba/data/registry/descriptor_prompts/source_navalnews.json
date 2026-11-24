@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.navalnews.news": {
+      "source": "source_navalnews.yaml",
+      "state": "draft"
+    }
+  }
+}

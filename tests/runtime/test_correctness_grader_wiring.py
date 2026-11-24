@@ -67,7 +67,7 @@ async def _resolve_llm() -> Any:
 
 def _descriptor(**llm_over: Any) -> AnalystDescriptor:
     llm: dict[str, Any] = {
-        "temperature": 0.0,
+        "temperature": 1.0,
         "primary": {"factory_kind": "stack_ref", "raw": _CORE,
                     "expected_family": "llm_provider"},
         "family_f2": {"factory_kind": "stack_ref", "raw": _F2,

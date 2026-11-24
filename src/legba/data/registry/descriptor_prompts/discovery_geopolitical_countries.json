@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:discovery_geopolitical_countries": {
+      "source": "discovery_geopolitical_countries.yaml",
+      "state": "configured"
+    }
+  }
+}

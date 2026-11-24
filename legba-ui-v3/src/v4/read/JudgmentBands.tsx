@@ -36,16 +36,21 @@
  * The GAPS band lives in `GapsBand.tsx`: it reads `/v3/absence` once per desk
  * it shows, which is a fetch shape none of the other three has.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
 import { apiGet } from '@/lib/api'
 import { SeverityDot } from '@/components/SeverityBadge'
 import type { CountryScorecard } from '@/lib/evalOps'
+import { PROFILE_UI } from '@/lib/profileUi'
 import {
-  BANDS,
+  bandsSourceText,
   bandTestId,
-  changedBand,
+  useBand,
+  useBands,
+  alertMarkText,
+  changedDeskCount,
+  changedList,
   checkedBand,
   dueBand,
   forecastMarkLabel,
@@ -64,18 +69,27 @@ import {
   type MorningVisit,
 } from '@/lib/morningReadBands'
 import GapsBand, { useGapViews } from './GapsBand'
+import UnverifiedMark from './UnverifiedMark'
 import {
   BandFrame,
+  bandCount,
   CitedRow,
   DESKS_PER_BAND,
   DeskHead,
   HeldBack,
   ITEMS_PER_DESK,
+  pendingCountText,
   StateLine,
   stateOf,
+  type QueryState,
 } from './bandChrome'
 import { asSeverity, scrollToAnchor, utcStamp } from './readFormat'
 import { ScaleStamp } from '@/components/ScaleStamp'
+import { useScope } from '@/state/scope'
+
+/** The profile's subject noun in a band's note (UI-B2; the exemplar's "desk"). */
+const SUBJECT = PROFILE_UI.subject.singular.toLowerCase()
+const SUBJECTS = PROFILE_UI.subject.plural.toLowerCase()
 
 /** The CHECKED band's population: one page of the day's findings. */
 export const CHECKED_LIMIT = 200
@@ -117,23 +131,29 @@ function ReadTimer({ visit }: { visit: MorningVisit }) {
 // Band 1 — CHANGED
 // ---------------------------------------------------------------------------
 
+/** Rows the ranked CHANGED list shows before its held-back line. */
+export const CHANGED_ROWS_SHOWN = DESKS_PER_BAND * ITEMS_PER_DESK
+
 function ChangedBand({
-  groups,
+  rows,
   cursor,
   state,
 }: {
-  groups: DeskGroup<ChangedRow>[]
+  rows: ChangedRow[]
   cursor: string
   state: 'loading' | 'error' | 'ready'
 }) {
-  const total = groups.reduce((n, g) => n + g.items.length, 0)
+  const spec = useBand('changed')
+  const total = rows.length
+  const desks = changedDeskCount(rows)
   return (
     <BandFrame
       id="changed"
-      label={BANDS[0].label}
-      question={BANDS[0].question}
-      count={total}
-      note={`${total} across ${groups.length} desk${groups.length === 1 ? '' : 's'} · since ${utcStamp(cursor) ?? cursor}`}
+      label={spec.label}
+      question={spec.question}
+      count={bandCount(state, total)}
+      state={state}
+      note={`${total} across ${desks} ${desks === 1 ? SUBJECT : SUBJECTS} · worst first · since ${utcStamp(cursor) ?? cursor}`}
     >
       {state === 'loading' && <StateLine testid="morning-read-changed-loading">Reading the diff…</StateLine>}
       {state === 'error' && (
@@ -142,45 +162,53 @@ function ChangedBand({
           this paint.
         </StateLine>
       )}
-      {state === 'ready' && groups.length === 0 && (
+      {state === 'ready' && rows.length === 0 && (
         <StateLine testid="morning-read-changed-empty">
           Nothing landed since {utcStamp(cursor) ?? cursor}. That is a real answer, not a stalled
           panel — the engine writes on its own cadence.
         </StateLine>
       )}
-      {groups.slice(0, DESKS_PER_BAND).map((g) => (
-        <div key={g.targetId} className="mb-3" data-testid="morning-read-changed-desk">
-          <DeskHead label={g.label} note={`${g.items.length} change${g.items.length === 1 ? '' : 's'}`} />
-          <ul className="space-y-0.5">
-            {g.items.slice(0, ITEMS_PER_DESK).map((item) => (
-              <CitedRow
-                key={`${item.kind}-${item.id}`}
-                rowKind={item.rowKind}
-                rowId={item.id}
-                label={item.headline}
-                testid="morning-read-changed-row"
-              >
-                <span className="flex items-baseline gap-2 text-xs">
-                  {asSeverity(item.severity) ? (
-                    <SeverityDot
-                      severity={asSeverity(item.severity)!}
-                      className="h-2 w-2 shrink-0 translate-y-[1px]"
-                    />
-                  ) : (
-                    <span className="inline-block h-2 w-2 shrink-0" aria-hidden />
-                  )}
-                  <span className="min-w-0 flex-1 text-ink-1">{item.headline}</span>
-                </span>
-                <span className="block pl-4 text-[0.6875rem] text-ink-3">
-                  {item.note} · {utcStamp(item.at) ?? item.at}
-                </span>
-              </CitedRow>
-            ))}
-          </ul>
-          <HeldBack n={g.items.length - ITEMS_PER_DESK} noun="change" />
-        </div>
-      ))}
-      <HeldBack n={groups.length - DESKS_PER_BAND} noun="desk" />
+      {rows.length > 0 && (
+        <ul className="space-y-0.5" data-testid="morning-read-changed-list">
+          {rows.slice(0, CHANGED_ROWS_SHOWN).map((item) => (
+            <CitedRow
+              key={`${item.kind}-${item.id}`}
+              rowKind={item.rowKind}
+              rowId={item.id}
+              label={item.headline}
+              testid="morning-read-changed-row"
+            >
+              <span className="flex items-baseline gap-2 text-xs">
+                {asSeverity(item.severity) ? (
+                  <SeverityDot
+                    severity={asSeverity(item.severity)!}
+                    className="h-2 w-2 shrink-0 translate-y-[1px]"
+                  />
+                ) : (
+                  <span className="inline-block h-2 w-2 shrink-0" aria-hidden />
+                )}
+                <span className="min-w-0 flex-1 text-ink-1">{item.headline}</span>
+                {item.alerts.length > 0 && (
+                  <span
+                    className="shrink-0 rounded border border-line px-1 text-label text-ink-2"
+                    title={`alert ${item.alerts.map((a) => a.id).join(', ')}`}
+                    data-testid="morning-read-changed-alert-mark"
+                  >
+                    {alertMarkText(item.alerts[0].channel)}
+                    {item.alerts.length > 1 ? ` ×${item.alerts.length}` : ''}
+                  </span>
+                )}
+              </span>
+              <span className="block pl-4 text-label text-ink-3">
+                <span className="text-ink-2" data-testid="morning-read-changed-desk">{item.deskLabel}</span>
+                {' · '}
+                {item.note} · {utcStamp(item.at) ?? item.at}
+              </span>
+            </CitedRow>
+          ))}
+        </ul>
+      )}
+      <HeldBack n={rows.length - CHANGED_ROWS_SHOWN} noun="change" />
     </BandFrame>
   )
 }
@@ -188,6 +216,11 @@ function ChangedBand({
 // ---------------------------------------------------------------------------
 // Band 2 — CHECKED
 // ---------------------------------------------------------------------------
+
+/** X4 READPATH — the block-less findings, split by the registry's state. */
+function uncheckedText(pending: number, notJudged: number): string {
+  return `${pending} judge pending, ${notJudged} not judged`
+}
 
 function CheckedBand({
   desks,
@@ -201,16 +234,20 @@ function CheckedBand({
   /** The findings page came back FULL — the window holds more than we read. */
   truncated: boolean
 }) {
+  const spec = useBand('checked')
   const flagged = desks.reduce((n, d) => n + d.claims.length, 0)
   const verified = desks.reduce((n, d) => n + d.verified, 0)
   const unchecked = desks.reduce((n, d) => n + d.unchecked, 0)
+  const pending = desks.reduce((n, d) => n + d.pending, 0)
+  const notJudged = desks.reduce((n, d) => n + d.notJudged, 0)
   return (
     <BandFrame
       id="checked"
-      label={BANDS[1].label}
-      question={BANDS[1].question}
-      count={flagged}
-      note={`${verified} verified · ${flagged} claim${flagged === 1 ? '' : 's'} flagged · ${unchecked} unchecked`}
+      label={spec.label}
+      question={spec.question}
+      count={bandCount(state, flagged)}
+      state={state}
+      note={`${verified} verified · ${flagged} claim${flagged === 1 ? '' : 's'} flagged · unverified: ${uncheckedText(pending, notJudged)}`}
     >
       {state === 'loading' && <StateLine testid="morning-read-checked-loading">Reading the day&rsquo;s verdicts…</StateLine>}
       {state === 'error' && (
@@ -227,7 +264,7 @@ function CheckedBand({
       {state === 'ready' && desks.length > 0 && flagged === 0 && (
         <StateLine testid="morning-read-checked-clean">
           The verify pass flagged nothing on any desk this window. {unchecked > 0
-            ? `${unchecked} finding${unchecked === 1 ? '' : 's'} carried no verify block at all — an absence, not a pass.`
+            ? `${unchecked} finding${unchecked === 1 ? '' : 's'} carried no verify verdict (${uncheckedText(pending, notJudged)}) — an absence, not a pass.`
             : 'Every finding carried a verify block.'}
         </StateLine>
       )}
@@ -235,10 +272,14 @@ function CheckedBand({
         <div key={d.targetId} className="mb-3" data-testid="morning-read-checked-desk">
           <DeskHead
             label={d.label}
-            note={`${d.verified} verified · ${d.unsupported} with a flagged claim · ${d.unchecked} unchecked`}
+            note={`${d.verified} verified · ${d.unsupported} with a flagged claim · unverified: ${uncheckedText(d.pending, d.notJudged)}`}
           />
           {d.claims.length === 0 ? (
-            <StateLine>Nothing flagged on this desk.</StateLine>
+            <StateLine>
+              {d.verified > 0
+                ? 'Nothing flagged on this desk.'
+                : 'Nothing on this desk carries a verify verdict, so nothing is claimed as held.'}
+            </StateLine>
           ) : (
             <ul className="space-y-1">
               {d.claims.slice(0, ITEMS_PER_DESK).map((c, i) => (
@@ -252,7 +293,7 @@ function CheckedBand({
                   <span className="block text-xs leading-relaxed text-ink-1">
                     &ldquo;{c.text}&rdquo;
                   </span>
-                  <span className="block text-[0.6875rem] text-ink-3">
+                  <span className="block text-label text-ink-3">
                     {c.reasonLabel} · {c.analystId ?? 'unknown producer'} · {c.findingTitle}
                     {c.markers.length > 0 ? ` · cited [${c.markers.join('] [')}]` : ' · uncited'}
                   </span>
@@ -261,12 +302,34 @@ function CheckedBand({
             </ul>
           )}
           <HeldBack n={d.claims.length - ITEMS_PER_DESK} noun="flagged claim" />
+          {d.unverified.length > 0 && (
+            <ul className="mt-1 space-y-0.5" data-testid="morning-read-checked-unverified">
+              {d.unverified.slice(0, ITEMS_PER_DESK).map((u) => (
+                <CitedRow
+                  key={u.findingId}
+                  rowKind="finding"
+                  rowId={u.findingId}
+                  label={u.title}
+                  testid="morning-read-checked-unverified-row"
+                >
+                  <span className="flex flex-wrap items-baseline gap-2 text-xs">
+                    <UnverifiedMark info={u.info} />
+                    <span className="min-w-0 flex-1 text-ink-1">{u.title}</span>
+                  </span>
+                  <span className="block text-label text-ink-3">
+                    {u.analystId ?? 'unknown producer'} · {utcStamp(u.producedAt) ?? u.producedAt}
+                  </span>
+                </CitedRow>
+              ))}
+            </ul>
+          )}
+          <HeldBack n={d.unverified.length - ITEMS_PER_DESK} noun="unverified finding" />
         </div>
       ))}
-      <HeldBack n={desks.length - DESKS_PER_BAND} noun="desk" />
+      <HeldBack n={desks.length - DESKS_PER_BAND} noun={SUBJECT} />
       {state === 'ready' && truncated && (
         <p
-          className="mt-1 text-[0.6875rem] leading-relaxed text-ink-3"
+          className="mt-1 text-label leading-relaxed text-ink-3"
           data-testid="morning-read-checked-truncated"
         >
           Read over the newest {CHECKED_LIMIT} findings in the window, not all of them — an older
@@ -288,15 +351,22 @@ function DueBand({
   groups: DeskGroup<ForecastDue>[]
   state: 'loading' | 'error' | 'ready'
 }) {
+  const spec = useBand('due')
   const total = groups.reduce((n, g) => n + g.items.length, 0)
   return (
     <BandFrame
       id="due"
-      label={BANDS[3].label}
-      question={BANDS[3].question}
-      count={total}
+      label={spec.label}
+      question={spec.question}
+      count={bandCount(state, total)}
+      state={state}
       note={`${total} call${total === 1 ? '' : 's'} past their window`}
     >
+      {state === 'ready' && groups.length > 0 && (
+        <StateLine testid="morning-read-due-legacy-label">
+          Acute-forecast pilot calls — untrusted, legacy, under diagnosis. Not the sealed forecast ledger.
+        </StateLine>
+      )}
       {state === 'loading' && <StateLine testid="morning-read-due-loading">Reading the forecast ledger…</StateLine>}
       {state === 'error' && (
         <StateLine testid="morning-read-due-error">
@@ -319,7 +389,7 @@ function DueBand({
                   {f.event_class} · p={f.p.toFixed(2)} (base {f.p_base.toFixed(2)}) ·{' '}
                   {f.days_overdue.toFixed(1)}d past its window
                 </span>
-                <span className="block text-[0.6875rem] text-ink-3">
+                <span className="block text-label text-ink-3">
                   {forecastMarkLabel(f.mark)} · window closed {utcStamp(f.window_end) ?? f.window_end}
                 </span>
                 {/* K3 — WHICH probability scale the p above is a reading on,
@@ -327,18 +397,18 @@ function DueBand({
                     scale rather than an assertion, so a call minted before it
                     reads "unstamped" rather than being counted as comparable
                     with today's. */}
-                <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[0.6875rem] text-ink-3">
+                <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-label text-ink-3">
                   <ScaleStamp row={f} testId={`morning-read-due-scale-${f.id}`} />
                   <span data-testid="morning-read-due-issued">
                     issued {utcStamp(f.issued_at) ?? f.issued_at}
                   </span>
                 </span>
                 <details className="mt-0.5">
-                  <summary className="cursor-pointer text-[0.6875rem] text-ink-3">
+                  <summary className="cursor-pointer text-label text-ink-3">
                     The frozen resolution test
                   </summary>
                   <p
-                    className="mt-0.5 whitespace-pre-wrap break-words font-mono text-[0.6875rem] leading-relaxed text-ink-2"
+                    className="mt-0.5 whitespace-pre-wrap break-words font-mono text-label leading-relaxed text-ink-2"
                     data-testid="morning-read-due-test"
                   >
                     {f.resolution_test || 'no resolution test recorded on this row'}
@@ -350,7 +420,7 @@ function DueBand({
           <HeldBack n={g.items.length - ITEMS_PER_DESK} noun="call" />
         </div>
       ))}
-      <HeldBack n={groups.length - DESKS_PER_BAND} noun="desk" />
+      <HeldBack n={groups.length - DESKS_PER_BAND} noun={SUBJECT} />
     </BandFrame>
   )
 }
@@ -359,15 +429,30 @@ function DueBand({
 // The reading-order rail
 // ---------------------------------------------------------------------------
 
-function ReadingRail({ counts, visit }: { counts: Record<BandId, number>; visit: MorningVisit }) {
+function ReadingRail({
+  counts,
+  states,
+  visit,
+}: {
+  /** Null until the band has been read — the rail prints `—`, never `0`. */
+  counts: Record<BandId, number | null>
+  states: Record<BandId, QueryState>
+  visit: MorningVisit
+}) {
+  // The bands' words: the projection's when the plane answers; the platform's
+  // reading order otherwise — and the rail says which, naming the refusal.
+  const { bands, read } = useBands()
   return (
     <nav
       className="read-col mb-5 flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-line pb-2"
       aria-label="Reading order"
       data-testid="morning-read-rail"
+      data-bands-source={read.state === 'ok' ? 'projection' : read.state === 'absent' ? read.name : 'loading'}
     >
-      <span className="text-label uppercase tracking-wider text-ink-3">Read in order</span>
-      {BANDS.map((band, i) => (
+      <span className="text-label uppercase tracking-wider text-ink-3" title={bandsSourceText(read)}>
+        Read in order
+      </span>
+      {bands.map((band, i) => (
         <button
           key={band.id}
           type="button"
@@ -377,7 +462,12 @@ function ReadingRail({ counts, visit }: { counts: Record<BandId, number>; visit:
           data-testid={`morning-read-rail-${band.id}`}
         >
           {i + 1}. {band.label}
-          <span className="ml-1 font-mono text-ink-3">{counts[band.id]}</span>
+          <span
+            className="ml-1 font-mono text-ink-3"
+            data-testid={`morning-read-rail-count-${band.id}`}
+          >
+            {counts[band.id] ?? pendingCountText(states[band.id])}
+          </span>
         </button>
       ))}
       <span className="ml-auto flex items-center gap-2">
@@ -389,6 +479,39 @@ function ReadingRail({ counts, visit }: { counts: Record<BandId, number>; visit:
         <ReadTimer visit={visit} />
       </span>
     </nav>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// The wall's scope (X3/D3)
+// ---------------------------------------------------------------------------
+
+/**
+ * A SUBJECT scope narrows every band to that subject (a panel FILTERS by
+ * scope — `state/scope.ts`). Before X3/D3 a rail click on Brazil scoped the
+ * feed while the bands kept listing Ukraine and Iran. Rows with no subject
+ * (the unscoped group) leave with the rest; "show every …" clears the scope.
+ */
+export function onSubject<T extends { targetId: string }>(rows: readonly T[], subjectId: string | null): T[] {
+  return subjectId ? rows.filter((r) => r.targetId === subjectId) : [...rows]
+}
+
+function ScopedLine({ label, onClear }: { label: string; onClear: () => void }) {
+  return (
+    <div className="read-col mb-3 flex items-center gap-2 text-xs text-ink-2" data-testid="morning-read-scoped">
+      <span>
+        Scoped to <span className="font-medium text-ink-1">{label}</span> — every band below reads this {SUBJECT}{' '}
+        only.
+      </span>
+      <button
+        type="button"
+        onClick={onClear}
+        className="text-ink-3 underline decoration-dotted underline-offset-2 hover:text-ink-1"
+        data-testid="morning-read-scope-clear"
+      >
+        show every {SUBJECT}
+      </button>
+    </div>
   )
 }
 
@@ -428,33 +551,62 @@ export default function JudgmentBands() {
     queryFn: () => apiGet<CountryScorecard[]>('/v3/eval/country_scorecard'),
   })
 
-  const changed = useMemo(() => changedBand(since.data), [since.data])
-  const checked = useMemo(() => checkedBand(day.data?.data), [day.data])
-  const due = useMemo(() => dueBand(since.data?.forecasts_due), [since.data])
+  // X3/D3 — a subject scope (a rail click, ⌘K, a map click) narrows every band.
+  const wallScope = useScope((s) => s.scope)
+  const clearScope = useScope((s) => s.clear)
+  const subjectId = wallScope?.kind === 'target' ? wallScope.id : null
+
+  const changed = useMemo(() => {
+    const rows = changedList(since.data)
+    return subjectId ? rows.filter((r) => r.deskId === subjectId) : rows
+  }, [since.data, subjectId])
+  const checked = useMemo(() => onSubject(checkedBand(day.data?.data), subjectId), [day.data, subjectId])
+  const due = useMemo(() => onSubject(dueBand(since.data?.forecasts_due), subjectId), [since.data, subjectId])
+  const scopedCards = useMemo(
+    () => (subjectId && cards.data ? cards.data.filter((c) => c.target_id === subjectId) : cards.data),
+    [cards.data, subjectId],
+  )
   // k5b — the GAPS band reads `/v3/absence` once per desk it shows. The hook
   // lives beside that band; the count comes back here so the reading rail
   // links to a number the band actually renders.
-  const gaps = useGapViews(cards.data)
+  // U-5 — the per-desk absence reads wait for the band to come near view.
+  const [gapsNear, setGapsNear] = useState(false)
+  const markGapsNear = useCallback(() => setGapsNear(true), [])
+  const gaps = useGapViews(scopedCards, { enabled: gapsNear })
 
-  const counts: Record<BandId, number> = {
-    changed: changed.reduce((n, g) => n + g.items.length, 0),
-    checked: checked.reduce((n, d) => n + d.claims.length, 0),
-    gaps: gaps.total,
-    due: due.reduce((n, g) => n + g.items.length, 0),
+  // X1/D1 — a band's count is a number only once its routes have answered;
+  // the GAPS band also waits on every per-desk absence read it is counting.
+  const states: Record<BandId, QueryState> = {
+    changed: stateOf(since),
+    checked: stateOf(day),
+    gaps: stateOf(cards),
+    due: stateOf(since),
+  }
+  const counts: Record<BandId, number | null> = {
+    changed: bandCount(states.changed, changed.length),
+    checked: bandCount(states.checked, checked.reduce((n, d) => n + d.claims.length, 0)),
+    gaps: gaps.pending ? null : bandCount(states.gaps, gaps.total),
+    due: bandCount(states.due, due.reduce((n, g) => n + g.items.length, 0)),
   }
 
   return (
     <section className="px-6 pt-8" data-testid="morning-read-judgment">
-      <ReadingRail counts={counts} visit={visit} />
-      <ChangedBand groups={changed} cursor={cursor} state={stateOf(since)} />
+      <ReadingRail counts={counts} states={states} visit={visit} />
+      {subjectId && <ScopedLine label={wallScope?.label ?? subjectId} onClear={clearScope} />}
+      <ChangedBand rows={changed} cursor={cursor} state={states.changed} />
       <CheckedBand
         desks={checked}
         cursor={cursor}
-        state={stateOf(day)}
+        state={states.checked}
         truncated={(day.data?.data?.length ?? 0) >= CHECKED_LIMIT}
       />
-      <GapsBand {...gaps} state={stateOf(cards)} />
-      <DueBand groups={due} state={stateOf(since)} />
+      <GapsBand
+        {...gaps}
+        state={states.gaps}
+        onNear={markGapsNear}
+        armed={states.changed !== 'loading' && states.checked !== 'loading'}
+      />
+      <DueBand groups={due} state={states.due} />
     </section>
   )
 }

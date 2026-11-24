@@ -58,7 +58,12 @@ distinct candidate every sweep. That volume is legitimate re-checking,
 not a bug this module can safely dedupe away: a retired actor_id is its
 own point in daprd's reminder namespace, so two different retired rows
 that happen to derive the same reminder *name* are not interchangeable
-candidates and collapsing them risks skipping a real orphan. We do NOT
+candidates and collapsing them risks skipping a real orphan. What CAN be
+safely skipped is asking again, every 5 minutes, about the same reminder of
+the same unchanged row that daprd already answered 404 for (W11-F268:
+734 such GETs per sweep on 2026-11-14): :class:`ReminderAbsenceMemo`
+remembers a confirmed absence per (actor_id, name, row ``updated_at``) and
+re-checks it once a day; candidates are never merged across rows. We do NOT
 re-activate the actor (no ``run`` / ``activate`` proxy call) — reaching
 the sidecar by name avoids waking a retired actor.
 
@@ -189,10 +194,67 @@ class ReminderGCResult:
     already_absent: int = 0  # GET-miss: genuinely nothing to delete, not an action
     failed: int = 0
     removed_names: list[tuple[str, str]] = field(default_factory=list)  # (actor_id, name)
+    recently_confirmed_absent: int = 0  # W11-F268: skipped, absent on a check < recheck_after ago
 
     @property
     def took_action(self) -> bool:
         return self.removed > 0
+
+
+#: W11-F268 — how long a reminder CONFIRMED absent for an unchanged retired row
+#: is not asked about again. The sweep runs on every reconcile resync (5 min)
+#: over every retired source/analyst row; those rows are never pruned (each
+#: descriptor edit leaves one behind), so on 2026-11-14 the sweep asked daprd
+#: about 734 reminders that were long gone every 5 minutes (~211k GETs a day,
+#: each a 404 at the sidecar and an INFO line in the runtime log; the operator
+#: saw it as "the runtime keeps asking about a superseded head"). A retired
+#: row's reminder only comes back if something registers it again: a
+#: reactivation rewrites the row (lifecycle and ``updated_at``), which drops
+#: it out of the retired list or changes the memo key; anything else (a
+#: scheduler restore) is caught by the re-check at most this long later.
+DEFAULT_ABSENT_RECHECK_AFTER_S = 24 * 3600.0
+
+
+class ReminderAbsenceMemo:
+    """Per-process memory of reminders confirmed ABSENT for a retired row.
+
+    Keyed by ``(actor_id, reminder_name, row updated_at)`` so any write to the
+    row invalidates it. Holds only absences: a reminder that was present (and
+    removed), or a check that failed, is asked about on the next sweep as
+    before. ``clock`` is injectable for tests (monotonic seconds).
+    """
+
+    def __init__(
+        self,
+        recheck_after_s: float = DEFAULT_ABSENT_RECHECK_AFTER_S,
+        *,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
+        import time
+
+        self.recheck_after_s = float(recheck_after_s)
+        self._clock = clock or time.monotonic
+        self._absent: dict[tuple[str, str, str], float] = {}
+
+    @staticmethod
+    def key(rec: ActorStateRecord, name: str) -> tuple[str, str, str]:
+        stamp = rec.updated_at.isoformat() if rec.updated_at is not None else ""
+        return (rec.actor_id, name, stamp)
+
+    def recently_absent(self, rec: ActorStateRecord, name: str) -> bool:
+        at = self._absent.get(self.key(rec, name))
+        return at is not None and (self._clock() - at) < self.recheck_after_s
+
+    def note_absent(self, rec: ActorStateRecord, name: str) -> None:
+        self._absent[self.key(rec, name)] = self._clock()
+
+    def forget(self, rec: ActorStateRecord, name: str) -> None:
+        self._absent.pop(self.key(rec, name), None)
+
+    def prune(self, live_keys: set[tuple[str, str, str]]) -> None:
+        """Drop entries for rows no longer retired/unchanged (bounded memory)."""
+        for k in [k for k in self._absent if k not in live_keys]:
+            del self._absent[k]
 
 
 # A pluggable "delete one reminder by name" — production wires a daprd
@@ -217,6 +279,8 @@ async def sweep_orphan_reminders(
     state_store: ActorStateStore,
     delete_reminder: ReminderDeleter,
     alert_publish: AlertPublisher | None = None,
+    pg_pool: Any | None = None,
+    absence_memo: ReminderAbsenceMemo | None = None,
 ) -> ReminderGCResult:
     """Unregister reminders owned by RETIRED actors. Provably-orphan only.
 
@@ -226,6 +290,10 @@ async def sweep_orphan_reminders(
         Must be idempotent (a missing reminder is a no-op success).
       alert_publish: optional ``(subject, payload) -> awaitable`` used to
         fire an operator alert when the sweep actually removed something.
+      absence_memo: optional W11-F268 memory of reminders already confirmed
+        absent for an unchanged retired row; those are not asked about again
+        until its re-check interval passes. None = ask about every candidate
+        every sweep (the historical behaviour).
 
     Returns a :class:`ReminderGCResult`. Never raises on a per-actor
     failure — one un-deletable reminder must not abort the whole sweep
@@ -239,6 +307,7 @@ async def sweep_orphan_reminders(
         return result
 
     result.retired_scanned = len(retired)
+    live_keys: set[tuple[str, str, str]] = set()
     for rec in retired:
         # Defence in depth: never act on a non-retired row even if the
         # lister ever returned one. (list_by_lifecycle filters, but the
@@ -254,10 +323,17 @@ async def sweep_orphan_reminders(
             continue
         for name in orphan_reminder_names(rec):
             result.candidates += 1
+            if absence_memo is not None:
+                live_keys.add(absence_memo.key(rec, name))
+                if absence_memo.recently_absent(rec, name):
+                    result.recently_confirmed_absent += 1
+                    continue
             try:
                 removed = await delete_reminder(actor_type, rec.actor_id, name)
             except Exception as exc:
                 result.failed += 1
+                if absence_memo is not None:
+                    absence_memo.forget(rec, name)
                 logger.warning(
                     "reminder_gc.delete_failed actor_id=%s reminder=%s err=%s",
                     rec.actor_id, name, exc,
@@ -272,10 +348,14 @@ async def sweep_orphan_reminders(
                 )
             else:
                 result.already_absent += 1
+                if absence_memo is not None:
+                    absence_memo.note_absent(rec, name)
                 logger.debug(
                     "reminder_gc.already_absent actor_id=%s reminder=%s",
                     rec.actor_id, name,
                 )
+    if absence_memo is not None:
+        absence_memo.prune(live_keys)
 
     if result.took_action and alert_publish is not None:
         import json
@@ -315,11 +395,31 @@ async def sweep_orphan_reminders(
             else:
                 logger.warning("reminder_gc.alert_publish_failed err=%s", exc)
 
+    if result.took_action and pg_pool is not None:
+        # L-1: recorded on the alert log through the ONE alert path (info;
+        # the page rule does not page it). The NATS publish above stays the
+        # live-tail telemetry it always was.
+        try:
+            from ..data.alerts.raise_alert import raise_alert
+
+            await raise_alert(
+                pg_pool, kind="reminder_orphan_collected", severity="info",
+                summary=(
+                    f"reconciliation sweep unregistered {result.removed} orphan "
+                    "daprd reminder(s) owned by retired actors"
+                ),
+                detail="\n".join(f"{a} {n}" for a, n in result.removed_names[:50]),
+                subject_id="dapr_reminders",
+                raised_by="reminder_gc",
+            )
+        except Exception as exc:  # noqa: BLE001 — never blocks the GC
+            logger.warning("reminder_gc.alert_raise_failed err=%s", exc)
+
     logger.info(
         "reminder_gc.sweep retired_scanned=%d candidates=%d removed=%d "
-        "already_absent=%d failed=%d",
+        "already_absent=%d failed=%d recently_confirmed_absent=%d",
         result.retired_scanned, result.candidates, result.removed,
-        result.already_absent, result.failed,
+        result.already_absent, result.failed, result.recently_confirmed_absent,
     )
     return result
 
@@ -409,6 +509,8 @@ def _reminder_body_present(resp: Any) -> bool:
 
 __all__ = [
     "AlertPublisher",
+    "DEFAULT_ABSENT_RECHECK_AFTER_S",
+    "ReminderAbsenceMemo",
     "ReminderDeleter",
     "ReminderGCResult",
     "build_sidecar_reminder_deleter",

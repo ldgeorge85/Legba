@@ -352,6 +352,66 @@ async def test_prompt_rendered_is_capped_with_a_truncation_marker():
     assert hashlib.sha256(full_text.encode("utf-8")).hexdigest() == sha
 
 
+async def test_prompt_tail_pins_head_32k_tail_4k_sha_and_length():
+    """W2-F1 — a 150k-char prompt: ``prompt_rendered`` keeps the head 32k (cap
+    NOT raised), ``input_payload.prompt_tail`` keeps the LAST 4,000 chars (the
+    grounding block's ordinals) + the total length + the sha256 of the FULL
+    prompt. Driven through the real receipt chain and read back off the INSERT.
+    """
+    grounding = "\n[GROUNDING]\n" + "".join(f"[{n}] ref-{n}\n" for n in range(1, 400))
+    filler = "m" * (150_000 - len(grounding))
+    user = filler + grounding
+    full = f"[SYSTEM]\nsys\n\n[USER]\n{user}"
+    assert len(full) > 150_000 - 100
+
+    token = run_accounting.bind_run_accounting()
+    try:
+        run_accounting.record_prompt_rendered("sys", [{"role": "user", "content": user}])
+        rendered, sha = run_accounting.current_prompt_rendered()
+        tail_payload = run_accounting.current_prompt_tail()
+        pool = _FakePool()
+        chain = RuntimeReceiptChain(pool)  # type: ignore[arg-type]
+        now = datetime.now(timezone.utc)
+        await chain.record(
+            run_id=uuid4(), analyst_id="a", analyst_version="v1",
+            cadence_trigger="cadence", target_id=None, input_row_refs=[],
+            input_payload=tail_payload, prompt_module_hash=None,
+            prompt_rendered=rendered, prompt_sha256=sha, output_row_refs=[],
+            output_payload={"title": "t"}, run_started_at=now, run_ended_at=now,
+        )
+    finally:
+        run_accounting.reset_run_accounting(token)
+
+    # Head cap unchanged: 32k of the front, then the truncation marker.
+    assert pool.store["prompt_rendered"].startswith(full[:32_000])
+    head, _, marker = pool.store["prompt_rendered"].partition("\n...[TRUNCATED")
+    assert head == full[:32_000]  # exactly the 32k head, no more
+    assert f"{len(full) - 32_000} of {len(full)} chars omitted" in marker
+    assert "TRUNCATED" in pool.store["prompt_rendered"]
+    # The tail: stored in input_payload (args[6], the jsonb text).
+    stored = json.loads(pool.store["args"][6])["prompt_tail"]
+    assert stored["text"] == full[-4_000:]
+    assert stored["chars"] == 4_000
+    assert stored["total_chars"] == len(full)
+    assert stored["sha256"] == hashlib.sha256(full.encode("utf-8")).hexdigest()
+    assert stored["sha256"] == pool.store["prompt_sha256"]
+    assert "[399] ref-399" in stored["text"]  # the grounding ordinals are visible
+    assert "[399] ref-399" not in pool.store["prompt_rendered"]
+
+
+async def test_prompt_tail_absent_when_the_prompt_fits_or_is_unbound():
+    # Unbound / nothing recorded -> None (never a fabricated empty tail).
+    assert run_accounting.current_prompt_tail() is None
+    token = run_accounting.bind_run_accounting()
+    try:
+        assert run_accounting.current_prompt_tail() is None
+        run_accounting.record_prompt_rendered("sys", [{"role": "user", "content": "hi"}])
+        # Fits under the head cap: prompt_rendered already holds all of it.
+        assert run_accounting.current_prompt_tail() is None
+    finally:
+        run_accounting.reset_run_accounting(token)
+
+
 # ---------------------------------------------------------------------------
 # 2) A deterministic (no-LLM) run records [] — matching the column default.
 # ---------------------------------------------------------------------------

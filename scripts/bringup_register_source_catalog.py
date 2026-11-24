@@ -1,14 +1,20 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""S-1 — register the no-auth source catalog (~45 verified RSS/GeoJSON feeds).
+"""S-1 — register the no-auth source catalog (verified RSS/GeoJSON feeds).
 
 The live working set registered only 4 sources while 13 source kinds exist;
-this script is the registration-side recovery: an EMBEDDED catalog of
+this script is the registration-side recovery: a catalog of
 independently verified, no-auth ``rss`` / ``geojson`` feeds with proper
 geo/tags metadata (so target source-selectors can match), conservative
 cadences (1h wires / 2–6h slow publishers, stagger-offset per source), and
 ``source_credibility`` seed rows carrying the migration-0031 ``tier`` +
 ``state_affiliation`` provenance columns.
+
+ROSTER-1: the catalog is profile DATA — the selected profile's
+``rosters.source_catalog`` file (the geopolitics exemplar's 46 feeds:
+``profiles/geopolitics/rosters/source_catalog.yaml``). This module is the
+LOADER over it (:func:`load_catalog`) plus the platform machinery: the entry
+model, the descriptor builder, the credibility seeding and ``--verify``.
 
 License note: feed URLs are facts. Every feed below was probed live by us
 (2026-06-09/10: HTTP GET + feedparser/GeoJSON parse); descriptors are written
@@ -47,10 +53,12 @@ import hashlib
 import json
 import pathlib
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
+from typing import Any, Iterable, Mapping, get_args
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 from _p17_registrar import (  # noqa: E402
     Family,
     RegisterResult,
@@ -60,7 +68,9 @@ from _p17_registrar import (  # noqa: E402
     register_descriptor,
 )
 
+from legba.data import rosters  # noqa: E402
 from legba.data.postgres import PostgresStore  # noqa: E402
+from legba.data.profile import load_profile, resolve_profile  # noqa: E402
 from legba.data.registry.descriptor import DescriptorRegistry  # noqa: E402
 from legba.data.schemas.lifecycle import AbstractionLevel, LifecycleState  # noqa: E402
 from legba.data.schemas.properties import Cron  # noqa: E402
@@ -70,6 +80,7 @@ from legba.data.schemas.source import (  # noqa: E402
     SourceDescriptor,
     SourceIdentity,
     SourceOutput,
+    SourceClass,
     SourcePipeline,
     SourceScope,
 )
@@ -84,35 +95,28 @@ SCORED_BY = "catalog.seed"
 
 VALID_TIERS = ("wire", "gov", "aggregator", "thinktank", "social")
 
-# S1-T8 — the STATE-CONTROLLED catalog feeds. A hand-curated set (NOT derived
-# from state_affiliation, which is also True for state-FUNDED-but-independent
-# public broadcasters like VOA / France 24 / Yonhap): only genuine
-# state-controlled outlets whose rationale marks them a conduit for official
-# positions belong here. These map to source_class == state_media (framing /
-# official-position evidence, LOW-tier for facts). Keep in sync with the
-# _REQUIRED_STATE_AFFILIATED set in tests/data_pkg/test_source_catalog_bringup.py
-# (minus voanews, which has a statutory editorial firewall → reporting).
-STATE_MEDIA_IDS: frozenset[str] = frozenset({
-    "source.tass.english",       # Russian state news agency
-    "source.xinhua.world",       # Chinese state news agency
-    "source.globaltimes.all",    # CCP-affiliated (People's Daily group)
-    "source.tehrantimes.all",    # Iranian state-aligned
-    "source.anadolu.english",    # Turkish state agency (documented editorial influence)
-})
+#: The ``source_class`` vocabulary an entry may declare (the schema's
+#: ``SourceClass``).
+SOURCE_CLASSES: tuple[str, ...] = tuple(get_args(SourceClass))
 
 
 def catalog_source_class(entry: "CatalogEntry") -> str:
     """S1-T8 — the source_class for a catalog entry (a fixed, auditable rule).
 
-    state_media is hand-curated (:data:`STATE_MEDIA_IDS`); the rest derive from
-    the existing credibility ``tier`` so every entry lands in the schema
-    vocabulary (reporting / analysis / official / state_media):
+    An entry's own ``source_class`` wins: state_media is hand-curated, ON THE
+    ENTRY in the profile's catalog YAML (ROSTER-2 — not derived from
+    ``state_affiliation``, which is also true for state-FUNDED-but-independent
+    public broadcasters like VOA / France 24 / Yonhap: only genuine
+    state-controlled outlets whose rationale marks them a conduit for official
+    positions carry it). The rest derive from the credibility ``tier`` so every
+    entry lands in the schema vocabulary (reporting / analysis / official /
+    state_media):
       * ``thinktank`` -> ``analysis``  (research / advocacy / OSINT)
       * ``gov``       -> ``official``  (government / IGO primary publishers)
       * ``wire`` / ``aggregator`` / ``social`` -> ``reporting`` (the default)
     """
-    if entry.id in STATE_MEDIA_IDS:
-        return "state_media"
+    if entry.source_class is not None:
+        return entry.source_class
     if entry.tier == "thinktank":
         return "analysis"
     if entry.tier == "gov":
@@ -161,417 +165,84 @@ class CatalogEntry:
     # GeoJSON feeds out (graph-and-data Wave-1b item 4; REVIEW §3.6). The stage
     # defaults reject_quantity_endpoints ON, so no per-descriptor config needed.
     fact_extract: bool = False
+    # SNAPSHOT feed: every poll returns the FULL current alert set (NWS active
+    # alerts, GDACS), so the same items are re-offered to the pipeline on every
+    # poll. Enrichment runs BEFORE the write (run_baseline, then
+    # write_canonical_signal's S-4 content-hash collapse), so an NER stage on a
+    # snapshot feed POSTs the models host once per re-offered item, then the
+    # row collapses. Snapshot feeds therefore never carry ``ner_multilingual``
+    # (their geo comes from the feed's own geometry / location fields) and
+    # cannot opt into ``fact_extract`` (which consumes NER's triples). The guard
+    # is tests/data_pkg/test_source_catalog_snapshot_feeds_no_ner.py.
+    snapshot: bool = False
+    # Wave-E access class. Default ``public`` (a free, no-auth feed — the
+    # taxonomy's rule); an entry whose live head carries another class says so.
+    access_class: str = "public"
+    # S1-T8 / ROSTER-2 — the entry's editorial class when it is curated rather
+    # than derived from ``tier`` (:func:`catalog_source_class`): the catalog's
+    # state-controlled outlets carry ``state_media``. ``None`` = derive.
+    source_class: str | None = None
+    # W10 TAX-2 — the feed's declared classification: ``<family>:<value>`` tags
+    # of registered vocabulary families, written to ``scope.classifications``
+    # and stamped on every signal it writes. Empty (the default) leaves the
+    # built descriptor — and its content hash — exactly as before.
+    classifications: tuple[str, ...] = ()
+    # Lane N-U — ``cadence.expect_quiet``: a feed quiet by nature, exempt from
+    # the watchdog's empty-poll streak page. False leaves the body unchanged.
+    expect_quiet: bool = False
 
 
 # ---------------------------------------------------------------------------
-# The embedded catalog — every URL probed live 2026-06-09/10 (HTTP 200 +
-# feedparser/GeoJSON parse). Order: crisis/humanitarian, human rights,
-# think tanks, defense/OSINT, regional wires, gov/finance, GeoJSON.
+# The catalog — profile DATA (ROSTER-1). The geopolitics exemplar's 46 feeds
+# live in profiles/geopolitics/rosters/source_catalog.yaml (every URL probed
+# live 2026-06-09/10: HTTP 200 + feedparser/GeoJSON parse); the selected
+# profile's ``rosters.source_catalog`` names the file. This module is the
+# platform half: the entry model above, the loader below, the descriptor
+# builder, the credibility seeding and ``--verify``.
 # ---------------------------------------------------------------------------
 
-CATALOG: tuple[CatalogEntry, ...] = (
-    # --- RSS: crisis / humanitarian -------------------------------------
-    CatalogEntry(
-        id="source.gdacs.alerts", name="GDACS — Disaster Alerts", kind="rss",
-        url="https://www.gdacs.org/xml/rss.xml",
-        tags=("crisis", "humanitarian", "hazard", "alert", "global"),
-        cadence_minutes=60,
-        cred_host="gdacs.org", cred_score=0.90, tier="gov", state_affiliation=True,
-        cred_rationale="EC/UN Global Disaster Alert and Coordination System — authoritative multi-hazard alerts.",
-    ),
-    CatalogEntry(
-        id="source.crisisgroup.latest", name="International Crisis Group — Latest", kind="rss",
-        url="https://www.crisisgroup.org/rss",
-        tags=("crisis", "conflict", "analysis", "thinktank"),
-        cadence_minutes=360,
-        cred_host="crisisgroup.org", cred_score=0.80, tier="thinktank",
-        cred_rationale="Conflict-prevention NGO; field-researched, methodology published.",
-    ),
-    CatalogEntry(
-        id="source.newhumanitarian.all", name="The New Humanitarian", kind="rss",
-        url="https://www.thenewhumanitarian.org/rss.xml",
-        tags=("crisis", "humanitarian", "news"),
-        cadence_minutes=120,
-        cred_host="thenewhumanitarian.org", cred_score=0.75, tier="wire",
-        cred_rationale="Independent humanitarian newsroom (formerly UN IRIN).",
-    ),
-    CatalogEntry(
-        id="source.who.news", name="WHO — News", kind="rss",
-        url="https://www.who.int/rss-feeds/news-english.xml",
-        tags=("health", "crisis", "gov", "global"),
-        cadence_minutes=360,
-        cred_host="who.int", cred_score=0.90, tier="gov", state_affiliation=True,
-        cred_rationale="World Health Organization — authoritative on outbreaks and global health.",
-    ),
-    CatalogEntry(
-        id="source.iaea.topnews", name="IAEA — Top News", kind="rss",
-        url="https://www.iaea.org/feeds/topnews",
-        tags=("nuclear", "energy", "gov", "global"),
-        cadence_minutes=360,
-        cred_host="iaea.org", cred_score=0.90, tier="gov", state_affiliation=True,
-        cred_rationale="International Atomic Energy Agency — authoritative on nuclear safety/safeguards.",
-    ),
-    CatalogEntry(
-        id="source.cdc.travel_notices", name="CDC — Travel Health Notices", kind="rss",
-        url="https://wwwnc.cdc.gov/travel/rss/notices.xml",
-        tags=("health", "travel", "advisory", "gov"),
-        cadence_minutes=360,
-        cred_host="cdc.gov", cred_score=0.90, tier="gov", state_affiliation=True,
-        cred_rationale="US Centers for Disease Control — authoritative public-health agency.",
-    ),
-    CatalogEntry(
-        id="source.cdc.outbreaks_us", name="CDC — US Outbreaks", kind="rss",
-        url="https://tools.cdc.gov/api/v2/resources/media/285676.rss",
-        tags=("health", "outbreak", "gov"),
-        cadence_minutes=360, geo=("US",),
-        cred_host="cdc.gov", cred_score=0.90, tier="gov", state_affiliation=True,
-        cred_rationale="US Centers for Disease Control — authoritative public-health agency.",
-    ),
-    # --- RSS: human rights ----------------------------------------------
-    CatalogEntry(
-        id="source.hrw.news", name="Human Rights Watch — News", kind="rss",
-        url="https://www.hrw.org/rss/news",
-        tags=("human_rights", "news", "global"),
-        cadence_minutes=360,
-        cred_host="hrw.org", cred_score=0.75, tier="thinktank",
-        cred_rationale="Advocacy organisation with documented research methodology.",
-    ),
-    CatalogEntry(
-        id="source.amnesty.latest", name="Amnesty International — Latest", kind="rss",
-        url="https://www.amnesty.org/en/latest/feed/",
-        tags=("human_rights", "news", "global"),
-        cadence_minutes=360,
-        cred_host="amnesty.org", cred_score=0.75, tier="thinktank",
-        cred_rationale="Advocacy organisation with documented research methodology.",
-    ),
-    CatalogEntry(
-        id="source.civicus.monitor", name="CIVICUS Monitor", kind="rss",
-        url="https://monitor.civicus.org/feed/",
-        tags=("human_rights", "civil_society", "global"),
-        cadence_minutes=360,
-        cred_host="civicus.org", cred_score=0.70, tier="thinktank",
-        cred_rationale="Civic-space tracking alliance; country reports from partner organisations.",
-    ),
-    # --- RSS: think tanks / analysis ------------------------------------
-    CatalogEntry(
-        id="source.csis.analysis", name="CSIS — Analysis", kind="rss",
-        url="https://www.csis.org/rss.xml",
-        tags=("thinktank", "analysis", "geopolitical"),
-        cadence_minutes=360,
-        cred_host="csis.org", cred_score=0.80, tier="thinktank",
-        cred_rationale="Center for Strategic and International Studies — established policy research.",
-    ),
-    CatalogEntry(
-        id="source.rand.press", name="RAND — Press Releases", kind="rss",
-        url="https://www.rand.org/news/press.xml",
-        tags=("thinktank", "analysis", "geopolitical"),
-        cadence_minutes=360,
-        cred_host="rand.org", cred_score=0.80, tier="thinktank",
-        cred_rationale="RAND Corporation — peer-reviewed policy research.",
-    ),
-    CatalogEntry(
-        id="source.atlanticcouncil.all", name="Atlantic Council", kind="rss",
-        url="https://www.atlanticcouncil.org/feed/",
-        tags=("thinktank", "analysis", "geopolitical"),
-        cadence_minutes=360,
-        cred_host="atlanticcouncil.org", cred_score=0.75, tier="thinktank",
-        cred_rationale="Established foreign-policy think tank; declared funders.",
-    ),
-    CatalogEntry(
-        id="source.warontherocks.all", name="War on the Rocks", kind="rss",
-        url="https://warontherocks.com/feed/",
-        tags=("thinktank", "analysis", "defense"),
-        cadence_minutes=360,
-        cred_host="warontherocks.com", cred_score=0.75, tier="thinktank",
-        cred_rationale="Practitioner-written defense/strategy analysis; named expert authors.",
-    ),
-    CatalogEntry(
-        id="source.bellingcat.all", name="Bellingcat", kind="rss",
-        url="https://www.bellingcat.com/feed/",
-        tags=("osint", "analysis", "investigation"),
-        cadence_minutes=360,
-        cred_host="bellingcat.com", cred_score=0.80, tier="thinktank",
-        cred_rationale="Open-source investigation collective; methods published per piece.",
-    ),
-    CatalogEntry(
-        id="source.foreignpolicy.all", name="Foreign Policy", kind="rss",
-        url="https://foreignpolicy.com/feed/",
-        tags=("news", "analysis", "geopolitical"),
-        cadence_minutes=120,
-        cred_host="foreignpolicy.com", cred_score=0.75, tier="wire",
-        cred_rationale="Established foreign-affairs magazine.",
-    ),
-    CatalogEntry(
-        id="source.foreignaffairs.all", name="Foreign Affairs", kind="rss",
-        url="https://www.foreignaffairs.com/rss.xml",
-        tags=("thinktank", "analysis", "geopolitical"),
-        cadence_minutes=360,
-        cred_host="foreignaffairs.com", cred_score=0.80, tier="thinktank",
-        cred_rationale="Council on Foreign Relations publication.",
-    ),
-    # --- RSS: defense / OSINT -------------------------------------------
-    CatalogEntry(
-        id="source.defenseone.all", name="Defense One", kind="rss",
-        url="https://www.defenseone.com/rss/all/",
-        tags=("defense", "news"),
-        cadence_minutes=120,
-        cred_host="defenseone.com", cred_score=0.75, tier="wire",
-        cred_rationale="GovExec defense trade press; sourced reporting.",
-    ),
-    CatalogEntry(
-        id="source.twz.all", name="The War Zone (TWZ)", kind="rss",
-        url="https://www.twz.com/feed",
-        tags=("defense", "osint", "news"),
-        cadence_minutes=120,
-        cred_host="twz.com", cred_score=0.70, tier="wire",
-        cred_rationale="Defense/OSINT trade press; imagery-driven reporting.",
-    ),
-    CatalogEntry(
-        id="source.gcaptain.all", name="gCaptain — Maritime News", kind="rss",
-        url="https://gcaptain.com/feed/",
-        tags=("maritime", "defense", "news"),
-        cadence_minutes=120,
-        cred_host="gcaptain.com", cred_score=0.70, tier="wire",
-        cred_rationale="Maritime-industry trade press.",
-    ),
-    CatalogEntry(
-        id="source.taskandpurpose.all", name="Task & Purpose", kind="rss",
-        url="https://taskandpurpose.com/feed/",
-        tags=("defense", "news"),
-        cadence_minutes=360, geo=("US",),
-        cred_host="taskandpurpose.com", cred_score=0.65, tier="wire",
-        cred_rationale="US military-affairs outlet.",
-    ),
-    # --- RSS: regional wires ---------------------------------------------
-    CatalogEntry(
-        id="source.yonhap.english", name="Yonhap News — English", kind="rss",
-        url="https://en.yna.co.kr/RSS/news.xml",
-        tags=("news", "wire", "asia"),
-        cadence_minutes=60, geo=("KR",),
-        cred_host="yna.co.kr", cred_score=0.80, tier="wire", state_affiliation=True,
-        cred_rationale="South Korea's national news agency (partly state-funded; editorially conventional wire).",
-    ),
-    CatalogEntry(
-        id="source.cna.all", name="Channel News Asia", kind="rss",
-        url="https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml",
-        tags=("news", "asia"),
-        cadence_minutes=60, geo=("SG",),
-        cred_host="channelnewsasia.com", cred_score=0.75, tier="wire", state_affiliation=True,
-        cred_rationale="Mediacorp (Singapore state-owned) regional broadcaster.",
-        fact_extract=True,
-    ),
-    CatalogEntry(
-        id="source.anadolu.english", name="Anadolu Agency — English", kind="rss",
-        url="https://www.aa.com.tr/en/rss/default?cat=guncel",
-        tags=("news", "wire", "middle_east"),
-        cadence_minutes=60, geo=("TR",),
-        cred_host="aa.com.tr", cred_score=0.45, tier="wire", state_affiliation=True,
-        cred_rationale="Turkish state news agency; documented government editorial influence.",
-    ),
-    CatalogEntry(
-        id="source.tehrantimes.all", name="Tehran Times", kind="rss",
-        url="https://www.tehrantimes.com/rss",
-        tags=("news", "middle_east"),
-        cadence_minutes=120, geo=("IR",),
-        cred_host="tehrantimes.com", cred_score=0.30, tier="wire", state_affiliation=True,
-        cred_rationale="Iranian state-aligned outlet; treat as official-position signal.",
-    ),
-    CatalogEntry(
-        id="source.tass.english", name="TASS — English", kind="rss",
-        url="https://tass.com/rss/v2.xml",
-        tags=("news", "wire", "europe"),
-        cadence_minutes=60, geo=("RU",),
-        cred_host="tass.com", cred_score=0.30, tier="wire", state_affiliation=True,
-        cred_rationale="Russian state news agency; conduit for official positions.",
-    ),
-    CatalogEntry(
-        id="source.allafrica.headlines", name="AllAfrica — Latest Headlines", kind="rss",
-        url="https://allafrica.com/tools/headlines/rdf/latest/headlines.rdf",
-        tags=("news", "aggregator", "africa"),
-        cadence_minutes=60,
-        cred_host="allafrica.com", cred_score=0.60, tier="aggregator",
-        cred_rationale="Aggregates African outlets; credibility varies with the underlying publisher.",
-    ),
-    CatalogEntry(
-        id="source.africanews.all", name="Africanews", kind="rss",
-        url="https://www.africanews.com/feed/rss",
-        tags=("news", "africa"),
-        cadence_minutes=60,
-        cred_host="africanews.com", cred_score=0.70, tier="wire",
-        cred_rationale="Euronews-group pan-African broadcaster.",
-    ),
-    CatalogEntry(
-        id="source.timesofindia.world", name="Times of India — World", kind="rss",
-        url="https://timesofindia.indiatimes.com/rssfeeds/296589292.cms",
-        tags=("news", "world", "south_asia"),
-        cadence_minutes=60,
-        cred_host="timesofindia.indiatimes.com", cred_score=0.65, tier="wire",
-        cred_rationale="Major Indian daily; world desk.",
-    ),
-    CatalogEntry(
-        id="source.hindustantimes.world", name="Hindustan Times — World", kind="rss",
-        url="https://www.hindustantimes.com/feeds/rss/world-news/rssfeed.xml",
-        tags=("news", "world", "south_asia"),
-        cadence_minutes=60,
-        cred_host="hindustantimes.com", cred_score=0.65, tier="wire",
-        cred_rationale="Major Indian daily; world desk.",
-    ),
-    CatalogEntry(
-        id="source.mercopress.all", name="MercoPress — South Atlantic News", kind="rss",
-        url="https://en.mercopress.com/rss",
-        tags=("news", "americas"),
-        cadence_minutes=120,
-        cred_host="mercopress.com", cred_score=0.65, tier="wire",
-        cred_rationale="Independent South Atlantic / Mercosur news agency.",
-    ),
-    CatalogEntry(
-        id="source.globalvoices.all", name="Global Voices", kind="rss",
-        url="https://globalvoices.org/feed/",
-        tags=("news", "civil_society", "aggregator", "global"),
-        cadence_minutes=120,
-        cred_host="globalvoices.org", cred_score=0.65, tier="aggregator",
-        cred_rationale="Community newsroom curating citizen media; bylined volunteer contributors.",
-    ),
-    CatalogEntry(
-        id="source.voa.africa", name="VOA — Africa", kind="rss",
-        url="https://www.voanews.com/api/z-botl-vomx-tpertmq",
-        tags=("news", "africa"),
-        cadence_minutes=60,
-        cred_host="voanews.com", cred_score=0.60, tier="wire", state_affiliation=True,
-        cred_rationale="Voice of America — US-government international broadcaster (USAGM); statutory editorial firewall.",
-    ),
-    CatalogEntry(
-        id="source.npr.world", name="NPR — World", kind="rss",
-        url="https://feeds.npr.org/1004/rss.xml",
-        tags=("news", "world", "global"),
-        cadence_minutes=60,
-        cred_host="npr.org", cred_score=0.90, tier="wire",
-        cred_rationale="US public broadcaster (already in 0014 baseline; row kept for catalog completeness).",
-        fact_extract=True,
-    ),
-    CatalogEntry(
-        id="source.france24.english", name="France 24 — English", kind="rss",
-        url="https://www.france24.com/en/rss",
-        tags=("news", "world", "global"),
-        cadence_minutes=60,
-        cred_host="france24.com", cred_score=0.70, tier="wire", state_affiliation=True,
-        cred_rationale="France Médias Monde — French state-funded international broadcaster.",
-        fact_extract=True,
-    ),
-    CatalogEntry(
-        id="source.economist.international", name="The Economist — International", kind="rss",
-        url="https://www.economist.com/international/rss.xml",
-        tags=("news", "analysis", "world"),
-        cadence_minutes=360,
-        cred_host="economist.com", cred_score=0.90, tier="wire",
-        cred_rationale="Already in 0014 baseline; row kept for catalog completeness.",
-        fact_extract=True,
-    ),
-    CatalogEntry(
-        id="source.xinhua.world", name="Xinhua — World (English)", kind="rss",
-        url="http://www.xinhuanet.com/english/rss/worldrss.xml",
-        tags=("news", "wire", "world", "asia"),
-        cadence_minutes=60,
-        cred_host="xinhuanet.com", cred_score=0.35, tier="wire", state_affiliation=True,
-        cred_rationale="Chinese state news agency; conduit for official positions.",
-    ),
-    CatalogEntry(
-        id="source.globaltimes.all", name="Global Times", kind="rss",
-        url="https://www.globaltimes.cn/rss/outbrain.xml",
-        tags=("news", "asia"),
-        cadence_minutes=120, geo=("CN",),
-        cred_host="globaltimes.cn", cred_score=0.30, tier="wire", state_affiliation=True,
-        cred_rationale="People's Daily-group (CCP-affiliated) outlet; strongly state-aligned.",
-    ),
-    CatalogEntry(
-        id="source.aljazeera.arabic", name="Al Jazeera — Arabic", kind="rss",
-        url="https://www.aljazeera.net/aljazeerarss/a7c186be-1baa-4bd4-9d80-a84db769f779/73d0e1b4-532f-45ef-b135-bfdff8b8cab9",
-        tags=("news", "world", "middle_east"),
-        cadence_minutes=60, language="ar",
-        cred_host="aljazeera.net", cred_score=0.60, tier="wire", state_affiliation=True,
-        cred_rationale="Qatari state-funded broadcaster; Arabic edition carries stronger editorial slant than AJE.",
-    ),
-    # --- RSS: gov / finance ----------------------------------------------
-    CatalogEntry(
-        id="source.federalreserve.press", name="US Federal Reserve — Press Releases", kind="rss",
-        url="https://www.federalreserve.gov/feeds/press_all.xml",
-        tags=("gov", "finance", "economic"),
-        cadence_minutes=360, geo=("US",),
-        cred_host="federalreserve.gov", cred_score=0.90, tier="gov", state_affiliation=True,
-        cred_rationale="US central bank — primary-source monetary policy.",
-    ),
-    CatalogEntry(
-        id="source.eia.press", name="US EIA — Press Releases", kind="rss",
-        url="https://www.eia.gov/rss/press_rss.xml",
-        tags=("gov", "energy", "economic"),
-        cadence_minutes=360, geo=("US",),
-        cred_host="eia.gov", cred_score=0.90, tier="gov", state_affiliation=True,
-        cred_rationale="US Energy Information Administration — primary-source energy statistics.",
-    ),
-    CatalogEntry(
-        id="source.stategov.travel_advisories", name="US State Dept — Travel Advisories", kind="rss",
-        url="https://travel.state.gov/_res/rss/TAsTWs.xml",
-        tags=("gov", "travel", "advisory"),
-        cadence_minutes=360,
-        cred_host="state.gov", cred_score=0.90, tier="gov", state_affiliation=True,
-        cred_rationale="Official US travel advisories — primary-source policy positions.",
-    ),
-    CatalogEntry(
-        id="source.fcdo.travel_advice", name="UK FCDO — Foreign Travel Advice", kind="rss",
-        url="https://www.gov.uk/foreign-travel-advice.atom",
-        tags=("gov", "travel", "advisory"),
-        cadence_minutes=360,
-        cred_host="gov.uk", cred_score=0.90, tier="gov", state_affiliation=True,
-        cred_rationale="Official UK travel advisories — primary-source policy positions.",
-    ),
-    # --- GeoJSON (kind exists; source_usgs_earthquakes.yaml is the template)
-    # "Major events only" curation (2026-06-12): the raw geophysical feeds
-    # firehose minor tremors + every county heat advisory, swamping the signal
-    # set with low-newsworthiness noise (and EMSC duplicated USGS). We point
-    # each at its significant/severe-only slice instead.
-    CatalogEntry(
-        id="source.usgs.earthquakes_m45", name="USGS — Significant Earthquakes, Past Week (GeoJSON)",
-        kind="geojson",
-        # Was 4.5_week (~hundreds/wk of routine quakes). The "significant" feed
-        # is USGS's own curated major-event slice (notable M6.5+ / high-impact).
-        url="https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/significant_week.geojson",
-        tags=("gis", "geospatial", "structured", "hazard", "seismic", "global"),
-        cadence_minutes=30,
-        cred_host="usgs.gov", cred_score=0.90, tier="gov", state_affiliation=True,
-        cred_rationale="US Geological Survey — authoritative seismic feed (significant events).",
-        extra_config={"feature_id_key": "id", "max_features": 5000},
-    ),
-    # EMSC retired 2026-06-12: duplicated USGS coverage with lower-quality
-    # titles and no curated significance slice — net noise. (Live descriptor
-    # is retired separately; removed here so re-runs don't re-register it.)
-    CatalogEntry(
-        id="source.nws.active_alerts", name="US NWS — Severe/Extreme Weather Alerts (GeoJSON)",
-        kind="geojson",
-        # Was all active alerts (every county heat advisory / minor statement).
-        # severity=Severe,Extreme keeps only the high-impact, newsworthy alerts.
-        url="https://api.weather.gov/alerts/active?severity=Severe,Extreme",
-        tags=("gis", "geospatial", "structured", "hazard", "weather", "alert", "gov"),
-        cadence_minutes=30, geo=("US",),
-        cred_host="weather.gov", cred_score=0.90, tier="gov", state_affiliation=True,
-        cred_rationale="US National Weather Service — severe/extreme weather alerts only.",
-        extra_config={"feature_id_key": "id", "max_features": 5000},
-        # Severe/Extreme alert headlines are rich English text — enrich language
-        # + entities so these high-value gov alerts stop dragging coverage.
-        enrich_text=True,
-    ),
-    CatalogEntry(
-        id="source.nasa.eonet_events", name="NASA EONET — Natural Events (GeoJSON)",
-        kind="geojson",
-        # EONET is already curated to named natural events; trim the window
-        # 7d -> 3d to keep the slice current and lower backfill volume.
-        url="https://eonet.gsfc.nasa.gov/api/v3/events/geojson?days=3",
-        tags=("gis", "geospatial", "structured", "hazard", "gov", "global"),
-        cadence_minutes=60,
-        cred_host="nasa.gov", cred_score=0.90, tier="gov", state_affiliation=True,
-        cred_rationale="NASA Earth Observatory Natural Event Tracker.",
-        extra_config={"feature_id_key": "id", "max_features": 5000},
-    ),
-)
+#: The fields an entry may carry — exactly :class:`CatalogEntry`'s.
+CATALOG_FIELDS: tuple[str, ...] = tuple(f.name for f in fields(CatalogEntry))
+_TUPLE_FIELDS = ("tags", "geo", "classifications")
+
+
+def catalog_entry(row: Mapping[str, Any]) -> CatalogEntry:
+    """One YAML row -> a :class:`CatalogEntry` (``tags`` / ``geo`` as tuples).
+    An unknown key or a missing required one is refused, naming the entry."""
+    unknown = sorted(set(row) - set(CATALOG_FIELDS))
+    if unknown:
+        raise ValueError(f"catalog entry {row.get('id')!r}: unknown key(s) {unknown}")
+    kwargs = {k: (tuple(v) if k in _TUPLE_FIELDS and v is not None else v) for k, v in row.items()}
+    if kwargs.get("source_class") is not None and kwargs["source_class"] not in SOURCE_CLASSES:
+        raise ValueError(
+            f"catalog entry {row.get('id')!r}: source_class {kwargs['source_class']!r} "
+            f"is not one of {list(SOURCE_CLASSES)}"
+        )
+    try:
+        return CatalogEntry(**kwargs)
+    except TypeError as exc:
+        raise ValueError(f"catalog entry {row.get('id')!r}: {exc}") from None
+
+
+def load_catalog(path: pathlib.Path | str | None = None) -> tuple[CatalogEntry, ...]:
+    """The catalog entries of a catalog YAML file, or — ``None`` — of the
+    selected profile (``LEGBA_PROFILE``, else ``profiles/geopolitics``,
+    resolved against the repo root); ``()`` when that profile declares no
+    catalog (``rosters.source_catalog: null``)."""
+    if path is None:
+        rows = rosters.source_catalog(load_profile(resolve_profile(root=REPO_ROOT)))
+    else:
+        rows = rosters.load_source_catalog(path)
+    return tuple(catalog_entry(r) for r in rows)
+
+
+#: The selected profile's catalog, loaded once at import (the walker passes a
+#: ``--profile``'s own file to :func:`load_catalog` instead).
+CATALOG: tuple[CatalogEntry, ...] = load_catalog()
+
+#: The catalog's state-controlled feeds — READ from the catalog (each entry's
+#: ``source_class: state_media``), never a second hand-kept list (ROSTER-2).
+STATE_MEDIA_IDS: frozenset[str] = frozenset(e.id for e in CATALOG if e.source_class == "state_media")
 
 
 # ---------------------------------------------------------------------------
@@ -605,11 +276,19 @@ def build_descriptor(entry: CatalogEntry) -> SourceDescriptor:
     source_usgs_earthquakes.yaml): shared open poll source, baseline
     enrichment ONCE at the source, media by reference.
     """
+    if entry.snapshot and entry.fact_extract:
+        raise ValueError(
+            f"{entry.id}: a snapshot feed cannot opt into fact_extract "
+            "(the stage consumes ner_multilingual's triples; snapshot feeds "
+            "carry no NER stage)"
+        )
     if entry.kind == "rss":
-        enrichment = [
-            FilterStage(kind="language_detect", config={}),
-            FilterStage(kind="ner_multilingual", config={}),
-        ]
+        enrichment = [FilterStage(kind="language_detect", config={})]
+        # Snapshot feeds re-offer every item on every poll and enrich before
+        # the write collapses the repeat: no NER POST for them (see
+        # CatalogEntry.snapshot).
+        if not entry.snapshot:
+            enrichment.append(FilterStage(kind="ner_multilingual", config={}))
         # Ingest-time fact extraction (opt-in, text-rich news feeds only).
         # Mirrors the registered source_bbc_world.yaml stage: reuse the REBEL
         # triples NER already produced; reject_quantity_endpoints is ON by the
@@ -635,11 +314,10 @@ def build_descriptor(entry: CatalogEntry) -> SourceDescriptor:
         # enricher reads payload["title"] (geojson maps the feature headline →
         # title), which language_detect / ner_multilingual both consume.
         if entry.enrich_text:
-            enrichment = [
-                FilterStage(kind="language_detect", config={}),
-                FilterStage(kind="ner_multilingual", config={}),
-                FilterStage(kind="geocode", config={}),
-            ]
+            enrichment = [FilterStage(kind="language_detect", config={})]
+            if not entry.snapshot:
+                enrichment.append(FilterStage(kind="ner_multilingual", config={}))
+            enrichment.append(FilterStage(kind="geocode", config={}))
         else:
             enrichment = [FilterStage(kind="geocode", config={})]
         max_age = 604_800           # match the hazard feeds' weekly windows
@@ -671,7 +349,13 @@ def build_descriptor(entry: CatalogEntry) -> SourceDescriptor:
             geo=list(entry.geo),
             languages=[entry.language],
             tags=list(entry.tags),
+            classifications=list(entry.classifications),   # W10 TAX-2
             source_class=catalog_source_class(entry),   # S1-T8
+            # Wave-E: a catalog entry is a free, no-auth, openly available feed —
+            # the taxonomy's `public` rule, per entry. The live heads carry it;
+            # the builder omitted it and fell to the fail-closed `restricted`
+            # default (W6 SPLIT-1 fold).
+            access_class=entry.access_class,
         ),
         acquisition="poll",
         config=config,
@@ -679,6 +363,7 @@ def build_descriptor(entry: CatalogEntry) -> SourceDescriptor:
             schedule=Cron(raw=cron_for(entry)),
             cooldown_seconds=60,
             jitter_seconds=30,
+            expect_quiet=entry.expect_quiet,
         ),
         pipeline=SourcePipeline(
             ingestion_filters=[
@@ -693,14 +378,17 @@ def build_descriptor(entry: CatalogEntry) -> SourceDescriptor:
     )
 
 
-def credibility_rows() -> list[tuple[str, float, str, str, str, bool]]:
-    """Deduped (host, score, rationale, scored_by, tier, state_affiliation) rows.
+def credibility_rows(
+    entries: Iterable[CatalogEntry] | None = None,
+) -> list[tuple[str, float, str, str, str, bool]]:
+    """Deduped (host, score, rationale, scored_by, tier, state_affiliation) rows
+    of ``entries`` (default :data:`CATALOG`).
 
     Entries sharing a host (e.g. the two cdc.gov feeds) must agree on the
     credibility fields — enforced here so the catalog can't drift silently.
     """
     rows: dict[str, tuple[str, float, str, str, str, bool]] = {}
-    for entry in CATALOG:
+    for entry in (CATALOG if entries is None else entries):
         row = (
             entry.cred_host, entry.cred_score, entry.cred_rationale,
             SCORED_BY, entry.tier, entry.state_affiliation,
@@ -729,7 +417,8 @@ _STICKY_OFF_STATES: frozenset[str] = frozenset({"paused", "retired"})
 
 
 async def register_catalog(
-    pg: PostgresStore, reg: DescriptorRegistry
+    pg: PostgresStore, reg: DescriptorRegistry,
+    entries: Iterable[CatalogEntry] | None = None,
 ) -> list[RegisterResult]:
     """Idempotently register every catalog descriptor. Pure function of the
     injected store/registry — the test suite drives it against the per-session
@@ -747,7 +436,7 @@ async def register_catalog(
     live_state = {r["descriptor_id"]: r["state"] for r in rows}
 
     results: list[RegisterResult] = []
-    for entry in CATALOG:
+    for entry in (CATALOG if entries is None else entries):
         cur = live_state.get(entry.id)
         if cur in _STICKY_OFF_STATES:
             results.append(
@@ -764,15 +453,18 @@ async def register_catalog(
     return results
 
 
-async def seed_credibility(pg: PostgresStore) -> tuple[int, int]:
-    """Seed source_credibility rows (0014 convention: ON CONFLICT DO NOTHING —
-    operator overrides and the 0014 baseline always win). Returns
-    (inserted, already_present). Requires migration 0031 (tier /
-    state_affiliation columns) — fails loud if it has not been applied."""
+async def seed_credibility(
+    pg: PostgresStore, entries: Iterable[CatalogEntry] | None = None,
+) -> tuple[int, int]:
+    """Seed source_credibility rows of ``entries`` (default :data:`CATALOG`;
+    0014 convention: ON CONFLICT DO NOTHING — operator overrides and the 0014
+    baseline always win). Returns (inserted, already_present). Requires
+    migration 0031 (tier / state_affiliation columns) — fails loud if it has
+    not been applied."""
     inserted = 0
     skipped = 0
     async with pg.acquire() as conn:
-        for host, score, rationale, scored_by, tier, state_aff in credibility_rows():
+        for host, score, rationale, scored_by, tier, state_aff in credibility_rows(entries):
             status = await conn.execute(
                 """
                 INSERT INTO source_credibility

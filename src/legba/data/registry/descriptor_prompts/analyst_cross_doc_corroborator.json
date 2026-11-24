@@ -1,0 +1,15 @@
+{
+  "prompts": {
+    "cross_doc_corroborator": {
+      "chars": 18281,
+      "sha256": "2b725bf2c36f95e8df3d0a825e7ea1adbd7772da4e21c5310a8c17a041bffd17",
+      "source": "analyst_cross_doc_corroborator.yaml"
+    }
+  },
+  "states": {
+    "analyst:cross_doc_corroborator": {
+      "source": "analyst_cross_doc_corroborator.yaml",
+      "state": "active"
+    }
+  }
+}

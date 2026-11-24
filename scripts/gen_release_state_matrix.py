@@ -6,17 +6,17 @@
 
 WHY A GENERATOR: the matrix's own header has said "regenerate the panel table
 from ... registry.ts when panels change tier" since it was written, but
-nothing ever did — §2's Live/Preview/Hidden classification was hand-copied
-from ``registry.ts`` and could silently drift (a panel's ``tier``/``hidden``
-flag changes in code, nobody remembers to edit the doc). §3 of the matrix
+nothing ever did — §2's Live/Preview classification was hand-copied
+from ``registry.ts`` and could silently drift (a panel's ``tier`` flag changes
+in code, nobody remembers to edit the doc). §3 of the matrix
 names this exact gap: "there is still no automated check that THIS matrix
 stays in sync with registry.ts." This script + its drift test
 (``tests/data_pkg/test_release_state_matrix_current.py``) close it.
 
 SCOPE (deliberately narrow, honest about what IS and ISN'T generated):
-``registry.ts`` only knows a panel's kind/category/title/tier/hidden/binding/
-modes — it carries no narrative ("why is this preview", "why was this
-hidden", backend-route wiring detail). Sections 1 / 1.1 / 3 of the matrix and
+``registry.ts`` only knows a panel's kind/category/title/tier/binding/modes,
+and ``kindPlan.ts`` which singletons are drills — neither carries narrative
+("why is this preview", "why is this a drill", backend-route wiring detail). Sections 1 / 1.1 / 3 of the matrix and
 the hand-authored "why" prose inside §2 encode operator knowledge that has no
 machine-readable source anywhere in the tree; this script does NOT touch
 them. It owns exactly one thing: the generated table between the
@@ -30,9 +30,12 @@ PARSING: ``registry.ts`` is TypeScript, not Python/JSON, and pulling in a JS
 toolchain for one small, extremely regular table is not worth the dependency.
 The panel rows are all shaped as a single-line ``def(...)`` call (kind,
 panelId, category, scopeKey, defaultTitle, requiresBinding, modes[],
-iconName[, hidden]) plus two ``ReadonlySet<PanelKind>`` literals
-(``PREVIEW_KINDS`` / ``HIDDEN_KINDS``) that override tier/hidden after the
-fact — regexes over that fixed shape are simpler and more auditable than a
+iconName) plus the ``PREVIEW_KINDS`` ``ReadonlySet<PanelKind>`` literal that
+overrides the tier after the fact. UI-B1/shell (W7) retired ``HIDDEN_KINDS``:
+"hidden" is now a DERIVED property — a DRILL is a kind whose params need a
+ref, i.e. every ``requiresBinding`` kind plus the keys of
+``panel-registry/kindPlan.ts::SINGLETON_DRILLS``, which this script reads the
+same way — regexes over that fixed shape are simpler and more auditable than a
 full TS AST, and the parser fails loud (asserts a nonzero row count, asserts
 every ``def()`` call it finds parses cleanly) rather than silently emitting
 an empty/partial table on a shape change.
@@ -46,6 +49,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from dataclasses import dataclass
@@ -53,6 +57,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REGISTRY_TS = REPO_ROOT / "legba-ui-v3" / "src" / "panel-registry" / "registry.ts"
+KIND_PLAN_TS = REPO_ROOT / "legba-ui-v3" / "src" / "panel-registry" / "kindPlan.ts"
+# W10 UI-B2: a default title may be a `PROFILE_UI.<path>` read rather than a
+# literal; it resolves through the packaged profile labels the workstation
+# imports (`lib/profileUi.ts` reads this file; gen_profile_ui.py writes it).
+PROFILE_UI_JSON = REPO_ROOT / "legba-ui-v3" / "src" / "lib" / "profile_ui.json"
 MATRIX_MD = REPO_ROOT / "docs" / "RELEASE_STATE_MATRIX.md"
 
 BEGIN_MARKER = "<!-- BEGIN GENERATED PANEL TABLE -->"
@@ -67,20 +76,26 @@ _DEF_CALL_RE = re.compile(
         \s*'(?P<panel_id>[^']+)'\s*,
         \s*'(?P<category>[^']+)'\s*,
         \s*(?P<scope_key>null|'[^']*')\s*,
-        \s*'(?P<title>[^']+)'\s*,
+        \s*(?:'(?P<title>[^']+)'|(?P<title_ref>PROFILE_UI(?:\.\w+)+))\s*,
         \s*(?P<requires_binding>true|false)\s*,
         \s*\[(?P<modes>[^\]]*)\]\s*,
         \s*'(?P<icon>[^']+)'
-        (?:\s*,\s*(?P<hidden_literal>true|false))?
         \s*\)
     """,
     re.VERBOSE,
 )
 
 _SET_LITERAL_RE = re.compile(
-    r"const\s+(?P<name>PREVIEW_KINDS|HIDDEN_KINDS)\s*:\s*ReadonlySet<PanelKind>\s*="
+    r"const\s+(?P<name>PREVIEW_KINDS)\s*:\s*ReadonlySet<PanelKind>\s*="
     r"\s*new Set(?:<PanelKind>)?\(\s*\[(?P<body>[\s\S]*?)\]\s*\)",
 )
+
+# `export const SINGLETON_DRILLS: ... = { 'kind': {...}, ... }` in kindPlan.ts —
+# the block runs to the first line that is exactly `}`.
+_DRILLS_BLOCK_RE = re.compile(
+    r"export const SINGLETON_DRILLS[^=]*=\s*\{(?P<body>[\s\S]*?)\n\}",
+)
+_DRILL_KEY_RE = re.compile(r"^\s*'([^']+)'\s*:", re.M)
 
 _QUOTED_RE = re.compile(r"'([^']+)'")
 
@@ -94,18 +109,18 @@ class PanelRow:
     title: str
     requires_binding: bool
     modes: tuple[str, ...]
-    hidden: bool
+    drill: bool
     tier: str  # 'live' | 'preview'
 
     def as_markdown_row(self) -> str:
         scope = self.scope_key or "—"
         binding = "yes" if self.requires_binding else "no"
         modes = ", ".join(self.modes) if self.modes else "—"
-        hidden = "yes" if self.hidden else "no"
+        drill = "yes" if self.drill else "no"
         return (
             f"| `{self.kind}` | `{self.panel_id}` | {self.category} | "
             f"{scope} | {self.title} | {binding} | {modes} | "
-            f"**{self.tier}** | {hidden} |"
+            f"**{self.tier}** | {drill} |"
         )
 
 
@@ -121,9 +136,36 @@ def _parse_kind_set(text: str, name: str) -> frozenset[str]:
     return frozenset(_QUOTED_RE.findall(m.group("body")))
 
 
-def parse_registry_ts(text: str) -> list[PanelRow]:
+def parse_singleton_drills(text: str) -> frozenset[str]:
+    m = _DRILLS_BLOCK_RE.search(text)
+    assert m is not None, (
+        f"{KIND_PLAN_TS}: could not find the `export const SINGLETON_DRILLS = {{...}}` "
+        f"block — kindPlan.ts's shape changed; update _DRILLS_BLOCK_RE in "
+        f"{Path(__file__).name}"
+    )
+    return frozenset(_DRILL_KEY_RE.findall(m.group("body")))
+
+
+def _resolve_profile_ui(ref: str, profile_ui: dict) -> str:
+    """``PROFILE_UI.map.title`` -> the packaged profile label at that path."""
+    node: object = profile_ui
+    for key in ref.split(".")[1:]:
+        assert isinstance(node, dict) and key in node, (
+            f"{REGISTRY_TS}: {ref} names no string in {PROFILE_UI_JSON.name} "
+            f"(missing {key!r}) — regenerate it with scripts/gen_profile_ui.py"
+        )
+        node = node[key]
+    assert isinstance(node, str) and node, f"{ref} resolves to {node!r}, not a title"
+    return node
+
+
+def parse_registry_ts(
+    text: str, kind_plan_text: str | None = None, profile_ui: dict | None = None
+) -> list[PanelRow]:
     preview_kinds = _parse_kind_set(text, "PREVIEW_KINDS")
-    hidden_kinds = _parse_kind_set(text, "HIDDEN_KINDS")
+    if kind_plan_text is None:
+        kind_plan_text = KIND_PLAN_TS.read_text(encoding="utf-8")
+    singleton_drills = parse_singleton_drills(kind_plan_text)
 
     rows: list[PanelRow] = []
     seen_kinds: set[str] = set()
@@ -140,23 +182,33 @@ def parse_registry_ts(text: str) -> list[PanelRow]:
         scope_raw = m.group("scope_key")
         scope_key = None if scope_raw == "null" else scope_raw.strip("'")
         modes = tuple(_QUOTED_RE.findall(m.group("modes")))
-        literal_hidden = m.group("hidden_literal") == "true"
-        hidden = literal_hidden or kind in hidden_kinds
+        requires_binding = m.group("requires_binding") == "true"
         tier = "preview" if kind in preview_kinds else "live"
+        title = m.group("title")
+        if title is None:
+            if profile_ui is None:
+                profile_ui = json.loads(PROFILE_UI_JSON.read_text(encoding="utf-8"))
+            title = _resolve_profile_ui(m.group("title_ref"), profile_ui)
         rows.append(
             PanelRow(
                 kind=kind,
                 panel_id=m.group("panel_id"),
                 category=m.group("category"),
                 scope_key=scope_key,
-                title=m.group("title"),
-                requires_binding=m.group("requires_binding") == "true",
+                title=title,
+                requires_binding=requires_binding,
                 modes=modes,
-                hidden=hidden,
+                drill=requires_binding or kind in singleton_drills,
                 tier=tier,
             )
         )
 
+    registrations = len(re.findall(r"definition:\s*def\(", text))
+    assert len(seen_kinds) >= registrations, (
+        f"{REGISTRY_TS}: {registrations} `definition: def(...)` registrations but "
+        f"only {len(seen_kinds)} parsed — a def() call's shape changed; update "
+        f"_DEF_CALL_RE in {Path(__file__).name} (never drop a panel silently)"
+    )
     assert rows, (
         f"{REGISTRY_TS}: parsed ZERO panel rows — either the file is empty/"
         f"moved, or its def() call shape changed and _DEF_CALL_RE needs "
@@ -176,17 +228,18 @@ def render_table(rows: list[PanelRow]) -> str:
     )
     header = (
         "| Kind | Panel ID | Category | Scope key | Default title | "
-        "Requires binding | Modes | Tier | Hidden |\n"
+        "Requires binding | Modes | Tier | Drill |\n"
         "|---|---|---|---|---|---|---|---|---|"
     )
     body = "\n".join(r.as_markdown_row() for r in ordered)
     live_n = sum(1 for r in rows if r.tier == "live")
     preview_n = sum(1 for r in rows if r.tier == "preview")
-    hidden_n = sum(1 for r in rows if r.hidden)
+    drill_n = sum(1 for r in rows if r.drill)
     summary = (
         f"{len(rows)} panel kinds registered — {live_n} live, {preview_n} "
-        f"preview, {hidden_n} hidden (a panel can be both live/preview AND "
-        f"hidden — hidden is a navigation-tier flag, not a build state)."
+        f"preview; {drill_n} are drills (a drill needs a ref and opens from "
+        f"its parent object, never from the catalog — a navigation property, "
+        f"not a build state)."
     )
     return (
         f"_Generated by `scripts/{Path(__file__).name}` from "

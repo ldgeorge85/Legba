@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.ecb.press": {
+      "source": "source_ecb_press.yaml",
+      "state": "draft"
+    }
+  }
+}

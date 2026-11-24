@@ -55,7 +55,7 @@ from legba.data.outputs.webhook import (
 )
 from legba.data.provenance.models import AlertPayload
 from legba.data.registry.signing import load_default_identity
-from tests._isolated_nats_gate import requires_isolated_nats
+from tests._isolated_nats_gate import clear_streams_capturing, requires_isolated_nats
 
 
 pytestmark = [pytest.mark.integration]
@@ -305,6 +305,7 @@ async def test_webhook_4xx_no_retry_no_dlq(
     analyst_id = f"{session_prefix}_4xx"
     dlq_full = dlq_subject(analyst_id)
     dlq_stream = f"{session_prefix}_4xx_stream"
+    await clear_streams_capturing(nats_store.js, dlq_full)
     await nats_store.ensure_stream(name=dlq_stream, subjects=[dlq_full])
 
     async with _echo_server() as (base_url, state):
@@ -359,6 +360,7 @@ async def test_webhook_5xx_retries_then_dlqs(
     analyst_id = f"{session_prefix}_5xx"
     dlq_full = dlq_subject(analyst_id)
     dlq_stream = f"{session_prefix}_5xx_stream"
+    await clear_streams_capturing(nats_store.js, dlq_full)
     await nats_store.ensure_stream(name=dlq_stream, subjects=[dlq_full])
 
     async with _echo_server() as (base_url, state):

@@ -26,6 +26,7 @@ exercise the helpers).
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import asyncio
 import concurrent.futures
@@ -173,7 +174,7 @@ def make_provider_lm(
     *,
     model: str,
     max_tokens: int = 1024,
-    temperature: float = 0.0,
+    temperature: float = HOUSE_TEMPERATURE,
 ) -> Any:
     """Build a ``dspy.BaseLM`` that calls ``handler.chat_complete`` (async)
     via ``bridge``. Imports dspy lazily (worker-only dep)."""
@@ -358,7 +359,7 @@ async def _build_handler(
             "(method.llm.primary unset)"
         )
     max_tokens = _scalar_option(llm_block.get("max_tokens"), default=1024)
-    temperature = _scalar_option(llm_block.get("temperature"), default=0.2)
+    temperature = _scalar_option(llm_block.get("temperature"), default=HOUSE_TEMPERATURE)
 
     handler = await build_llm_handler_from_stack_component(
         component_id,

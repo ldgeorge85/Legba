@@ -50,6 +50,7 @@ AnalystContext); absent → a ``failed`` ToolResult naming the missing surface.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
@@ -331,6 +332,125 @@ async def _origin_context(conn: Any, refs: list[UUID]) -> str:
         return ""
 
 
+@dataclass(frozen=True)
+class OpenQuestionWrite:
+    """What :func:`write_open_question` did with one question.
+
+    ``row`` is the written hypotheses row (``None`` when refused or routed to
+    the dead-letter queue); ``question`` is the thesis AS STORED (after the
+    referent fold); ``refused`` is the caller-facing reason when a guard
+    refused it (``None`` otherwise); ``deictic_spans`` records whether the
+    thesis as written was self-contained.
+    """
+
+    row: Any | None
+    question: str
+    refused: str | None
+    deictic_spans: list[str]
+
+
+async def write_open_question(
+    conn: Any,
+    *,
+    analyst_ctx: AnalystContext,
+    question: str,
+    derived_from: list[UUID],
+    data: dict[str, Any],
+    counter: str = "",
+    origin_context: str | None = None,
+    diagnostic_evidence: list[Any] | None = None,
+    publish_fn: Any = None,
+    requested_by: Any = None,
+) -> OpenQuestionWrite:
+    """THE open-question write path — the referent fold, the office guard, the
+    provenance writer. Shared by :func:`open_question_tool` and by the consult
+    watch mint (``consult_watch_mint``, F-4), so there is ONE writer of
+    ``status='open_question'`` theses with these guards, never two.
+
+    ``origin_context`` is the sentence a deictic thesis is folded against.
+    ``None`` (the tool) reads the origin finding's title off ``derived_from``;
+    a caller that already holds the context (the consult's own question)
+    passes it. ``diagnostic_evidence`` is the durable, containment-queryable
+    marker array (the ``hypotheses`` table has no ``data`` column) — ``None``
+    leaves the payload's default, byte-identical for the tool.
+    """
+    dangling = deictic_spans(question)
+    if dangling:
+        context = (
+            origin_context
+            if origin_context is not None
+            else await _origin_context(conn, derived_from)
+        )
+        resolved = inline_referents(question, context)
+        if resolved != question:
+            logger.info(
+                "open_question.referents_inlined spans=%s — the thesis is "
+                "stored self-contained; a dangling referent measured 0.133 "
+                "against the open-question set (K-4 R3)",
+                dangling,
+            )
+            question = resolved
+
+    # CW-8 — an OFFICE with nothing to bind it to. Checked AFTER the
+    # inline above, deliberately: the origin finding's title routinely
+    # supplies the country an office question is missing, and refusing a
+    # question we were one lookup away from grounding would be the guard
+    # working against the fix. K-4 R3 carried "the loyalty of the military
+    # to the Supreme Leader versus the Prime Minister" — Iran abolished
+    # the premiership in 1989, and the reason nobody caught it is the same
+    # reason the matcher could not: the thesis names two offices and no
+    # country, so there was nothing to check them against.
+    offices = ungrounded_office(question)
+    if offices:
+        logger.warning(
+            "open_question.ungrounded_office offices=%s requested_by=%s — "
+            "refused: the thesis asks about an office and names no "
+            "country, person or institution to bind it to, so neither a "
+            "reader nor the matcher can tell whether the office exists",
+            offices,
+            requested_by,
+        )
+        return OpenQuestionWrite(
+            row=None,
+            question=question,
+            refused=(
+                "open_question names office(s) "
+                f"{', '.join(offices)} with no referent to bind them to — "
+                "say WHOSE office (a country, institution or person). An "
+                "office alone is a slot, not a question the substrate can "
+                "answer"
+            ),
+            deictic_spans=dangling,
+        )
+    payload = HypothesisPayload(
+        thesis=question[:4096],
+        counter_thesis=counter[:4096],
+        status="open_question",
+        **(
+            {"diagnostic_evidence": diagnostic_evidence}
+            if diagnostic_evidence is not None
+            else {}
+        ),
+        data={
+            **data,
+            # Kept even when the inline succeeded: it records that the
+            # thesis AS WRITTEN was not self-contained, which is the thing
+            # a prompt author needs to see.
+            "deictic_spans": dangling,
+        },
+    )
+    row, _dlq = await write_hypothesis(
+        conn,
+        analyst_ctx=analyst_ctx,
+        payload=payload,
+        derived_from=derived_from,
+        publish_fn=publish_fn,
+    )
+    return OpenQuestionWrite(
+        row=row, question=question, refused=None, deictic_spans=dangling,
+    )
+
+
 async def open_question_tool(
     call: ToolCall, pack: ActionPack, ctx: ToolContext
 ) -> ToolResult:
@@ -354,7 +474,8 @@ async def open_question_tool(
     that writes most of them, at 0.071). So when the question carries a
     dangling referent, the origin finding's TITLE is folded in at write time —
     once, visibly, appended rather than substituted, so the row still reads as
-    the analyst's question.
+    the analyst's question. The fold, the CW-8 office guard and the write are
+    :func:`write_open_question`, shared with the consult watch mint.
     """
     wb = _writeback(ctx, "open_question")
     if wb is None:
@@ -375,78 +496,34 @@ async def open_question_tool(
 
     counter = str(call.args.get("counter", "")).strip()
     async with wb.pg_pool.acquire() as conn:
-        dangling = deictic_spans(question)
-        if dangling:
-            resolved = inline_referents(
-                question, await _origin_context(conn, derived_from)
-            )
-            if resolved != question:
-                logger.info(
-                    "open_question.referents_inlined spans=%s — the thesis is "
-                    "stored self-contained; a dangling referent measured 0.133 "
-                    "against the open-question set (K-4 R3)",
-                    dangling,
-                )
-                question = resolved
-
-        # CW-8 — an OFFICE with nothing to bind it to. Checked AFTER the
-        # inline above, deliberately: the origin finding's title routinely
-        # supplies the country an office question is missing, and refusing a
-        # question we were one lookup away from grounding would be the guard
-        # working against the fix. K-4 R3 carried "the loyalty of the military
-        # to the Supreme Leader versus the Prime Minister" — Iran abolished
-        # the premiership in 1989, and the reason nobody caught it is the same
-        # reason the matcher could not: the thesis names two offices and no
-        # country, so there was nothing to check them against.
-        offices = ungrounded_office(question)
-        if offices:
-            logger.warning(
-                "open_question.ungrounded_office offices=%s requested_by=%s — "
-                "refused: the thesis asks about an office and names no "
-                "country, person or institution to bind it to, so neither a "
-                "reader nor the matcher can tell whether the office exists",
-                offices,
-                call.requested_by,
-            )
-            return ToolResult(
-                status="failed",
-                error=(
-                    "open_question names office(s) "
-                    f"{', '.join(offices)} with no referent to bind them to — "
-                    "say WHOSE office (a country, institution or person). An "
-                    "office alone is a slot, not a question the substrate can "
-                    "answer"
-                ),
-            )
-        payload = HypothesisPayload(
-            thesis=question[:4096],
-            counter_thesis=counter[:4096],
-            status="open_question",
+        written = await write_open_question(
+            conn,
+            analyst_ctx=wb.analyst_ctx,
+            question=question,
+            counter=counter,
+            derived_from=derived_from,
             data={
                 "kind": "open_question",
                 "requested_by": call.requested_by,
                 "pack_id": pack.identity.id,
-                # Kept even when the inline succeeded: it records that the
-                # thesis AS WRITTEN was not self-contained, which is the thing
-                # a prompt author needs to see.
-                "deictic_spans": dangling,
             },
-        )
-        row, _dlq = await write_hypothesis(
-            conn,
-            analyst_ctx=wb.analyst_ctx,
-            payload=payload,
-            derived_from=derived_from,
             publish_fn=wb.publish_fn,
+            requested_by=call.requested_by,
         )
-    if row is None:
+    if written.refused is not None:
+        return ToolResult(status="failed", error=written.refused)
+    if written.row is None:
         return ToolResult(
             status="failed",
             error="open_question payload rejected to dead-letter (schema validation)",
         )
     return ToolResult(
         status="completed",
-        output={"hypothesis_id": str(row.id), "status": "open_question", "question": question},
+        output={
+            "hypothesis_id": str(written.row.id),
+            "status": "open_question",
+            "question": written.question,
+        },
         units=1,
     )
 
@@ -460,10 +537,12 @@ def register_write_tools(registry: "Any") -> None:
 
 
 __all__ = [
+    "OpenQuestionWrite",
     "WRITE_PACK_ID",
     "WRITE_TOOLS",
     "open_question_tool",
     "propose_fact_tool",
     "register_write_tools",
     "request_source_tool",
+    "write_open_question",
 ]

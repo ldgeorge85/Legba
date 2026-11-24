@@ -1,0 +1,672 @@
+{
+ "analyst_id": "world_assessment",
+ "body": "Placeholder read body. [[ref:1]] [[ref:2]] [[ref:3]] [[ref:4]] [[ref:5]] [[ref:6]] [[ref:7]] [[ref:8]] [[ref:9]] [[ref:10]] [[ref:11]] [[ref:12]] [[ref:13]] [[ref:14]] [[ref:15]] [[ref:16]].",
+ "confidence": 0.55,
+ "data": {
+  "data": {
+   "assessment": {
+    "badge": {
+     "external_accuracy": {
+      "as_of": "2026-08-29",
+      "lineage": "C-A",
+      "n": 77,
+      "population": "composition_prose",
+      "round": "R3",
+      "value": 0.4805
+     },
+     "external_accuracy_note": "graded against the world by human raters on the PRE-assembly prose tier",
+     "fidelity_n": null,
+     "fidelity_state": "unmeasured",
+     "fidelity_to_spine": null,
+     "standing_accuracy": null,
+     "standing_state": "unmeasured"
+    },
+    "coverage": {
+     "blocks_carried": 16,
+     "blocks_cited": 16,
+     "blocks_cited_mass_share": null,
+     "blocks_uncited": [],
+     "lead_kind": "earned_single",
+     "lead_named": true,
+     "lead_ordinals": [
+      1
+     ],
+     "uncited_labels": [],
+     "version": "coverage.v1"
+    },
+    "fidelity": null,
+    "lead_test": {
+     "bar_ratio": 1.5,
+     "bar_share": 0.15,
+     "earned": true,
+     "key": "cited_mass.v1",
+     "min_candidates": 8,
+     "min_candidates_effective": 8,
+     "n_candidates": 33,
+     "no_head": 0,
+     "ratio_12": 2.1937,
+     "top_share": 0.2986
+    },
+    "markers": [
+     {
+      "ordinal": 1,
+      "sentence_index": 0
+     },
+     {
+      "ordinal": 2,
+      "sentence_index": 0
+     },
+     {
+      "ordinal": 3,
+      "sentence_index": 0
+     },
+     {
+      "ordinal": 4,
+      "sentence_index": 0
+     },
+     {
+      "ordinal": 1,
+      "sentence_index": 0
+     },
+     {
+      "ordinal": 3,
+      "sentence_index": 0
+     },
+     {
+      "ordinal": 4,
+      "sentence_index": 0
+     },
+     {
+      "ordinal": 1,
+      "sentence_index": 2
+     },
+     {
+      "ordinal": 2,
+      "sentence_index": 2
+     },
+     {
+      "ordinal": 8,
+      "sentence_index": 2
+     },
+     {
+      "ordinal": 3,
+      "sentence_index": 2
+     },
+     {
+      "ordinal": 1,
+      "sentence_index": 3
+     },
+     {
+      "ordinal": 3,
+      "sentence_index": 3
+     },
+     {
+      "ordinal": 8,
+      "sentence_index": 3
+     },
+     {
+      "ordinal": 4,
+      "sentence_index": 4
+     },
+     {
+      "ordinal": 8,
+      "sentence_index": 4
+     },
+     {
+      "ordinal": 4,
+      "sentence_index": 5
+     },
+     {
+      "ordinal": 8,
+      "sentence_index": 5
+     },
+     {
+      "ordinal": 3,
+      "sentence_index": 7
+     },
+     {
+      "ordinal": 7,
+      "sentence_index": 7
+     },
+     {
+      "ordinal": 5,
+      "sentence_index": 7
+     },
+     {
+      "ordinal": 5,
+      "sentence_index": 8
+     },
+     {
+      "ordinal": 7,
+      "sentence_index": 8
+     },
+     {
+      "ordinal": 1,
+      "sentence_index": 10
+     },
+     {
+      "ordinal": 2,
+      "sentence_index": 10
+     },
+     {
+      "ordinal": 6,
+      "sentence_index": 10
+     },
+     {
+      "ordinal": 1,
+      "sentence_index": 11
+     },
+     {
+      "ordinal": 6,
+      "sentence_index": 11
+     },
+     {
+      "ordinal": 4,
+      "sentence_index": 12
+     },
+     {
+      "ordinal": 3,
+      "sentence_index": 12
+     },
+     {
+      "ordinal": 3,
+      "sentence_index": 13
+     },
+     {
+      "ordinal": 4,
+      "sentence_index": 13
+     },
+     {
+      "ordinal": 12,
+      "sentence_index": 14
+     },
+     {
+      "ordinal": 15,
+      "sentence_index": 14
+     },
+     {
+      "ordinal": 14,
+      "sentence_index": 14
+     },
+     {
+      "ordinal": 10,
+      "sentence_index": 14
+     },
+     {
+      "ordinal": 13,
+      "sentence_index": 14
+     },
+     {
+      "ordinal": 11,
+      "sentence_index": 14
+     },
+     {
+      "ordinal": 9,
+      "sentence_index": 14
+     },
+     {
+      "ordinal": 16,
+      "sentence_index": 14
+     },
+     {
+      "ordinal": 1,
+      "sentence_index": 17
+     },
+     {
+      "ordinal": 2,
+      "sentence_index": 17
+     },
+     {
+      "ordinal": 6,
+      "sentence_index": 17
+     },
+     {
+      "ordinal": 4,
+      "sentence_index": 18
+     },
+     {
+      "ordinal": 1,
+      "sentence_index": 20
+     },
+     {
+      "ordinal": 1,
+      "sentence_index": 21
+     }
+    ],
+    "markers_normalized": 0,
+    "prompt_version": "assessment_prompt.v5",
+    "schema": "assessment.v1",
+    "spine_as_of": "2026-11-07T12:21:03.428588+00:00",
+    "spine_blocks": 16,
+    "spine_id": "e30e67d3-7842-49d9-96e4-3c95e35df8cd",
+    "spine_regime": "assembly",
+    "spine_schema": "assembly.v1",
+    "unsupported": [],
+    "unsupported_checked": {
+     "aperture_units_declared": 129,
+     "aperture_vocabulary_words": 2430,
+     "by_class": {
+      "aperture_guess": 0,
+      "aperture_unrostered": 0,
+      "causal_link": 0,
+      "fact": 0,
+      "instrument_prose": 0,
+      "rank": 0,
+      "scope_widening": 0,
+      "superlative": 0,
+      "uncited": 5
+     },
+     "deterministic_classes": [
+      "rank",
+      "superlative",
+      "causal_link",
+      "scope_widening",
+      "instrument_prose",
+      "aperture_unrostered",
+      "aperture_guess",
+      "uncited"
+     ],
+     "judge_classes": [
+      "fact"
+     ],
+     "judge_note": "the fact class needs the judge arm (D-1 \u00a73.5); it has not landed, so a claim two paraphrase hops from a span that denies it is NOT yet detected here",
+     "judge_state": "not_run",
+     "marks": 5,
+     "overlaps_suppressed": 0,
+     "sentences_examined": 21,
+     "spine_candidates": 33,
+     "version": "unsupported.v5"
+    }
+   },
+   "citations": [
+    {
+     "derived_from": [
+      "e30e67d3-7842-49d9-96e4-3c95e35df8cd"
+     ],
+     "effective_confidence": 0.8,
+     "evidence_text": "[quoted desk sentence 1]",
+     "marker": "[[ref:1]]",
+     "ordinal": 1,
+     "ref_id": "e30e67d3-7842-49d9-96e4-3c95e35df8cd",
+     "ref_kind": "finding",
+     "source": "world_assessor",
+     "spine_block": {
+      "desk": "escalation",
+      "finding_id": "e8b3cc08-0148-44e2-ba95-30a4965e28b0",
+      "target_id": "country_g20_ru"
+     },
+     "title": "Escalation"
+    },
+    {
+     "context_match": "assessment_of_target_recent",
+     "context_origin_id": "7a852fd4-00c7-5c25-3d3b-6340ec1151a6",
+     "derived_from": [
+      "e30e67d3-7842-49d9-96e4-3c95e35df8cd"
+     ],
+     "effective_confidence": 0.8,
+     "evidence_text": "[quoted desk sentence 2]",
+     "marker": "[[ref:2]]",
+     "ordinal": 2,
+     "ref_id": "e30e67d3-7842-49d9-96e4-3c95e35df8cd",
+     "ref_kind": "finding",
+     "source": "world_assessor",
+     "spine_block": {
+      "desk": "escalation",
+      "finding_id": "e8b3cc08-0148-44e2-ba95-30a4965e28b0",
+      "target_id": "country_g20_ru"
+     },
+     "title": "Escalation"
+    },
+    {
+     "context_match": "assessment_of_this_record",
+     "context_origin_id": "d0f559db-7a72-2015-ba67-0cbfbe146ae7",
+     "derived_from": [
+      "e30e67d3-7842-49d9-96e4-3c95e35df8cd"
+     ],
+     "effective_confidence": 0.6,
+     "evidence_text": "[quoted desk sentence 3]",
+     "marker": "[[ref:3]]",
+     "ordinal": 3,
+     "ref_id": "e30e67d3-7842-49d9-96e4-3c95e35df8cd",
+     "ref_kind": "finding",
+     "source": "world_assessor",
+     "spine_block": {
+      "desk": "military_posture",
+      "finding_id": "7940f3c4-8f13-4a8d-ae84-d4a8731f84ed",
+      "target_id": "country_watch_ir"
+     },
+     "title": "Military posture"
+    },
+    {
+     "context_match": "assessment_of_this_record",
+     "context_origin_id": "c9f3bf03-2a99-c313-e0e0-cdd95e6e4212",
+     "derived_from": [
+      "e30e67d3-7842-49d9-96e4-3c95e35df8cd"
+     ],
+     "effective_confidence": 0.72,
+     "evidence_text": "[quoted desk sentence 4]",
+     "marker": "[[ref:4]]",
+     "ordinal": 4,
+     "ref_id": "e30e67d3-7842-49d9-96e4-3c95e35df8cd",
+     "ref_kind": "finding",
+     "source": "world_assessor",
+     "spine_block": {
+      "desk": "economic_coercion",
+      "finding_id": "7f9c3756-fc2f-4667-a0c5-3f8e2a0e7682",
+      "target_id": "country_g20_sa"
+     },
+     "title": "Economic coercion"
+    },
+    {
+     "context_match": "assessment_of_this_record",
+     "context_origin_id": "17ebb191-342b-3d18-6046-b15fb21b8bd7",
+     "derived_from": [
+      "e30e67d3-7842-49d9-96e4-3c95e35df8cd"
+     ],
+     "effective_confidence": 0.6,
+     "evidence_text": "[quoted desk sentence 5]",
+     "marker": "[[ref:5]]",
+     "ordinal": 5,
+     "ref_id": "e30e67d3-7842-49d9-96e4-3c95e35df8cd",
+     "ref_kind": "finding",
+     "source": "world_assessor",
+     "spine_block": {
+      "desk": "military_posture",
+      "finding_id": "71a4c998-ce33-47d2-a8f6-71cd8d72ccf4",
+      "target_id": "country_watch_il"
+     },
+     "title": "Military posture"
+    },
+    {
+     "context_match": "assessment_of_this_record",
+     "context_origin_id": "dccaf55d-a8f4-66c1-1556-f4bc185720c2",
+     "derived_from": [
+      "e30e67d3-7842-49d9-96e4-3c95e35df8cd"
+     ],
+     "effective_confidence": 0.7,
+     "evidence_text": "[quoted desk sentence 6]",
+     "marker": "[[ref:6]]",
+     "ordinal": 6,
+     "ref_id": "e30e67d3-7842-49d9-96e4-3c95e35df8cd",
+     "ref_kind": "finding",
+     "source": "world_assessor",
+     "spine_block": {
+      "desk": "military_posture",
+      "finding_id": "71e8e5fc-f0d2-41f8-a326-b0ca3369a13d",
+      "target_id": "country_watch_ua"
+     },
+     "title": "Military posture"
+    },
+    {
+     "context_match": "assessment_of_this_record",
+     "context_origin_id": "89a7d46b-2277-719a-9d22-270156800bb5",
+     "derived_from": [
+      "e30e67d3-7842-49d9-96e4-3c95e35df8cd"
+     ],
+     "effective_confidence": 0.8,
+     "evidence_text": "[quoted desk sentence 7]",
+     "marker": "[[ref:7]]",
+     "ordinal": 7,
+     "ref_id": "e30e67d3-7842-49d9-96e4-3c95e35df8cd",
+     "ref_kind": "finding",
+     "source": "world_assessor",
+     "spine_block": {
+      "desk": "military_posture",
+      "finding_id": "1c3eca18-4865-40e6-81b9-a97325d13a50",
+      "target_id": "country_g20_us"
+     },
+     "title": "Military posture"
+    },
+    {
+     "context_match": "assessment_of_this_record",
+     "context_origin_id": "b98b3b0f-b711-e181-8c6f-b486ae712ea0",
+     "derived_from": [
+      "e30e67d3-7842-49d9-96e4-3c95e35df8cd"
+     ],
+     "effective_confidence": 0.8,
+     "evidence_text": "[quoted desk sentence 8]",
+     "marker": "[[ref:8]]",
+     "ordinal": 8,
+     "ref_id": "e30e67d3-7842-49d9-96e4-3c95e35df8cd",
+     "ref_kind": "finding",
+     "source": "world_assessor",
+     "spine_block": {
+      "desk": "energy_security",
+      "finding_id": "96264083-5648-4057-8be3-093e49d54235",
+      "target_id": "country_watch_sd"
+     },
+     "title": "Energy security"
+    },
+    {
+     "context_match": "assessment_of_this_record",
+     "context_origin_id": "c1f97538-82c0-2a67-e686-66fb4c79e4cd",
+     "derived_from": [
+      "e30e67d3-7842-49d9-96e4-3c95e35df8cd"
+     ],
+     "effective_confidence": 0.55,
+     "evidence_text": "[quoted desk sentence 9]",
+     "marker": "[[ref:9]]",
+     "ordinal": 9,
+     "ref_id": "e30e67d3-7842-49d9-96e4-3c95e35df8cd",
+     "ref_kind": "finding",
+     "source": "world_assessor",
+     "spine_block": {
+      "desk": "military_posture",
+      "finding_id": "a3f375a5-cdb4-4f47-a5a2-b50566bda985",
+      "target_id": "country_watch_cd"
+     },
+     "title": "Military posture"
+    },
+    {
+     "context_match": "assessment_of_this_record",
+     "context_origin_id": "f3253800-3585-0896-741f-7f171c2d158b",
+     "derived_from": [
+      "e30e67d3-7842-49d9-96e4-3c95e35df8cd"
+     ],
+     "effective_confidence": 0.78,
+     "evidence_text": "[quoted desk sentence 10]",
+     "marker": "[[ref:10]]",
+     "ordinal": 10,
+     "ref_id": "e30e67d3-7842-49d9-96e4-3c95e35df8cd",
+     "ref_kind": "finding",
+     "source": "world_assessor",
+     "spine_block": {
+      "desk": "escalation",
+      "finding_id": "a454105a-ffaf-41a3-af4d-784876d21bf3",
+      "target_id": "country_watch_kp"
+     },
+     "title": "Escalation"
+    },
+    {
+     "context_match": "assessment_of_this_record",
+     "context_origin_id": "660ee05a-705a-4b96-5f2d-d7b28065999c",
+     "derived_from": [
+      "e30e67d3-7842-49d9-96e4-3c95e35df8cd"
+     ],
+     "effective_confidence": 0.7,
+     "evidence_text": "[quoted desk sentence 11]",
+     "marker": "[[ref:11]]",
+     "ordinal": 11,
+     "ref_id": "e30e67d3-7842-49d9-96e4-3c95e35df8cd",
+     "ref_kind": "finding",
+     "source": "world_assessor",
+     "spine_block": {
+      "desk": "military_posture",
+      "finding_id": "3dca8713-b473-4613-905a-df8d058e6474",
+      "target_id": "country_watch_mm"
+     },
+     "title": "Military posture"
+    },
+    {
+     "context_match": "assessment_of_this_record",
+     "context_origin_id": "0b820281-94cb-8e21-6e89-f825aff500eb",
+     "derived_from": [
+      "e30e67d3-7842-49d9-96e4-3c95e35df8cd"
+     ],
+     "effective_confidence": 0.75,
+     "evidence_text": "[quoted desk sentence 12]",
+     "marker": "[[ref:12]]",
+     "ordinal": 12,
+     "ref_id": "e30e67d3-7842-49d9-96e4-3c95e35df8cd",
+     "ref_kind": "finding",
+     "source": "world_assessor",
+     "spine_block": {
+      "desk": "economic_coercion",
+      "finding_id": "3fdcd478-177f-4e02-9e9b-192d240f80e1",
+      "target_id": "country_g20_cn"
+     },
+     "title": "Economic coercion"
+    },
+    {
+     "context_match": "assessment_of_this_record",
+     "context_origin_id": "8c102ea7-7e36-c5e1-eeca-10e233c446f2",
+     "derived_from": [
+      "e30e67d3-7842-49d9-96e4-3c95e35df8cd"
+     ],
+     "effective_confidence": 0.7,
+     "evidence_text": "[quoted desk sentence 13]",
+     "marker": "[[ref:13]]",
+     "ordinal": 13,
+     "ref_id": "e30e67d3-7842-49d9-96e4-3c95e35df8cd",
+     "ref_kind": "finding",
+     "source": "world_assessor",
+     "spine_block": {
+      "desk": "military_posture",
+      "finding_id": "22df55b5-9e2a-4807-8b63-6357766f15aa",
+      "target_id": "country_watch_pk"
+     },
+     "title": "Military posture"
+    },
+    {
+     "context_match": "assessment_of_this_record",
+     "context_origin_id": "8ff8208b-c05e-893c-04ae-fdda27a53777",
+     "derived_from": [
+      "e30e67d3-7842-49d9-96e4-3c95e35df8cd"
+     ],
+     "effective_confidence": 0.7,
+     "evidence_text": "[quoted desk sentence 14]",
+     "marker": "[[ref:14]]",
+     "ordinal": 14,
+     "ref_id": "e30e67d3-7842-49d9-96e4-3c95e35df8cd",
+     "ref_kind": "finding",
+     "source": "world_assessor",
+     "spine_block": {
+      "desk": "escalation",
+      "finding_id": "d4914dad-247b-486a-9367-4ce48c47056d",
+      "target_id": "country_g20_id"
+     },
+     "title": "Escalation"
+    },
+    {
+     "context_match": "assessment_of_this_record",
+     "context_origin_id": "fe2e8c5f-b9ee-654a-b0b1-f2a66c0ae61a",
+     "derived_from": [
+      "e30e67d3-7842-49d9-96e4-3c95e35df8cd"
+     ],
+     "effective_confidence": 0.75,
+     "evidence_text": "[quoted desk sentence 15]",
+     "marker": "[[ref:15]]",
+     "ordinal": 15,
+     "ref_id": "e30e67d3-7842-49d9-96e4-3c95e35df8cd",
+     "ref_kind": "finding",
+     "source": "world_assessor",
+     "spine_block": {
+      "desk": "escalation",
+      "finding_id": "1df2a346-d18f-42bd-8a21-5cfbc39e39e2",
+      "target_id": "country_g20_fr"
+     },
+     "title": "Escalation"
+    },
+    {
+     "context_match": "assessment_of_this_record",
+     "context_origin_id": "165162ff-a51f-198f-6e5f-fbca9fb4806f",
+     "derived_from": [
+      "e30e67d3-7842-49d9-96e4-3c95e35df8cd"
+     ],
+     "effective_confidence": 0.7,
+     "evidence_text": "[quoted desk sentence 16]",
+     "marker": "[[ref:16]]",
+     "ordinal": 16,
+     "ref_id": "e30e67d3-7842-49d9-96e4-3c95e35df8cd",
+     "ref_kind": "finding",
+     "source": "world_assessor",
+     "spine_block": {
+      "desk": "escalation",
+      "finding_id": "b7a099d6-ec37-4283-b496-2004db555ce4",
+      "target_id": "country_watch_ne"
+     },
+     "title": "Escalation"
+    }
+   ],
+   "meta": true,
+   "situation_signature": "composition:world_assessment:world"
+  }
+ },
+ "derived_from": [
+  "e30e67d3-7842-49d9-96e4-3c95e35df8cd"
+ ],
+ "id": "64f74201-65cc-4705-9c69-b7b13fbbd41a",
+ "produced_at": "2026-11-07T12:35:25.739979+00:00",
+ "severity": null,
+ "target_id": null,
+ "title": "[world assessment title]",
+ "verification": {
+  "aligned_by_id": 19,
+  "aligned_positionally": 0,
+  "branch_scores": {
+   "absence": {
+    "checkable": 1,
+    "score": 1.0,
+    "supported": 1
+   },
+   "citation_support": {
+    "checkable": 17,
+    "score": 0.9412,
+    "supported": 16
+   },
+   "synthesis": {
+    "checkable": 1,
+    "score": 1.0,
+    "supported": 1
+   }
+  },
+  "branch_versions": {
+   "absence": "absence.v5",
+   "citation_support": "citsupp.v6",
+   "synthesis": "synthesis.v0"
+  },
+  "checkable_claims": 19,
+  "claim_verdicts_truncated": false,
+  "confidence_ceiling": 0.8,
+  "counters": {
+   "absence_slice_no_eligible_rows": 1,
+   "absence_slice_off_scope_rows_excluded": 1,
+   "absence_slice_unresolved": 1,
+   "composition_integrity_absence_claims_seen": 1,
+   "denominator_coverage_statement": 4
+  },
+  "faithfulness_score": 0.9474,
+  "judge_attempts": 2,
+  "judge_http_statuses": [
+   "200",
+   "200"
+  ],
+  "judge_llm_ref": "llm.verify.innoai_gemma.openai_compat",
+  "judge_pipeline_version": "2026-10-03/2",
+  "judge_route": "configured",
+  "judge_status": "llm",
+  "judge_trigger": "sampled",
+  "judge_unavailable_reason": null,
+  "miscount_claims": 0,
+  "overall_score": 0.8,
+  "pre_escalation_judge_status": null,
+  "pre_escalation_overall_score": null,
+  "provisional": false,
+  "provisional_score_ceiling": null,
+  "score_state": "scored",
+  "score_state_reason": null,
+  "supported_claims": 18,
+  "unmatched_claims": 0,
+  "unsupported_spans": []
+ }
+}

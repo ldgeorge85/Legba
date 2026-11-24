@@ -31,13 +31,20 @@ import {
   evidenceStateDetail,
   judgeText,
   shareText,
+  staleReadText,
   type EvidenceUnitRow,
   type ExportAbsences,
   type ExportCitation,
+  type CompositionIndex,
   type ExportItem,
   type NotPublishedLine,
   type ReadingLimit,
 } from '@/lib/deskBriefPage'
+import { noCompositionLines, subjectNoun } from '@/lib/subjectPage'
+
+/** The profile's subject noun (the exemplar's "desk") — every word on the
+ *  page that names the subject is the profile's, never the exemplar's. */
+const NOUN = subjectNoun()
 
 /** The one em dash this page uses for a figure that does not exist. */
 export const ABSENT = '—'
@@ -101,18 +108,27 @@ export const NEVER_POOLED =
 
 export function IndexCard({
   targetId,
+  index,
   composition,
   stamp,
-  compositionAsOf,
   unitsCarried,
   unitsRoster,
   absences,
 }: {
   targetId: string
+  /** X1/D1 — the headline AND the as-of, read off one row
+   *  (`lib/deskBriefPage.compositionIndex`), so the card cannot say "no
+   *  composition" above a composition's date. */
+  index: CompositionIndex
+  /** The export document's item for the composition — its verify state,
+   *  severity and version chips. Null while the document composes. */
   composition: ExportItem | null
   stamp: Stamp
-  compositionAsOf: string | null
-  unitsCarried: number
+  /** The units the composition CARRIED — its assembly's block count, the
+   *  same source the composition's own title counts its verified reads
+   *  from, so the headline and this card cannot disagree. `null` when the
+   *  composition's assembly could not be read: the card says "–", never 0. */
+  unitsCarried: number | null
   unitsRoster: number
   absences: ExportAbsences | null
 }) {
@@ -121,10 +137,14 @@ export function IndexCard({
   return (
     <section className="mb-8" data-testid="desk-brief-index-card">
       <div className="text-label uppercase tracking-wider text-ink-3">
-        desk brief &middot; <span className="font-mono normal-case">{targetId}</span>
+        {NOUN} brief &middot; <span className="font-mono normal-case">{targetId}</span>
       </div>
-      <h2 className="mt-1 text-lg leading-snug text-ink-1" data-testid="desk-brief-title">
-        {composition?.title?.trim() || 'No composition published for this desk yet'}
+      <h2
+        className="mt-1 text-lg leading-snug text-ink-1"
+        data-testid="desk-brief-title"
+        data-composition={index.present ? 'present' : 'absent'}
+      >
+        {index.headline}
       </h2>
 
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
@@ -152,7 +172,7 @@ export function IndexCard({
       <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
         <FigureCard
           label="composition as of"
-          value={compositionAsOf ?? 'not recorded'}
+          value={index.asOfLabel}
           testId="desk-brief-asof"
         />
         <FigureCard
@@ -163,7 +183,7 @@ export function IndexCard({
         />
         <FigureCard
           label="units carried"
-          value={`${unitsCarried} of ${unitsRoster} on the roster`}
+          value={`${unitsCarried === null ? '–' : unitsCarried} of ${unitsRoster} on the roster`}
           note="the roster is the denominator, not the carried set"
           testId="desk-brief-units-carried"
         />
@@ -302,6 +322,7 @@ export function UnitBlock({
           text={item.body}
           citations={citations}
           claimTags
+          crossFramingTargetId={targetId}
         />
       ) : (
         <p className="mt-2 text-xs text-ink-3">This read carries no written body.</p>
@@ -311,7 +332,7 @@ export function UnitBlock({
 
       {situations.length > 0 && (
         <div className="mt-2" data-testid="desk-brief-unit-situations">
-          <SectionLabel>open situations on this desk</SectionLabel>
+          <SectionLabel>open situations on this {NOUN}</SectionLabel>
           <ul className="space-y-1">
             {situations.map((s) => (
               <li key={s.id} className="text-xs text-ink-2">
@@ -352,10 +373,14 @@ const STATE_TONE: Record<string, string> = {
 
 export function EvidenceTable({
   rows,
+  rosterReason = null,
   dimensions,
   layers,
 }: {
   rows: EvidenceUnitRow[]
+  /** Why the subject's roster is empty or unresolved (UI-B3), in words; null
+   *  when the roster has rows. Printed in place of an empty table body. */
+  rosterReason?: string | null
   dimensions: Record<string, DimensionBand> | null | undefined
   layers: React.ReactNode
 }) {
@@ -363,7 +388,7 @@ export function EvidenceTable({
     <section className="mb-8" data-testid="desk-brief-evidence">
       <SectionLabel
         tip={
-          'One row per bounded unit of this desk, whether or not the ' +
+          `One row per bounded unit of this ${NOUN}, whether or not the ` +
           'composition carried it — the roster is the denominator. The state ' +
           'column names which record decided it: the composition’s own ' +
           'coverage register, the banded scorecard, or the cadence check. A ' +
@@ -373,6 +398,11 @@ export function EvidenceTable({
       >
         evidence by unit
       </SectionLabel>
+      {rosterReason && (
+        <p className="mb-1.5 text-xs text-ink-3" data-testid="desk-brief-roster-reason">
+          No roster: {rosterReason}.
+        </p>
+      )}
       <div className="overflow-x-auto">
         <table className="w-full min-w-[46rem] border-collapse text-xs">
           <thead>
@@ -403,6 +433,23 @@ export function EvidenceTable({
                   </td>
                   <td className="py-1.5 pr-3 text-ink-2">
                     {r.readAt ? r.readAt.slice(0, 10) : ABSENT}
+                    {staleReadText(r.quotedAgeH, r.quotedStale) && (
+                      <div
+                        className="text-label italic text-amber-300"
+                        data-testid={`desk-brief-evidence-stale-${r.unitId}`}
+                        title="The composition quoted this read older than the unit's cadence × the stale-read multiple."
+                      >
+                        quoted stale: {staleReadText(r.quotedAgeH, r.quotedStale)}
+                      </div>
+                    )}
+                    {r.carried && (
+                      <div
+                        className="text-label italic text-ink-3"
+                        data-testid={`desk-brief-evidence-carried-${r.unitId}`}
+                      >
+                        carried, unsupported: {r.carried}
+                      </div>
+                    )}
                   </td>
                   <td className="py-1.5 pr-3 text-ink-2">{judgeText(r.judgeScore)}</td>
                   <td className="py-1.5 pr-3 text-ink-2">
@@ -545,7 +592,7 @@ export function ReadingLimits({
         </SectionLabel>
         {notPublishedLines.length === 0 ? (
           <p className="text-xs text-ink-3" data-testid="desk-brief-not-published-empty">
-            Every class this page reads answered for this desk: nothing was held back, no
+            Every class this page reads answered for this {NOUN}: nothing was held back, no
             unit was named and left unfilled, and no id failed to resolve.
           </p>
         ) : (
@@ -583,19 +630,19 @@ export function LayerAperture({
 }) {
   return (
     <div className="mt-3" data-testid="desk-brief-layers" data-state={state}>
-      <SectionLabel tip="The six declared source layers and what this desk's own layer map says about each. A layer the map calls absent is a declared absence with the operator's reason, never a layer that happens to be quiet.">
-        source layers for this desk
+      <SectionLabel tip={`The six declared source layers and what this ${NOUN}'s own layer map says about each. A layer the map calls absent is a declared absence with the operator's reason, never a layer that happens to be quiet.`}>
+        source layers for this {NOUN}
       </SectionLabel>
       {state === 'loading' && <p className="text-xs text-ink-3">reading the layer map…</p>}
       {state === 'unavailable' && (
         <p className="text-xs text-ink-3">
-          The divergence read did not answer, so this page cannot say which layers feed this
-          desk.
+          The divergence read did not answer, so this page cannot say which layers feed this{' '}
+          {NOUN}.
         </p>
       )}
       {state === 'undeclared' && (
         <p className="text-xs text-ink-3">
-          No layer map is declared for this desk, so no layer is stated as present, absent or
+          No layer map is declared for this {NOUN}, so no layer is stated as present, absent or
           unmeasured here.
         </p>
       )}
@@ -629,8 +676,11 @@ export function LayerAperture({
   )
 }
 
-/** The honest banner for a desk with nothing composed yet. */
-export function NoComposition({ targetId }: { targetId: string }) {
+/** The honest banner for a subject with nothing composed yet — UI-D1 Table
+ *  A's absence line ("no composition on record for this subject", the
+ *  profile's noun substituted) and what was asked. */
+export function NoComposition({ targetId, producers }: { targetId: string; producers: readonly string[] }) {
+  const lines = noCompositionLines(targetId, producers)
   return (
     <div
       className="flex items-start gap-2 rounded border border-line bg-surf-1 px-3 py-2 text-xs text-ink-2"
@@ -638,9 +688,10 @@ export function NoComposition({ targetId }: { targetId: string }) {
     >
       <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" aria-hidden />
       <span>
-        No <span className="font-mono">country_composition</span> row has been published for{' '}
-        <span className="font-mono">{targetId}</span>, so there is no record to read this desk
-        from. The unit roster below still states what would be carried.
+        <span className="text-ink-1" data-testid="desk-brief-no-composition-headline">
+          {lines.headline}
+        </span>{' '}
+        {lines.detail}
       </span>
     </div>
   )

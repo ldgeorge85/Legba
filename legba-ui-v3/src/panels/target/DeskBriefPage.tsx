@@ -1,5 +1,12 @@
 /**
- * Desk Brief (`target.desk_brief_page`) — the desk brief READ, not downloaded.
+ * The subject brief — `subject.page`'s Brief tab (UI-B3; was the bound kind
+ * `target.desk_brief_page`, which now aliases onto this tab). The desk brief
+ * READ, not downloaded, GENERALIZED to a subject of any frame kind: the roster
+ * is the subject's OWN (`lib/subjectPage.ts::subjectRoster` — a supply-chain
+ * lane carries its lane unit, a regime its own questions, never a country
+ * desk's nine), the composition is the newest row any of the profile's
+ * composing frames published on it, and every exemplar word on the page is the
+ * profile's subject noun.
  *
  * `POST /api/v1/v3/export` has composed a desk brief since 7b-iii and
  * `lib/printDocument.ts` has laid it out for paper since k1. Both hand the
@@ -40,11 +47,19 @@
  *
  * ## Consult
  *
- * Opening the page sets the ambient scope pin (`lib/consultContext`,
- * `SCOPE_PIN_ORIGIN`) to this desk, and opening a unit block re-pins it to
- * that unit's read. The Consult tile, wherever it is docked, follows — the
- * same session, with its provenance census intact. There is no consult panel
- * bolted onto this one.
+ * The page pins its subject (the bound tile's pin — `App.tsx`, UI-B6 — and
+ * `SubjectPage`'s own `usePinScope`), and opening a unit block RE-PINS Consult
+ * to that unit's read through the same hook (`usePinScope`, surface
+ * `subject brief`) and focuses it. The Consult tile, wherever it is docked,
+ * follows — the same session, with its provenance census intact. There is no
+ * consult panel bolted onto this one.
+ *
+ * ## No composition
+ *
+ * A subject no composing frame has published on (a lane, a regime on a fresh
+ * instance) renders the absence line and its OWN roster's latest reads — one
+ * `/findings?analyst_id_in=<roster>` read — so the evidence table says what
+ * each unit has read, never a country-shaped empty page.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -67,12 +82,22 @@ import { assessmentChannelFor, pickAssessmentRow } from '@/lib/assessmentChannel
 import AssessmentBand, { AssessmentAbsent } from '@/v4/read/AssessmentBand'
 import { readScaleStamp, scaleStampLabel } from '@/lib/scaleStamp'
 import { selectRow } from '@/state/selection'
-import { useScope } from '@/state/scope'
-import { scopeFromRow, scopeFromTarget } from '@/lib/scopeFromReport'
-import { GAP_STRIP_UNITS, type GapLatestFinding } from '@/lib/gapStripModel'
+import { usePinScope, type PinObject } from '@/lib/consultContext'
+import { type GapLatestFinding } from '@/lib/gapStripModel'
+import { defaultDeskBriefFetchers } from '@/state/exportBasket'
+import { profileUnits, useProjection } from '@/lib/profileUi'
+import { useSubjectIndex } from '@/lib/deskNames'
+import {
+  cadenceFromProjection,
+  compositionProducers,
+  subjectNoun,
+  subjectRoster,
+} from '@/lib/subjectPage'
 import type { CountryScorecard } from '@/lib/evalOps'
 import { fetchUnitCorrectness, type UnitCorrectness } from '@/lib/unitCorrectnessModel'
+import { extractCitations } from '@/lib/citationsModel'
 import {
+  compositionIndex,
   deriveEvidenceTable,
   exportCitations,
   findItem,
@@ -92,10 +117,27 @@ import {
   UnitBlock,
 } from './DeskBriefSections'
 
-/** The desk's bounded-unit roster size — the evidence table's denominator. */
-const ROSTER_SIZE = GAP_STRIP_UNITS.length
-/** Unit id → its display label, for a roster row the composition never named. */
-const UNIT_LABEL = new Map(GAP_STRIP_UNITS.map((u) => [u.id, u.label]))
+/** Unit id → its display label (every unit the profile declares — a block the
+ *  composition carried for a unit off this subject's roster still reads by name). */
+const UNIT_LABEL = new Map(profileUnits().map((u) => [u.id, u.label]))
+/** The profile's composing frames' producers — the composition candidates. */
+const PRODUCERS = compositionProducers()
+/** The profile's subject noun (the exemplar's "desk"). */
+const NOUN = subjectNoun()
+/** "Desk brief" for the exemplar; the profile's noun anywhere else. */
+const BRIEF_TITLE = `${NOUN.charAt(0).toUpperCase()}${NOUN.slice(1)} brief`
+
+/** The newest row any composing frame published on the subject, or null. */
+async function fetchSubjectComposition(targetId: string): Promise<ReadFindingRow | null> {
+  if (PRODUCERS.length === 0) return null
+  const resp = await apiGet<{ data: ReadFindingRow[] }>(
+    `/findings?target_id=${encodeURIComponent(targetId)}` +
+      `&analyst_id_in=${encodeURIComponent(PRODUCERS.join(','))}&limit=1&fields=full`,
+  )
+  return resp.data[0] ?? null
+}
+
+const SUBJECT_BRIEF_FETCHERS = { ...defaultDeskBriefFetchers, fetchComposition: fetchSubjectComposition }
 
 interface FindingsResponse {
   data: ReadFindingRow[]
@@ -113,13 +155,37 @@ export default function DeskBriefPagePanel({ registration, scope }: PanelProps) 
   const [actionError, setActionError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
 
+  // ── the subject's OWN roster (UI-B3) ─────────────────────────────────────
+  const subjectIndex = useSubjectIndex()
+  const unitsProjection = useProjection('units')
+  const cadence = useMemo(
+    () => (unitsProjection.state === 'ok' ? cadenceFromProjection(unitsProjection.rows) : undefined),
+    [unitsProjection],
+  )
+  const roster = useMemo(
+    () => subjectRoster(targetId, { index: subjectIndex, cadence }),
+    [targetId, subjectIndex, cadence],
+  )
+  const rosterIds = roster.units.map((u) => u.id).join(',')
+
   // ── the basket, read-only ────────────────────────────────────────────────
   const briefQ = useQuery<DeskBriefRead>({
     enabled: !!targetId,
     queryKey: ['desk-brief-page-read', targetId],
-    queryFn: () => readDeskBrief(targetId),
+    queryFn: () => readDeskBrief(targetId, SUBJECT_BRIEF_FETCHERS),
   })
   const brief = briefQ.data ?? null
+
+  // ── no composition: the roster's own latest reads (one request) ─────────
+  const rosterReadsQ = useQuery<FindingsResponse>({
+    enabled: !!targetId && !!brief && !brief.compositionId && rosterIds.length > 0,
+    queryKey: ['desk-brief-page-roster-reads', targetId, rosterIds],
+    queryFn: () =>
+      apiGet<FindingsResponse>(
+        `/findings?target_id=${encodeURIComponent(targetId)}` +
+          `&analyst_id_in=${encodeURIComponent(rosterIds)}&limit=50&fields=summary`,
+      ),
+  })
 
   // ── the composed document (the ONE call the file and the paper share) ────
   const itemKey = (brief?.items ?? []).map((i) => `${i.kind}:${i.id}`).join('|')
@@ -130,7 +196,7 @@ export default function DeskBriefPagePanel({ registration, scope }: PanelProps) 
       const artifact = await exportCollection({
         items: (brief?.items ?? []).map((i) => ({ kind: i.kind, id: i.id })),
         format: 'json',
-        title: `Desk brief — ${targetId}`,
+        title: `${BRIEF_TITLE} — ${targetId}`,
         appendix: deskBriefAppendix(targetId, brief?.appendix ?? null),
       })
       return { artifact, doc: parseExportDocument(artifact.content) }
@@ -184,7 +250,7 @@ export default function DeskBriefPagePanel({ registration, scope }: PanelProps) 
     queryFn: () =>
       apiGet<FindingsResponse>(
         `/findings?analyst_id=${encodeURIComponent(channelSpec!.analystId)}` +
-          `&target_id=${encodeURIComponent(targetId)}&limit=5`,
+          `&target_id=${encodeURIComponent(targetId)}&limit=5&fields=full`,
       ),
   })
   const voiceRow = useMemo(
@@ -193,15 +259,17 @@ export default function DeskBriefPagePanel({ registration, scope }: PanelProps) 
   )
   const voice = useMemo(() => (voiceRow ? projectAssessment(voiceRow) : null), [voiceRow])
 
-  // ── CONSULT: the ambient scope pin follows the page ──────────────────────
-  useEffect(() => {
-    if (!targetId) return
-    useScope.getState().setScope(scopeFromTarget(targetId, targetId, 'desk-brief-page'))
-  }, [targetId])
+  // ── CONSULT: a unit block drill re-pins to THAT read (UI-B6's hook) ──────
+  // The subject itself is pinned by the page around this tab; the drill is the
+  // newer claim, so Consult follows the read the reader opened. A new subject
+  // releases the drill.
+  const [drill, setDrill] = useState<{ pin: PinObject | null; rev: number }>({ pin: null, rev: 0 })
+  useEffect(() => setDrill((d) => ({ pin: null, rev: d.rev })), [targetId])
+  usePinScope(drill.pin, 'subject brief', drill.rev)
 
-  /** Opening a unit block re-pins the scope to THAT read and focuses it. */
+  /** Opening a unit block re-pins Consult to THAT read and focuses it. */
   const openUnit = useCallback((row: ReadFindingRow, label: string) => {
-    useScope.getState().setScope(scopeFromRow(row, 'desk-brief-page'))
+    setDrill((d) => ({ pin: { kind: 'finding', id: row.id, label }, rev: d.rev + 1 }))
     selectRow('finding', row.id, label, { origin: 'desk-brief-page' })
   }, [])
 
@@ -227,7 +295,7 @@ export default function DeskBriefPagePanel({ registration, scope }: PanelProps) 
         const artifact = await exportCollection({
           items: (brief?.items ?? []).map((i) => ({ kind: i.kind, id: i.id })),
           format: 'markdown',
-          title: `Desk brief — ${targetId}`,
+          title: `${BRIEF_TITLE} — ${targetId}`,
           appendix: deskBriefAppendix(targetId, brief?.appendix ?? null),
         })
         downloadExportArtifact(artifact)
@@ -244,7 +312,7 @@ export default function DeskBriefPagePanel({ registration, scope }: PanelProps) 
         const artifact = await exportCollection({
           items: (brief?.items ?? []).map((i) => ({ kind: i.kind, id: i.id })),
           format: 'markdown',
-          title: `Desk brief — ${targetId}`,
+          title: `${BRIEF_TITLE} — ${targetId}`,
           appendix: deskBriefAppendix(targetId, brief?.appendix ?? null),
         })
         const opened = printExportDocument({
@@ -286,7 +354,7 @@ export default function DeskBriefPagePanel({ registration, scope }: PanelProps) 
         })
         const a = document.createElement('a')
         a.href = dataUrl
-        a.download = `legba-desk-brief-${targetId}-${new Date().toISOString().slice(0, 10)}.png`
+        a.download = `legba-${NOUN.replace(/[^a-z0-9]+/g, '-')}-brief-${targetId}-${new Date().toISOString().slice(0, 10)}.png`
         document.body.appendChild(a)
         a.click()
         document.body.removeChild(a)
@@ -315,6 +383,18 @@ export default function DeskBriefPagePanel({ registration, scope }: PanelProps) 
 
   const compositionItem = findItem(doc, brief?.compositionId ?? null)
 
+  /** C2/fix 2 — "units carried" is the composition's OWN carried set (its
+   *  assembly's blocks), the one source its headline counts "N verified desk
+   *  reads" from. It used to count the export document's resolved unit items,
+   *  which is 0 while the document composes — so the card printed "0 of 8"
+   *  under a headline saying 3. No composition carries nothing (a read answer,
+   *  0); a composition whose assembly cannot be read is unknown ("–"). */
+  const unitsCarried: number | null = !brief?.compositionId
+    ? 0
+    : assembly
+      ? assembly.blocks.length
+      : null
+
   const questions = useMemo(() => {
     const m = new Map<string, string>()
     for (const b of assembly?.blocks ?? []) if (b.question) m.set(b.desk, b.question)
@@ -328,28 +408,45 @@ export default function DeskBriefPagePanel({ registration, scope }: PanelProps) 
       if (!unit || !item.produced_at) continue
       m.set(unit, { id: item.id, producedAt: item.produced_at, severity: item.severity })
     }
+    // No composition on record: each roster unit's own newest read stands in
+    // (the route returns newest first; the first row per unit is its latest).
+    for (const row of rosterReadsQ.data?.data ?? []) {
+      const unit = row.analyst_id
+      if (!unit || !row.produced_at || m.has(unit)) continue
+      m.set(unit, { id: row.id, producedAt: row.produced_at, severity: row.severity ?? null })
+    }
     return m
-  }, [unitItems])
+  }, [unitItems, rosterReadsQ.data])
+
+  /** The question set: the composition's own block questions, else the
+   *  profile's standing question for the unit. */
+  const questionSet = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const u of roster.units) if (u.question) m.set(u.id, u.question)
+    for (const [k, v] of questions) m.set(k, v)
+    return m
+  }, [roster, questions])
 
   const evidenceRows = useMemo(
     () =>
       deriveEvidenceTable({
+        units: roster.units,
         coverage: assembly?.coverage ?? [],
-        questions,
+        questions: questionSet,
         latestByUnit,
         dimensions,
         correctness: correctnessByUnit,
         absences: doc?.absences,
       }),
-    [assembly, questions, latestByUnit, dimensions, correctnessByUnit, doc],
+    [roster, assembly, questionSet, latestByUnit, dimensions, correctnessByUnit, doc],
   )
 
   const ungraded = useMemo(
     () =>
       correctnessPage?.reference?.state === 'current'
-        ? GAP_STRIP_UNITS.filter((u) => !correctnessByUnit.has(u.id)).map((u) => u.id)
+        ? roster.units.filter((u) => !correctnessByUnit.has(u.id)).map((u) => u.id)
         : [],
-    [correctnessPage, correctnessByUnit],
+    [roster, correctnessPage, correctnessByUnit],
   )
 
   const notPublishedLines = useMemo(
@@ -365,16 +462,31 @@ export default function DeskBriefPagePanel({ registration, scope }: PanelProps) 
 
   const stamp = useMemo(() => readScaleStamp(brief?.composition), [brief?.composition])
 
+  /** X1/D1 — the card's headline and its as-of, off the ONE composition row. */
+  const index = useMemo(
+    () => compositionIndex(brief?.composition ?? null, assembly?.as_of ?? null, NOUN),
+    [brief?.composition, assembly],
+  )
+
+  /** X1/D1 — the voice's own citations, so its `[[ref:N]]` render as chips. */
+  const voiceCitations = useMemo(
+    () =>
+      voiceRow?.data && typeof voiceRow.data === 'object'
+        ? extractCitations(voiceRow.data as Record<string, unknown>)
+        : [],
+    [voiceRow],
+  )
+
   const limits = useMemo(
     () =>
       readingLimits({
         doc,
-        compositionAsOf: assembly?.as_of ?? brief?.composition?.produced_at ?? null,
+        compositionAsOf: index.asOf,
         scaleLine: scaleStampLabel(stamp),
         scorecardAt: scorecardQ.data?.[0]?.produced_at ?? null,
         reference: correctnessPage?.reference ?? null,
       }),
-    [doc, assembly, brief, stamp, scorecardQ.data, correctnessPage],
+    [doc, index, stamp, scorecardQ.data, correctnessPage],
   )
 
   const endnoteGroups = useMemo(() => {
@@ -446,7 +558,7 @@ export default function DeskBriefPagePanel({ registration, scope }: PanelProps) 
   return (
     <PanelChrome
       registration={registration}
-      subtitle={`desk ${targetId}`}
+      subtitle={`${NOUN} ${targetId}`}
       actions={actions}
       onRefresh={() => {
         briefQ.refetch()
@@ -460,30 +572,43 @@ export default function DeskBriefPagePanel({ registration, scope }: PanelProps) 
         <div className="px-4 py-4" ref={pageRef}>
         {briefQ.isLoading && (
           <p className="text-xs text-ink-3" data-testid="desk-brief-page-loading">
-            reading this desk&rsquo;s composition…
+            reading this {NOUN}&rsquo;s composition…
           </p>
         )}
         {briefQ.isError && (
           <p className="text-xs text-accent-critical" data-testid="desk-brief-page-read-error">
-            Could not read the desk: {String(briefQ.error)}
+            Could not read the {NOUN}: {String(briefQ.error)}
           </p>
         )}
 
-        {brief && !brief.compositionId && <NoComposition targetId={targetId} />}
+        {brief && !brief.compositionId && <NoComposition targetId={targetId} producers={PRODUCERS} />}
 
         {brief && (
           <>
             <IndexCard
               targetId={targetId}
+              index={index}
               composition={compositionItem}
               stamp={stamp}
-              compositionAsOf={assembly?.as_of ?? brief.composition?.produced_at ?? null}
-              unitsCarried={unitItems.length}
-              unitsRoster={ROSTER_SIZE}
+              unitsCarried={unitsCarried}
+              unitsRoster={roster.units.length}
               absences={doc?.absences ?? null}
             />
 
+            {/* The voice read can take seconds; "none written" is a claim about
+                the record and prints only once that read answered empty. */}
+            {channelSpec && voiceQ.isError && (
+              <p className="mb-8 text-xs text-accent-critical" data-testid="desk-brief-voice-error">
+                Could not read the {channelSpec.label.toLowerCase()}: {String(voiceQ.error)}
+              </p>
+            )}
+            {channelSpec && !voiceQ.isSuccess && !voiceQ.isError && (
+              <p className="mb-8 text-xs text-ink-3" data-testid="desk-brief-voice-loading">
+                reading the {channelSpec.label.toLowerCase()}…
+              </p>
+            )}
             {channelSpec &&
+              voiceQ.isSuccess &&
               (voice && voiceRow ? (
                 <AssessmentBand
                   body={voiceRow.body ?? ''}
@@ -492,6 +617,7 @@ export default function DeskBriefPagePanel({ registration, scope }: PanelProps) 
                   channelLabel={channelSpec.label}
                   spineOrdinals={(assembly?.blocks ?? []).map((b) => b.ordinal)}
                   spineMismatch={voice.spine_id !== brief.composition?.id}
+                  citations={voiceCitations}
                 />
               ) : (
                 <AssessmentAbsent reason={channelSpec.absentReason} />
@@ -557,6 +683,7 @@ export default function DeskBriefPagePanel({ registration, scope }: PanelProps) 
 
             <EvidenceTable
               rows={evidenceRows}
+              rosterReason={roster.basis === 'unresolved' || roster.units.length === 0 ? roster.reason : null}
               dimensions={dimensions}
               layers={
                 <LayerAperture

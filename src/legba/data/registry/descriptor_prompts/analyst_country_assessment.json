@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:country_assessment": {
+      "source": "analyst_country_assessment.yaml",
+      "state": "draft"
+    }
+  }
+}

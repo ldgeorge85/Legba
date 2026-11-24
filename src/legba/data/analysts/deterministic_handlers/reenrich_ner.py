@@ -76,6 +76,7 @@ import json
 import logging
 from typing import Any, Mapping
 
+from ... import profile_constants as _profile_constants
 from ...filters._contract import FilterContext
 from ...provenance.models import FindingPayload
 from ...sources._contract import Signal
@@ -105,13 +106,11 @@ REENRICH_TIMEOUT_SECONDS = 60.0
 
 #: The non-Latin source-language set routed through translate-then-NER, threaded into
 #: BOTH the SELECT predicate and the NER handler config so the sweep's candidate set
-#: and the handler's translate routing stay in sync. Mirrors
-#: ``ner.py::_NON_LATIN_TRANSLATE_LANGS`` (kept as a literal here so this backfill
-#: module is self-contained and the SELECT never imports the httpx-bearing ner
-#: module at query time).
-_DEFAULT_TRANSLATE_LANGS: tuple[str, ...] = (
-    "ar", "fa", "he", "ru", "uk", "zh", "ja", "ko", "hi", "th", "ur",
-)
+#: and the handler's translate routing stay in sync. The instance profile's
+#: ``constants.translation_languages`` (SPLIT-3, the leaf ``profile_constants``
+#: — the SELECT never imports the httpx-bearing ner module at query time;
+#: ``ner.py::_NON_LATIN_TRANSLATE_LANGS`` reads the same value).
+_DEFAULT_TRANSLATE_LANGS: tuple[str, ...] = _profile_constants.translation_languages()
 
 #: Marker written into ``payload.reenrich_failed`` on a poison row (NER failed on an
 #: otherwise-healthy tick) so it drains out of the partial index and is never

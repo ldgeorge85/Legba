@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.gcp.status": {
+      "source": "source_gcp_status.yaml",
+      "state": "draft"
+    }
+  }
+}

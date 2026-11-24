@@ -1,0 +1,15 @@
+{
+  "prompts": {
+    "corpus_researcher": {
+      "chars": 11600,
+      "sha256": "f7420c095023a84845745e202aa3957f78b0b9a962a26cac61be43de95a9f0b3",
+      "source": "analyst_corpus_researcher.yaml"
+    }
+  },
+  "states": {
+    "analyst:corpus_researcher": {
+      "source": "analyst_corpus_researcher.yaml",
+      "state": "active"
+    }
+  }
+}

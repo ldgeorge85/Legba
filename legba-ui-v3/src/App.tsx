@@ -1,109 +1,184 @@
 /**
- * L-204 — Legba UI v3 root.
+ * Legba UI v3 root — THE FRAME (U-6; 02_UI_TARGET_BRIEF §12, which replaced
+ * the U-2 shell's fixed Consult column after the owner saw it live).
  *
- * Layout:
- *  ┌────────────────────────────────────────────────────────────────┐
- *  │  Sidebar    │      Dockview workspace                          │
- *  │  (panels)   │      (per-panel tiles)                           │
- *  │             │                                                  │
- *  │             ├──────────────────────────────────────────────────│
- *  │             │      StatusBar                                   │
- *  └────────────────────────────────────────────────────────────────┘
+ *  ┌──────────────────────────────── top bar ──────────────────────────────────┐
+ *  │ Legba │ Board Subject Ledger Watch │ [subject ▾] │ ⌘K ＋ ↶ ↺ 🔗 │ Operator ▸ │
+ *  ├──────┬──────────────────────────────┬──────────────────────────────────────┤
+ *  │ rail │  STAGE (today's read; what   │  PANELS — Dockview, 1–3 columns by    │
+ *  │ subj │  was pulled up; breadcrumb)  │  width (`lib/frameGrid.ts`), the map  │
+ *  │ hist │ ═══════ divider (drag) ══════│  leading; resizable, swappable,       │
+ *  │ view │  CHAT — Consult, ask box at  │  closable, re-openable from ＋.        │
+ *  │      │  its foot (move · collapse)  │  The Record sheet slides over here.   │
+ *  ├──────┴──────────────────────────────┴──────────────────────────────────────┤
+ *  │ time band (reader side)                                                     │
+ *  │ status line — sources n/N firing · gaps · judge · grader                    │
+ *  └─────────────────────────────────────────────────────────────────────────────┘
  *
- * The Sidebar lists registered panels. Clicking one calls
- * `dockApi.addPanel`, which mounts the resolved React component via the
- * `LegbaPanelComponent` Dockview frame.
+ * Every page is this frame; a page declares its stage, its panels and whether
+ * the chat starts open (`lib/surfaces.ts`). Consult is back in the layout: the
+ * divider resizes it, its header collapses it to the ask bar, pops it to the
+ * full centre or moves it to a column on the left or the right
+ * (`components/ConsultDock.tsx`, remembered per page in `state/frame.ts`).
+ *
+ * ONE EXECUTOR. Every producer — the bar, ⌘K, the ＋ catalog, the rail, the
+ * URL, the panels' cross-links and Consult's cases — compiles to the drive
+ * actions (`lib/applyAction.ts`) or to a panel action (`lib/panelActions.ts`),
+ * and both land in ONE opener here ({@link openViewAt}): the stage for a
+ * page-sized view, else the view's home region, replacing that region's
+ * previous opened view — never a new column. The frame reports what is on
+ * screen (`lib/onScreen.ts`) through the same port.
  */
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   DockviewReact,
   type DockviewReadyEvent,
   type DockviewApi,
+  type IDockviewPanel,
   type IDockviewPanelProps,
-  type IDockviewPanelHeaderProps,
+  type IDockviewHeaderActionsProps,
+  type SerializedDockview,
 } from 'dockview-react'
-import { Sidebar } from '@/components/Sidebar'
+import { ExternalLink, PanelTop, PanelLeftOpen } from 'lucide-react'
 import { StatusBar } from '@/components/StatusBar'
 import { CommandPalette } from '@/components/CommandPalette'
+import { SurfaceBar } from '@/components/SurfaceBar'
+import { ConsultDock } from '@/components/ConsultDock'
+import { RecordSheet } from '@/components/RecordSheet'
+import { FrameRail } from '@/components/FrameRail'
+import { Stage } from '@/components/Stage'
+import { Splitter } from '@/components/Splitter'
+import { ViewHost } from '@/components/ViewHost'
+import { PanelLoading } from '@/components/SingletonView'
+import { SingletonView } from '@/components/SingletonView'
+import { PortalContainerProvider } from '@/ui/portal'
+import { legbaDark } from '@/ui/dockviewTheme'
 import { UnboundPanelPlaceholder } from '@/components/PanelChrome'
 import { PanelTierProvider } from '@/components/PanelTierContext'
 import { PanelErrorBoundary } from '@/components/PanelErrorBoundary'
 import { DockviewPanelApiProvider } from '@/components/DockviewPanelApiContext'
+import { QueryRegion, TileQueryRegion } from '@/lib/queryLayer'
+import TimeScrubber from '@/v4/world/TimeScrubber'
 import { useRegistry } from '@/panel-registry/useRegistry'
 import { PANEL_REGISTRY } from '@/panel-registry/registry'
-import { extractScope, instanceId, resolvePanel } from '@/panel-registry/loader'
-import { resolveKind } from '@/panel-registry/aliases'
+import { extractScope, resolvePanel } from '@/panel-registry/loader'
+import { resolveKind, rewriteSerializedLayout } from '@/panel-registry/aliases'
+import { contractOf } from '@/panel-registry/contractOf'
+import { frameViewComponent, viewIdOf } from '@/panel-registry/contracts'
+import { drive, registerShell } from '@/lib/applyAction'
+import { boundPinFor, usePinScope } from '@/lib/consultContext'
+import { requestPanelTab } from '@/state/panelParams'
+import { goToSurface, openPanel, registerShellCommands } from '@/lib/commands'
+import { actionOf, parseAddress } from '@/lib/address'
+import { openCaseAddress } from '@/lib/caseReplay'
+import { useSubjectIndex, humanizeId } from '@/lib/deskNames'
+import { boundTileTitle } from '@/lib/subjectTitle'
+import { boundRegistration } from '@/lib/boundRegistration'
+import { usePreferences, type Density } from '@/components/density/PreferencesProvider'
 import type { PanelKind, PanelRegistration } from '@/types'
 import { currentMode, getToken } from '@/auth/jwt'
+import { OPERATOR_SIDE_REASON, useBelowContributor } from '@/auth/roles'
 import {
-  applyPreset,
-  findPreset,
-  hasCustomLayout,
-  loadCustomLayout,
-  saveCustomLayout,
-} from '@/lib/layoutPresets'
+  LANDING_SURFACE,
+  MAX_REGIONS,
+  SURFACES,
+  findSurface,
+  frameViewTitle,
+  homeOf,
+  isFrameView,
+  isSlotId,
+  isMountedViewId,
+  layoutCensus,
+  readSurfaceLayout,
+  resetSurfaceLayout,
+  resolveSurfaceId,
+  saveSurfaceLayout,
+  surfaceViews,
+  type RegionId,
+  type SurfaceDef,
+  type SurfaceId,
+  type ViewId,
+} from '@/lib/surfaces'
 import {
-  findWorkspace,
-  isWorkspaceId,
-  LANDING_WORKSPACE,
-  loadWorkspaceLayout,
-  migrateLegacyLayout,
-  resetWorkspaceLayout,
-  saveWorkspaceLayout,
-  seedWorkspace,
-  WORKSPACES,
-  type WorkspaceDef,
-  type WorkspaceId,
-} from '@/lib/workspaces'
-import { WorkspaceBar } from '@/components/WorkspaceBar'
-import { findMission, isMissionId, type MissionId } from '@/lib/missions'
-import { OPEN_CROSS_FRAMING_EVENT } from '@/lib/crossFramingLink'
-import { applyMission } from '@/lib/applyMission'
-import { applyInvestigateLayout, applyInvestigateAnalystLayout } from '@/lib/investigateLayout'
+  TRANSIENT_PARAM,
+  dropWouldExceedRegions,
+  openInRegion,
+  seedSurface,
+  sizeSurface,
+  type ViewPosition,
+} from '@/lib/surfaceDock'
+import { columnsFor, frameGrid, rootPxFor, ASK_BAR_REM, CHAT_MAX_SHARE, PANEL_COLUMN_MIN_REM } from '@/lib/frameGrid'
+import { registerFramePort, pushViewUndo, undoView, useViewUndo, type ViewOnScreen } from '@/lib/panelActions'
+import { legacyPresetSurface } from '@/lib/layoutPresets'
+import { legacyMission } from '@/lib/missions'
 import { toggleDebugMode } from '@/lib/debugMode'
-import { useSelection, type SelectionKind } from '@/state/selection'
-import {
-  emitRead,
-  installReadTelemetryLifecycle,
-  setTelemetryWorkspace,
-} from '@/lib/readTelemetry'
-import {
-  readMissionHash,
-  readWorkspaceHash,
-  useShareState,
-  writeMissionHash,
-  writeWorkspaceHash,
-} from '@/lib/shareState'
+import { useSelection } from '@/state/selection'
+import { emitRead, installReadTelemetryLifecycle, setTelemetryWorkspace } from '@/lib/readTelemetry'
+import { useShareState, writeMissionHash, writeWorkspaceHash } from '@/lib/shareState'
 import { installDeskScopeBridge } from '@/lib/scopeFromReport'
 import { useScope } from '@/state/scope'
-import type { PaletteRecord } from '@/components/usePaletteRecords'
+import { useWorldState } from '@/v4/world/worldState'
+import { isCasePlaying, useCasePlayer } from '@/state/casePlayer'
+import {
+  currentStage,
+  stageInstanceId,
+  useFrame,
+  type ChatPlacement,
+  type PageFrame,
+  type StageEntry,
+  type StageState,
+} from '@/state/frame'
+import { useActiveSurface } from '@/state/activeSurface'
+// The map's contract wired to the globe's actions (U-7), kept while the map is hidden.
+import '@/v4/globe/contract'
+import '@/v4/watch/register'
+
+type Mode = ReturnType<typeof currentMode>
+
+const INSPECTOR_KIND = 'system.inspector'
+const CONSULT_KIND = 'system.consult'
+/** Where the last subject the reader looked at is kept, so Subject never opens empty. */
+export const LAST_SUBJECT_KEY = 'legba_last_subject'
+
+interface LegbaPanelParams {
+  registration: PanelRegistration | null
+  singletonKind?: PanelKind
+  mode: Mode
+  /** Tab a tabbed survivor opens on (set when a retired kind was aliased here). */
+  tab?: string
+  /** The region's ONE opened view (the next open there replaces it). */
+  transient?: boolean
+}
+
+function SuspenseBoundary({ children }: { children: ReactNode }) {
+  return <Suspense fallback={<PanelLoading />}>{children}</Suspense>
+}
 
 /**
- * One Dockview panel — looks up the bound `PanelRegistration` by panel id
- * and renders the resolved component.
- *
- * Dockview passes us a `params` object via `addPanel({ params })`; we
- * stash the `registration` there at open time so each tile gets its own
- * binding.
+ * One Dockview panel — a singleton through `SingletonView`, or a bound read
+ * against its synthesized registration.
  */
 function LegbaPanelComponent(props: IDockviewPanelProps<LegbaPanelParams>) {
+  // U-5: a tile's reads wait until the tile is the visible one in its group
+  // (`lib/queryLayer.ts`) — Dockview keeps a hidden tab mounted.
+  return (
+    <DockviewPanelApiProvider value={props.api}>
+      <TileQueryRegion>
+        <LegbaPanelBody {...props} />
+      </TileQueryRegion>
+    </DockviewPanelApiProvider>
+  )
+}
+
+function LegbaPanelBody(props: IDockviewPanelProps<LegbaPanelParams>) {
   const params = props.params
   const registration = params?.registration
 
-  // READ TELEMETRY (D2e) — THE panel-open chokepoint.
-  //
-  // Every opener in this file (`onOpenPanel` from the sidebar/palette,
-  // `addSingleton` from workspace seeding and layout presets, `addBound` from
-  // the investigate rails) and every restored saved layout mounts through
-  // `component: 'default'`, which is this function. Dockview instantiates it
-  // exactly once per `addPanel` — `dockviewMountLifecycle.probe.test.tsx`
-  // pins that a tab switch does NOT remount — so one effect here counts every
-  // panel open in the app and nothing else. Instrumenting the three openers
-  // instead would have missed the restored-layout path entirely, which is
-  // most of a normal morning.
-  //
-  // Computed before any early return so the hook order stays unconditional.
+  // READ TELEMETRY (D2e) — the dock's panel-open chokepoint: every view a page
+  // seeds, restores or opens in a region mounts through `component:
+  // 'default'`, which is this function. (The stage's views count themselves
+  // in `ViewHost`; Consult's open is emitted where the frame mounts it.)
   const openedKind = registration
     ? (registration.layout_slot ?? registration.panel_id)
     : params?.singletonKind
@@ -112,78 +187,31 @@ function LegbaPanelComponent(props: IDockviewPanelProps<LegbaPanelParams>) {
   useEffect(() => {
     if (!openedKind) return
     emitRead('panel_open', { subjectKind: 'panel', subjectId: openedKind })
-    // The operator-pull surface the premise review measured decaying
-    // 64→53→18 gets its own kind, so "did giving them a worthy read revive
-    // asking questions of it?" is answerable without a subject-string filter.
-    if (openedKind === 'system.consult') emitRead('consult_open')
-    // `lineage_walk` is NOT emitted here: opening the Provenance survivor is
-    // not the same act as entering one of its walk surfaces, and the panel
-    // owns that distinction. See panels/merged/Provenance.tsx.
   }, [openedKind])
 
+  // THE PIN HOOK on a bound view (UI-B6): a per-subject or per-unit read pins
+  // Consult to the record it is bound to while it is in front.
+  const boundPin = boundPinFor(registration?.binding, registration?.descriptor_id ?? null)
+  const [frontRev, setFrontRev] = useState(0)
+  useEffect(() => {
+    if (!boundPin || typeof props.api?.onDidActiveChange !== 'function') return
+    const d = props.api.onDidActiveChange((e) => {
+      if (e.isActive) setFrontRev((r) => r + 1)
+    })
+    return () => d.dispose()
+  }, [props.api, !!boundPin]) // eslint-disable-line react-hooks/exhaustive-deps
+  usePinScope(boundPin, 'tile', frontRev)
+
   if (!registration) {
-    // Singleton panel — no binding; render a synthetic registration.
     if (params?.singletonKind) {
-      // A saved layout / deep-link may name a RETIRED kind: resolve it onto
-      // its survivor and remember the tab that IS the retired surface
-      // (panel-registry/aliases.ts, design §4.4 call site 2).
-      const alias = resolveKind(params.singletonKind)
-      const kind = alias?.kind ?? params.singletonKind
-      const tab = params.tab ?? alias?.tab
-      const entry = PANEL_REGISTRY[kind]
-      if (!entry) {
-        return (
-          <UnboundPanelPlaceholder
-            panelId={params.singletonKind}
-            descriptorId="(no descriptor — singleton)"
-          />
-        )
-      }
-      const synthetic: PanelRegistration = {
-        id: `singleton:${kind}`,
-        panel_id: entry.definition.panelId,
-        descriptor_id: '(singleton)',
-        descriptor_version: '00000000',
-        descriptor_family: 'target',
-        analyst_id: null,
-        title: entry.definition.defaultTitle,
-        mode: params.mode,
-        layout_slot: kind,
-        data_query: {},
-        binding: {},
-        retired: false,
-        created_at: new Date().toISOString(),
-        retired_at: null,
-      }
-      const Component = entry.Component
-      return (
-        <DockviewPanelApiProvider value={props.api}>
-          <PanelErrorBoundary label={synthetic.id}>
-            <PanelTierProvider tier={entry.definition.tier ?? 'live'}>
-              <Suspense fallback={<PanelLoading />}>
-                <Component
-                  registration={synthetic}
-                  scope={{}}
-                  mode={params.mode}
-                  initialTab={tab}
-                />
-              </Suspense>
-            </PanelTierProvider>
-          </PanelErrorBoundary>
-        </DockviewPanelApiProvider>
-      )
+      return <SingletonView kind={params.singletonKind} mode={params.mode} tab={params.tab} api={props.api} />
     }
     return <UnboundPanelPlaceholder panelId="?" descriptorId="(no binding)" />
   }
 
   const resolved = resolvePanel(registration)
   if (!resolved.ok) {
-    return (
-      <UnboundPanelPlaceholder
-        panelId={resolved.panel_id}
-        descriptorId={registration.descriptor_id}
-      />
-    )
+    return <UnboundPanelPlaceholder panelId={resolved.panel_id} descriptorId={registration.descriptor_id} />
   }
   const Component = resolved.Component
   const scope = extractScope(registration)
@@ -191,355 +219,783 @@ function LegbaPanelComponent(props: IDockviewPanelProps<LegbaPanelParams>) {
     <DockviewPanelApiProvider value={props.api}>
       <PanelErrorBoundary label={registration.id}>
         <PanelTierProvider tier={resolved.definition.tier ?? 'live'}>
-          <Suspense fallback={<PanelLoading />}>
+          <SuspenseBoundary>
             <Component
               registration={registration}
               scope={scope}
               mode={params!.mode}
               initialTab={params?.tab ?? resolved.tab}
             />
-          </Suspense>
+          </SuspenseBoundary>
         </PanelTierProvider>
       </PanelErrorBoundary>
     </DockviewPanelApiProvider>
   )
 }
 
-function PanelLoading() {
+/**
+ * A region view that is not a panel kind: a mounted view (the forecast
+ * ledger), a slot (a view that does not exist yet) or a view registered with
+ * its own component (`panel-registry/contracts.ts::registerPanel`).
+ */
+function SlotPanel(props: IDockviewPanelProps<{ slot: string; recordId?: string }>) {
+  const mode = currentMode()
   return (
-    <div className="flex items-center justify-center h-full w-full text-slate-500 text-xs">
-      Loading panel…
+    <DockviewPanelApiProvider value={props.api}>
+      <TileQueryRegion>
+        <ViewHost view={props.params.slot} recordId={props.params.recordId} mode={mode} instanceId={props.api.id} pinSurface="tile" />
+      </TileQueryRegion>
+    </DockviewPanelApiProvider>
+  )
+}
+
+/**
+ * The Dockview component map. EXPORTED for the read-telemetry runtime test,
+ * which mounts a real `DockviewReact` with THIS object.
+ */
+export const COMPONENTS = { default: LegbaPanelComponent, slot: SlotPanel }
+
+/**
+ * A region's header actions: SEND TO THE STAGE (the view in front becomes the
+ * stage's), and POP OUT (a floating group over the panels) or DOCK BACK.
+ */
+function RegionActions(props: IDockviewHeaderActionsProps) {
+  const floating = props.api.location.type === 'floating'
+  return (
+    <div className="flex h-full items-center gap-0.5 pr-1">
+      <button
+        type="button"
+        data-testid="region-to-stage"
+        title="Show this on the stage"
+        aria-label="Show this on the stage"
+        onClick={() => {
+          const p = props.group.activePanel
+          if (p) window.dispatchEvent(new CustomEvent('legba:frame-to-stage', { detail: p.id }))
+        }}
+        className="flex h-6 w-6 items-center justify-center rounded-control text-ink-3 hover:bg-surf-3 hover:text-ink-1"
+      >
+        <PanelLeftOpen size={13} aria-hidden />
+      </button>
+      <button
+        type="button"
+        data-testid={floating ? 'region-dock' : 'region-popout'}
+        title={floating ? 'Dock this region back' : 'Pop this region out over the panels'}
+        aria-label={floating ? 'Dock this region back' : 'Pop this region out'}
+        onClick={() => {
+          try {
+            if (floating) {
+              const target = props.containerApi.groups.find((g) => g.api.location.type === 'grid')
+              if (target) props.api.moveTo({ group: target, position: 'center' })
+            } else {
+              props.containerApi.addFloatingGroup(props.group, { width: 640, height: 440 })
+            }
+          } catch {
+            // a refused move leaves the region where it was
+          }
+        }}
+        className="flex h-6 w-6 items-center justify-center rounded-control text-ink-3 hover:bg-surf-3 hover:text-ink-1"
+      >
+        {floating ? <PanelTop size={13} aria-hidden /> : <ExternalLink size={13} aria-hidden />}
+      </button>
     </div>
   )
 }
 
-interface LegbaPanelParams {
-  registration: PanelRegistration | null
-  singletonKind?: PanelKind
-  mode: ReturnType<typeof currentMode>
-  /** Tab a tabbed survivor opens on (set when a retired kind was aliased here). */
-  tab?: string
+/** Every opener resolves retired ids through the alias table. */
+function addSingleton(
+  api: DockviewApi,
+  requestedKind: PanelKind,
+  mode: Mode,
+  position?: ViewPosition,
+  tab?: string,
+  opts: { seeded?: boolean; inactive?: boolean } = {},
+): IDockviewPanel | undefined {
+  const alias = resolveKind(requestedKind)
+  const kind = alias?.kind ?? requestedKind
+  const def = PANEL_REGISTRY[kind]?.definition
+  if (!def) return undefined
+  if (def.modes.length > 0 && !def.modes.includes(mode)) return undefined
+  const existing = api.getPanel(kind)
+  if (existing) {
+    existing.api.setActive()
+    const wantTab = tab ?? alias?.tab
+    if (wantTab) requestPanelTab(kind, wantTab)
+    return existing
+  }
+  if (position && !api.getPanel(position.referencePanel)) position = undefined
+  return api.addPanel({
+    id: kind,
+    component: 'default',
+    title: contractOf(kind)?.name ?? def.defaultTitle,
+    params: {
+      registration: null,
+      singletonKind: kind,
+      mode,
+      tab: tab ?? alias?.tab,
+      ...(opts.seeded ? {} : { [TRANSIENT_PARAM]: true }),
+    } satisfies LegbaPanelParams,
+    ...(opts.inactive ? { inactive: true } : {}),
+    ...(position ? { position: { referencePanel: position.referencePanel, direction: position.direction } } : {}),
+  })
+}
+
+/** The title a non-kind view carries (a slot, the forecast ledger, a registered view). */
+function frameTitle(view: string): string {
+  if (isSlotId(view) || isMountedViewId(view)) return frameViewTitle(view)
+  return contractOf(view)?.name ?? view
+}
+
+/** A slot, a mounted view, or a registered frame view, in the dock. */
+function addSlot(
+  api: DockviewApi,
+  view: string,
+  position?: ViewPosition,
+  inactive?: boolean,
+  opts: { seeded?: boolean; recordId?: string } = {},
+) {
+  const id = opts.recordId ? `${view}:${opts.recordId}` : view
+  const existing = api.getPanel(id)
+  if (existing) return existing
+  if (position && !api.getPanel(position.referencePanel)) position = undefined
+  return api.addPanel({
+    id,
+    component: 'slot',
+    title: frameTitle(view),
+    params: { slot: view, ...(opts.recordId ? { recordId: opts.recordId } : {}), ...(opts.seeded ? {} : { [TRANSIENT_PARAM]: true }) },
+    ...(inactive ? { inactive: true } : {}),
+    ...(position ? { position: { referencePanel: position.referencePanel, direction: position.direction } } : {}),
+  })
+}
+
+/** A bound read (`<kind>:<record>`) against a synthesized registration. */
+function addBound(
+  api: DockviewApi,
+  kind: PanelKind,
+  recordId: string,
+  mode: Mode,
+  axis: 'target' | 'analyst',
+  position: ViewPosition | undefined,
+  tab?: string,
+): IDockviewPanel | undefined {
+  const alias = resolveKind(kind)
+  if (alias) kind = alias.kind
+  const wantTab = tab ?? alias?.tab
+  const def = PANEL_REGISTRY[kind]?.definition
+  if (!def) return undefined
+  if (def.modes.length > 0 && !def.modes.includes(mode)) return undefined
+  const id = `${kind}:${recordId}`
+  const existing = api.getPanel(id)
+  if (existing) {
+    existing.api.setActive()
+    if (wantTab) requestPanelTab(id, wantTab)
+    return existing
+  }
+  const registration = boundRegistration(kind, recordId, mode, axis)!
+  return api.addPanel({
+    id,
+    component: 'default',
+    title: registration.title,
+    params: {
+      registration,
+      mode,
+      [TRANSIENT_PARAM]: true,
+      ...(wantTab ? { tab: wantTab } : {}),
+    } satisfies LegbaPanelParams,
+    ...(position ? { position: { referencePanel: position.referencePanel, direction: position.direction } } : {}),
+  })
+}
+
+function readLastSubject(): string | null {
+  try {
+    return localStorage.getItem(LAST_SUBJECT_KEY)
+  } catch {
+    return null
+  }
+}
+
+/** The stage entry a page opens on. */
+function defaultStageEntry(def: SurfaceDef): StageEntry {
+  return { view: def.stage, title: contractOf(def.stage)?.name ?? frameTitle(def.stage), origin: 'page' }
+}
+
+/** The viewport's width, live. */
+function useViewportWidth(): number {
+  const [w, setW] = useState(() => (typeof window === 'undefined' ? 1680 : window.innerWidth || 1680))
+  useEffect(() => {
+    const on = () => setW(window.innerWidth || 1680)
+    window.addEventListener('resize', on)
+    return () => window.removeEventListener('resize', on)
+  }, [])
+  return w
+}
+
+/** An element's height, live. */
+function useHeight<T extends HTMLElement>(): [(el: T | null) => void, number] {
+  const [el, setEl] = useState<T | null>(null)
+  const [h, setH] = useState(0)
+  useLayoutEffect(() => {
+    if (!el) return
+    setH(el.getBoundingClientRect().height)
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => setH(el.getBoundingClientRect().height))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [el])
+  return [setEl, h]
 }
 
 /**
- * The Dockview component map. EXPORTED for the read-telemetry runtime test
- * (`lib/readTelemetryRuntime.test.tsx`), which mounts a real `DockviewReact`
- * with THIS object rather than a stand-in — so if the panel-open chokepoint
- * ever stops being `LegbaPanelComponent`, the test follows the change instead
- * of quietly passing against a copy. Same reason `ANCHOR_KINDS` is exported.
+ * The FRAME SNAPSHOT an undo or a case's Restore puts back: the panel side's
+ * Dockview arrangement (its own keys, so a reader of `panels` / `grid` sees
+ * the dock as before) plus the page, the stage and the chat.
  */
-export const COMPONENTS = { default: LegbaPanelComponent }
-
-/**
- * Anchor-panel tab (item 5): renders the title WITHOUT a close button, so a
- * pinned panel can't be closed out of the workspace. RETAINED but currently
- * UNUSED — see {@link ANCHOR_KINDS}. Any future kind added to that set picks
- * this tab up again with no other change.
- */
-function AnchorTab(props: IDockviewPanelHeaderProps) {
-  return (
-    <div
-      className="flex h-full select-none items-center px-3 text-[13px] whitespace-nowrap"
-      title="Anchor panel — always docked"
-      data-testid="anchor-tab"
-    >
-      <span className="truncate">{props.api.title}</span>
-    </div>
-  )
+type FrameSnapshot = Partial<SerializedDockview> & {
+  __frame: 1
+  __surface: SurfaceId
+  __stage: StageState | null
+  __page: PageFrame
 }
 
-const TAB_COMPONENTS = { anchor: AnchorTab }
+function isFrameSnapshot(v: unknown): v is FrameSnapshot {
+  return !!v && typeof v === 'object' && (v as { __frame?: unknown }).__frame === 1
+}
 
-/**
- * Singletons pinned as non-closable anchors (item 5) — opened anywhere (boot
- * seed / sidebar / palette) they use the close-button-less {@link AnchorTab}.
- *
- * EMPTY as of the operator's call 2026-08-04. `system.findings` (Live Feed) and
- * `system.inspector` used to be pinned here; they are now ordinary closable
- * panels. Nothing is stranded by closing them — both still open by default at
- * boot (the seed is unchanged) and reopen from the sidebar or the command
- * palette — so pinning only cost the operator the ability to reclaim the space.
- *
- * The machinery is kept, not deleted: adding a kind back to this set is the
- * whole change needed to pin a future surface.
- */
-export const ANCHOR_KINDS: ReadonlySet<PanelKind> = new Set<PanelKind>([])
-
-/**
- * The Cross-framing deep link.
- *
- * The event name is IMPORTED from `lib/crossFramingLink.ts` — the one authority
- * for it — and re-exported here so the shell's test dispatches the real name
- * rather than a copy that could drift. The kind is a `PanelKind` now that the
- * panel is registered, so a rename fails at `tsc` rather than at runtime.
- */
-export { OPEN_CROSS_FRAMING_EVENT }
-export const CROSS_FRAMING_KIND: PanelKind = 'analysis.cross_framing'
+function dockOf(s: FrameSnapshot): SerializedDockview | null {
+  const { __frame: _f, __surface: _s, __stage: _st, __page: _p, ...dock } = s
+  return dock.grid && dock.panels ? (dock as SerializedDockview) : null
+}
 
 export function App() {
   const mode = currentMode()
   const { registrations, isLoading, isError, error } = useRegistry(mode)
+  // UI-B2: read the subject roster once, so every surface names a subject by
+  // what it DECLARES (lib/deskNames.ts), never by parsing its id.
+  useSubjectIndex()
   const [dockApi, setDockApi] = useState<DockviewApi | null>(null)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
-  const [savedLayout, setSavedLayout] = useState(() => hasCustomLayout(mode))
-  // The active stance (design §2). A shared link can carry it (`#ws=`), so the
-  // initial value is read from the hash and falls back to the landing.
-  // The MISSION the reader is on (wave-P design pass). A mission is a stance
-  // plus its target scope, its temporal window and its map layers
-  // (`lib/missions.ts`), and a link can carry it as `#mission=`.
-  const [mission, setMission] = useState<MissionId | null>(() => {
-    const fromHash = readMissionHash()
-    return fromHash && isMissionId(fromHash) ? fromHash : null
+  const [sheetOpen, setSheetOpen] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+  // The overlay host every `src/ui/` primitive portals into (`ui/portal.tsx`).
+  const [portalHost, setPortalHost] = useState<HTMLElement | null>(null)
+  const prefs = usePreferences()
+  // THE BOOT ADDRESS — a saved view is a link (`lib/address.ts`).
+  const bootAddress = useMemo(
+    () => parseAddress(window.location.hash, window.location.search),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
+  // RA-1: a reader (below contributor) stays on the reader side — the
+  // operator sections are the engine's own panels and the contributors' work
+  // queues, every read of which the registry refuses a reader.
+  const readerOnly = useBelowContributor()
+  const readerOnlyRef = useRef(readerOnly)
+  readerOnlyRef.current = readerOnly
+  const [surface, setSurface] = useState<SurfaceId>(() => {
+    const allowed = (id: SurfaceId | null): SurfaceId | null =>
+      id && readerOnly && findSurface(id)?.side === 'operator' ? LANDING_SURFACE : id
+    const layout = actionOf(bootAddress.actions, 'arrange')?.args.layout
+    const fromWs = typeof layout === 'string' ? resolveSurfaceId(layout) : null
+    if (fromWs) return allowed(fromWs) ?? LANDING_SURFACE
+    const mission = actionOf(bootAddress.actions, 'run_mission')?.args.name
+    const fromMission = typeof mission === 'string' ? resolveSurfaceId(mission) : null
+    return allowed(fromMission) ?? LANDING_SURFACE
   })
-  // What applying it actually did to the scope — including "no desk selected,
-  // so the wall was left as it was". Rendered on the bar; never swallowed.
-  const [missionNote, setMissionNote] = useState<string | null>(null)
-  const [workspace, setWorkspace] = useState<WorkspaceId>(() => {
-    const fromHash = readWorkspaceHash()
-    if (fromHash && isWorkspaceId(fromHash)) return fromHash
-    // `#mission=` alone names a stance: the mission's own. A link that carries
-    // the job does not also have to spell out the arrangement.
-    const m = readMissionHash()
-    if (m && isMissionId(m)) return findMission(m)!.workspace
-    return LANDING_WORKSPACE
-  })
+  const surfaceRef = useRef<SurfaceId>(surface)
+  surfaceRef.current = surface
+  // The views that dress by surface (the map: a globe on the Board, an inset on Subject).
+  useEffect(() => useActiveSurface.getState().setSurface(surface), [surface])
   const seededRef = useRef(false)
-  // The stance whose layout the dock currently holds — read by the unload
-  // autosave and the switcher without re-binding either to React state.
-  const workspaceRef = useRef<WorkspaceId>(workspace)
-  workspaceRef.current = workspace
+  /** True while the shell itself is laying the dock down (closes then are not the reader's). */
+  const layingRef = useRef(false)
+  /** Seeded views the reader closed on the current page. */
+  const closedRef = useRef<Set<string>>(new Set())
+  const def = findSurface(surface)
+  const side = def?.side ?? 'reader'
 
-  // Shareable state — selection AND scope ⇄ URL hash (addressability, no router).
+  // THE FRAME'S OWN STATE — the chat, per page; the rail.
+  const hydrate = useFrame((s) => s.hydrate)
+  useState(() => {
+    hydrate()
+    return null
+  })
+  const pageFrame = useFrame((s) => s.pages[surface]) ?? useFrame.getState().page(surface, def?.chat)
+  const railPref = useFrame((s) => s.railOpen)
+  const vw = useViewportWidth()
+  const grid = frameGrid(vw, railPref ?? undefined)
+  const railOpen = railPref ?? vw >= 1600
+  const rootPx = rootPxFor(vw)
+  const setPage = useCallback(
+    (patch: Partial<PageFrame>) => useFrame.getState().setPage(surfaceRef.current, patch, findSurface(surfaceRef.current)?.chat),
+    [],
+  )
+
+  // Shareable state — selection, scope and window ⇄ the URL hash.
   useShareState()
-
-  // SCOPE ≠ FOCUS (WORKSTATION_V2_FLOW_DESIGN §3). One subscription in the shell
-  // mirrors deliberate DESK selections into the scope store, so "pick a desk →
-  // the feed/map/timeline filter to it" holds no matter which surface the desk
-  // was picked from — and, unlike the `seedDeskFilter` it replaces, survives
-  // every subsequent row click. See `lib/scopeFromReport.installDeskScopeBridge`.
+  // SCOPE ≠ FOCUS: deliberate subject selections are mirrored into the scope.
   useEffect(() => installDeskScopeBridge(), [])
-
-  // READ TELEMETRY (D2e) — the drain hooks. Queued events flush on a timer;
-  // this makes sure the LAST batch of a morning is not the one that gets lost,
-  // via `sendBeacon` on hide/pagehide/unload. Installed once, torn down with
-  // the app. Everything inside fails silent by construction — see
-  // lib/readTelemetry.ts rule 1.
+  // READ TELEMETRY (D2e) — the drain hooks.
   useEffect(() => installReadTelemetryLifecycle(), [])
 
   const onDockReady = useCallback((ev: DockviewReadyEvent) => {
     setDockApi(ev.api)
   }, [])
 
-  // Global Ctrl/Cmd-K toggles the command palette (v2 parity); Ctrl/Cmd+Shift-D
-  // toggles the developer "debug chrome" (item 5 — panel provenance stamp,
-  // status-bar counters, density control), which defaults OFF.
+  // THE REGION BUDGET: a drop that would split off a region past the panel
+  // side's ceiling is refused; joining a region (a tab) and popping out are not.
   useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
-        e.preventDefault()
-        setPaletteOpen((o) => !o)
-        return
-      }
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'd' || e.key === 'D')) {
-        e.preventDefault()
-        toggleDebugMode()
-      }
+    if (!dockApi) return
+    const d = dockApi.onWillShowOverlay((e) => {
+      if (dropWouldExceedRegions(dockApi, e.kind, e.position)) e.preventDefault()
+    })
+    return () => d.dispose()
+  }, [dockApi])
+
+  // A seeded view the READER closes stays closed in the stored arrangement
+  // (and is one ＋ away); any other missing view resets the page.
+  useEffect(() => {
+    if (!dockApi) return
+    const d = dockApi.onDidRemovePanel((p) => {
+      if (layingRef.current) return
+      const sdef = findSurface(surfaceRef.current)
+      if (sdef && surfaceViews(sdef).includes(p.id as ViewId)) closedRef.current.add(p.id)
+    })
+    const a = dockApi.onDidAddPanel((p) => {
+      closedRef.current.delete(p.id)
+    })
+    return () => {
+      d.dispose()
+      a.dispose()
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [dockApi])
 
-  // Enter a workspace (UI_HOLISTIC_DESIGN_2026-08-24 §2 — the stance model).
-  //
-  // A workspace REMEMBERS ITSELF: if this stance has a stored layout for the
-  // active mode we restore that (the operator's own arrangement), otherwise we
-  // seed the curated default and pin its proportions. Nothing here clears
-  // another stance's slot — the caller saves the outgoing layout first (see
-  // `onSwitchWorkspace`), which is what makes a workspace an object you return
-  // to rather than the reset the old `applyPreset` performed.
-  const enterWorkspace = useCallback(
-    (ws: WorkspaceId) => {
-      if (!dockApi) return
-      const def = findWorkspace(ws)
-      if (!def) return
-      seededRef.current = true
-
-      // READ TELEMETRY (D2e) — the stance chokepoint. Boot, Alt+N, the
-      // workspace bar, the `#ws=` deep-link and Alt+Shift+R all land here, so
-      // one emit covers every way a stance can come up.
-      //
-      // The workspace is pushed into the telemetry module FIRST, so every
-      // panel_open the seed walk is about to fire is tagged with the stance it
-      // belongs to rather than the one being left.
-      setTelemetryWorkspace(ws)
-      emitRead('workspace_open', { workspace: ws })
-      // THE HEADLINE METRIC. `brief_read` is emitted exactly here — the
-      // Morning Read landing mounting — because that is the product the
-      // oracle wager is about. "On how many of the last 90 days did the
-      // operator open the morning read at all?" is the number that decides
-      // Option 1 vs the pre-committed Option 2 fallback, and this is the only
-      // line in the app that answers it.
-      if (ws === LANDING_WORKSPACE) emitRead('brief_read', { workspace: ws })
-
-      if (loadWorkspaceLayout(dockApi, ws, mode)) return
-      dockApi.clear()
-      seedWorkspace(def, (kind, position) => addSingleton(dockApi, kind, mode, position))
-      // Default-active tabs (e.g. the World Assessment in front of the
-      // Inspector on Morning Read) and the stance's pinned proportions —
-      // the boot-only extras a generic seed walk doesn't know about.
-      for (const kind of def.active ?? []) dockApi.getPanel(kind)?.api.setActive()
-      sizeWorkspace(dockApi, def)
-    },
-    [dockApi, mode],
+  /** The view opener the seed shares with every open. */
+  const openView = useCallback(
+    (
+      api: DockviewApi,
+      view: ViewId,
+      position: ViewPosition | undefined,
+      opts: { seeded: boolean; inactive?: boolean },
+    ): IDockviewPanel | undefined =>
+      isFrameView(view) || frameViewComponent(view)
+        ? addSlot(api, view, position, opts.inactive, { seeded: opts.seeded })
+        : addSingleton(api, view as PanelKind, mode, position, undefined, opts),
+    [mode],
   )
 
-  // THE LANDING (design §3.1) — first open is the Morning Read workspace,
-  // seeded, in one paint: never a blank dock, never the panel tree, never a
-  // tour. It answers "what happened, what moved, what does it mean?" —
-  //
-  //   +-------------------------------------------------------------------+
-  //   |  AT A GLANCE (signals / findings / situations / sources + deltas)  |
-  //   +-------------------------------------------------------------------+
-  //   |  THE WALL — world at a glance · MOVERS SINCE LAST VISIT ·          |
-  //   |             newest verified · health corner                       |
-  //   +--------------------------------+----------------------------------+
-  //   |  LIVE FEED                     |  WORLD ASSESSMENT | Alerts | Insp |
-  //   |  (verified-first, facets)      +----------------------------------+
-  //   |                                |  WORLD MAP                       |
-  //   +--------------------------------+----------------------------------+
-  //
-  // This supersedes the S7-T2 mission-control boot grid. The one substantive
-  // change to what mounts: the Wall replaces the standalone
-  // `system.wall_movers` tile, because movers-since-last-visit is the Wall's
-  // OWN quadrant and the old grid mounted it a second time beside its parent
-  // (design §1.2) — U-4's "cold boot must answer what changed" acceptance is
-  // kept, by the panel that owns the answer. The exact placement sequence
-  // lives in `lib/workspaces.ts` so it is colocated with, and unit-tested the
-  // same way as, the other five stances.
+  /** How many panel columns the panel side affords right now. */
+  const columnsNow = useCallback((api: DockviewApi) => {
+    const w = api.width || Math.max(0, (window.innerWidth || 1680) - frameGrid(window.innerWidth || 1680).railPx - frameGrid(window.innerWidth || 1680).centrePx)
+    return columnsFor(w, rootPxFor(window.innerWidth || 1680))
+  }, [])
+
+  const seed = useCallback(
+    (api: DockviewApi, sdef: SurfaceDef) => {
+      layingRef.current = true
+      try {
+        const cols = columnsNow(api)
+        seedSurface(api, sdef, (view, position, opts) => openView(api, view, position, opts), cols)
+        requestAnimationFrame(() => sizeSurface(api, sdef, columnsNow(api)))
+      } finally {
+        layingRef.current = false
+      }
+      closedRef.current = new Set()
+    },
+    [openView, columnsNow],
+  )
+
+  /** Lay a page down: its stage on its default; its panels stored when still valid, else default. */
+  const enterSurface = useCallback(
+    (next: SurfaceId) => {
+      if (!dockApi) return
+      const sdef = findSurface(next)
+      if (!sdef) return
+      seededRef.current = true
+      setTelemetryWorkspace(next)
+      emitRead('workspace_open', { workspace: next })
+      if (next === LANDING_SURFACE) emitRead('brief_read', { workspace: next })
+      const st = useFrame.getState().stages[next]
+      if (!st || st.stack.length === 0) useFrame.getState().seedStage(next, defaultStageEntry(sdef))
+      const stored = readSurfaceLayout(next, mode)
+      if (stored.ok) {
+        layingRef.current = true
+        try {
+          dockApi.fromJSON(stored.layout)
+          closedRef.current = new Set(stored.closed)
+          return
+        } catch {
+          resetSurfaceLayout(next, mode)
+          setNotice(`${sdef.label}'s stored arrangement could not be laid out — back to its default`)
+        } finally {
+          layingRef.current = false
+        }
+      } else if (stored.reason !== 'none') {
+        setNotice(stored.note)
+      }
+      seed(dockApi, sdef)
+    },
+    [dockApi, mode, seed],
+  )
+
+  const saveCurrent = useCallback(() => {
+    if (!dockApi || !seededRef.current) return
+    try {
+      saveSurfaceLayout(surfaceRef.current, mode, dockApi.toJSON(), [...closedRef.current])
+    } catch {
+      // a half-torn dock may not serialize; losing one autosave is fine
+    }
+  }, [dockApi, mode])
+
+  /** Go to a page: the outgoing arrangement is stored first (switching never destroys). */
+  const switchSurface = useCallback(
+    (next: SurfaceId) => {
+      if (!dockApi) return
+      if (readerOnlyRef.current && findSurface(next)?.side === 'operator') {
+        // never laid down: its panels would only ask and be refused
+        setNotice(OPERATOR_SIDE_REASON)
+        return
+      }
+      if (next === surfaceRef.current && seededRef.current) return
+      if (seededRef.current) saveCurrent()
+      surfaceRef.current = next
+      useActiveSurface.getState().setSurface(next)
+      setSurface(next)
+      setNotice(null)
+      writeWorkspaceHash(next)
+      writeMissionHash(null)
+      enterSurface(next)
+    },
+    [dockApi, enterSurface, saveCurrent],
+  )
+
+  // THE LANDING — the boot page, restored or seeded, in one paint.
   useEffect(() => {
     if (!dockApi || seededRef.current) return
     if (mode !== 'personal' && mode !== 'cis') {
       seededRef.current = true
       return
     }
-    // A pre-workspace saved layout becomes Morning Read's slot on the very
-    // first boot after this train (design §6.2 rule 1) — copied, never moved,
-    // so the sidebar's Save/Restore keeps its own slot untouched.
-    migrateLegacyLayout(mode)
-    enterWorkspace(workspaceRef.current)
-  }, [dockApi, mode, enterWorkspace])
+    enterSurface(surfaceRef.current)
+    // Consult is open on every page: its open is the landing's, tagged with
+    // the page the reader landed on.
+    emitRead('panel_open', { subjectKind: 'panel', subjectId: CONSULT_KIND })
+    emitRead('consult_open')
+    // A link's window (`#win=`) and a retired `#mission=` apply once, after
+    // the page is down, through the one executor.
+    const extra = bootAddress.actions.filter((a) => a.action === 'timeline' || a.action === 'run_mission')
+    if (extra.length > 0) drive(extra, { origin: 'share-link' })
+  }, [dockApi, mode, enterSurface, bootAddress])
 
-  // SWITCHING NEVER DESTROYS (design §2.5). The outgoing stance is serialized
-  // into its own slot on the way out, so coming back returns the arrangement
-  // you left — the single behavioural bug that made `LAYOUT_PRESETS` unusable
-  // as workspaces was `applyPreset`'s `api.clear()` on the way IN.
-  const onSwitchWorkspace = useCallback(
-    (next: WorkspaceId) => {
-      if (!dockApi || next === workspaceRef.current) return
-      saveWorkspaceLayout(dockApi, workspaceRef.current, mode)
-      workspaceRef.current = next
-      setWorkspace(next)
-      writeWorkspaceHash(next)
-      // A mission describes a stance AND its aperture. Walking off that stance
-      // by tab or Alt+N leaves the mission's name no longer true of the wall,
-      // so it is dropped rather than left advertising a job you are not on.
-      // The scope, the window and the layers it set are NOT rolled back — they
-      // are the reader's posture now, and undoing them would be the surprise.
-      setMission((cur) => {
-        if (cur && findMission(cur)?.workspace !== next) {
-          writeMissionHash(null)
-          setMissionNote(null)
-          return null
-        }
-        return cur
-      })
-      enterWorkspace(next)
-    },
-    [dockApi, mode, enterWorkspace],
-  )
-
-  // CHOOSE A MISSION (wave-P design pass) — the stance, then the three axes a
-  // stance never carried. The stance switch goes through `onSwitchWorkspace` so
-  // "switching never destroys" is not forked: the outgoing arrangement is still
-  // serialized into its own slot first. Then `applyMission` sets the scope (so
-  // the Consult tile it opens comes up already pinned), moves the map's and the
-  // scrubber's window, sets the layers the job claims, and opens the tiles the
-  // stance's seed does not carry.
-  const onChooseMission = useCallback(
-    (id: MissionId, opts: { skipScope?: boolean } = {}) => {
-      if (!dockApi) return
-      const def = findMission(id)
-      if (!def) return
-      onSwitchWorkspace(def.workspace)
-      // Written unconditionally: `onSwitchWorkspace` is a no-op when the reader
-      // is already standing on the mission's stance, and a shared link must
-      // carry the arrangement either way.
-      writeWorkspaceHash(def.workspace)
-      const applied = applyMission(
-        def,
-        (kind, position) =>
-          // Re-anchor rather than hand Dockview a position naming a tile it
-          // never saw — the same rule `seedWorkspace` keeps for a mode-gated
-          // reference panel, which here also covers a saved arrangement the
-          // reader closed the reference out of.
-          addSingleton(
-            dockApi,
-            kind,
-            mode,
-            position && dockApi.getPanel(position.referencePanel) ? position : undefined,
-          ),
-        opts,
-      )
-      setMission(id)
-      setMissionNote(`${def.label} — ${applied.scope.note}`)
-      writeMissionHash(id)
-      // No new telemetry event kind: `enterWorkspace` already emitted
-      // `workspace_open` for the stance this mission mounts, and minting a
-      // vocabulary the rollup does not know would be a silent write of an
-      // event nothing can read back.
-    },
-    [dockApi, mode, onSwitchWorkspace],
-  )
-
-  // The `#mission=` deep-link, applied ONCE after the boot seed. It runs in its
-  // own effect (rather than inside the seed effect) because `onChooseMission`
-  // is declared below that effect and would be in its temporal dead zone.
-  //
-  // SCOPE IS SUPPRESSED when the link also carries `#scope=`: `useShareState`
-  // restored that address a moment ago, the sender chose it deliberately, and a
-  // mission's default aperture must not clear it on the way in.
-  const missionBootRef = useRef(false)
-  useEffect(() => {
-    if (!dockApi || missionBootRef.current) return
-    missionBootRef.current = true
-    const id = readMissionHash()
-    if (!id || !isMissionId(id)) return
-    onChooseMission(id, { skipScope: useScope.getState().scope != null })
-  }, [dockApi, onChooseMission])
-
-  // Discard this stance's saved layout and re-seed its curated default —
-  // the design's "Reset this workspace" (Alt+Shift+R). Scoped to ONE stance:
-  // every other slot, and the sidebar's Save/Restore layout, are untouched.
-  const onResetWorkspace = useCallback(() => {
+  // Reset: discard this page's stored arrangement and frame, lay its default down.
+  const onReset = useCallback(() => {
     if (!dockApi) return
-    resetWorkspaceLayout(workspaceRef.current, mode)
-    enterWorkspace(workspaceRef.current)
-  }, [dockApi, mode, enterWorkspace])
+    resetSurfaceLayout(surfaceRef.current, mode)
+    useFrame.getState().resetPage(surfaceRef.current)
+    const sdef = findSurface(surfaceRef.current)
+    if (sdef) {
+      useFrame.getState().seedStage(sdef.id, defaultStageEntry(sdef))
+      seed(dockApi, sdef)
+    }
+    setNotice(`${sdef?.label ?? 'This page'} is back to its default`)
+  }, [dockApi, mode, seed])
 
-  // Alt+1…6 switch, Alt+` cycles, Alt+Shift+R resets (design §3.2 / §7 Q3 —
-  // Ctrl+digit collides with browser tab switching on Windows/Linux and ⌘digit
-  // on macOS; Alt+digit is free in both and preventDefault-able).
+  // A saved view is a link: the address bar already holds it; copy it.
+  const onCopyLink = useCallback(() => {
+    writeWorkspaceHash(surfaceRef.current)
+    const href = window.location.href
+    const done = (ok: boolean) =>
+      setNotice(ok ? 'Link to this view copied' : 'The address bar holds the link to this view')
+    try {
+      if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(href).then(
+          () => done(true),
+          () => done(false),
+        )
+      } else done(false)
+    } catch {
+      done(false)
+    }
+  }, [])
+
+  // Persist the live arrangement on unload, and on every layout change (a
+  // drag of a splitter is remembered without waiting for a page switch).
+  useEffect(() => {
+    if (!dockApi) return
+    window.addEventListener('beforeunload', saveCurrent)
+    let t: ReturnType<typeof setTimeout> | null = null
+    const d = dockApi.onDidLayoutChange(() => {
+      if (layingRef.current || !seededRef.current) return
+      if (t) clearTimeout(t)
+      t = setTimeout(saveCurrent, 300)
+    })
+    return () => {
+      window.removeEventListener('beforeunload', saveCurrent)
+      d.dispose()
+      if (t) clearTimeout(t)
+    }
+  }, [dockApi, saveCurrent])
+
+  useEffect(() => {
+    if (!isLoading) setLastRefresh(new Date())
+  }, [isLoading, registrations])
+
+  // THE RECORD SHEET follows the selection: a record selected by the reader
+  // opens it; a subject is the POINT (not a record), and a record Consult or
+  // the stage put on the stage is read there, not in the sheet.
+  useEffect(() => {
+    // A link that names a record (`#rec=`) is opened by the sheet's own
+    // effect, which runs BEFORE this one (a child's effects run first): its
+    // selection landed before this subscription existed and was never seen,
+    // so a shared Record link opened nothing (roll 87, found behind the live
+    // walk's Board-row fallback). Open the sheet for it here.
+    if (useSelection.getState().selection?.origin === 'link') setSheetOpen(true)
+    return useSelection.subscribe((s, prev) => {
+      if (s.selection === prev.selection || !s.selection) return
+      if (s.selection.kind === 'target') {
+        try {
+          localStorage.setItem(LAST_SUBJECT_KEY, s.selection.id)
+        } catch {
+          // per-viewer convenience
+        }
+        return
+      }
+      if (s.selection.origin === 'stage' || s.selection.origin === 'case') return
+      setSheetOpen(true)
+    })
+  }, [])
+
+  // SUBJECT NEVER OPENS EMPTY (brief §2): standing on Subject with no subject
+  // in view, the last one the reader looked at becomes the point.
+  useEffect(() => {
+    if (surface !== 'subject') return
+    const sel = useSelection.getState().selection
+    const scope = useScope.getState().scope
+    if (sel?.kind === 'target' || scope?.kind === 'target') return
+    const last = readLastSubject()
+    if (last) useSelection.getState().select({ kind: 'target', id: last, origin: 'shell' })
+  }, [surface])
+
+  // ── THE ONE OPENER ─────────────────────────────────────────────────────
+  /** Where an instance is on screen: `stage`, a dock id, or null. */
+  const findOpen = useCallback(
+    (id: string): string | null => {
+      const cur = currentStage(useFrame.getState().stages[surfaceRef.current])
+      if (cur && (stageInstanceId(cur) === id || (!cur.recordId && cur.view === id))) return 'stage'
+      if (!dockApi) return null
+      if (dockApi.getPanel(id)) return id
+      const bound = dockApi.panels.find((p) => viewIdOf(p.id) === id && p.id !== id)
+      return bound ? bound.id : null
+    },
+    [dockApi],
+  )
+
+  const caseOrigin = () => (isCasePlaying(useCasePlayer.getState().player) ? 'case' : 'operator')
+
+  /**
+   * Open a view where it belongs: an instance already on screen comes to the
+   * front (on its tab); a page-sized view lands on the stage (with a crumb
+   * back); anything else lands in its home region, replacing that region's
+   * previous opened view. Returns the panel / true when shown.
+   */
+  const openViewAt = useCallback(
+    (
+      requested: string,
+      opts: { place?: 'stage' | 'panel'; recordId?: string; axis?: 'target' | 'analyst'; tab?: string; origin?: string } = {},
+    ): unknown => {
+      if (!dockApi) return undefined
+      const alias = resolveKind(requested)
+      const view = (alias?.kind ?? requested) as string
+      const tab = opts.tab ?? alias?.tab
+      if (view === CONSULT_KIND) {
+        const pf = useFrame.getState().page(surfaceRef.current, findSurface(surfaceRef.current)?.chat)
+        if (pf.collapsed) setPage({ collapsed: false })
+        return true
+      }
+      if (view === INSPECTOR_KIND && opts.place !== 'stage') {
+        setSheetOpen(true)
+        return true
+      }
+      const kindDef = PANEL_REGISTRY[view as PanelKind]?.definition
+      const frameView = isFrameView(view) || !!frameViewComponent(view)
+      if (!kindDef && !frameView) return undefined
+      if (kindDef && kindDef.modes.length > 0 && !kindDef.modes.includes(mode)) return undefined
+      const instance = opts.recordId ? `${view}:${opts.recordId}` : view
+      const home = homeOf(view, surfaceRef.current)
+      // RA-1: an operator view never opens for a reader (on any page): its
+      // reads are the engine's and the registry refuses them a reader.
+      if (readerOnlyRef.current && findSurface(home.surface)?.side === 'operator') {
+        setNotice(OPERATOR_SIDE_REASON)
+        return undefined
+      }
+      if (home.surface !== surfaceRef.current) switchSurface(home.surface)
+      const here = surfaceRef.current
+      const sdef = findSurface(here)!
+      const origin = opts.origin ?? caseOrigin()
+
+      // Already on screen: bring it forward, on the asked tab.
+      const live = opts.place ? null : findOpen(instance)
+      if (live === 'stage') {
+        if (tab) requestPanelTab(instance, tab)
+        return true
+      }
+      if (live) {
+        const p = dockApi.getPanel(live)
+        p?.api.setActive()
+        if (tab) requestPanelTab(live, tab)
+        return p
+      }
+      const toStage = opts.place ? opts.place === 'stage' : home.place === 'stage'
+      if (toStage) {
+        const title = opts.recordId
+          ? kindDef
+            ? boundTileTitle(view as PanelKind, kindDef.defaultTitle, opts.recordId, opts.axis ?? 'target')
+            : `${frameTitle(view)} · ${opts.recordId}`
+          : (contractOf(view)?.name ?? frameTitle(view))
+        // The same view somewhere in the dock leaves it (one place per view).
+        const docked = dockApi.getPanel(instance)
+        if (docked) docked.api.close()
+        // A crumb already in the trail is gone back to (and asked for its tab);
+        // a new one mounts on its tab.
+        const known = (useFrame.getState().stages[here]?.stack ?? []).some((e) => stageInstanceId(e) === instance)
+        useFrame.getState().pushStage(here, {
+          view,
+          recordId: opts.recordId,
+          axis: opts.axis,
+          tab,
+          title,
+          origin,
+        })
+        if (tab && known) requestPanelTab(instance, tab)
+        return true
+      }
+      const region: RegionId = home.place === 'stage' ? sdef.openRegion : home.place
+      const add = (position: ViewPosition | undefined) =>
+        opts.recordId && kindDef
+          ? addBound(dockApi, view as PanelKind, opts.recordId, mode, opts.axis ?? 'target', position, tab)
+          : frameView
+            ? addSlot(dockApi, view, position, false, { recordId: opts.recordId })
+            : addSingleton(dockApi, view as PanelKind, mode, position, tab, { seeded: home.seeded })
+      // The stage's current entry is this view: it leaves the stage.
+      const st = useFrame.getState().stages[here]
+      const cur = currentStage(st)
+      if (cur && stageInstanceId(cur) === instance && st && st.index > 0) useFrame.getState().goStage(here, st.index - 1)
+      return openInRegion(dockApi, sdef, region, add, instance)
+    },
+    [dockApi, mode, switchSurface, findOpen, setPage],
+  )
+
+  // A region's "show on the stage" button.
+  useEffect(() => {
+    const on = (e: Event) => {
+      const id = String((e as CustomEvent).detail ?? '')
+      if (!id || !dockApi) return
+      const p = dockApi.getPanel(id)
+      const params = (p?.params ?? {}) as { slot?: string; recordId?: string; registration?: PanelRegistration | null; singletonKind?: string }
+      const view = params.slot ?? params.singletonKind ?? params.registration?.layout_slot ?? viewIdOf(id)
+      const recordId = params.recordId ?? (params.registration ? params.registration.descriptor_id : undefined)
+      const axis = params.registration?.descriptor_family === 'analyst' ? 'analyst' : 'target'
+      pushViewUndo(`show ${p?.title ?? view} on the stage`)
+      openViewAt(view, { place: 'stage', recordId, axis, origin: 'operator' })
+    }
+    window.addEventListener('legba:frame-to-stage', on)
+    return () => window.removeEventListener('legba:frame-to-stage', on)
+  }, [dockApi, openViewAt])
+
+  // ── THE SNAPSHOT (undo, a case's Restore) ─────────────────────────────
+  const snapshot = useCallback((): FrameSnapshot => {
+    let dock: SerializedDockview | null = null
+    try {
+      dock = dockApi ? dockApi.toJSON() : null
+    } catch {
+      dock = null
+    }
+    const s = surfaceRef.current
+    const st = useFrame.getState().stages[s]
+    return {
+      ...(dock ?? {}),
+      __frame: 1,
+      __surface: s,
+      __stage: st ? { stack: st.stack.slice(), index: st.index } : null,
+      __page: { ...useFrame.getState().page(s, findSurface(s)?.chat) },
+    }
+  }, [dockApi])
+
+  const restore = useCallback(
+    (snap: FrameSnapshot) => {
+      if (!dockApi) return
+      const target = snap.__surface
+      if (target !== surfaceRef.current && findSurface(target)) {
+        surfaceRef.current = target
+        setSurface(target)
+        writeWorkspaceHash(target)
+        enterSurface(target)
+      }
+      if (snap.__stage) useFrame.getState().setStage(target, snap.__stage)
+      useFrame.getState().setPage(target, snap.__page, findSurface(target)?.chat)
+      const dock = dockOf(snap)
+      if (!dock) return
+      try {
+        const rewrite = rewriteSerializedLayout(dock)
+        if (layoutCensus(rewrite.layout).regions <= MAX_REGIONS) {
+          layingRef.current = true
+          dockApi.fromJSON(rewrite.layout)
+        }
+      } catch {
+        // a layout Dockview refuses leaves the panels as they are
+      } finally {
+        layingRef.current = false
+      }
+    },
+    [dockApi, enterSurface],
+  )
+
+  // Keys: Ctrl/Cmd-K the palette, Ctrl/Cmd-I the Record sheet, Ctrl/Cmd+Shift-D
+  // debug chrome, Ctrl/Cmd-Z undo a view change (outside a text box), Escape
+  // closes the sheet.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault()
+        setPaletteOpen((o) => !o)
+        return
+      }
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && (e.key === 'i' || e.key === 'I')) {
+        e.preventDefault()
+        setSheetOpen((o) => !o)
+        return
+      }
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'd' || e.key === 'D')) {
+        e.preventDefault()
+        toggleDebugMode()
+        return
+      }
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+        const t = e.target as HTMLElement | null
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+        const label = undoView()
+        if (label) {
+          e.preventDefault()
+          setNotice(`Undone: ${label}`)
+        }
+        return
+      }
+      if (e.key === 'Escape' && !paletteOpen) setSheetOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [paletteOpen])
+
+  // Alt+1…8 switch pages (1–4 reader, 5–8 operator), Alt+` cycles within the
+  // side, Alt+Shift+R resets; Alt+←/→ walk the focus trail, Alt+Shift+←/→ the
+  // scope trail.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (!e.altKey || e.ctrlKey || e.metaKey) return
       if (e.shiftKey) {
         if (e.key === 'R' || e.key === 'r') {
           e.preventDefault()
-          onResetWorkspace()
+          onReset()
         }
-        // Alt+Shift+← / → walk the SCOPE trail — "what the wall was about
-        // before this", a coarser and much shorter history than the focus one.
         if (e.key === 'ArrowLeft') {
           e.preventDefault()
           useScope.getState().back()
@@ -552,13 +1008,12 @@ export function App() {
       }
       if (e.key === '`') {
         e.preventDefault()
-        const i = WORKSPACES.findIndex((w) => w.id === workspaceRef.current)
-        onSwitchWorkspace(WORKSPACES[(i + 1) % WORKSPACES.length].id)
+        const sd = findSurface(surfaceRef.current)?.side ?? 'reader'
+        const list = SURFACES.filter((s) => s.side === sd)
+        const i = list.findIndex((s) => s.id === surfaceRef.current)
+        drive(goToSurface(list[(i + 1) % list.length].id))
         return
       }
-      // Alt+← / Alt+→ walk the FOCUS trail (design §3 enabler 3). The store
-      // shipped `back()` only, with one consumer inside the Inspector; the
-      // drill trail is navigation, so it gets a binding in the shell.
       if (e.key === 'ArrowLeft') {
         e.preventDefault()
         useSelection.getState().back()
@@ -571,414 +1026,435 @@ export function App() {
       }
       const digit = Number(e.key)
       if (!Number.isInteger(digit)) return
-      const target = WORKSPACES.find((w) => w.index === digit)
+      const target = SURFACES.find((s) => s.key === digit)
       if (!target) return
       e.preventDefault()
-      onSwitchWorkspace(target.id)
+      drive(goToSurface(target.id))
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onSwitchWorkspace, onResetWorkspace])
+  }, [onReset])
 
-  // A stance that only persisted on SWITCH would lose a reload's worth of
-  // arranging, so the live layout is also serialized on unload. Reset is the
-  // escape hatch when an arrangement goes wrong.
+  // THE ONE EXECUTOR'S SHELL PORT. Every drive action reaches the frame
+  // through exactly these calls (`lib/applyAction.ts`).
   useEffect(() => {
     if (!dockApi) return
-    function persist() {
-      if (dockApi) saveWorkspaceLayout(dockApi, workspaceRef.current, mode)
-    }
-    window.addEventListener('beforeunload', persist)
-    return () => window.removeEventListener('beforeunload', persist)
-  }, [dockApi, mode])
+    return registerShell({
+      mode,
+      openSingleton: (kind, tab) => openViewAt(kind, { tab }),
+      openBound: (kind, recordId, axis, tab) => {
+        seededRef.current = true
+        return openViewAt(kind, { recordId, axis, tab })
+      },
+      showRecord: (ref) => {
+        useFrame.getState().pushStage(surfaceRef.current, {
+          view: INSPECTOR_KIND,
+          record: { kind: ref.kind, id: ref.id, label: ref.label },
+          title: ref.label ?? (ref.kind === 'target' ? humanizeId(ref.id) : `${ref.kind} record`),
+          origin: 'case',
+        })
+      },
+      switchStance: (id) => {
+        const s = resolveSurfaceId(id)
+        if (s) switchSurface(s)
+      },
+      applyPreset: (id) => {
+        const s = legacyPresetSurface(id)
+        if (s) switchSurface(s)
+        if (id === 'focus') setSheetOpen(true)
+      },
+      runMission: (id) => {
+        const m = legacyMission(id)
+        const s = resolveSurfaceId(id)
+        if (s) switchSurface(s)
+        if (m) useWorldState.getState().setSpan(m.timeWindow.spanMs)
+      },
+      // Consult is in the frame; an arrangement never takes it away. A case
+      // that moves the view keeps the conversation (and its STOP) on screen.
+      reopenConsult: () => {
+        const pf = useFrame.getState().page(surfaceRef.current, findSurface(surfaceRef.current)?.chat)
+        if (pf.collapsed) setPage({ collapsed: false })
+      },
+      currentStance: () => surfaceRef.current,
+      serializeLayout: () => snapshot(),
+      // Undo of a case (D2): back onto the page it started from, with the
+      // panels, stage and chat it had — without storing the case's arrangement.
+      restoreLayout: (stance, layout) => {
+        if (isFrameSnapshot(layout)) {
+          restore(layout)
+          return
+        }
+        const s = stance ? resolveSurfaceId(stance) : null
+        if (s && s !== surfaceRef.current) {
+          surfaceRef.current = s
+          setSurface(s)
+          writeWorkspaceHash(s)
+          enterSurface(s)
+        }
+        if (!layout) return
+        try {
+          const rewrite = rewriteSerializedLayout(layout as SerializedDockview)
+          if (!rewrite.empty && layoutCensus(rewrite.layout).regions <= MAX_REGIONS) dockApi.fromJSON(rewrite.layout)
+        } catch {
+          // a layout Dockview refuses leaves the page as the case left it
+        }
+      },
+    })
+  }, [dockApi, mode, switchSurface, enterSurface, openViewAt, snapshot, restore, setPage])
 
+  // THE FRAME PORT — the panel contract's router and the on-screen report.
   useEffect(() => {
-    if (!isLoading) setLastRefresh(new Date())
-  }, [isLoading, registrations])
+    if (!dockApi) return
+    return registerFramePort({
+      surface: () => surfaceRef.current,
+      openView: (viewId, o) => !!openViewAt(viewId, o),
+      closeView: (instanceId) => {
+        const st = useFrame.getState().stages[surfaceRef.current]
+        const cur = currentStage(st)
+        if (cur && stageInstanceId(cur) === instanceId) {
+          // Off the stage = back one crumb; the page's own read never closes.
+          if (!st || st.index === 0) return false
+          useFrame.getState().goStage(surfaceRef.current, st.index - 1)
+          return true
+        }
+        const p = dockApi.getPanel(instanceId)
+        if (!p) return false
+        p.api.close()
+        return true
+      },
+      focusView: (instanceId) => {
+        const cur = currentStage(useFrame.getState().stages[surfaceRef.current])
+        if (cur && stageInstanceId(cur) === instanceId) return true
+        const p = dockApi.getPanel(instanceId)
+        if (!p) return false
+        p.api.setActive()
+        return true
+      },
+      // The instance id where it is on screen: the stage's, or the dock's.
+      findOpen: (id) => {
+        const where = findOpen(id)
+        if (where !== 'stage') return where
+        const cur = currentStage(useFrame.getState().stages[surfaceRef.current])
+        return cur ? stageInstanceId(cur) : null
+      },
+      views: () => {
+        const out: ViewOnScreen[] = []
+        const cur = currentStage(useFrame.getState().stages[surfaceRef.current])
+        if (cur) out.push({ id: stageInstanceId(cur), at: 'stage', front: true })
+        const groups = [...dockApi.groups]
+          .filter((g) => g.api.location.type === 'grid')
+          .sort((a, b) => {
+            const ra = a.element.getBoundingClientRect()
+            const rb = b.element.getBoundingClientRect()
+            return ra.left - rb.left || ra.top - rb.top
+          })
+        groups.forEach((g, i) => {
+          for (const p of g.panels) out.push({ id: p.id, at: `p${i + 1}`, front: g.activePanel?.id === p.id })
+        })
+        return out
+      },
+      chat: () => {
+        const pf = useFrame.getState().page(surfaceRef.current, findSurface(surfaceRef.current)?.chat)
+        return { placement: pf.placement, collapsed: pf.collapsed }
+      },
+      snapshot: () => snapshot(),
+      restore: (s) => {
+        if (isFrameSnapshot(s)) restore(s)
+      },
+    })
+  }, [dockApi, openViewAt, findOpen, snapshot, restore])
 
-  const onOpenPanel = useCallback(
-    (requestedKind: PanelKind, registration: PanelRegistration | null) => {
-      if (!dockApi) return
-      // Retired kinds resolve onto their survivor + tab before anything is
-      // opened, so a ⌘K deep-link or an event bridge minted before a merge
-      // train still lands on a real surface (design §4.4 call site 2).
-      const alias = resolveKind(requestedKind)
-      const kind = alias?.kind ?? requestedKind
-      if (!PANEL_REGISTRY[kind]) return
-      const scope = registration ? extractScope(registration) : {}
-      const id = registration ? instanceId(kind, scope) : kind
-      const existing = dockApi.getPanel(id)
-      if (existing) {
-        // Dockview 4.x: DockviewApi.setActivePanel was removed — use
-        // the panel's own api.setActive() instead.
-        existing.api.setActive()
-        return
+  // THE SHELL COMMAND FAMILY (`lib/commands.ts`) — operator-only, never recorded.
+  useEffect(() => {
+    const densities: Density[] = ['tight', 'cozy', 'comfortable']
+    return registerShellCommands({
+      'view.reset': onReset,
+      'view.link': onCopyLink,
+      'palette.search': () => setPaletteOpen(true),
+      'tile.close': () => {
+        const active = dockApi?.activePanel
+        if (active) active.api.close()
+      },
+      'density.cycle': () =>
+        prefs.setDensity(densities[(densities.indexOf(prefs.density) + 1) % densities.length]),
+    })
+  }, [dockApi, onReset, onCopyLink, prefs])
+
+  // `#case=<session>:<turn>` — replay a recorded case on boot.
+  const caseBootRef = useRef(false)
+  useEffect(() => {
+    if (!dockApi || caseBootRef.current || !bootAddress.case) return
+    caseBootRef.current = true
+    void openCaseAddress(bootAddress.case).then((r) => {
+      if (!r.ok) setNotice(`case link — ${r.reason}`)
+    })
+  }, [dockApi, bootAddress])
+
+  // ── THE CENTRE'S GEOMETRY ─────────────────────────────────────────────
+  const [centreRef, centreH] = useHeight<HTMLDivElement>()
+  const centreBox = useRef<HTMLDivElement | null>(null)
+  const sideBox = useRef<HTMLDivElement | null>(null)
+  const [dragShare, setDragShare] = useState<number | null>(null)
+  const [dragCentre, setDragCentre] = useState<number | null>(null)
+  const [dragSide, setDragSide] = useState<number | null>(null)
+  const placement: ChatPlacement = pageFrame.placement
+  const collapsed = pageFrame.collapsed && placement === 'bottom'
+  const askBarPx = ASK_BAR_REM * rootPx
+  const sideColPx = (dragSide ?? pageFrame.sideRem) * rootPx
+  const minPanelsPx = Math.min(PANEL_COLUMN_MIN_REM, 20) * rootPx
+  const roomForCentre = vw - grid.railPx - (placement === 'left' || placement === 'right' ? sideColPx : 0) - minPanelsPx
+  const centreWanted = (dragCentre ?? pageFrame.centreRem ?? grid.centrePx / rootPx) * rootPx
+  const centrePx = Math.round(Math.max(24 * rootPx, Math.min(centreWanted, roomForCentre)))
+  const share = dragShare ?? pageFrame.share
+  const chatPx = collapsed
+    ? askBarPx
+    : Math.round(Math.min(CHAT_MAX_SHARE * (centreH || 800), Math.max(askBarPx, share * (centreH || 800))))
+
+  const onDividerMove = useCallback(
+    (clientY: number) => {
+      const el = centreBox.current
+      if (!el) return
+      const r = el.getBoundingClientRect()
+      if (r.height <= 0) return
+      const px = r.bottom - clientY
+      setDragShare(Math.min(CHAT_MAX_SHARE, Math.max(0, px / r.height)))
+    },
+    [],
+  )
+  const onDividerEnd = useCallback(() => {
+    setDragShare((s) => {
+      if (s == null) return null
+      const h = centreBox.current?.getBoundingClientRect().height ?? 800
+      if (s * h <= askBarPx + 12) setPage({ collapsed: true })
+      else setPage({ collapsed: false, share: s })
+      return null
+    })
+  }, [askBarPx, setPage])
+  const onDividerKey = useCallback(
+    (step: number) => {
+      if (step === -Infinity) return setPage({ collapsed: false, share: CHAT_MAX_SHARE })
+      if (step === Infinity) return setPage({ collapsed: true })
+      const s = collapsed ? askBarPx / (centreH || 800) : pageFrame.share
+      setPage({ collapsed: false, share: Math.min(CHAT_MAX_SHARE, Math.max(askBarPx / (centreH || 800), s - step * 0.04)) })
+    },
+    [setPage, collapsed, askBarPx, centreH, pageFrame.share],
+  )
+  const onCentreEdgeMove = useCallback(
+    (clientX: number) => {
+      const el = centreBox.current
+      if (!el) return
+      const left = el.getBoundingClientRect().left
+      setDragCentre(Math.max(24, (clientX - left) / rootPx))
+    },
+    [rootPx],
+  )
+  const onCentreEdgeEnd = useCallback(() => {
+    setDragCentre((c) => {
+      if (c != null) setPage({ centreRem: Math.round(Math.min(c, roomForCentre / rootPx) * 10) / 10 })
+      return null
+    })
+  }, [setPage, roomForCentre, rootPx])
+  const onSideMove = useCallback(
+    (clientX: number) => {
+      const el = sideBox.current
+      if (!el) return
+      const r = el.getBoundingClientRect()
+      const px = placement === 'left' ? clientX - r.left : r.right - clientX
+      setDragSide(Math.min(80, Math.max(20, px / rootPx)))
+    },
+    [placement, rootPx],
+  )
+  const onSideEnd = useCallback(() => {
+    setDragSide((s) => {
+      if (s != null) setPage({ sideRem: Math.round(s * 10) / 10 })
+      return null
+    })
+  }, [setPage])
+
+  // The dock re-lays its columns when the centre changes size.
+  useEffect(() => {
+    if (!dockApi) return
+    const id = requestAnimationFrame(() => {
+      try {
+        const el = sideBox.current?.parentElement?.querySelector('[data-testid="panel-side"]') as HTMLElement | null
+        const r = el?.getBoundingClientRect()
+        if (r && r.width > 0) dockApi.layout(r.width, r.height)
+      } catch {
+        // layout is best-effort
       }
-      const def = PANEL_REGISTRY[kind].definition
-      const title = registration?.title ?? def.defaultTitle
-      dockApi.addPanel({
-        id,
-        component: 'default',
-        title,
-        params: {
-          registration,
-          singletonKind: registration ? undefined : kind,
-          mode,
-          tab: alias?.tab,
-        } satisfies LegbaPanelParams,
-      })
+    })
+    return () => cancelAnimationFrame(id)
+  }, [dockApi, centrePx, placement, sideColPx, railOpen, vw])
+
+  const moveChat = useCallback(
+    (p: ChatPlacement) => {
+      pushViewUndo('move Consult')
+      setPage({ placement: p, collapsed: false })
     },
-    [dockApi, mode],
+    [setPage],
   )
+  const collapseChat = useCallback((c: boolean) => setPage({ collapsed: c }), [setPage])
 
-  // #90 Wave C — bridge the optimizer "view prompt-module diff" link to the
-  // panel opener. Optimizer.tsx parks the candidate id in a durable window slot
-  // AND fires `legba:open-optimizer-diff`; we open/focus the singleton diff
-  // panel here so a first click works even when the panel isn't mounted yet
-  // (the panel drains the parked slot on mount). Without this bridge the event
-  // is lost when no listener exists yet — the original "doesn't open" bug.
-  useEffect(() => {
-    function onOpenDiff() {
-      onOpenPanel('system.optimizer.diff', null)
-    }
-    window.addEventListener('legba:open-optimizer-diff', onOpenDiff)
-    return () => window.removeEventListener('legba:open-optimizer-diff', onOpenDiff)
-  }, [onOpenPanel])
-
-  // The same bridge for Cross-framing. `lib/crossFramingLink.ts` parks the
-  // claim on `window` as a replayable slot AND fires this event; the slot serves
-  // the first-open case (a `CustomEvent` with no listener is lost) and this
-  // listener materialises the tile so that first click actually opens it, with
-  // the panel draining the parked subject on mount. The event name is the
-  // module's own export and the kind is a registered `PanelKind`, so neither
-  // can drift from the panel silently.
-  useEffect(() => {
-    function onOpenCrossFraming() {
-      onOpenPanel(CROSS_FRAMING_KIND, null)
-    }
-    window.addEventListener(OPEN_CROSS_FRAMING_EVENT, onOpenCrossFraming)
-    return () => window.removeEventListener(OPEN_CROSS_FRAMING_EVENT, onOpenCrossFraming)
-  }, [onOpenPanel])
-
-  // P-A — the Target Overview's "read as page" opens the desk brief page BOUND
-  // to that desk. Same bridge shape as the optimizer diff above, and the same
-  // reason: a panel cannot mount a sibling panel, and the shell must not have
-  // to know which panels carry which cross-links. `addBound` mints the
-  // synthetic per-target registration, so the tile dedupes with a sidebar or
-  // palette open of the same kind on the same desk.
-  useEffect(() => {
-    function onOpenDeskBrief(e: Event) {
-      if (!dockApi) return
-      const targetId = (e as CustomEvent<{ targetId?: string }>).detail?.targetId
-      if (!targetId) return
-      addBound(dockApi, 'target.desk_brief_page', targetId, mode)
-    }
-    window.addEventListener('legba:open-desk-brief', onOpenDeskBrief)
-    return () => window.removeEventListener('legba:open-desk-brief', onOpenDeskBrief)
-  }, [dockApi, mode])
-
-  // Apply a named layout preset — clears the workspace and re-seeds it
-  // through the same singleton opener the boot grid uses, so preset panels
-  // are gated by mode identically and indistinguishable from hand-opened
-  // ones. After seeding, the boot effect must not re-run.
-  const onApplyPreset = useCallback(
-    (presetId: string) => {
-      if (!dockApi) return
-      const preset = findPreset(presetId)
-      if (!preset) return
-      seededRef.current = true
-      applyPreset(dockApi, preset, (kind, position) => addSingleton(dockApi, kind, mode, position))
-    },
-    [dockApi, mode],
-  )
-
-  // Open the target-scoped analysis grid (Overview/Map/Findings/Timeline) for a
-  // chosen target. Surfaces the binding-scoped analysis panels that no preset or
-  // boot grid reaches today (the Map et al.). See lib/investigateLayout.ts.
-  const onInvestigateTarget = useCallback(
-    (targetId: string) => {
-      if (!dockApi) return
-      seededRef.current = true
-      applyInvestigateLayout(dockApi, targetId, (kind, position) =>
-        addBound(dockApi, kind, targetId, mode, position),
-      )
-      // Move 6: the Inspector is a first-class right rail while investigating —
-      // dock it right of the Findings anchor and pin it to ~35% so detail/drill
-      // gets real estate (not a corner tab).
-      const inspector = addSingleton(dockApi, 'system.inspector', mode, {
-        referencePanel: `target.findings:${targetId}` as PanelKind,
-        direction: 'right',
-      })
-      sizeInspectorRail(dockApi, inspector)
-    },
-    [dockApi, mode],
-  )
-
-  // Analyst analogue of onInvestigateTarget (redesign Move 3b — closes P-B2):
-  // open the per-analyst grid (Outputs/Runs/Critiques/Cross-target) bound to a
-  // chosen analyst. Same addBound machinery, keyed on analyst_id.
-  const onInvestigateAnalyst = useCallback(
-    (analystId: string) => {
-      if (!dockApi) return
-      seededRef.current = true
-      applyInvestigateAnalystLayout(dockApi, analystId, (kind, position) =>
-        addBound(dockApi, kind, analystId, mode, position, 'analyst'),
-      )
-      // Move 6: dock the Inspector as the ~35% right rail (mirror of the target
-      // investigate grid) so analyst-output detail/drill gets the room.
-      const inspector = addSingleton(dockApi, 'system.inspector', mode, {
-        referencePanel: `analyst.outputs:${analystId}` as PanelKind,
-        direction: 'right',
-      })
-      sizeInspectorRail(dockApi, inspector)
-    },
-    [dockApi, mode],
-  )
-
-  // Palette: open a record's bound primary panel (target→Findings, analyst→
-  // Outputs). Sources have no binding-scoped panel, so the palette routes them
-  // through onSelectRecord instead (handled in CommandPalette).
-  const onOpenBoundRecord = useCallback(
-    (kind: PanelKind, recordKind: PaletteRecord['recordKind'], id: string) => {
-      if (!dockApi) return
-      if (recordKind === 'source') {
-        // No source-bound analysis panel; drop the source into the Inspector.
-        useSelection.getState().select({ kind: 'source', id, origin: 'palette' })
-        return
-      }
-      addBound(dockApi, kind, id, mode, undefined, recordKind === 'analyst' ? 'analyst' : 'target')
-    },
-    [dockApi, mode],
-  )
-
-  // Palette: select a record into the unified store → the Inspector renders it.
-  const onSelectRecord = useCallback((recordKind: SelectionKind, id: string, label: string) => {
-    useSelection.getState().select({ kind: recordKind, id, label, origin: 'palette' })
+  const undoTop = useViewUndo((s) => s.stack[s.stack.length - 1]?.label ?? null)
+  const onUndo = useCallback(() => {
+    const label = undoView()
+    if (label) setNotice(`Undone: ${label}`)
   }, [])
 
-  // Save the live (hand-dragged) layout for this mode to localStorage.
-  const onSaveLayout = useCallback(() => {
-    if (!dockApi) return
-    saveCustomLayout(dockApi, mode)
-    setSavedLayout(true)
-  }, [dockApi, mode])
-
-  // Restore the previously-saved layout for this mode, if any.
-  const onRestoreLayout = useCallback(() => {
-    if (!dockApi) return
-    seededRef.current = true
-    loadCustomLayout(dockApi, mode)
-  }, [dockApi, mode])
-
-  const visibleRegistrations = useMemo(() => {
-    return registrations.filter((r) => !r.retired)
-  }, [registrations])
-
   const errorText = isError ? `registry load failed: ${error?.message ?? 'unknown'}` : null
+  const dock = (
+    <QueryRegion id="consult" active>
+      <ConsultDock mode={mode} placement={placement} collapsed={pageFrame.collapsed} onCollapse={collapseChat} onMove={moveChat} />
+    </QueryRegion>
+  )
 
   return (
-    <div className="h-full w-full flex flex-col bg-surf-base">
-      <div className="flex-1 flex min-h-0">
-        <Sidebar
-          registrations={visibleRegistrations}
-          onOpen={onOpenPanel}
-          onApplyPreset={onApplyPreset}
+    <PortalContainerProvider container={portalHost}>
+      <div
+        className="h-full w-full flex flex-col bg-surf-base"
+        data-testid="frame"
+        data-surface={surface}
+        data-side={side}
+        data-chat={placement}
+        style={
+          {
+            '--rail-open': `${15}rem`,
+            '--rail-shut': `${3}rem`,
+          } as React.CSSProperties
+        }
+      >
+        <SurfaceBar
+          mode={mode}
+          active={surface}
+          onSwitch={(id) => drive(goToSurface(id))}
+          onReset={onReset}
+          onCopyLink={onCopyLink}
           onOpenPalette={() => setPaletteOpen(true)}
-          onSaveLayout={onSaveLayout}
-          onRestoreLayout={onRestoreLayout}
-          canRestoreLayout={savedLayout}
+          onUndo={onUndo}
+          undoLabel={undoTop}
+          notice={notice}
         />
-        {/* The workspace column: the stance bar over the dock. The sidebar to
-            its left is unchanged — the bar is additive chrome, not a re-shell. */}
-        <main className="flex-1 min-w-0 flex flex-col">
-          <WorkspaceBar
-            active={workspace}
-            onSwitch={onSwitchWorkspace}
-            onReset={onResetWorkspace}
-            activeMission={mission}
-            missionNote={missionNote}
-            onChooseMission={onChooseMission}
-          />
-          <div className="min-h-0 flex-1">
-            <DockviewReact
-              components={COMPONENTS}
-              tabComponents={TAB_COMPONENTS}
-              onReady={onDockReady}
-              className="dockview-theme-abyss h-full"
+        <div className="flex-1 flex min-h-0">
+          {/* U-5: a folded rail reads nothing */}
+          <QueryRegion id="rail" active={railOpen}>
+            <FrameRail
+              mode={mode}
+              side={side}
+              open={railOpen}
+              onToggle={(o) => useFrame.getState().setRail(o)}
+              pageLabel={def?.label ?? ''}
+              onOpenPalette={() => setPaletteOpen(true)}
             />
+          </QueryRegion>
+          <main className="relative flex-1 min-w-0 flex" data-testid="surface-main">
+            {placement === 'left' && (
+              <>
+                <div ref={sideBox} className="h-full min-h-0 shrink-0" style={{ width: sideColPx }} data-testid="consult-side-left">
+                  {dock}
+                </div>
+                <Splitter orientation="vertical" label="Consult's width" testId="consult-side-splitter" onMove={onSideMove} onEnd={onSideEnd} />
+              </>
+            )}
+            <div
+              ref={(el) => {
+                centreBox.current = el
+                centreRef(el)
+              }}
+              className="flex h-full min-h-0 shrink-0 flex-col"
+              style={{ width: centrePx }}
+              data-testid="centre"
+            >
+              {placement !== 'full' && (
+                <div className="min-h-0 flex-1" data-testid="stage-slot">
+                  {/* U-5: the stage is always shown while it is mounted */}
+                  <QueryRegion id="stage" active>
+                    <Stage surface={surface} mode={mode} />
+                  </QueryRegion>
+                </div>
+              )}
+              {placement === 'full' && (
+                <button
+                  type="button"
+                  onClick={() => moveChat('bottom')}
+                  className="h-7 shrink-0 border-b border-line bg-surf-1 px-3 text-left text-label text-ink-3 hover:text-ink-1"
+                  data-testid="stage-peek"
+                  title="Show the stage again, with Consult under it"
+                >
+                  ▴ {currentStage(useFrame.getState().stages[surface])?.title ?? 'The stage'} — show the stage
+                </button>
+              )}
+              {placement === 'bottom' && (
+                <Splitter
+                  orientation="horizontal"
+                  label="Divide the stage and Consult"
+                  testId="chat-divider"
+                  value={Math.round((chatPx / (centreH || 800)) * 100)}
+                  onMove={onDividerMove}
+                  onEnd={onDividerEnd}
+                  onKeyStep={onDividerKey}
+                />
+              )}
+              {(placement === 'bottom' || placement === 'full') && (
+                <div
+                  className="min-h-0 shrink-0"
+                  style={placement === 'full' ? { flex: '1 1 0' } : { height: chatPx }}
+                  data-testid="chat-slot"
+                >
+                  {dock}
+                </div>
+              )}
+            </div>
+            <Splitter
+              orientation="vertical"
+              label="Width of the centre"
+              testId="centre-edge"
+              onMove={onCentreEdgeMove}
+              onEnd={onCentreEdgeEnd}
+            />
+            <div className="relative min-h-0 min-w-0 flex-1" data-testid="panel-side">
+              <DockviewReact
+                components={COMPONENTS}
+                rightHeaderActionsComponent={RegionActions}
+                onReady={onDockReady}
+                theme={legbaDark}
+                className="h-full"
+              />
+            </div>
+            {placement === 'right' && (
+              <>
+                <Splitter orientation="vertical" label="Consult's width" testId="consult-side-splitter" onMove={onSideMove} onEnd={onSideEnd} />
+                <div ref={sideBox} className="h-full min-h-0 shrink-0" style={{ width: sideColPx }} data-testid="consult-side-right">
+                  {dock}
+                </div>
+              </>
+            )}
+            <RecordSheet open={sheetOpen} mode={mode} onClose={() => setSheetOpen(false)} />
+            <div
+              ref={setPortalHost}
+              data-ui-portal-host=""
+              data-testid="ui-portal-host"
+              className="legba-portal-host"
+            />
+          </main>
+        </div>
+        {side === 'reader' && (
+          <div data-testid="time-band" className="shrink-0">
+            <TimeScrubber />
           </div>
-        </main>
+        )}
+        <StatusBar
+          mode={mode}
+          authenticated={getToken() != null}
+          lastRefresh={lastRefresh}
+          errorText={errorText}
+          onOpenExport={() => drive(openPanel('system.report_export'))}
+          onOpenPanel={(kind) => drive(openPanel(kind))}
+        />
+        {/* U-5: the palette stays mounted while closed; its reads wait for it to open */}
+        <QueryRegion id="palette" active={paletteOpen}>
+          <CommandPalette open={paletteOpen} mode={mode} side={side} onClose={() => setPaletteOpen(false)} />
+        </QueryRegion>
       </div>
-      <StatusBar
-        mode={mode}
-        authenticated={getToken() != null}
-        lastRefresh={lastRefresh}
-        errorText={errorText}
-        onOpenExport={() => onOpenPanel('system.report_export', null)}
-        onOpenPanel={(kind) => onOpenPanel(kind, null)}
-      />
-      <CommandPalette
-        open={paletteOpen}
-        mode={mode}
-        onClose={() => setPaletteOpen(false)}
-        onOpen={onOpenPanel}
-        onOpenBound={onOpenBoundRecord}
-        onSelectRecord={onSelectRecord}
-        onApplyPreset={onApplyPreset}
-        onSwitchWorkspace={onSwitchWorkspace}
-        onInvestigateTarget={onInvestigateTarget}
-        onInvestigateAnalyst={onInvestigateAnalyst}
-      />
-    </div>
+    </PortalContainerProvider>
   )
-}
-
-function addSingleton(
-  api: DockviewApi,
-  requestedKind: PanelKind,
-  mode: ReturnType<typeof currentMode>,
-  position?: { referencePanel: PanelKind; direction: 'right' | 'left' | 'above' | 'below' | 'within' },
-) {
-  // Same alias resolution as `onOpenPanel` — the sidebar, ⌘K, workspace seeds
-  // and layout presets all reach a panel through one of these two openers, so
-  // resolving in both is resolving everywhere.
-  const alias = resolveKind(requestedKind)
-  const kind = alias?.kind ?? requestedKind
-  const def = PANEL_REGISTRY[kind]?.definition
-  if (!def) return undefined
-  if (def.modes.length > 0 && !def.modes.includes(mode)) return undefined
-  const existing = api.getPanel(kind)
-  if (existing) {
-    // Dockview 4.x: setActivePanel moved to the panel's api.
-    existing.api.setActive()
-    return existing
-  }
-  return api.addPanel({
-    id: kind,
-    component: 'default',
-    title: def.defaultTitle,
-    // Anchor singletons (Live Feed / Inspector) get the close-button-less tab.
-    ...(ANCHOR_KINDS.has(kind) ? { tabComponent: 'anchor' } : {}),
-    params: {
-      registration: null,
-      singletonKind: kind,
-      mode,
-      tab: alias?.tab,
-    } satisfies LegbaPanelParams,
-    // When position is supplied, Dockview splits the workspace relative
-    // to the reference panel; otherwise the new panel joins the active
-    // group as a tab.  The boot seed uses positions to materialise a
-    // proper grid; sidebar opens stay tab-add (default behaviour).
-    ...(position
-      ? {
-          position: {
-            referencePanel: position.referencePanel,
-            direction: position.direction,
-          },
-        }
-      : {}),
-  })
-}
-
-/**
- * Pin a workspace's proportions after its seed (the successor of S7-T2's
- * hardcoded `sizeMissionControl`). Dockview splits ~50/50 by default, so a
- * stance's drawn weights — a thin glance strip, a ~300px Wall band, a ~34%
- * report rail — have to be re-applied once, one frame after seeding.
- *
- * The hints are data on the workspace definition (`lib/workspaces.ts`), not
- * arithmetic in the shell, so a stance's shape is reviewable in one place.
- * Sizing is best-effort: a failed resize must never break the landing.
- */
-function sizeWorkspace(api: DockviewApi, def: WorkspaceDef) {
-  if (!def.sizes || def.sizes.length === 0) return
-  // Defer one frame so Dockview has laid out the groups before we resize.
-  requestAnimationFrame(() => {
-    const width = api.width || 1280
-    for (const hint of def.sizes ?? []) {
-      const panel = api.getPanel(hint.kind)
-      if (!panel) continue
-      try {
-        if (hint.height != null) panel.api.setSize({ height: hint.height })
-        if (hint.widthFraction != null) {
-          panel.api.setSize({ width: Math.round(width * hint.widthFraction) })
-        }
-      } catch {
-        // setSize is best-effort; a failed resize must never break the seed.
-      }
-    }
-  })
-}
-
-/**
- * Pin the Inspector to a ~35% right rail after an Investigate grid seeds — the
- * detail/drill pane the grid brushes into.
- */
-function sizeInspectorRail(api: DockviewApi, inspector?: ReturnType<DockviewApi['addPanel']>) {
-  requestAnimationFrame(() => {
-    const width = api.width || 1280
-    try {
-      inspector?.api.setSize({ width: Math.round(width * 0.35) })
-    } catch {
-      // best-effort
-    }
-  })
-}
-
-/**
- * Open a binding-scoped panel against a synthesized per-record registration.
- *
- * Mirrors `addSingleton` but for `requiresBinding` panels: it mints a
- * `PanelRegistration` carrying the binding (`target_id` or `analyst_id` — the
- * shape the runtime registry would otherwise supply) so the analysis panels
- * render scoped to the record with no backend `ui_panel_registrations` row. The
- * panel id matches `instanceId(kind, scope)` (`<kind>:<record_id>`) so a later
- * sidebar open of the same panel dedups onto this tile.
- *
- * `axis` selects the binding key from the panel kind's category so the same
- * helper drives both the target grid and the analyst grid (Move 3b).
- */
-function addBound(
-  api: DockviewApi,
-  kind: PanelKind,
-  recordId: string,
-  mode: ReturnType<typeof currentMode>,
-  position?: { referencePanel: string; direction: 'right' | 'left' | 'above' | 'below' | 'within' },
-  axis: 'target' | 'analyst' = 'target',
-) {
-  const def = PANEL_REGISTRY[kind]?.definition
-  if (!def) return
-  if (def.modes.length > 0 && !def.modes.includes(mode)) return
-  const id = `${kind}:${recordId}`
-  const existing = api.getPanel(id)
-  if (existing) {
-    existing.api.setActive()
-    return
-  }
-  const binding = axis === 'analyst' ? { analyst_id: recordId } : { target_id: recordId }
-  const registration: PanelRegistration = {
-    id,
-    panel_id: def.panelId,
-    descriptor_id: recordId,
-    descriptor_version: '00000000',
-    descriptor_family: axis,
-    analyst_id: axis === 'analyst' ? recordId : null,
-    title: `${def.defaultTitle} · ${recordId}`,
-    mode,
-    layout_slot: kind,
-    data_query: {},
-    binding,
-    retired: false,
-    created_at: new Date().toISOString(),
-    retired_at: null,
-  }
-  api.addPanel({
-    id,
-    component: 'default',
-    title: registration.title,
-    params: { registration, mode } satisfies LegbaPanelParams,
-    ...(position
-      ? { position: { referencePanel: position.referencePanel, direction: position.direction } }
-      : {}),
-  })
 }

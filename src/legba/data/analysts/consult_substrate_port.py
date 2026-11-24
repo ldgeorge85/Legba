@@ -34,6 +34,11 @@ class SubstrateQueryPort(Protocol):
     that into the next ROUND's tool-result message.  The mapping includes
     a ``"refs"`` list of substrate UUIDs whenever rows were returned so
     the kind can build :attr:`ConsultResponsePayload.cited_substrate_refs`.
+
+    ``known_at`` on the raw readers (lane E0) is the record-time cut only the
+    evaluation harness passes; :mod:`legba.data.raw_reader_known_at` classifies
+    every raw reader. Implementations need not accept it: the dispatcher sends
+    it only when it is set.
     """
 
     async def search_signals(
@@ -42,6 +47,7 @@ class SubstrateQueryPort(Protocol):
         query: str,
         limit: int = 20,
         scope_predicate: str | None = None,
+        known_at: Any = None,
     ) -> dict[str, Any]: ...
 
     async def query_facts(
@@ -52,12 +58,14 @@ class SubstrateQueryPort(Protocol):
         value: str | None = None,
         limit: int = 30,
         as_of: str | None = None,
+        known_at: Any = None,
     ) -> dict[str, Any]: ...
 
     async def inspect_entity(
         self,
         *,
         name: str,
+        known_at: Any = None,
     ) -> dict[str, Any]: ...
 
     async def vector_search(
@@ -65,6 +73,7 @@ class SubstrateQueryPort(Protocol):
         *,
         query: str,
         limit: int = 10,
+        known_at: Any = None,
     ) -> dict[str, Any]: ...
 
     async def search_context(
@@ -85,12 +94,14 @@ class SubstrateQueryPort(Protocol):
         query: str,
         filters: dict[str, Any] | None = None,
         size: int = 10,
+        known_at: Any = None,
     ) -> dict[str, Any]: ...
 
     async def read_document(
         self,
         *,
         doc_id: str,
+        known_at: Any = None,
     ) -> dict[str, Any]: ...
 
     async def query_nexuses(
@@ -172,8 +183,12 @@ class SubstrateQueryPort(Protocol):
         severity: str | None = None,
         since_hours: int | None = None,
         include_superseded: bool = False,
-        limit: int = 20,
+        limit: int | None = None,
         believed_as_of: str | None = None,
+        mode: str | None = None,
+        target_ids: list[str] | None = None,
+        offset: int = 0,
+        known_at: Any = None,
     ) -> dict[str, Any]: ...
 
     async def list_situations(
@@ -193,6 +208,7 @@ class SubstrateQueryPort(Protocol):
         target_id: str | None = None,
         fold_verdicts: str = "as_of",
         limit: int = 20,
+        known_at: Any = None,
     ) -> dict[str, Any]: ...
 
     # V3/P6 — the event surface (spec §6.1). query_events filters the
@@ -213,12 +229,14 @@ class SubstrateQueryPort(Protocol):
         include_origin: list[str] | None = None,
         situation_id: str | None = None,
         limit: int = 20,
+        known_at: Any = None,
     ) -> dict[str, Any]: ...
 
     async def inspect_event(
         self,
         *,
         event_id: str,
+        known_at: Any = None,
     ) -> dict[str, Any]: ...
 
     async def query_predictions(
@@ -237,6 +255,34 @@ class SubstrateQueryPort(Protocol):
         active_only: bool = True,
         silent_only: bool = False,
         silent_hours: int = 48,
+        known_at: Any = None,
+    ) -> dict[str, Any]: ...
+
+    # W11-F141 — the scheduled-events calendar (migration 0240): the
+    # operator-entered register of FUTURE dated things (summits, votes,
+    # deadlines, strikes). window_start/window_end bound the read by overlap
+    # (default now → +14 days); the result's ``coverage`` block makes an
+    # empty answer say "no events held for this window", never a bare empty
+    # list a consult could read as "nothing is scheduled".
+    async def list_scheduled_events(
+        self,
+        *,
+        window_start: str | None = None,
+        window_end: str | None = None,
+        scope: str | None = None,
+        subject_keys: list[str] | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]: ...
+
+    # W11-F162 — the forecast ledger's due-date reader (migrations 0242/0244):
+    # questions due within the horizon, their resolver, every issuer's number,
+    # the newest rule proposal and the judgement it waits on.
+    async def list_due_resolvers(
+        self,
+        *,
+        horizon_days: int = 14,
+        include_closed: bool = False,
+        limit: int = 50,
     ) -> dict[str, Any]: ...
 
     # Journal self-instrument readers (Journal Assessor Wave 1, plan §5). The
@@ -317,6 +363,7 @@ class SubstrateQueryPort(Protocol):
         as_of: Any = None,
         collection_id: str | None = None,
         limit: int = 500,
+        known_at: Any = None,
     ) -> dict[str, Any]: ...
 
     async def series_compare(
@@ -329,11 +376,30 @@ class SubstrateQueryPort(Protocol):
         as_of: Any = None,
         collection_id: str | None = None,
         limit: int = 500,
+        known_at: Any = None,
+    ) -> dict[str, Any]: ...
+
+    # E2 — the LIVE series (`origin_class='live'`, written by a source's
+    # ObservationSink): a separate reader, never the history tools above. No
+    # `series_id` (or no `subject`) lists the live series; with both it reads
+    # one over a bounded valid window, every revision, both timestamps.
+    async def live_series(
+        self,
+        *,
+        series_id: str | None = None,
+        subject: str | None = None,
+        source_id: str | None = None,
+        since: Any = None,
+        until: Any = None,
+        limit: int = 200,
+        known_at: Any = None,
     ) -> dict[str, Any]: ...
 
     # 7g-2 — the provenance census's one read: `origin_class` counts for a
     # bounded list of CITED substrate ids, taken from the rows' own column
     # rather than from which tool returned them.
+    async def series_holdings(self, *, limit: int = 200) -> dict[str, Any]: ...
+
     async def classify_cited_refs(
         self,
         *,

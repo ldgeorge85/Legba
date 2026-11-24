@@ -43,7 +43,9 @@ import { CountryUnitsAssessment } from '@/v4/why/CountryUnitsAssessment'
 import { citationAnchorId, type Citation } from '@/lib/citationsModel'
 import { emitRead } from '@/lib/readTelemetry'
 import { selectRow } from '@/state/selection'
-import type { AssemblyBlock, AssemblySpan } from '@/lib/assemblyModel'
+import { openRecord } from '@/lib/recordSheet'
+import { firstCitedOrdinal } from '@/lib/recordChain'
+import { contestedSentence, type AssemblyBlock, type AssemblySpan } from '@/lib/assemblyModel'
 import { age, asSeverity, plural, score, scrollToAnchor, shortId, utcStamp } from './readFormat'
 
 /**
@@ -75,6 +77,38 @@ export function leadSpan(block: AssemblyBlock): AssemblySpan | null {
     block.spans.find((s) => s.role === 'what_changed') ??
     block.spans[0] ??
     null
+  )
+}
+
+/**
+ * Lane N-D — what the quotation's OWN citations do not bear out. Quote fidelity
+ * says the desk was quoted faithfully; this line says where the desk's
+ * sentence and its cited signals disagree (a number no cited signal states, a
+ * citation about other actors). Visible, never a drop: the quotation stays.
+ */
+export function SpanCheckNote({ block }: { block: AssemblyBlock }) {
+  const c = block.span_checks
+  if (!c || (c.number_unsupported.length === 0 && c.actor_mismatch.length === 0)) return null
+  return (
+    <p
+      className="mt-1.5 text-label leading-relaxed"
+      style={{ color: 'var(--sev-medium)' }}
+      data-testid="read-span-checks"
+    >
+      {c.number_unsupported.length > 0 && (
+        <span data-testid="read-number-unsupported">
+          number_unsupported: {c.number_unsupported.map((n) => `“${n.phrase}”`).join(', ')} — not
+          stated by the signals this sentence cites ({c.number_unsupported[0].markers.join('')})
+        </span>
+      )}
+      {c.number_unsupported.length > 0 && c.actor_mismatch.length > 0 && ' · '}
+      {c.actor_mismatch.length > 0 && (
+        <span data-testid="read-actor-mismatch">
+          actor_mismatch: {c.actor_mismatch.map((a) => `${a.marker} names ${a.names.join('/')}`).join('; ')}
+          {' '}— not the actors this sentence is about ({c.actor_mismatch[0].span_actors.join('/')})
+        </span>
+      )}
+    </p>
   )
 }
 
@@ -167,9 +201,14 @@ export interface RecordBlockProps {
   /** Ordinals in the lead position, if the concentration test earned one. */
   lead: boolean
   refused: boolean
+  /**
+   * W4 F-3 — the record's floor grain (`assembly.floor.grain`), so a block the
+   * floor KEPT can say which floor kept it. Absent on a record with no floor.
+   */
+  floorGrain?: string | null
 }
 
-export default function RecordBlock({ block, lead, refused }: RecordBlockProps) {
+export default function RecordBlock({ block, lead, refused, floorGrain }: RecordBlockProps) {
   const [open, setOpen] = useState(false)
   const panelId = useId()
   const citations = useMemo(() => blockCitations(block), [block])
@@ -178,6 +217,8 @@ export default function RecordBlock({ block, lead, refused }: RecordBlockProps) 
     () => block.spans.filter((s) => s !== head).map((s) => s.text).join(' '),
     [block.spans, head],
   )
+  // U-10: the lead sentence's own citation — the Record sheet opens on it.
+  const leadCite = useMemo(() => firstCitedOrdinal(head?.text), [head])
   const sev = asSeverity(block.severity)
   const stamp = utcStamp(block.produced_at)
 
@@ -239,7 +280,7 @@ export default function RecordBlock({ block, lead, refused }: RecordBlockProps) 
         )}
         {block.tier === 'periphery' && (
           <span
-            className="text-[0.625rem] uppercase tracking-wide"
+            className="text-label uppercase tracking-wide"
             style={{ color: 'var(--sev-medium)' }}
             title="below the verify floor — carried as periphery, not basis"
             data-testid="read-block-periphery"
@@ -254,7 +295,7 @@ export default function RecordBlock({ block, lead, refused }: RecordBlockProps) 
         <h3 className="read-question" data-testid="read-question">
           {block.question}
           {block.question_source === 'fallback_desk_name' && (
-            <span className="ml-1.5 text-[0.6875rem] text-ink-3" title="no bounded question is declared on this desk's descriptor yet">
+            <span className="ml-1.5 text-label text-ink-3" title="no bounded question is declared on this desk's descriptor yet">
               (desk name — no question declared)
             </span>
           )}
@@ -267,6 +308,19 @@ export default function RecordBlock({ block, lead, refused }: RecordBlockProps) 
             {head && (
               <div className="read-lede report-prose" data-testid="read-lede">
                 <CitedProse text={head.text} citations={citations} onCiteClick={onCite} />
+                {leadCite !== null && (
+                  <button
+                    type="button"
+                    className="ml-1 text-label text-ink-3 underline decoration-dotted underline-offset-2 hover:text-ink-1"
+                    onClick={() =>
+                      openRecord({ kind: 'finding', id: block.finding_id, label: block.question }, { cite: leadCite, origin: 'read' })
+                    }
+                    title="Open the record behind this sentence: its evidence, what was received, and whether it changed"
+                    data-testid="read-record-sentence"
+                  >
+                    why believe this?
+                  </button>
+                )}
               </div>
             )}
             {rest !== '' && (
@@ -274,11 +328,21 @@ export default function RecordBlock({ block, lead, refused }: RecordBlockProps) 
                 <CitedProse text={rest} citations={citations} onCiteClick={onCite} />
               </div>
             )}
+            {(block.contested_facts ?? []).map((f, i) => (
+              <p
+                key={`contested-${i}`}
+                className="mt-1.5 text-xs leading-relaxed text-ink-2"
+                data-testid="read-contested"
+              >
+                {contestedSentence(f)}
+              </p>
+            ))}
             {head && head.scope_tokens.length > 0 && (
-              <p className="mt-1.5 text-[0.6875rem] text-ink-3" data-testid="read-scope">
+              <p className="mt-1.5 text-label text-ink-3" data-testid="read-scope">
                 scope preserved from the source sentence: &ldquo;{head.scope_tokens.join('&rdquo;, &ldquo;')}&rdquo;
               </p>
             )}
+            <SpanCheckNote block={block} />
           </>
         )}
 
@@ -302,6 +366,29 @@ export default function RecordBlock({ block, lead, refused }: RecordBlockProps) 
           </span>
           {block.evidence_age_h !== null && <span aria-hidden>·</span>}
           {block.evidence_age_h !== null && <span>{age(block.evidence_age_h)} old</span>}
+          {block.carried_by_floor && <span aria-hidden>·</span>}
+          {block.carried_by_floor && (
+            <span
+              className="rounded-sm border border-line px-1 text-label"
+              style={block.floor_stale ? { color: 'var(--sev-medium)' } : undefined}
+              title="the order ranked this block below the cut; the floor guarantees one block per group"
+              data-testid="read-block-floor"
+            >
+              kept by the {floorGrain ?? 'selection'} floor · order rank {block.order_rank ?? '—'}
+              {block.floor_stale &&
+                ` · ${age(block.evidence_age_h) ?? 'age not stated'} old — not fresh`}
+            </span>
+          )}
+          {block.carried_by_thread && <span aria-hidden>·</span>}
+          {block.carried_by_thread && (
+            <span
+              className="rounded-sm border border-line px-1 text-label"
+              title="heads in this unit and a carried unit cite the same signal; the shared-thread slot carried it"
+              data-testid="read-block-thread"
+            >
+              carried by the shared-thread slot
+            </span>
+          )}
           <span aria-hidden>·</span>
           <button
             type="button"

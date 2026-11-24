@@ -1,0 +1,140 @@
+# roll 73 (2026-11-13) — SourceDescriptor for the UK Maritime Trade Operations
+# (UKMTO) incident list, published by the Royal Navy's SCCD site. Ships DRAFT
+# (operator-approved for activation on the reference host; LIFECYCLE.md).
+#
+# Endpoint: https://sccd.royalnavy.mod.uk/api/ukmto/all — keyless JSON. Its
+# CDN blocks the HTTP/2 fingerprint, so this source is fetched ONLY over
+# HTTP/1.1 (`fetch.http_version: http1.1`) by the platform's own client. Never
+# probe it with curl or replay cookies.
+#
+# Payload (read 2026-11-13 through the guarded client over HTTP/1.1: 200,
+# application/json, ~65 KB): a ROOT ARRAY of ~60 incident objects, e.g.
+#   incidentNumber (int), sitecoreId (uuid, stable id), utcDateCreated (ISO,
+#   when UKMTO published), utcDateOfIncident (ISO), incidentTypeName
+#   ("Suspicious Activity", "Attack", ...), incidentTypeLevel, region,
+#   place ("Strait of Hormuz"), locationLatitude/Longitude (floats),
+#   vesselName, vesselType, crewHeld, otherDetails (the narrative text).
+# Mapping: id = sitecoreId, body = otherDetails, timestamp = utcDateCreated
+# (publication — a "time-late" report of an older incident is still picked
+# up; the incident date stays in payload.item). Lane N-R (2026-11-13):
+#   * title = title_template "{incidentTypeName}: {place} — {vesselType}"
+#     ("Attack: Strait of Hormuz — Tanker"); a missing or junk field ("." /
+#     "-") drops with its separator; all missing falls back to the type name.
+#   * geometry = the record's own locationLatitude / locationLongitude, place
+#     = `place` (payload.geo.location_name). off_land: no_country — an
+#     incident at sea is filed under NO country (payload.geo.at_sea, tag
+#     at_sea), never under the coastal state a text geocode would guess (the
+#     first poll filed Hormuz under OM and "NE of Al Jubayl" under SA).
+#     `region` ("IO") is NOT a country code and is not read.
+#
+# Geography: deliberately NO declared geo. The json_api handler stamps the
+# declared scope.geo onto every signal when the item carries no ISO code, and
+# the publisher's country (GB) would mis-tag every Hormuz / Red Sea incident.
+#
+# Poll budget: 180 s (handler ceiling 240). Each written signal costs ~9 s —
+# NOT enrichment (the NLP chain measured <0.1 s per item on the first poll)
+# but the fleet-wide tier-1 ingest dedupe scan (data/filters/ingest_dedupe.py
+# _lookup_by_url_hash reads every canonical_url row of the tenant, ~381k on
+# 2026-11-13, per signal). At the generic 30 s budget the 30-day backlog
+# drained four incidents an hour; 180 s drains ~20.
+# Credibility: host royalnavy.mod.uk seeded at 0.90 / gov / state-affiliated
+# (scripts/bringup_register_source_batch_2026_09.py).
+
+identity:
+  id: source.ukmto.incidents
+  name: UKMTO — maritime security incidents (Royal Navy SCCD)
+  kind: json_api
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: roll_73
+  created: "2026-11-13T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [maritime, security, shipping, piracy, incident, gov, gb]
+  source_class: official
+  license_class: open_gov_attribution
+  access_class: public          # free no-auth API
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "57 * * * *"            # hourly (a free minute in the roster)
+  cooldown_seconds: 600
+  jitter_seconds: 60
+
+config:
+  url_template:
+    factory_kind: text
+    raw: "https://sccd.royalnavy.mod.uk/api/ukmto/all"
+  items_path:
+    factory_kind: text
+    raw: ""
+  id_path:
+    factory_kind: text
+    raw: "sitecoreId"
+  title_path:
+    factory_kind: text
+    raw: "incidentTypeName"
+  timestamp_path:
+    factory_kind: text
+    raw: "utcDateCreated"
+  body_path:
+    factory_kind: text
+    raw: "otherDetails"
+  language:
+    factory_kind: text
+    raw: "en"
+  lookback_minutes:
+    factory_kind: number
+    raw: 43200                   # first poll reaches back 30 days
+  max_items_per_pull:
+    factory_kind: number
+    raw: 100
+  poll_budget_seconds:
+    factory_kind: number
+    raw: 180                     # N-R: drain the backlog (see header)
+  title_template:
+    factory_kind: text
+    raw: "{incidentTypeName}: {place} — {vesselType}"
+  geometry:
+    factory_kind: dict
+    value_kind: text
+    raw:
+      lat_path: locationLatitude
+      lon_path: locationLongitude
+      place_path: place
+      off_land: no_country
+
+fetch:
+  http_version: http1.1
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1
+      config: {}
+    - kind: dedupe_tier_2
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

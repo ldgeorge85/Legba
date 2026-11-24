@@ -133,6 +133,8 @@ _GAUGE_ANALYSTS: tuple[str, ...] = (
     "region_composition",
     "country_composition",
     "escalation_composition",
+    # W5 (2026-11-07): the second thematic tier, gauged like the first.
+    "hybrid_threat_composition",
     "world_assessment",
     # P3 LANE A. Post-demotion the gauge can only say something about a tier
     # that still AUTHORS a title, and after D-5 there are exactly two of those.

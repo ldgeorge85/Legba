@@ -1,0 +1,1570 @@
+{
+ "_frozen": "the CATALOG literal of scripts/bringup_register_source_catalog.py at cd60e100 (2026-10-04), before ROSTER-1 moved it to profiles/geopolitics/rosters/source_catalog.yaml - never regenerate this from the YAML",
+ "credibility_rows": [
+  [
+   "gdacs.org",
+   0.9,
+   "EC/UN Global Disaster Alert and Coordination System — authoritative multi-hazard alerts.",
+   "catalog.seed",
+   "gov",
+   true
+  ],
+  [
+   "crisisgroup.org",
+   0.8,
+   "Conflict-prevention NGO; field-researched, methodology published.",
+   "catalog.seed",
+   "thinktank",
+   false
+  ],
+  [
+   "thenewhumanitarian.org",
+   0.75,
+   "Independent humanitarian newsroom (formerly UN IRIN).",
+   "catalog.seed",
+   "wire",
+   false
+  ],
+  [
+   "who.int",
+   0.9,
+   "World Health Organization — authoritative on outbreaks and global health.",
+   "catalog.seed",
+   "gov",
+   true
+  ],
+  [
+   "iaea.org",
+   0.9,
+   "International Atomic Energy Agency — authoritative on nuclear safety/safeguards.",
+   "catalog.seed",
+   "gov",
+   true
+  ],
+  [
+   "cdc.gov",
+   0.9,
+   "US Centers for Disease Control — authoritative public-health agency.",
+   "catalog.seed",
+   "gov",
+   true
+  ],
+  [
+   "hrw.org",
+   0.75,
+   "Advocacy organisation with documented research methodology.",
+   "catalog.seed",
+   "thinktank",
+   false
+  ],
+  [
+   "amnesty.org",
+   0.75,
+   "Advocacy organisation with documented research methodology.",
+   "catalog.seed",
+   "thinktank",
+   false
+  ],
+  [
+   "civicus.org",
+   0.7,
+   "Civic-space tracking alliance; country reports from partner organisations.",
+   "catalog.seed",
+   "thinktank",
+   false
+  ],
+  [
+   "csis.org",
+   0.8,
+   "Center for Strategic and International Studies — established policy research.",
+   "catalog.seed",
+   "thinktank",
+   false
+  ],
+  [
+   "rand.org",
+   0.8,
+   "RAND Corporation — peer-reviewed policy research.",
+   "catalog.seed",
+   "thinktank",
+   false
+  ],
+  [
+   "atlanticcouncil.org",
+   0.75,
+   "Established foreign-policy think tank; declared funders.",
+   "catalog.seed",
+   "thinktank",
+   false
+  ],
+  [
+   "warontherocks.com",
+   0.75,
+   "Practitioner-written defense/strategy analysis; named expert authors.",
+   "catalog.seed",
+   "thinktank",
+   false
+  ],
+  [
+   "bellingcat.com",
+   0.8,
+   "Open-source investigation collective; methods published per piece.",
+   "catalog.seed",
+   "thinktank",
+   false
+  ],
+  [
+   "foreignpolicy.com",
+   0.75,
+   "Established foreign-affairs magazine.",
+   "catalog.seed",
+   "wire",
+   false
+  ],
+  [
+   "foreignaffairs.com",
+   0.8,
+   "Council on Foreign Relations publication.",
+   "catalog.seed",
+   "thinktank",
+   false
+  ],
+  [
+   "defenseone.com",
+   0.75,
+   "GovExec defense trade press; sourced reporting.",
+   "catalog.seed",
+   "wire",
+   false
+  ],
+  [
+   "twz.com",
+   0.7,
+   "Defense/OSINT trade press; imagery-driven reporting.",
+   "catalog.seed",
+   "wire",
+   false
+  ],
+  [
+   "gcaptain.com",
+   0.7,
+   "Maritime-industry trade press.",
+   "catalog.seed",
+   "wire",
+   false
+  ],
+  [
+   "taskandpurpose.com",
+   0.65,
+   "US military-affairs outlet.",
+   "catalog.seed",
+   "wire",
+   false
+  ],
+  [
+   "yna.co.kr",
+   0.8,
+   "South Korea's national news agency (partly state-funded; editorially conventional wire).",
+   "catalog.seed",
+   "wire",
+   true
+  ],
+  [
+   "channelnewsasia.com",
+   0.75,
+   "Mediacorp (Singapore state-owned) regional broadcaster.",
+   "catalog.seed",
+   "wire",
+   true
+  ],
+  [
+   "aa.com.tr",
+   0.45,
+   "Turkish state news agency; documented government editorial influence.",
+   "catalog.seed",
+   "wire",
+   true
+  ],
+  [
+   "tehrantimes.com",
+   0.3,
+   "Iranian state-aligned outlet; treat as official-position signal.",
+   "catalog.seed",
+   "wire",
+   true
+  ],
+  [
+   "tass.com",
+   0.3,
+   "Russian state news agency; conduit for official positions.",
+   "catalog.seed",
+   "wire",
+   true
+  ],
+  [
+   "allafrica.com",
+   0.6,
+   "Aggregates African outlets; credibility varies with the underlying publisher.",
+   "catalog.seed",
+   "aggregator",
+   false
+  ],
+  [
+   "africanews.com",
+   0.7,
+   "Euronews-group pan-African broadcaster.",
+   "catalog.seed",
+   "wire",
+   false
+  ],
+  [
+   "timesofindia.indiatimes.com",
+   0.65,
+   "Major Indian daily; world desk.",
+   "catalog.seed",
+   "wire",
+   false
+  ],
+  [
+   "hindustantimes.com",
+   0.65,
+   "Major Indian daily; world desk.",
+   "catalog.seed",
+   "wire",
+   false
+  ],
+  [
+   "mercopress.com",
+   0.65,
+   "Independent South Atlantic / Mercosur news agency.",
+   "catalog.seed",
+   "wire",
+   false
+  ],
+  [
+   "globalvoices.org",
+   0.65,
+   "Community newsroom curating citizen media; bylined volunteer contributors.",
+   "catalog.seed",
+   "aggregator",
+   false
+  ],
+  [
+   "voanews.com",
+   0.6,
+   "Voice of America — US-government international broadcaster (USAGM); statutory editorial firewall.",
+   "catalog.seed",
+   "wire",
+   true
+  ],
+  [
+   "npr.org",
+   0.9,
+   "US public broadcaster (already in 0014 baseline; row kept for catalog completeness).",
+   "catalog.seed",
+   "wire",
+   false
+  ],
+  [
+   "france24.com",
+   0.7,
+   "France Médias Monde — French state-funded international broadcaster.",
+   "catalog.seed",
+   "wire",
+   true
+  ],
+  [
+   "economist.com",
+   0.9,
+   "Already in 0014 baseline; row kept for catalog completeness.",
+   "catalog.seed",
+   "wire",
+   false
+  ],
+  [
+   "xinhuanet.com",
+   0.35,
+   "Chinese state news agency; conduit for official positions.",
+   "catalog.seed",
+   "wire",
+   true
+  ],
+  [
+   "globaltimes.cn",
+   0.3,
+   "People's Daily-group (CCP-affiliated) outlet; strongly state-aligned.",
+   "catalog.seed",
+   "wire",
+   true
+  ],
+  [
+   "aljazeera.net",
+   0.6,
+   "Qatari state-funded broadcaster; Arabic edition carries stronger editorial slant than AJE.",
+   "catalog.seed",
+   "wire",
+   true
+  ],
+  [
+   "federalreserve.gov",
+   0.9,
+   "US central bank — primary-source monetary policy.",
+   "catalog.seed",
+   "gov",
+   true
+  ],
+  [
+   "eia.gov",
+   0.9,
+   "US Energy Information Administration — primary-source energy statistics.",
+   "catalog.seed",
+   "gov",
+   true
+  ],
+  [
+   "state.gov",
+   0.9,
+   "Official US travel advisories — primary-source policy positions.",
+   "catalog.seed",
+   "gov",
+   true
+  ],
+  [
+   "gov.uk",
+   0.9,
+   "Official UK travel advisories — primary-source policy positions.",
+   "catalog.seed",
+   "gov",
+   true
+  ],
+  [
+   "usgs.gov",
+   0.9,
+   "US Geological Survey — authoritative seismic feed (significant events).",
+   "catalog.seed",
+   "gov",
+   true
+  ],
+  [
+   "weather.gov",
+   0.9,
+   "US National Weather Service — severe/extreme weather alerts only.",
+   "catalog.seed",
+   "gov",
+   true
+  ],
+  [
+   "nasa.gov",
+   0.9,
+   "NASA Earth Observatory Natural Event Tracker.",
+   "catalog.seed",
+   "gov",
+   true
+  ]
+ ],
+ "entries": [
+  {
+   "access_class": "restricted",
+   "cadence_minutes": 60,
+   "cred_host": "gdacs.org",
+   "cred_rationale": "EC/UN Global Disaster Alert and Coordination System — authoritative multi-hazard alerts.",
+   "cred_score": 0.9,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.gdacs.alerts",
+   "kind": "rss",
+   "language": "en",
+   "name": "GDACS — Disaster Alerts",
+   "snapshot": true,
+   "state_affiliation": true,
+   "tags": [
+    "crisis",
+    "humanitarian",
+    "hazard",
+    "alert",
+    "global"
+   ],
+   "tier": "gov",
+   "url": "https://www.gdacs.org/xml/rss.xml"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 360,
+   "cred_host": "crisisgroup.org",
+   "cred_rationale": "Conflict-prevention NGO; field-researched, methodology published.",
+   "cred_score": 0.8,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.crisisgroup.latest",
+   "kind": "rss",
+   "language": "en",
+   "name": "International Crisis Group — Latest",
+   "snapshot": false,
+   "state_affiliation": false,
+   "tags": [
+    "crisis",
+    "conflict",
+    "analysis",
+    "thinktank"
+   ],
+   "tier": "thinktank",
+   "url": "https://www.crisisgroup.org/rss"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 120,
+   "cred_host": "thenewhumanitarian.org",
+   "cred_rationale": "Independent humanitarian newsroom (formerly UN IRIN).",
+   "cred_score": 0.75,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.newhumanitarian.all",
+   "kind": "rss",
+   "language": "en",
+   "name": "The New Humanitarian",
+   "snapshot": false,
+   "state_affiliation": false,
+   "tags": [
+    "crisis",
+    "humanitarian",
+    "news"
+   ],
+   "tier": "wire",
+   "url": "https://www.thenewhumanitarian.org/rss/all.xml"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 360,
+   "cred_host": "who.int",
+   "cred_rationale": "World Health Organization — authoritative on outbreaks and global health.",
+   "cred_score": 0.9,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.who.news",
+   "kind": "rss",
+   "language": "en",
+   "name": "WHO — News",
+   "snapshot": false,
+   "state_affiliation": true,
+   "tags": [
+    "health",
+    "crisis",
+    "gov",
+    "global"
+   ],
+   "tier": "gov",
+   "url": "https://www.who.int/rss-feeds/news-english.xml"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 360,
+   "cred_host": "iaea.org",
+   "cred_rationale": "International Atomic Energy Agency — authoritative on nuclear safety/safeguards.",
+   "cred_score": 0.9,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.iaea.topnews",
+   "kind": "rss",
+   "language": "en",
+   "name": "IAEA — Top News",
+   "snapshot": false,
+   "state_affiliation": true,
+   "tags": [
+    "nuclear",
+    "energy",
+    "gov",
+    "global"
+   ],
+   "tier": "gov",
+   "url": "https://www.iaea.org/feeds/topnews"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 360,
+   "cred_host": "cdc.gov",
+   "cred_rationale": "US Centers for Disease Control — authoritative public-health agency.",
+   "cred_score": 0.9,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.cdc.travel_notices",
+   "kind": "rss",
+   "language": "en",
+   "name": "CDC — Travel Health Notices",
+   "snapshot": false,
+   "state_affiliation": true,
+   "tags": [
+    "health",
+    "travel",
+    "advisory",
+    "gov"
+   ],
+   "tier": "gov",
+   "url": "https://wwwnc.cdc.gov/travel/rss/notices.xml"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 360,
+   "cred_host": "cdc.gov",
+   "cred_rationale": "US Centers for Disease Control — authoritative public-health agency.",
+   "cred_score": 0.9,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [
+    "US"
+   ],
+   "id": "source.cdc.outbreaks_us",
+   "kind": "rss",
+   "language": "en",
+   "name": "CDC — US Outbreaks",
+   "snapshot": false,
+   "state_affiliation": true,
+   "tags": [
+    "health",
+    "outbreak",
+    "gov"
+   ],
+   "tier": "gov",
+   "url": "https://tools.cdc.gov/api/v2/resources/media/285676.rss"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 360,
+   "cred_host": "hrw.org",
+   "cred_rationale": "Advocacy organisation with documented research methodology.",
+   "cred_score": 0.75,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.hrw.news",
+   "kind": "rss",
+   "language": "en",
+   "name": "Human Rights Watch — News",
+   "snapshot": false,
+   "state_affiliation": false,
+   "tags": [
+    "human_rights",
+    "news",
+    "global"
+   ],
+   "tier": "thinktank",
+   "url": "https://www.hrw.org/rss/news"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 360,
+   "cred_host": "amnesty.org",
+   "cred_rationale": "Advocacy organisation with documented research methodology.",
+   "cred_score": 0.75,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.amnesty.latest",
+   "kind": "rss",
+   "language": "en",
+   "name": "Amnesty International — Latest",
+   "snapshot": false,
+   "state_affiliation": false,
+   "tags": [
+    "human_rights",
+    "news",
+    "global"
+   ],
+   "tier": "thinktank",
+   "url": "https://www.amnesty.org/en/latest/feed/"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 360,
+   "cred_host": "civicus.org",
+   "cred_rationale": "Civic-space tracking alliance; country reports from partner organisations.",
+   "cred_score": 0.7,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.civicus.monitor",
+   "kind": "rss",
+   "language": "en",
+   "name": "CIVICUS Monitor",
+   "snapshot": false,
+   "state_affiliation": false,
+   "tags": [
+    "human_rights",
+    "civil_society",
+    "global"
+   ],
+   "tier": "thinktank",
+   "url": "https://monitor.civicus.org/feed/"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 360,
+   "cred_host": "csis.org",
+   "cred_rationale": "Center for Strategic and International Studies — established policy research.",
+   "cred_score": 0.8,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.csis.analysis",
+   "kind": "rss",
+   "language": "en",
+   "name": "CSIS — Analysis",
+   "snapshot": false,
+   "state_affiliation": false,
+   "tags": [
+    "thinktank",
+    "analysis",
+    "geopolitical"
+   ],
+   "tier": "thinktank",
+   "url": "https://www.csis.org/rss.xml"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 360,
+   "cred_host": "rand.org",
+   "cred_rationale": "RAND Corporation — peer-reviewed policy research.",
+   "cred_score": 0.8,
+   "enrich_text": false,
+   "extra_config": {
+    "user_agent": "Mozilla/5.0 (compatible; LegbaBot/2.0; +https://www.rand.org/news/press.xml)"
+   },
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.rand.press",
+   "kind": "rss",
+   "language": "en",
+   "name": "RAND — Press Releases",
+   "snapshot": false,
+   "state_affiliation": false,
+   "tags": [
+    "thinktank",
+    "analysis",
+    "geopolitical"
+   ],
+   "tier": "thinktank",
+   "url": "https://www.rand.org/news/press.xml"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 360,
+   "cred_host": "atlanticcouncil.org",
+   "cred_rationale": "Established foreign-policy think tank; declared funders.",
+   "cred_score": 0.75,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.atlanticcouncil.all",
+   "kind": "rss",
+   "language": "en",
+   "name": "Atlantic Council",
+   "snapshot": false,
+   "state_affiliation": false,
+   "tags": [
+    "thinktank",
+    "analysis",
+    "geopolitical"
+   ],
+   "tier": "thinktank",
+   "url": "https://www.atlanticcouncil.org/feed/"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 360,
+   "cred_host": "warontherocks.com",
+   "cred_rationale": "Practitioner-written defense/strategy analysis; named expert authors.",
+   "cred_score": 0.75,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.warontherocks.all",
+   "kind": "rss",
+   "language": "en",
+   "name": "War on the Rocks",
+   "snapshot": false,
+   "state_affiliation": false,
+   "tags": [
+    "thinktank",
+    "analysis",
+    "defense"
+   ],
+   "tier": "thinktank",
+   "url": "https://warontherocks.com/feed/"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 360,
+   "cred_host": "bellingcat.com",
+   "cred_rationale": "Open-source investigation collective; methods published per piece.",
+   "cred_score": 0.8,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.bellingcat.all",
+   "kind": "rss",
+   "language": "en",
+   "name": "Bellingcat",
+   "snapshot": false,
+   "state_affiliation": false,
+   "tags": [
+    "osint",
+    "analysis",
+    "investigation"
+   ],
+   "tier": "thinktank",
+   "url": "https://www.bellingcat.com/feed/"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 120,
+   "cred_host": "foreignpolicy.com",
+   "cred_rationale": "Established foreign-affairs magazine.",
+   "cred_score": 0.75,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.foreignpolicy.all",
+   "kind": "rss",
+   "language": "en",
+   "name": "Foreign Policy",
+   "snapshot": false,
+   "state_affiliation": false,
+   "tags": [
+    "news",
+    "analysis",
+    "geopolitical"
+   ],
+   "tier": "wire",
+   "url": "https://foreignpolicy.com/feed/"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 360,
+   "cred_host": "foreignaffairs.com",
+   "cred_rationale": "Council on Foreign Relations publication.",
+   "cred_score": 0.8,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.foreignaffairs.all",
+   "kind": "rss",
+   "language": "en",
+   "name": "Foreign Affairs",
+   "snapshot": false,
+   "state_affiliation": false,
+   "tags": [
+    "thinktank",
+    "analysis",
+    "geopolitical"
+   ],
+   "tier": "thinktank",
+   "url": "https://www.foreignaffairs.com/rss.xml"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 120,
+   "cred_host": "defenseone.com",
+   "cred_rationale": "GovExec defense trade press; sourced reporting.",
+   "cred_score": 0.75,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.defenseone.all",
+   "kind": "rss",
+   "language": "en",
+   "name": "Defense One",
+   "snapshot": false,
+   "state_affiliation": false,
+   "tags": [
+    "defense",
+    "news"
+   ],
+   "tier": "wire",
+   "url": "https://www.defenseone.com/rss/all/"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 120,
+   "cred_host": "twz.com",
+   "cred_rationale": "Defense/OSINT trade press; imagery-driven reporting.",
+   "cred_score": 0.7,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.twz.all",
+   "kind": "rss",
+   "language": "en",
+   "name": "The War Zone (TWZ)",
+   "snapshot": false,
+   "state_affiliation": false,
+   "tags": [
+    "defense",
+    "osint",
+    "news"
+   ],
+   "tier": "wire",
+   "url": "https://www.twz.com/feed"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 120,
+   "cred_host": "gcaptain.com",
+   "cred_rationale": "Maritime-industry trade press.",
+   "cred_score": 0.7,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.gcaptain.all",
+   "kind": "rss",
+   "language": "en",
+   "name": "gCaptain — Maritime News",
+   "snapshot": false,
+   "state_affiliation": false,
+   "tags": [
+    "maritime",
+    "defense",
+    "news"
+   ],
+   "tier": "wire",
+   "url": "https://gcaptain.com/feed/"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 360,
+   "cred_host": "taskandpurpose.com",
+   "cred_rationale": "US military-affairs outlet.",
+   "cred_score": 0.65,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [
+    "US"
+   ],
+   "id": "source.taskandpurpose.all",
+   "kind": "rss",
+   "language": "en",
+   "name": "Task & Purpose",
+   "snapshot": false,
+   "state_affiliation": false,
+   "tags": [
+    "defense",
+    "news"
+   ],
+   "tier": "wire",
+   "url": "https://taskandpurpose.com/feed/"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 60,
+   "cred_host": "yna.co.kr",
+   "cred_rationale": "South Korea's national news agency (partly state-funded; editorially conventional wire).",
+   "cred_score": 0.8,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [
+    "KR"
+   ],
+   "id": "source.yonhap.english",
+   "kind": "rss",
+   "language": "en",
+   "name": "Yonhap News — English",
+   "snapshot": false,
+   "state_affiliation": true,
+   "tags": [
+    "news",
+    "wire",
+    "asia"
+   ],
+   "tier": "wire",
+   "url": "https://en.yna.co.kr/RSS/news.xml"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 60,
+   "cred_host": "channelnewsasia.com",
+   "cred_rationale": "Mediacorp (Singapore state-owned) regional broadcaster.",
+   "cred_score": 0.75,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": true,
+   "geo": [
+    "SG"
+   ],
+   "id": "source.cna.all",
+   "kind": "rss",
+   "language": "en",
+   "name": "Channel News Asia",
+   "snapshot": false,
+   "state_affiliation": true,
+   "tags": [
+    "news",
+    "asia"
+   ],
+   "tier": "wire",
+   "url": "https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 60,
+   "cred_host": "aa.com.tr",
+   "cred_rationale": "Turkish state news agency; documented government editorial influence.",
+   "cred_score": 0.45,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [
+    "TR"
+   ],
+   "id": "source.anadolu.english",
+   "kind": "rss",
+   "language": "en",
+   "name": "Anadolu Agency — English",
+   "snapshot": false,
+   "state_affiliation": true,
+   "tags": [
+    "news",
+    "wire",
+    "middle_east"
+   ],
+   "tier": "wire",
+   "url": "https://www.aa.com.tr/en/rss/default?cat=guncel"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 120,
+   "cred_host": "tehrantimes.com",
+   "cred_rationale": "Iranian state-aligned outlet; treat as official-position signal.",
+   "cred_score": 0.3,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [
+    "IR"
+   ],
+   "id": "source.tehrantimes.all",
+   "kind": "rss",
+   "language": "en",
+   "name": "Tehran Times",
+   "snapshot": false,
+   "state_affiliation": true,
+   "tags": [
+    "news",
+    "middle_east"
+   ],
+   "tier": "wire",
+   "url": "https://www.tehrantimes.com/rss"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 60,
+   "cred_host": "tass.com",
+   "cred_rationale": "Russian state news agency; conduit for official positions.",
+   "cred_score": 0.3,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [
+    "RU"
+   ],
+   "id": "source.tass.english",
+   "kind": "rss",
+   "language": "en",
+   "name": "TASS — English",
+   "snapshot": false,
+   "state_affiliation": true,
+   "tags": [
+    "news",
+    "wire",
+    "europe"
+   ],
+   "tier": "wire",
+   "url": "https://tass.com/rss/v2.xml"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 60,
+   "cred_host": "allafrica.com",
+   "cred_rationale": "Aggregates African outlets; credibility varies with the underlying publisher.",
+   "cred_score": 0.6,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.allafrica.headlines",
+   "kind": "rss",
+   "language": "en",
+   "name": "AllAfrica — Latest Headlines",
+   "snapshot": false,
+   "state_affiliation": false,
+   "tags": [
+    "news",
+    "aggregator",
+    "africa"
+   ],
+   "tier": "aggregator",
+   "url": "https://allafrica.com/tools/headlines/rdf/latest/headlines.rdf"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 60,
+   "cred_host": "africanews.com",
+   "cred_rationale": "Euronews-group pan-African broadcaster.",
+   "cred_score": 0.7,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.africanews.all",
+   "kind": "rss",
+   "language": "en",
+   "name": "Africanews",
+   "snapshot": false,
+   "state_affiliation": false,
+   "tags": [
+    "news",
+    "africa"
+   ],
+   "tier": "wire",
+   "url": "https://www.africanews.com/feed/rss"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 60,
+   "cred_host": "timesofindia.indiatimes.com",
+   "cred_rationale": "Major Indian daily; world desk.",
+   "cred_score": 0.65,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.timesofindia.world",
+   "kind": "rss",
+   "language": "en",
+   "name": "Times of India — World",
+   "snapshot": false,
+   "state_affiliation": false,
+   "tags": [
+    "news",
+    "world",
+    "south_asia"
+   ],
+   "tier": "wire",
+   "url": "https://timesofindia.indiatimes.com/rssfeeds/296589292.cms"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 60,
+   "cred_host": "hindustantimes.com",
+   "cred_rationale": "Major Indian daily; world desk.",
+   "cred_score": 0.65,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.hindustantimes.world",
+   "kind": "rss",
+   "language": "en",
+   "name": "Hindustan Times — World",
+   "snapshot": false,
+   "state_affiliation": false,
+   "tags": [
+    "news",
+    "world",
+    "south_asia"
+   ],
+   "tier": "wire",
+   "url": "https://www.hindustantimes.com/feeds/rss/world-news/rssfeed.xml"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 120,
+   "cred_host": "mercopress.com",
+   "cred_rationale": "Independent South Atlantic / Mercosur news agency.",
+   "cred_score": 0.65,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.mercopress.all",
+   "kind": "rss",
+   "language": "en",
+   "name": "MercoPress — South Atlantic News",
+   "snapshot": false,
+   "state_affiliation": false,
+   "tags": [
+    "news",
+    "americas"
+   ],
+   "tier": "wire",
+   "url": "https://en.mercopress.com/rss"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 120,
+   "cred_host": "globalvoices.org",
+   "cred_rationale": "Community newsroom curating citizen media; bylined volunteer contributors.",
+   "cred_score": 0.65,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.globalvoices.all",
+   "kind": "rss",
+   "language": "en",
+   "name": "Global Voices",
+   "snapshot": false,
+   "state_affiliation": false,
+   "tags": [
+    "news",
+    "civil_society",
+    "aggregator",
+    "global"
+   ],
+   "tier": "aggregator",
+   "url": "https://globalvoices.org/feed/"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 60,
+   "cred_host": "voanews.com",
+   "cred_rationale": "Voice of America — US-government international broadcaster (USAGM); statutory editorial firewall.",
+   "cred_score": 0.6,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.voa.africa",
+   "kind": "rss",
+   "language": "en",
+   "name": "VOA — Africa",
+   "snapshot": false,
+   "state_affiliation": true,
+   "tags": [
+    "news",
+    "africa"
+   ],
+   "tier": "wire",
+   "url": "https://www.voanews.com/api/z-botl-vomx-tpertmq"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 60,
+   "cred_host": "npr.org",
+   "cred_rationale": "US public broadcaster (already in 0014 baseline; row kept for catalog completeness).",
+   "cred_score": 0.9,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": true,
+   "geo": [],
+   "id": "source.npr.world",
+   "kind": "rss",
+   "language": "en",
+   "name": "NPR — World",
+   "snapshot": false,
+   "state_affiliation": false,
+   "tags": [
+    "news",
+    "world",
+    "global"
+   ],
+   "tier": "wire",
+   "url": "https://feeds.npr.org/1004/rss.xml"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 60,
+   "cred_host": "france24.com",
+   "cred_rationale": "France Médias Monde — French state-funded international broadcaster.",
+   "cred_score": 0.7,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": true,
+   "geo": [],
+   "id": "source.france24.english",
+   "kind": "rss",
+   "language": "en",
+   "name": "France 24 — English",
+   "snapshot": false,
+   "state_affiliation": true,
+   "tags": [
+    "news",
+    "world",
+    "global"
+   ],
+   "tier": "wire",
+   "url": "https://www.france24.com/en/rss"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 360,
+   "cred_host": "economist.com",
+   "cred_rationale": "Already in 0014 baseline; row kept for catalog completeness.",
+   "cred_score": 0.9,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": true,
+   "geo": [],
+   "id": "source.economist.international",
+   "kind": "rss",
+   "language": "en",
+   "name": "The Economist — International",
+   "snapshot": false,
+   "state_affiliation": false,
+   "tags": [
+    "news",
+    "analysis",
+    "world"
+   ],
+   "tier": "wire",
+   "url": "https://www.economist.com/international/rss.xml"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 60,
+   "cred_host": "xinhuanet.com",
+   "cred_rationale": "Chinese state news agency; conduit for official positions.",
+   "cred_score": 0.35,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.xinhua.world",
+   "kind": "rss",
+   "language": "en",
+   "name": "Xinhua — World (English)",
+   "snapshot": false,
+   "state_affiliation": true,
+   "tags": [
+    "news",
+    "wire",
+    "world",
+    "asia"
+   ],
+   "tier": "wire",
+   "url": "http://www.xinhuanet.com/english/rss/worldrss.xml"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 120,
+   "cred_host": "globaltimes.cn",
+   "cred_rationale": "People's Daily-group (CCP-affiliated) outlet; strongly state-aligned.",
+   "cred_score": 0.3,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [
+    "CN"
+   ],
+   "id": "source.globaltimes.all",
+   "kind": "rss",
+   "language": "en",
+   "name": "Global Times",
+   "snapshot": false,
+   "state_affiliation": true,
+   "tags": [
+    "news",
+    "asia"
+   ],
+   "tier": "wire",
+   "url": "https://www.globaltimes.cn/rss/outbrain.xml"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 60,
+   "cred_host": "aljazeera.net",
+   "cred_rationale": "Qatari state-funded broadcaster; Arabic edition carries stronger editorial slant than AJE.",
+   "cred_score": 0.6,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.aljazeera.arabic",
+   "kind": "rss",
+   "language": "ar",
+   "name": "Al Jazeera — Arabic",
+   "snapshot": false,
+   "state_affiliation": true,
+   "tags": [
+    "news",
+    "world",
+    "middle_east"
+   ],
+   "tier": "wire",
+   "url": "https://www.aljazeera.net/aljazeerarss/a7c186be-1baa-4bd4-9d80-a84db769f779/73d0e1b4-532f-45ef-b135-bfdff8b8cab9"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 360,
+   "cred_host": "federalreserve.gov",
+   "cred_rationale": "US central bank — primary-source monetary policy.",
+   "cred_score": 0.9,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [
+    "US"
+   ],
+   "id": "source.federalreserve.press",
+   "kind": "rss",
+   "language": "en",
+   "name": "US Federal Reserve — Press Releases",
+   "snapshot": false,
+   "state_affiliation": true,
+   "tags": [
+    "gov",
+    "finance",
+    "economic"
+   ],
+   "tier": "gov",
+   "url": "https://www.federalreserve.gov/feeds/press_all.xml"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 360,
+   "cred_host": "eia.gov",
+   "cred_rationale": "US Energy Information Administration — primary-source energy statistics.",
+   "cred_score": 0.9,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [
+    "US"
+   ],
+   "id": "source.eia.press",
+   "kind": "rss",
+   "language": "en",
+   "name": "US EIA — Press Releases",
+   "snapshot": false,
+   "state_affiliation": true,
+   "tags": [
+    "gov",
+    "energy",
+    "economic"
+   ],
+   "tier": "gov",
+   "url": "https://www.eia.gov/rss/press_rss.xml"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 360,
+   "cred_host": "state.gov",
+   "cred_rationale": "Official US travel advisories — primary-source policy positions.",
+   "cred_score": 0.9,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.stategov.travel_advisories",
+   "kind": "rss",
+   "language": "en",
+   "name": "US State Dept — Travel Advisories",
+   "snapshot": false,
+   "state_affiliation": true,
+   "tags": [
+    "gov",
+    "travel",
+    "advisory"
+   ],
+   "tier": "gov",
+   "url": "https://travel.state.gov/_res/rss/TAsTWs.xml"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 360,
+   "cred_host": "gov.uk",
+   "cred_rationale": "Official UK travel advisories — primary-source policy positions.",
+   "cred_score": 0.9,
+   "enrich_text": false,
+   "extra_config": {},
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.fcdo.travel_advice",
+   "kind": "rss",
+   "language": "en",
+   "name": "UK FCDO — Foreign Travel Advice",
+   "snapshot": false,
+   "state_affiliation": true,
+   "tags": [
+    "gov",
+    "travel",
+    "advisory"
+   ],
+   "tier": "gov",
+   "url": "https://www.gov.uk/foreign-travel-advice.atom"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 30,
+   "cred_host": "usgs.gov",
+   "cred_rationale": "US Geological Survey — authoritative seismic feed (significant events).",
+   "cred_score": 0.9,
+   "enrich_text": false,
+   "extra_config": {
+    "feature_id_key": "id",
+    "max_features": 5000
+   },
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.usgs.earthquakes_m45",
+   "kind": "geojson",
+   "language": "en",
+   "name": "USGS — Significant Earthquakes, Past Week (GeoJSON)",
+   "snapshot": false,
+   "state_affiliation": true,
+   "tags": [
+    "gis",
+    "geospatial",
+    "structured",
+    "hazard",
+    "seismic",
+    "global"
+   ],
+   "tier": "gov",
+   "url": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/significant_week.geojson"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 30,
+   "cred_host": "weather.gov",
+   "cred_rationale": "US National Weather Service — severe/extreme weather alerts only.",
+   "cred_score": 0.9,
+   "enrich_text": true,
+   "extra_config": {
+    "feature_id_key": "id",
+    "max_features": 5000
+   },
+   "fact_extract": false,
+   "geo": [
+    "US"
+   ],
+   "id": "source.nws.active_alerts",
+   "kind": "geojson",
+   "language": "en",
+   "name": "US NWS — Severe/Extreme Weather Alerts (GeoJSON)",
+   "snapshot": false,
+   "state_affiliation": true,
+   "tags": [
+    "gis",
+    "geospatial",
+    "structured",
+    "hazard",
+    "weather",
+    "alert",
+    "gov"
+   ],
+   "tier": "gov",
+   "url": "https://api.weather.gov/alerts/active?severity=Severe,Extreme"
+  },
+  {
+   "access_class": "public",
+   "cadence_minutes": 60,
+   "cred_host": "nasa.gov",
+   "cred_rationale": "NASA Earth Observatory Natural Event Tracker.",
+   "cred_score": 0.9,
+   "enrich_text": false,
+   "extra_config": {
+    "feature_id_key": "id",
+    "max_features": 5000
+   },
+   "fact_extract": false,
+   "geo": [],
+   "id": "source.nasa.eonet_events",
+   "kind": "geojson",
+   "language": "en",
+   "name": "NASA EONET — Natural Events (GeoJSON)",
+   "snapshot": false,
+   "state_affiliation": true,
+   "tags": [
+    "gis",
+    "geospatial",
+    "structured",
+    "hazard",
+    "gov",
+    "global"
+   ],
+   "tier": "gov",
+   "url": "https://eonet.gsfc.nasa.gov/api/v3/events/geojson?days=3"
+  }
+ ],
+ "rendered_sha256": {
+  "source.africanews.all": "1a592e12d51ed14414481e832d4676bfa89c06c5f1706c3931dc7919f3e123ef",
+  "source.aljazeera.arabic": "6d96a9b5d98b217154ea993ed16249442c8cfa73bfded95ecc0a5e9e651f57ed",
+  "source.allafrica.headlines": "ead74d78592d1246c2881f2c00c745145b51d0e742c37b5b3dbafa2069a601ec",
+  "source.amnesty.latest": "62ec8f4013dd04a766bf5cf2f81613044e13170d47f5aa0f8591d4cb3525916f",
+  "source.anadolu.english": "236ccf02016891a88001023248922cab87fd682f5210376bfa2951b7baebeba3",
+  "source.atlanticcouncil.all": "30c86ea05918fd0b144e6ccba6ce9db758646d736e793a7123075040a8a933eb",
+  "source.bellingcat.all": "e9403c086f16e4a5a0f0be0662fb495c32a7a3087ed23cb6030f83b5a9071240",
+  "source.cdc.outbreaks_us": "4a060f022949555b8a5c95a94847ff4f0aa269330b1ada79a057bdaeb5d2be88",
+  "source.cdc.travel_notices": "9d11de567fe985d52a07b8b48c0552c1a03e8e6f0caab1786c96fce28856a208",
+  "source.civicus.monitor": "f3db7b0661052a596de230066c527d3e0ed33ff5f9cdc723a706bc6f7279f2cb",
+  "source.cna.all": "c66897316d9a21a40b06be82e27c7f8db5d7b949641b9823b8273a135b83eddb",
+  "source.crisisgroup.latest": "195aa616c53de984b43cf6ea64020dd6eb345568b32598b57e579f31c2be23b1",
+  "source.csis.analysis": "01d3ef113a4c0560ff1f9acbdabbe08b7079739b150993f6362378ef4e91e297",
+  "source.defenseone.all": "03429dcc9b5ba2df9241de1e5cabd6d44d44ba66e6da0b941198f4ba0c7b50e5",
+  "source.economist.international": "3b8756a2554cab55c66a45b9e116831428545b0f9776cedc319e36e52830f06a",
+  "source.eia.press": "f83b39f82c087005c6796e6688c88c2f0b4d35330632d0490cdefde5e3eebb5d",
+  "source.fcdo.travel_advice": "2a40ea595caa0bd44162a2ebadf59bd542698e6b75614f6e96588f035fbf46f9",
+  "source.federalreserve.press": "9eadf1f0f0412c97a957e52e40754ebbe4c3a388c1d20423b130431d733ff0a0",
+  "source.foreignaffairs.all": "d323ba7ead49a9ef79c7d6135cefe47097449f45eb6f9f1e094d868fbf2bfde4",
+  "source.foreignpolicy.all": "ba6293b8e985ad0d3a177ba5d5066f88630695c39ae5979276f49c8b0f721d0a",
+  "source.france24.english": "c06261a4b20756aeb6227c575c23ebb38b3aa591a75bcaebea35905cf735687a",
+  "source.gcaptain.all": "18a3c4122b0f009877d3a4ff68d3619318c2b6b1cb3d332512dfdd46b0859aa2",
+  "source.gdacs.alerts": "a5ec0cc3d59180cf7c829cd48237c2105b4bc68e5a26a32479c9b2a87b7269ca",
+  "source.globaltimes.all": "5888ce125c60a129cee81bb685f47f5608346526387cbd0ff217ca79829a6a5c",
+  "source.globalvoices.all": "78d8f439badb83b52ac2ff0796c4354082592ce09c6467b8ffa03655b6da3d56",
+  "source.hindustantimes.world": "cb40f84d1abe8d890f29400188865c09fd575675980198a8d6f138f04d92ccdf",
+  "source.hrw.news": "1dd8cf02ad8236dc474d00d8f5ba274d20803ec071b14bf44ce5deb5ef6c777b",
+  "source.iaea.topnews": "97e01ff2666f342597707a29d193d8b46e011debcd3a0eadb52b826f5385a3f7",
+  "source.mercopress.all": "4f9a94f44ec52475b557e76d38ebc5b653b2b51c5deb3a393cf43aea70807902",
+  "source.nasa.eonet_events": "2d4fcf98a3d6eed468e92aed59da127dcd28bec1bcca3c9669af6a40ed6658f4",
+  "source.newhumanitarian.all": "e336b75394fd8f19a8186cc3d8d75d5375a386b22345b40ca526cfce60aa9092",
+  "source.npr.world": "8b767e4e437e57ce9f4ef025ccbdddaa1d30937fa3800676fab2316ee447e390",
+  "source.nws.active_alerts": "73e90263cfb3c4c4c0bc8ef667d34e6b62b3a5e76ee82f0825248195a0a81d16",
+  "source.rand.press": "1278c3020ad6007addd838e3f00afd4383c21e41e9a426c5d5ef6b749918c76b",
+  "source.stategov.travel_advisories": "83db0cd583761614db0e98a8473c3aec81325183e0e3c1c67d8911adfd5c7ea6",
+  "source.taskandpurpose.all": "0e5eb4fcd395b4cd460beae9e19acee4aad49aaa1123d798542ae958cd1d24d3",
+  "source.tass.english": "1b5db3d3c5dbb32f4394291ce06f9a0b71c8eaaf42f094d876824b069ac224d8",
+  "source.tehrantimes.all": "ebe4528fc6f00270a907894ca889e1841159d70818cc2c2b726364e18629fd7e",
+  "source.timesofindia.world": "31feb1b3c920a3098c5c6104b56fd9a7b0e296cbb6a5a7b34e412dc68b3698f9",
+  "source.twz.all": "8f074a54ad4f9fd2ba75ee0a14fbb23fc7c7a004d9eb5fb318c74deb79898cdf",
+  "source.usgs.earthquakes_m45": "298360b1efc211a7f6a996161b801d62b5d1777afa318521d6355aa2a83a7e1e",
+  "source.voa.africa": "391a210d0d4eb5edab4ae2315ca8c59ae6d6f03b34531e51a6c48811290d2138",
+  "source.warontherocks.all": "ae0f0248e159c2704d811f16b5bfa521e03f3ca162cec9b078068821439fac6c",
+  "source.who.news": "68076e5cd296b504a0797b491f93c841a7e64d74a491ca72fb0a8426ee2ee821",
+  "source.xinhua.world": "d7e492f4bd4cf55910fd1ae174f527d4fc5b1901d0a877fe71c742dfb0b02008",
+  "source.yonhap.english": "939af08da554351e5ac8c83eac3de8a88a458ad7f1bffeef33309917da142759"
+ },
+ "state_media_ids": [
+  "source.anadolu.english",
+  "source.globaltimes.all",
+  "source.tass.english",
+  "source.tehrantimes.all",
+  "source.xinhua.world"
+ ],
+ "state_media_ids_frozen": "the STATE_MEDIA_IDS literal of scripts/bringup_register_source_catalog.py at d1893001 (2026-10-04), before ROSTER-2 moved it onto the catalog entries as source_class: state_media - never regenerate this from the YAML"
+}

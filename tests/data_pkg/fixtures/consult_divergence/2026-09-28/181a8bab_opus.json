@@ -1,0 +1,1577 @@
+[
+  {
+    "session_id": "181a8bab-dc51-4f92-a8d2-031c2047f312",
+    "role": "user",
+    "content": "Okay.  There is a lot of shit going on in the world right now. Can you review the larger arc and patterns, and from that can you provide any larger view of the current direction of geopolitics, focused on military and economics, trade and social movement, etc?",
+    "steps": [],
+    "tool_calls": [],
+    "cited_refs": [],
+    "created_at": "2026-09-28T00:48:45.303296+00:00",
+    "request_id": null,
+    "synthesis_status": "complete"
+  },
+  {
+    "session_id": "181a8bab-dc51-4f92-a8d2-031c2047f312",
+    "role": "assistant",
+    "content": "## Bottom line\n\n**The system has shifted from a contest over territory to a contest over *flows* — and that is the single most important thing going on.** Every one of the four maritime lanes the platform monitors is degraded simultaneously, the semiconductor flow with them, and the dominant instrument of state power across the board is now denial of passage (straits, sanctions, tariffs, export controls, airspace bans, border seizures) rather than conquest of ground. Assess with **high confidence** on the observed pattern; **moderate confidence** on the causal reading that this is a coherent structural shift rather than coincident crises.\n\n---\n\n## 1. The arc: what actually changed\n\nReading the substrate back to June, the pivot event is the **US–Iran war**. US strikes in June prompted Iran to declare closure of the Strait of Hormuz [c4e338aa-4aca-42ed-a488-94e55fbfd357]; a June memorandum briefly reopened it and dropped Brent to ~$78 [6e7d33b7-f90e-4e06-b9c4-3f9b7cdae91c], but the reopening did not hold. By mid-September the conflict was in its **sixth month** with ships still being struck in the strait [ae0625ac-1916-43cd-96ef-33805781b343], Iran insisting reopening happen only on the terms of the US–Iran memorandum [c445fe24-865c-4173-823c-4472fb037be5], and the platform's own desk carrying Hormuz as closed with only limited traffic, confidence 0.93 [c61e1cc4-366c-4825-80b6-7548be9929c3].\n\nThat war became the template. Since then:\n\n- **Houthis seized Mocha and pushed to the Hanish islands**, putting them in position to control Bab el-Mandeb [adf07dc8-e876-4ff1-aece-5a46a9a4ddb8]; Qatar called losing that gateway \"catastrophic for the entire world\" [1ef09c11-291a-44aa-bf95-8997a30a6417]. Saudi tankers began rerouting around Africa [acd4f981-f70b-4bc5-aafb-4fde147c9a35].\n- **Russia's interdiction keeps the Black Sea blocked** [0a559381-8907-4d9a-b3bf-f2a2f360e3dd].\n- **Taiwan's semiconductor export flow is degraded by border seizures** [7eb59e82-0f84-45af-ad77-ea77eb3d1cd7] — note this is a *customs/interdiction* mechanism, not a blockade or invasion.\n- Commentators are explicitly asking whether **China intends to copy the Hormuz playbook around Taiwan** [e2201130-9e76-4027-8f4d-9e006952bcab].\n\n**Judgment (confidence ~0.75):** the Hormuz closure demonstrated to every revisionist actor that a mid-sized power can hold global energy hostage at acceptable cost. That demonstration effect — not any single ideology or bloc — is the organizing dynamic of the current period. The Atlantic Council's counter-read is worth holding: Iran may be *draining* rather than banking its leverage [fea74111-3654-4c92-abea-afb006aa1f9a], which would make the tactic self-limiting.\n\n---\n\n## 2. Military: wide, shallow, and structurally stuck\n\nThe platform's world read as of 28 Sep leads on **Russian drone-and-missile strikes on Ukrainian cities keeping escalation risk high**, with Russia's high-intensity war posture unchanged [eea5b823-17c0-4a78-bc13-f59f67a6a8a0]. Around that:\n\n| Theatre | State | Evidence |\n|---|---|---|\n| Ukraine/Russia | Grinding; talks deadlocked on territory [1b56c5f0-5599-4502-8225-e00b943fd271]; Lavrov refuses a ceasefire *during* negotiation [ffd0a063-ce24-42f6-a41b-b6f3c40a02b7]; Zelensky floats a Black Sea-only maritime truce [780d0322-2584-4878-81bc-9e8170b54a38] | [33fb2d2f-3eae-475e-8302-19faf19ef118] |\n| US–Iran | ACH judged Iran's **rapid escalation confirmed** (21 supporting / 2 refuting), while a competing \"high but stable plateau\" hypothesis is still *active* with a similar balance — i.e. the desks disagree with themselves | [6e766540-df57-4099-a628-d3cc1f4c2f48], [5b45a522-e4d0-4b55-bba3-1105aad695e5] |\n| Israel/Lebanon | Artillery, air strikes, white phosphorus intensifying — a second, distinct escalation vector | [58509dea-f25a-4ef1-a6b0-e59da6a74b61] |\n| Korea | DPRK uranium enrichment plant assessed **likely operational within 12 months** (confirmed ACH); DMZ mine blast injured ROK troops | [f7159180-5f57-4326-9f43-90ac7c4711e4], [76a304a4-a7ad-46cc-bd29-c5735597ff42] |\n| India–Pakistan | Naval clash plus UN and water-rights confrontation; the de-escalation hypothesis is winning *narrowly* (14 v 10) — genuinely unresolved | [975f8d28-8759-41a7-a120-53dc652ae37e] |\n| Africa | Sudan army advancing in North Kordofan; JNIM proxy war in Mali; Niger junta purges; South Africa deploying military to support police against mass shootings | [cd194580-257d-4502-bc73-23a13f14dfc1] |\n\n**Observed and important:** the US is simultaneously *drawing down* (coalition withdrawal from Iraqi Kurdistan) and *advancing toward renewed strikes on Iran* — the platform's own US desk flags these two reads as pointing in opposite directions [4860466a-12e9-41f6-91b4-6236a611c6c3], [b94cc692-2897-4d1d-971a-beda86c726fd]. **Assessment (~0.6):** that is not incoherence, it is a deliberate shift from garrisoning to punitive stand-off strike — lower footprint, higher volatility.\n\n**The proxy layer is thickening.** An ACH row with 11 supporting and 0 refuting judges that **China will markedly expand material and intelligence assistance to Iran** — dual-use drone/missile components, rail logistics, satellite surveillance [4aea9ab4-ec65-47c5-9da2-34cf31bcd5cb]; the China desk carries the proliferation network to Iran as active with continued missile-launcher transfers [c45ab6e5-7b8e-454c-9ef4-72e0ff4a2c8e]. Treat as a **strong lead**, not settled fact — it is agent-derived.\n\n---\n\n## 3. Economics: an energy-shock economy, not a demand recession\n\nThis is the cleanest macro signal in the corpus. The IMF cut 2026 global growth **twice**, to ~3%, explicitly citing the Iran war, with AI demand partly offsetting the energy shock [8c7cc3f1-ce6d-40ea-b396-ea702a47a782], [abf04220-f018-41f7-a858-facc9f344d46]. OPEC downgraded oil demand growth repeatedly [37e40988-9245-41a9-ae8c-62fb9e7a6a78]. Notably the **OECD went the other way in September, lifting 2026 to 2.9% \"despite Mideast war\"** [4f7d5dcf-af36-4bbc-8efb-e075a27f3db9] — surface that disagreement rather than average it; it suggests the shock is being absorbed better than feared.\n\nThe transmission is through **energy and freight, not credit**:\n- UK inflation back to 2.9%, attributed to Iran-war energy bills [4b5843fe-1258-43de-8a88-01986d413f81]; UK shop-price inflation at a two-year high [96fbd5e3-6a3f-424e-8b03-4b515b475585].\n- Japan's energy-security read notes a freight-cost shock making shipping roughly **one-fifth of landed crude cost** [76a304a4-a7ad-46cc-bd29-c5735597ff42].\n- Consumer-level pass-through is now explicit in reporting — \"this century's biggest oil shock… entering its sixth month\" [71f8f2f6-5cf1-4941-9ef3-3ea5f315ccb6].\n\n**The most striking structural fact in the platform's own output:** on 27 Sep, **energy security was the top-ranked dimension for the US, China, Japan, Italy, Iran, Saudi Arabia and Mexico simultaneously** [eea5b823-17c0-4a78-bc13-f59f67a6a8a0], [52413464-1db1-4ea9-ab31-13922953fe12], [33fb2d2f-3eae-475e-8302-19faf19ef118], [76a304a4-a7ad-46cc-bd29-c5735597ff42]. Some of that is weather (a US nor'easter, Hurricane Polo, typhoons) rather than geopolitics [b94cc692-2897-4d1d-971a-beda86c726fd] — but the convergence is real. **Assessed:** energy security has displaced growth as the organizing variable of economic statecraft.\n\n---\n\n## 4. Trade: tariffs are now furniture, and the leverage has moved to minerals\n\nThree things stand out.\n\n**(a) Tariffs have stopped being events.** The platform clusters \"US maintains 50% tariff on Canadian imports\" as a *continuing incident* across 121 signals and 34 sources [1ae8e592-b4e7-4f1f-b5bb-6ae5d45899c8]; a 100% US drone-export tariff on China sits in the China desk as steady-state [c45ab6e5-7b8e-454c-9ef4-72e0ff4a2c8e]; Australia is \"squeezed by the US–China beef tariff regime with no new relief\" [76a304a4-a7ad-46cc-bd29-c5735597ff42]; Argentina runs standing sanctions over Falklands offshore oil [52413464-1db1-4ea9-ab31-13922953fe12]. The news value is now in *absence of change*.\n\n**(b) Critical minerals, not tariffs, are the binding constraint.** Multiple independent outlets reported that rare earths forced a less combative US posture ahead of the Xi summit [ae1aa4c7-541a-4a07-a41c-a0cf63c98270]; Foreign Affairs framed it as China's \"most potent weapon\" [362e65f3-3ad1-484f-9344-01689402ceae]; US and Japanese officials met specifically over Chinese **yttrium** curbs two weeks before the summit [d73edb98-b49b-4d72-933c-0da6ff195ca0]. **Judgment (confidence ~0.8): the escalation ladder in US–China economics now runs through inputs, not through tariff rates.**\n\n**(c) And yet — the Washington summit produced détente.** Xi's three-day US visit ended with tariff cuts on ~$30bn of goods, a trade council, an AI-safety communication channel, and — tellingly — a **joint statement opposing tolls on international waterways** [27502dd3-eeb0-45c8-8e66-f52f88097873], [3546c52e-061e-4c37-9b70-d0cc6df8a477]. Chinese framing replicated across outlets was \"pomp > substance\" [c45ab6e5-7b8e-454c-9ef4-72e0ff4a2c8e].\n\n**The contradiction to hold onto:** the US and China are de-escalating bilaterally *while* the US moves toward renewed strikes on Iran and China expands proliferation support to Iran. That is not a new Cold War bloc structure. It is **condominium at the top, proxy competition below** — and the waterway-tolls language is the two largest powers quietly agreeing that the chokepoint tactic is a threat to *both* of them.\n\n---\n\n## 5. Alliances: re-blocking into minilaterals, not into two camps\n\n- **\"Islamic NATO.\"** Saudi Arabia, Türkiye and Pakistan signed the **Mecca Joint Defence Agreement** on 7 Aug — attack on one is attack on all [814ddbdd-653c-44bd-8513-64643bed8789] — endorsed by Trump as \"big, bold\" [b10ac747-7aa7-4f3e-90f1-eea2e1aa2eec], with **Iran reportedly invited to join** [42ebd06f-d415-4592-90b5-a2c53f5a984c]. Its first real test — Houthi strikes on Saudi Arabia — produced no intervention, and analysts judge the deterrent hobbled [716c4f89-0aa7-4c0f-9e75-2e220c416c26]. Turkey's desk reads the pact as a *modest* posture expansion held back by non-ratification [58509dea-f25a-4ef1-a6b0-e59da6a74b61]. **Assessment: real signalling, thin substance — so far.**\n- **The Arctic opens as a theatre.** A US–Denmark–Greenland security pact permits **two new US bases**, explicitly aimed at Beijing and Moscow, with \"stronger NATO engagement in the Arctic\" [1a91a4af-9af7-40dc-8eb6-6002cb28c263], [0ad22738-a7de-45a0-ad26-44f4412b0ea9], [e6724a09-d992-4ccd-aa24-c75b2d19cdf1]. Note the platform's own situation frame still carries this as \"single-sourced\" [3b60b8e2-611c-4ecc-a74f-30cbbe2fb959] — the frame is stale; the open corpus now corroborates it across four-plus outlets.\n- **Rearmament is real but hitting a fiscal wall.** NATO spending projected above **$1.8 trillion** in 2026 with all 32 allies past 2% [9ee034d4-6f5f-4c29-9ced-844aaff4a7c7]; Germany defending a record **€140bn** 2027 budget [23f998d7-7397-40c3-b2b0-6cd366e20e2f]; Korea seeking +8.2%. Against that: Czechia's PM openly refusing faster increases [409c96d9-6bd7-433f-8d91-ce1a54bf416e], and Sweden's election fought over guns-versus-welfare [3271b21d-90d3-46c6-9306-dd1d95900093]. **Judgment (~0.7): the guns-vs-butter fight is the next European political cleavage, and it maps onto the nativist-right surge below.**\n- **BRICS: monetary plumbing, not a currency.** The New Delhi summit put de-dollarization on the agenda [f8911217-0ca6-472a-b55b-359b0a521b51]; Russia claims 90% of BRICS trade in national currencies while explicitly disclaiming de-dollarization as a goal [911c81e9-05f1-4f66-9e33-24df043f59e5], and Peskov ruled out a BRICS currency [158b80ac-92d2-4784-b859-a2c2130bad38]. Corroborating market datum: **dollar–yuan became Hong Kong's most-traded pair for the first time** [1d2f31d3-09fc-4541-87ca-5cac31dbaf4a]. **Assessment (~0.6): incremental settlement-layer erosion of dollar dominance, no reserve-currency displacement. Note the loudest de-dollarization sourcing is TASS — low credibility, treat as advocacy.**\n\n---\n\n## 6. Social movement: two different revolts, one common cause\n\n**In the rich North — nativist consolidation.** The AfD won a landslide in Saxony-Anhalt (≈44%), gutting Merz's CDU [2c29c4c3-7e4d-4171-8223-7daf89ca5308], congratulated by Trump [dcd218d6-7b8a-4cc0-8cb3-c2426fbf7da3]. AP's useful corrective: it has **not** been a steady march, it is episodic venting at mainstream failure [c6a38a1e-ed74-4133-b64e-73119d703119].\n\n**In the global South — youth anti-incumbency.** India's Gen Z \"Cockroach\" movement forced a cabinet minister out after 36 days of protest [1531faa1-e119-48d5-ace2-c0d025cf0336] and is now threatening renewed nationwide action over the election commission [20940f24-5a86-48b5-803b-49911525c692]. Analysts count **six youth-led anti-establishment uprisings reshaping South Asia in five years** [61676dd9-cbc5-42ee-bfa6-7c39596510c5]; Pakistani ministers openly fear contagion [f8e53bec-11dd-4691-9b0b-8a475af22574]; Morocco's Gen Z movement converted to electoral participation [4097e780-e019-4b80-ac91-730c8759b5c9 — surfaced in corpus].\n\n**Everywhere — migration is hardening into a security instrument.** More than 178,000 migrants fled or were deported from South Africa after an anti-immigration crackdown and protests [b4031bb1-a311-4377-a89d-800d131af3f1], with Pretoria then seeking AU-wide talks and reimbursement [cfd549f6-2143-4c60-bad6-0c082243e06e]. Egypt is deporting Sudanese asylum seekers at scale [77051e4f-6dc8-4716-8252-543b721f56f7]; European law is tightening to the point of deporting Chechen refugees to Russia [cc8a89ff-50e6-4f37-9dc8-b087f73efcae].\n\n**Judgment (~0.7):** these are the same phenomenon — an energy/food price shock (§3) translating into anti-incumbent mobilisation, expressed as nativism where the median voter is old and as youth revolt where the median voter is young. Migration restriction is the one policy both versions demand, which is why it is hardening on every continent at once.\n\n**Plus a distinct information layer.** The platform is detecting coordinated narrative campaigns as a routine background condition: Türkiye's \"My Family Is Safe\" anti-LGBTQ push [87bff2c7-2d89-438d-8387-0c2815a33fae], Russian outlets claiming Germany fabricated a UAV crisis before elections [a6463970-1036-428c-ab85-04a5d444701a], DPRK \"new-type weapon\" seeding [f773458e-5d81-4b8d-80dc-359867866453], and a US-side convergence around the RAF Fairford incident [4860466a-12e9-41f6-91b4-6236a611c6c3]. Social contention is now a contested operational domain, not just an outcome.\n\n---\n\n## 7. Direction of travel — 6 to 12 months\n\n1. **Chokepoint coercion spreads before it recedes** (~0.65). Hormuz has held closed for a quarter despite a signed memorandum; Bab el-Mandeb is being taken by ground advance; the Black Sea is interdicted; Taiwan's exports are being throttled by seizures. The tactic is working. The US–China \"no tolls on international waterways\" line [3546c52e-061e-4c37-9b70-d0cc6df8a477] is the first sign of a great-power counter-norm forming.\n2. **Economics stays supply-shocked, not demand-crashed** (~0.6). Expect persistent 2–3% inflation in the North, high freight, and repeated downward oil-demand revisions — with the OECD's upgrade [4f7d5dcf-af36-4bbc-8efb-e075a27f3db9] as the live counter-case.\n3. **Great-power management coexists with proxy escalation** (~0.6). US–China keep the bilateral channel (tariff cuts, AI hotline) while competing lethally through Iran, the Houthis, the Philippines and Taiwan's customs.\n4. **Minilateral pacts proliferate and underperform** (~0.55). Mecca, the Arctic pact, trilaterals — signed fast, tested badly [716c4f89-0aa7-4c0f-9e75-2e220c416c26].\n5. **Political instability is concentrated in the middle powers, not the great ones.** Every leadership-transition desk with real evidence reads *low* — US, China, Canada, Taiwan, Pakistan, DRC, Indonesia [eea5b823-17c0-4a78-bc13-f59f67a6a8a0], [fe753ad0-35a4-4bbc-a428-60a912afa7f4], [52413464-1db1-4ea9-ab31-13922953fe12]. Incumbents are holding; it is *policy*, not *personnel*, that is moving. France is the one flagged imminent handover (Macron to successor, ~28 Sep) but that read is **sub-floor / uncited** [33fb2d2f-3eae-475e-8302-19faf19ef118] — do not act on it without confirmation.\n\n---\n\n## 8. What would change my mind — watch these\n\n- **Hormuz genuinely reopening on memorandum terms** [c445fe24-865c-4173-823c-4472fb037be5] — collapses the energy-security convergence and most of §3 with it.\n- **Houthis actually closing Bab el-Mandeb** [1ef09c11-291a-44aa-bf95-8997a30a6417] — second chokepoint closure would turn a pattern into a doctrine, and would test the Mecca pact for real.\n- **Taiwan seizures escalating from customs to interdiction** [7eb59e82-0f84-45af-ad77-ea77eb3d1cd7], [e2201130-9e76-4027-8f4d-9e006952bcab]; China's new total-mobilisation law takes effect in October [9fca8c90-e515-4258-84de-b93a85378a0d].\n- **Chinese rare-earth/yttrium curbs tightening rather than trading away** [d73edb98-b49b-4d72-933c-0da6ff195ca0] — the summit détente is only as durable as this.\n- **A verified, sustained pause in Russian strikes** — the platform names this as the single biggest swing factor in its own world read [b3165642-4521-4e38-9cc2-97abca081fb6].\n\n---\n\n## 9. Health warnings on this answer\n\n- **The platform's own confidence is modest.** The headline world assessment carries effective confidence **0.556** with a critic score of 0.6–0.75, and admits it carried only **8 of 33** roster units — 25 countries were not represented [eea5b823-17c0-4a78-bc13-f59f67a6a8a0], [b3165642-4521-4e38-9cc2-97abca081fb6]. Most country desks sit at 0.5.\n- **Every clustered situation frame is `dormant` or `closed`.** The lane frames (Red Sea 0.46, Malacca 0.46, semiconductors 0.49 intensity) are the highest-energy ones remaining [d6b35902-1b3f-410f-8c2f-009275454a35], [792fd4d7-ff16-4a34-80bf-f1af1a58c14c], [44d65bf6-3a16-47c3-8cdf-38394a174916], [165e8cd2-2688-4461-846d-5104b86f425c] — which independently supports the chokepoint thesis, but \"dormant\" here reflects clustering staleness, not calm.\n- **The forecast feed is frozen** (writer retired 2026-07-01) — I have not used any prediction row as a current forecast [5c37ad2e-d000-4bba-9b4f-bd17bb4391f0].\n- **Source asymmetry.** De-dollarization and rearmament-scepticism material leans on TASS (credibility 0.3); the Iran/Hormuz material is better corroborated. Several ACH rows resolved via bulk `status_transition` on 27 Sep rather than on fresh evidence — treat \"confirmed\"/\"refuted\" labels as provisional.\n- **Many high-value reference feeds have been silent 50–80 hours** (Crisis Group, Foreign Affairs, Bellingcat, CIVICUS, DFRLab, WTO) — so the strategic-analysis layer under this read is thinner than the wire-service layer.",
+    "steps": [
+      {
+        "kind": "render_prompt",
+        "calls": 0,
+        "phase": "plan",
+        "max_rounds": 10,
+        "est_cost_usd": 0.0,
+        "input_tokens": 0,
+        "max_cost_usd": 1000000.0,
+        "final_floor_s": 240.0,
+        "output_tokens": 0,
+        "prompt_module": "legba.prompts.consult_on_demand.v1",
+        "rounds_source": "request",
+        "question_chars": 260,
+        "round_protocol": "native_tools",
+        "total_budget_s": 900.0,
+        "scope_predicate": false,
+        "max_input_tokens": 100000000,
+        "native_batch_cap": 5,
+        "round_result_bytes": 40000
+      },
+      {
+        "kind": "llm_call",
+        "phase": "reason",
+        "round": 1,
+        "usage": {
+          "calls": 1,
+          "est_cost_usd": 0.1892,
+          "input_tokens": 156,
+          "max_cost_usd": 1000000.0,
+          "output_tokens": 173,
+          "max_input_tokens": 100000000
+        },
+        "tokens": 329
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 30
+        },
+        "kind": "tool_call",
+        "tool": "list_situations",
+        "phase": "act",
+        "round": 1,
+        "result": {
+          "refs": 30,
+          "count": 30
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 30
+        },
+        "kind": "tool_call",
+        "tool": "list_findings",
+        "phase": "act",
+        "round": 1,
+        "result": {
+          "refs": 30,
+          "count": 30
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {},
+        "kind": "tool_call",
+        "tool": "list_targets",
+        "phase": "act",
+        "round": 1,
+        "result": {
+          "refs": 0,
+          "count": 44
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "kind": "llm_call",
+        "phase": "reason",
+        "round": 2,
+        "usage": {
+          "calls": 2,
+          "est_cost_usd": 0.5345,
+          "input_tokens": 19075,
+          "max_cost_usd": 1000000.0,
+          "output_tokens": 807,
+          "max_input_tokens": 100000000
+        },
+        "tokens": 19553
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 40,
+          "since": "2026-09-01"
+        },
+        "kind": "tool_call",
+        "tool": "query_events",
+        "phase": "act",
+        "round": 2,
+        "result": {
+          "refs": 40,
+          "count": 40
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "target_ids": [
+            "lane_hormuz",
+            "lane_red_sea",
+            "lane_black_sea",
+            "lane_malacca_south_china_sea",
+            "flow_semiconductors",
+            "flow_energy_shipping"
+          ]
+        },
+        "kind": "tool_call",
+        "tool": "compare_targets",
+        "phase": "act",
+        "round": 2,
+        "result": {
+          "refs": 6,
+          "count": 0
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 25
+        },
+        "kind": "tool_call",
+        "tool": "query_hypotheses",
+        "phase": "act",
+        "round": 2,
+        "result": {
+          "refs": 25,
+          "count": 25
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 20,
+          "query": "tariffs export controls trade war rare earths"
+        },
+        "kind": "tool_call",
+        "tool": "search_signals",
+        "phase": "act",
+        "round": 2,
+        "result": {
+          "refs": 0,
+          "count": 0
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 20,
+          "query": "mass protests migration social unrest strikes"
+        },
+        "kind": "tool_call",
+        "tool": "vector_search",
+        "phase": "act",
+        "round": 2,
+        "result": {
+          "refs": 20,
+          "count": 20
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "kind": "llm_call",
+        "phase": "reason",
+        "round": 3,
+        "usage": {
+          "calls": 3,
+          "est_cost_usd": 1.163,
+          "input_tokens": 57299,
+          "max_cost_usd": 1000000.0,
+          "output_tokens": 1357,
+          "max_input_tokens": 100000000
+        },
+        "tokens": 38774
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 15,
+          "query": "tariff export controls rare earth semiconductor trade retaliation"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 3,
+        "result": {
+          "refs": 15,
+          "count": 15
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 15,
+          "query": "protests migration deportation refugees unrest crackdown"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 3,
+        "result": {
+          "refs": 15,
+          "count": 15
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "event_id": "1ae8e592-b4e7-4f1f-b5bb-6ae5d45899c8"
+        },
+        "kind": "tool_call",
+        "tool": "inspect_event",
+        "phase": "act",
+        "round": 3,
+        "result": {
+          "refs": 114,
+          "count": 0
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 10,
+          "target_id": "country_g20_us"
+        },
+        "kind": "tool_call",
+        "tool": "list_findings",
+        "phase": "act",
+        "round": 3,
+        "result": {
+          "refs": 10,
+          "count": 10
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 10,
+          "target_id": "country_g20_cn"
+        },
+        "kind": "tool_call",
+        "tool": "list_findings",
+        "phase": "act",
+        "round": 3,
+        "result": {
+          "refs": 10,
+          "count": 10
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "kind": "llm_call",
+        "phase": "reason",
+        "round": 4,
+        "usage": {
+          "calls": 4,
+          "est_cost_usd": 2.0199,
+          "input_tokens": 110889,
+          "max_cost_usd": 1000000.0,
+          "output_tokens": 1878,
+          "max_input_tokens": 100000000
+        },
+        "tokens": 54111
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 5,
+          "target_id": "region_europe"
+        },
+        "kind": "tool_call",
+        "tool": "list_findings",
+        "phase": "act",
+        "round": 4,
+        "result": {
+          "refs": 1,
+          "count": 1
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 5,
+          "target_id": "region_indo_pacific"
+        },
+        "kind": "tool_call",
+        "tool": "list_findings",
+        "phase": "act",
+        "round": 4,
+        "result": {
+          "refs": 1,
+          "count": 1
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 5,
+          "target_id": "region_africa"
+        },
+        "kind": "tool_call",
+        "tool": "list_findings",
+        "phase": "act",
+        "round": 4,
+        "result": {
+          "refs": 1,
+          "count": 1
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 12,
+          "query": "BRICS de-dollarization currency reserves settlement yuan"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 4,
+        "result": {
+          "refs": 12,
+          "count": 12
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 12,
+          "query": "defense spending increase rearmament NATO budget conscription"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 4,
+        "result": {
+          "refs": 12,
+          "count": 12
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "kind": "llm_call",
+        "phase": "reason",
+        "round": 5,
+        "usage": {
+          "calls": 5,
+          "est_cost_usd": 3.1122,
+          "input_tokens": 180027,
+          "max_cost_usd": 1000000.0,
+          "output_tokens": 2429,
+          "max_input_tokens": 100000000
+        },
+        "tokens": 69689
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 5,
+          "target_id": "situation_iran_war"
+        },
+        "kind": "tool_call",
+        "tool": "list_findings",
+        "phase": "act",
+        "round": 5,
+        "result": {
+          "refs": 5,
+          "count": 5
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 12,
+          "query": "oil price surge freight rates inflation food prices cost of living"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 5,
+        "result": {
+          "refs": 12,
+          "count": 12
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 12,
+          "query": "far-right election victory populist government immigration backlash Europe"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 5,
+        "result": {
+          "refs": 12,
+          "count": 12
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "as_of": "2026-07-05",
+          "limit": 20
+        },
+        "kind": "tool_call",
+        "tool": "list_situations",
+        "phase": "act",
+        "round": 5,
+        "result": {
+          "refs": 20,
+          "count": 20
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 15
+        },
+        "kind": "tool_call",
+        "tool": "query_predictions",
+        "phase": "act",
+        "round": 5,
+        "result": {
+          "refs": 15,
+          "count": 15
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "kind": "llm_call",
+        "phase": "reason",
+        "round": 6,
+        "usage": {
+          "calls": 6,
+          "est_cost_usd": 4.4521,
+          "input_tokens": 265588,
+          "max_cost_usd": 1000000.0,
+          "output_tokens": 2997,
+          "max_input_tokens": 100000000
+        },
+        "tokens": 86129
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 3,
+          "target_id": "region_mena"
+        },
+        "kind": "tool_call",
+        "tool": "list_findings",
+        "phase": "act",
+        "round": 6,
+        "result": {
+          "refs": 1,
+          "count": 1
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "limit": 3,
+          "target_id": "region_americas"
+        },
+        "kind": "tool_call",
+        "tool": "list_findings",
+        "phase": "act",
+        "round": 6,
+        "result": {
+          "refs": 1,
+          "count": 1
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 10,
+          "query": "Strait of Hormuz closure oil shock began war Iran United States strikes"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 6,
+        "result": {
+          "refs": 10,
+          "count": 10
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 12,
+          "query": "global growth forecast recession IMF world trade volumes slowdown 2026"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 6,
+        "result": {
+          "refs": 12,
+          "count": 12
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 10,
+          "query": "Taiwan strait blockade China drills semiconductor seizure export"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 6,
+        "result": {
+          "refs": 10,
+          "count": 10
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "kind": "llm_call",
+        "phase": "reason",
+        "round": 7,
+        "usage": {
+          "calls": 7,
+          "est_cost_usd": 6.0202,
+          "input_tokens": 366804,
+          "max_cost_usd": 1000000.0,
+          "output_tokens": 3476,
+          "max_input_tokens": 100000000
+        },
+        "tokens": 101695
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 10,
+          "query": "Trump Xi summit Washington outcome agreement tariffs AI channel"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 7,
+        "result": {
+          "refs": 10,
+          "count": 10
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 10,
+          "query": "Mecca Joint Defence Agreement Saudi Pakistan collective defence pact"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 7,
+        "result": {
+          "refs": 10,
+          "count": 10
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 8,
+          "query": "Greenland US military bases Denmark Arctic sovereignty annexation"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 7,
+        "result": {
+          "refs": 8,
+          "count": 8
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 10,
+          "query": "Ukraine ceasefire negotiations peace plan Russia territory talks"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 7,
+        "result": {
+          "refs": 10,
+          "count": 10
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "kind": "llm_call",
+        "phase": "reason",
+        "round": 8,
+        "usage": {
+          "calls": 8,
+          "est_cost_usd": 7.8272,
+          "input_tokens": 484672,
+          "max_cost_usd": 1000000.0,
+          "output_tokens": 3811,
+          "max_input_tokens": 100000000
+        },
+        "tokens": 118203
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 12,
+          "query": "Gen Z protests youth uprising government resignation demonstrations 2026"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 8,
+        "result": {
+          "refs": 12,
+          "count": 12
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "size": 10,
+          "query": "Houthi Bab el-Mandeb Mocha port blockade Red Sea attacks shipping"
+        },
+        "kind": "tool_call",
+        "tool": "search_corpus",
+        "phase": "act",
+        "round": 8,
+        "result": {
+          "refs": 10,
+          "count": 10
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "ok": true,
+        "args": {
+          "active_only": true
+        },
+        "kind": "tool_call",
+        "tool": "list_sources",
+        "phase": "act",
+        "round": 8,
+        "result": {
+          "refs": 0,
+          "count": 118
+        },
+        "admitted": true,
+        "governed": true
+      },
+      {
+        "kind": "llm_call",
+        "phase": "reason",
+        "round": 9,
+        "usage": {
+          "calls": 9,
+          "est_cost_usd": 11.0999,
+          "input_tokens": 621505,
+          "max_cost_usd": 1000000.0,
+          "output_tokens": 19895,
+          "max_input_tokens": 100000000
+        },
+        "tokens": 152917
+      },
+      {
+        "kind": "final",
+        "phase": "reflect",
+        "round": 9
+      }
+    ],
+    "tool_calls": [
+      {
+        "args": {
+          "limit": 30
+        },
+        "tool": "list_situations",
+        "result": {
+          "refs": 30,
+          "count": 30
+        }
+      },
+      {
+        "args": {
+          "limit": 30
+        },
+        "tool": "list_findings",
+        "result": {
+          "refs": 30,
+          "count": 30
+        }
+      },
+      {
+        "args": {},
+        "tool": "list_targets",
+        "result": {
+          "refs": 0,
+          "count": 44
+        }
+      },
+      {
+        "args": {
+          "limit": 40,
+          "since": "2026-09-01"
+        },
+        "tool": "query_events",
+        "result": {
+          "refs": 40,
+          "count": 40
+        }
+      },
+      {
+        "args": {
+          "target_ids": [
+            "lane_hormuz",
+            "lane_red_sea",
+            "lane_black_sea",
+            "lane_malacca_south_china_sea",
+            "flow_semiconductors",
+            "flow_energy_shipping"
+          ]
+        },
+        "tool": "compare_targets",
+        "result": {
+          "refs": 6,
+          "count": 0
+        }
+      },
+      {
+        "args": {
+          "limit": 25
+        },
+        "tool": "query_hypotheses",
+        "result": {
+          "refs": 25,
+          "count": 25
+        }
+      },
+      {
+        "args": {
+          "limit": 20,
+          "query": "tariffs export controls trade war rare earths"
+        },
+        "tool": "search_signals",
+        "result": {
+          "refs": 0,
+          "count": 0
+        }
+      },
+      {
+        "args": {
+          "limit": 20,
+          "query": "mass protests migration social unrest strikes"
+        },
+        "tool": "vector_search",
+        "result": {
+          "refs": 20,
+          "count": 20
+        }
+      },
+      {
+        "args": {
+          "size": 15,
+          "query": "tariff export controls rare earth semiconductor trade retaliation"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 15,
+          "count": 15
+        }
+      },
+      {
+        "args": {
+          "size": 15,
+          "query": "protests migration deportation refugees unrest crackdown"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 15,
+          "count": 15
+        }
+      },
+      {
+        "args": {
+          "event_id": "1ae8e592-b4e7-4f1f-b5bb-6ae5d45899c8"
+        },
+        "tool": "inspect_event",
+        "result": {
+          "refs": 114,
+          "count": 0
+        }
+      },
+      {
+        "args": {
+          "limit": 10,
+          "target_id": "country_g20_us"
+        },
+        "tool": "list_findings",
+        "result": {
+          "refs": 10,
+          "count": 10
+        }
+      },
+      {
+        "args": {
+          "limit": 10,
+          "target_id": "country_g20_cn"
+        },
+        "tool": "list_findings",
+        "result": {
+          "refs": 10,
+          "count": 10
+        }
+      },
+      {
+        "args": {
+          "limit": 5,
+          "target_id": "region_europe"
+        },
+        "tool": "list_findings",
+        "result": {
+          "refs": 1,
+          "count": 1
+        }
+      },
+      {
+        "args": {
+          "limit": 5,
+          "target_id": "region_indo_pacific"
+        },
+        "tool": "list_findings",
+        "result": {
+          "refs": 1,
+          "count": 1
+        }
+      },
+      {
+        "args": {
+          "limit": 5,
+          "target_id": "region_africa"
+        },
+        "tool": "list_findings",
+        "result": {
+          "refs": 1,
+          "count": 1
+        }
+      },
+      {
+        "args": {
+          "size": 12,
+          "query": "BRICS de-dollarization currency reserves settlement yuan"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 12,
+          "count": 12
+        }
+      },
+      {
+        "args": {
+          "size": 12,
+          "query": "defense spending increase rearmament NATO budget conscription"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 12,
+          "count": 12
+        }
+      },
+      {
+        "args": {
+          "limit": 5,
+          "target_id": "situation_iran_war"
+        },
+        "tool": "list_findings",
+        "result": {
+          "refs": 5,
+          "count": 5
+        }
+      },
+      {
+        "args": {
+          "size": 12,
+          "query": "oil price surge freight rates inflation food prices cost of living"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 12,
+          "count": 12
+        }
+      },
+      {
+        "args": {
+          "size": 12,
+          "query": "far-right election victory populist government immigration backlash Europe"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 12,
+          "count": 12
+        }
+      },
+      {
+        "args": {
+          "as_of": "2026-07-05",
+          "limit": 20
+        },
+        "tool": "list_situations",
+        "result": {
+          "refs": 20,
+          "count": 20
+        }
+      },
+      {
+        "args": {
+          "limit": 15
+        },
+        "tool": "query_predictions",
+        "result": {
+          "refs": 15,
+          "count": 15
+        }
+      },
+      {
+        "args": {
+          "limit": 3,
+          "target_id": "region_mena"
+        },
+        "tool": "list_findings",
+        "result": {
+          "refs": 1,
+          "count": 1
+        }
+      },
+      {
+        "args": {
+          "limit": 3,
+          "target_id": "region_americas"
+        },
+        "tool": "list_findings",
+        "result": {
+          "refs": 1,
+          "count": 1
+        }
+      },
+      {
+        "args": {
+          "size": 10,
+          "query": "Strait of Hormuz closure oil shock began war Iran United States strikes"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 10,
+          "count": 10
+        }
+      },
+      {
+        "args": {
+          "size": 12,
+          "query": "global growth forecast recession IMF world trade volumes slowdown 2026"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 12,
+          "count": 12
+        }
+      },
+      {
+        "args": {
+          "size": 10,
+          "query": "Taiwan strait blockade China drills semiconductor seizure export"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 10,
+          "count": 10
+        }
+      },
+      {
+        "args": {
+          "size": 10,
+          "query": "Trump Xi summit Washington outcome agreement tariffs AI channel"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 10,
+          "count": 10
+        }
+      },
+      {
+        "args": {
+          "size": 10,
+          "query": "Mecca Joint Defence Agreement Saudi Pakistan collective defence pact"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 10,
+          "count": 10
+        }
+      },
+      {
+        "args": {
+          "size": 8,
+          "query": "Greenland US military bases Denmark Arctic sovereignty annexation"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 8,
+          "count": 8
+        }
+      },
+      {
+        "args": {
+          "size": 10,
+          "query": "Ukraine ceasefire negotiations peace plan Russia territory talks"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 10,
+          "count": 10
+        }
+      },
+      {
+        "args": {
+          "size": 12,
+          "query": "Gen Z protests youth uprising government resignation demonstrations 2026"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 12,
+          "count": 12
+        }
+      },
+      {
+        "args": {
+          "size": 10,
+          "query": "Houthi Bab el-Mandeb Mocha port blockade Red Sea attacks shipping"
+        },
+        "tool": "search_corpus",
+        "result": {
+          "refs": 10,
+          "count": 10
+        }
+      },
+      {
+        "args": {
+          "active_only": true
+        },
+        "tool": "list_sources",
+        "result": {
+          "refs": 0,
+          "count": 118
+        }
+      }
+    ],
+    "cited_refs": [
+      {
+        "id": "eea5b823-17c0-4a78-bc13-f59f67a6a8a0",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "b3165642-4521-4e38-9cc2-97abca081fb6",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "58509dea-f25a-4ef1-a6b0-e59da6a74b61",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "33fb2d2f-3eae-475e-8302-19faf19ef118",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "76a304a4-a7ad-46cc-bd29-c5735597ff42",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "cd194580-257d-4502-bc73-23a13f14dfc1",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "52413464-1db1-4ea9-ab31-13922953fe12",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "c61e1cc4-366c-4825-80b6-7548be9929c3",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "a0206e70-d338-4621-a39a-628b351ea2d4",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "0a559381-8907-4d9a-b3bf-f2a2f360e3dd",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "c9e46f9d-a3c7-48e3-a827-2bc74ec1b196",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "7eb59e82-0f84-45af-ad77-ea77eb3d1cd7",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "90af42f5-f03d-4020-8908-1fa4a705a80a",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "1ae8e592-b4e7-4f1f-b5bb-6ae5d45899c8",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "4860466a-12e9-41f6-91b4-6236a611c6c3",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "c45ab6e5-7b8e-454c-9ef4-72e0ff4a2c8e",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "b94cc692-2897-4d1d-971a-beda86c726fd",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "fe753ad0-35a4-4bbc-a428-60a912afa7f4",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "038d20d6-c0ed-41b8-ae67-12967d28809e",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "4aea9ab4-ec65-47c5-9da2-34cf31bcd5cb",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "6e766540-df57-4099-a628-d3cc1f4c2f48",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "5b45a522-e4d0-4b55-bba3-1105aad695e5",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "f7159180-5f57-4326-9f43-90ac7c4711e4",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "975f8d28-8759-41a7-a120-53dc652ae37e",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "d6b35902-1b3f-410f-8c2f-009275454a35",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "792fd4d7-ff16-4a34-80bf-f1af1a58c14c",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "44d65bf6-3a16-47c3-8cdf-38394a174916",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "165e8cd2-2688-4461-846d-5104b86f425c",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "3b60b8e2-611c-4ecc-a74f-30cbbe2fb959",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "c4e338aa-4aca-42ed-a488-94e55fbfd357",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "ae0625ac-1916-43cd-96ef-33805781b343",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "c445fe24-865c-4173-823c-4472fb037be5",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "fea74111-3654-4c92-abea-afb006aa1f9a",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "946b9620-29cc-4486-8f4b-ee65b0823340",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "adf07dc8-e876-4ff1-aece-5a46a9a4ddb8",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "1ef09c11-291a-44aa-bf95-8997a30a6417",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "acd4f981-f70b-4bc5-aafb-4fde147c9a35",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "8c7cc3f1-ce6d-40ea-b396-ea702a47a782",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "abf04220-f018-41f7-a858-facc9f344d46",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "4f7d5dcf-af36-4bbc-8efb-e075a27f3db9",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "37e40988-9245-41a9-ae8c-62fb9e7a6a78",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "4b5843fe-1258-43de-8a88-01986d413f81",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "96fbd5e3-6a3f-424e-8b03-4b515b475585",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "71f8f2f6-5cf1-4941-9ef3-3ea5f315ccb6",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "362e65f3-3ad1-484f-9344-01689402ceae",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "ae1aa4c7-541a-4a07-a41c-a0cf63c98270",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "d73edb98-b49b-4d72-933c-0da6ff195ca0",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "27502dd3-eeb0-45c8-8e66-f52f88097873",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "3546c52e-061e-4c37-9b70-d0cc6df8a477",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "814ddbdd-653c-44bd-8513-64643bed8789",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "b10ac747-7aa7-4f3e-90f1-eea2e1aa2eec",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "716c4f89-0aa7-4c0f-9e75-2e220c416c26",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "42ebd06f-d415-4592-90b5-a2c53f5a984c",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "1a91a4af-9af7-40dc-8eb6-6002cb28c263",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "0ad22738-a7de-45a0-ad26-44f4412b0ea9",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "e6724a09-d992-4ccd-aa24-c75b2d19cdf1",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "9ee034d4-6f5f-4c29-9ced-844aaff4a7c7",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "23f998d7-7397-40c3-b2b0-6cd366e20e2f",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "409c96d9-6bd7-433f-8d91-ce1a54bf416e",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "3271b21d-90d3-46c6-9306-dd1d95900093",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "f8911217-0ca6-472a-b55b-359b0a521b51",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "911c81e9-05f1-4f66-9e33-24df043f59e5",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "158b80ac-92d2-4784-b859-a2c2130bad38",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "1d2f31d3-09fc-4541-87ca-5cac31dbaf4a",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "2c29c4c3-7e4d-4171-8223-7daf89ca5308",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "c6a38a1e-ed74-4133-b64e-73119d703119",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "dcd218d6-7b8a-4cc0-8cb3-c2426fbf7da3",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "1531faa1-e119-48d5-ace2-c0d025cf0336",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "20940f24-5a86-48b5-803b-49911525c692",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "61676dd9-cbc5-42ee-bfa6-7c39596510c5",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "f8e53bec-11dd-4691-9b0b-8a475af22574",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "b4031bb1-a311-4377-a89d-800d131af3f1",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "cfd549f6-2143-4c60-bad6-0c082243e06e",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "77051e4f-6dc8-4716-8252-543b721f56f7",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "cc8a89ff-50e6-4f37-9dc8-b087f73efcae",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "e2201130-9e76-4027-8f4d-9e006952bcab",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "9fca8c90-e515-4258-84de-b93a85378a0d",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "6c946d2a-1ae9-4c55-9952-ed2d94e7c141",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "1b56c5f0-5599-4502-8225-e00b943fd271",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "ffd0a063-ce24-42f6-a41b-b6f3c40a02b7",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "780d0322-2584-4878-81bc-9e8170b54a38",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "87bff2c7-2d89-438d-8387-0c2815a33fae",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "a6463970-1036-428c-ab85-04a5d444701a",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "f773458e-5d81-4b8d-80dc-359867866453",
+        "kind": "signal",
+        "description": null
+      },
+      {
+        "id": "5c37ad2e-d000-4bba-9b4f-bd17bb4391f0",
+        "kind": "signal",
+        "description": null
+      }
+    ],
+    "created_at": "2026-09-28T00:55:50.774158+00:00",
+    "request_id": null,
+    "synthesis_status": "complete"
+  }
+]

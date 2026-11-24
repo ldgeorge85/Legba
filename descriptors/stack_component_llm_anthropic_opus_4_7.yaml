@@ -1,0 +1,82 @@
+# The default Anthropic consult plane (kind: llm_provider) — and, since
+# 2026-11-05, the bake-off's FRONTIER model for arms B, C, D and E
+# (planning/reviews/BAKEOFF_DESIGN.md v1.1 §2).
+#
+# THE ID IS HISTORICAL. `llm.anthropic.opus_4_7` was named for Claude Opus 4.7
+# and has since been re-pointed by PUT several times (Opus 4.8 2026-06-24,
+# Opus 5 2026-09-16) without renaming, because six descriptors and the consult
+# model allowlist (`CONSULT_MODEL_ALLOWLIST["opus"]` in
+# src/legba/data/registry/consult_api.py) name it. The model it SERVES is
+# `model_name` below, and that is authoritative: on 2026-11-05 it was pinned to
+# Claude Opus 5.5 (`claude-opus-5-5`, $4 / $20 / cache read $0.20 / cache write
+# $5 per MTok) for the pre-registered bake-off. The live component was PUT by
+# the orchestrator; this file is the tree's mirror of that body (lane W11-G1).
+#
+# ⚠ THIS FILE IS THE REVIEWABLE HOME OF THE COMPONENT BODY, and it is the ONLY
+# one: scripts/bringup_register_stack.py LOADS this YAML (via
+# `_STACK_DESCRIPTOR_FILES`) — the inline copy it used to carry (with a
+# `LEGBA_CONSULT_MODEL_NAME` env default of claude-opus-4-8, two models stale)
+# is gone, so the tree and the registrar cannot drift. Same convention as
+# `stack_component_llm_anthropic_fable_5_1.yaml`, whose shape this mirrors.
+# The registrar is idempotent: on a live stack the component is already
+# registered and is reported `already_registered`, never re-PUT.
+#
+# NAMING IS LOAD-BEARING. The `llm.anthropic.` prefix routes the id to the
+# Anthropic handler (`infer_llm_subprovider`, rule 1). Do not rename it.
+#
+# Wire facts for the Opus 5.5 line (the Anthropic handler already handles
+# them by model-id prefix — `claude-opus-5` covers `claude-opus-5-5`):
+# `temperature` is rejected (dropped, logged once as a dead knob), 128k
+# output ceiling, thinking cannot be disabled, native tool_use OK. Pricing
+# lives in the handler's PRICE_TABLE (`claude-opus-5-5` row, longest prefix
+# wins); the bake-off meters at the operator-verified prices file instead.
+#
+# No price_* fields, matching the fable component — Anthropic spend is
+# watched by the consult receipt and the bake-off meter, not this family's
+# per-component burn gauge.
+
+id: llm.anthropic.opus_4_7
+name: Anthropic Claude Opus 5.5 (consult default; bake-off frontier)
+schema_uri: legba/stack/llm_provider/1.0.0
+# Placeholder — the registry stamps the content hash at register time.
+version: "0000000000000000"
+state: active
+owner: lewis@local
+
+config:
+  # Base host only — `_chat_endpoint_path()` prepends `/v1/...`. Identical to
+  # every other Anthropic component.
+  api_endpoint:
+    factory_kind: text
+    raw: https://api.anthropic.com
+
+  # VAULT REF, never the plaintext. The SAME ref every Anthropic component
+  # uses — one key, one account.
+  api_key:
+    factory_kind: secret
+    raw: llm.anthropic.api_key
+
+  # Claude Opus 5.5 — pinned for the bake-off (2026-11-05). The id above is
+  # historical; this is the model the component serves.
+  model_name:
+    factory_kind: text
+    raw: claude-opus-5-5
+
+  # The component default; a consult descriptor's `method.llm.max_tokens`
+  # (32768 on every consult kind) is what the loop sends.
+  max_tokens:
+    factory_kind: number
+    raw: 8192
+
+  # The stall ceiling, not a generation wall-time cap: the handler streams
+  # every generation and httpx applies this per chunk — sized for the worst
+  # prefill gap before message_start on a long cached transcript.
+  timeout_seconds:
+    factory_kind: number
+    raw: 300
+
+  # Consult-only, never the scheduled primary (the standing rule).
+  tier:
+    factory_kind: dropdown_static
+    raw: fallback
+    options: [primary, fallback, cheap]

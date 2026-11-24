@@ -313,7 +313,10 @@ def test_merkle_root_is_deterministic_and_sensitive():
 def test_two_calendars_and_version_stamp():
     assert len(ra.CALENDARS) == 2
     assert all("opentimestamps" in c for c in ra.CALENDARS)
-    assert ra.RECEIPT_ANCHOR_VERSION == "2026-09/h13"
+    # 2026-11/st0: the forecast-ledger leaves follow the chain heads (0242).
+    # 2026-11/audit-chain: the audit-log chain head is the last leaf (0248).
+    # 2026-11/f1-leaves: the same tree, its ordered leaves stored (0262).
+    assert ra.RECEIPT_ANCHOR_VERSION == "2026-11/f1-leaves"
 
 
 class _AnchorConn:

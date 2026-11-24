@@ -50,11 +50,73 @@ os.environ.setdefault("LEGBA_PREDICATE_WALL_CLOCK_MS", "250")
 # Tests that assert the fail-closed 503 path monkeypatch.delenv this key.
 os.environ.setdefault("LEGBA_DEV_MODE", "1")
 
+# X2-B1: the registry gate now has a SECOND principal
+# (LEGBA_REGISTRY_SERVICE_TOKEN). ``legba.data.config._load_env`` loads the
+# repo — or the live — ``.env`` into this process; were the fleet's service
+# token loaded with it, every test that pops LEGBA_REGISTRY_API_TOKEN to get
+# dev mode would find the gate still CONFIGURED and fail closed. Pin it to
+# empty BEFORE any ``.env`` load (``load_dotenv`` never overrides a present
+# key; empty reads as unset). Tests that exercise the service principal
+# monkeypatch it in.
+os.environ["LEGBA_REGISTRY_SERVICE_TOKEN"] = ""
+
+# Sign-in (A-1) and the per-service tokens (X2-B1): the same class. A host
+# whose ``.env`` turns sign-in on (``LEGBA_AUTH_SIGNIN=1``) and carries the
+# named services' tokens would put every in-process app behind the session
+# gate (a 401 where the test expects its route's answer) and make each
+# service token a configured credential. The suite runs with sign-in OFF and
+# no named service token unless a test sets one (``monkeypatch.setenv``);
+# pinned empty BEFORE any ``.env`` load, as above.
+os.environ["LEGBA_AUTH_SIGNIN"] = ""
+for _svc in ("REGISTRY", "RUNTIME", "WORKER", "CONSOLE"):
+    os.environ[f"LEGBA_SERVICE_TOKEN_{_svc}"] = ""
+del _svc
+
+# N-V: every Postgres connection the suite makes goes through the test-server
+# guard (tests/_pg_test_server_guard.py). On the deployment host
+# 127.0.0.1:5432 is the LIVE server; only a server carrying the test stack's
+# marker, inside a run that declares LEGBA_TEST_PG_ISOLATED=1 (the container
+# runner), is ever connected to. Installed at import, before any pool exists.
+from tests._pg_test_server_guard import (  # noqa: E402
+    HOW_TO_RUN as _PG_HOW_TO_RUN,
+    ISOLATED_ENV as _PG_ISOLATED_ENV,
+    TestServerRefusedError as _PgRefused,
+    assert_test_server as _assert_pg_test_server,
+    install_asyncpg_guard as _install_asyncpg_guard,
+    isolation_declared as _pg_isolation_declared,
+)
+
+_install_asyncpg_guard()
+
+
+def pytest_sessionstart(session):
+    """The hard guard at session start (N-V).
+
+    Isolation declared: the canonical test server (127.0.0.1:5432 in the
+    test stack's namespace) must prove it is one, or the session ABORTS
+    before anything is created or migrated. Not declared (a bare host run):
+    no server is probed at all; Postgres-backed tests fail or skip on the
+    refusal while pure unit tests still run.
+    """
+    import asyncio
+
+    if not _pg_isolation_declared():
+        print(
+            f"\n[legba tests] {_PG_ISOLATED_ENV} is not '1': every Postgres "
+            f"connection is refused in this session. {_PG_HOW_TO_RUN}"
+        )
+        return
+    try:
+        asyncio.run(_assert_pg_test_server())
+    except _PgRefused as exc:
+        pytest.exit(f"[legba tests] {exc}", returncode=4)
+
 # Env vars that individual test modules legitimately mutate for their own
 # in-process apps but that other tests depend on being at their .env-loaded
 # (or unset) baseline. Snapshot + restore these at every test boundary.
 _PRESERVED_ENV_KEYS = (
     "LEGBA_REGISTRY_API_TOKEN",
+    "LEGBA_REGISTRY_SERVICE_TOKEN",
     "LEGBA_REGISTRY_API_URL",
     "LEGBA_REGISTRY_SIGNING_KEY",
     "LEGBA_REGISTRY_SIGNING_KEY_FILE",

@@ -1,0 +1,39 @@
+# The `crosswalk` vocabulary family — a profile's value -> the platform value
+# it is (W9 VIEW-1, DEC-12: per-profile projections with a crosswalk family,
+# not one merged taxonomy).
+#
+# Seeded by the descriptor walker (scripts/bringup_register_descriptors.py,
+# "vocabulary seeds"), the same generic loader descriptors/vocabulary_frame.yaml
+# uses: every row is upserted into `vocabulary_entries`, the tree's parent /
+# notes winning on a re-run; an operator-deprecated row stays deprecated.
+# Read by the profile projection (src/legba/data/profile_projection.py): each
+# profile's plane carries the rows under its own namespace in its `crosswalk`
+# section (GET /api/v1/registry/projection/<plane>/crosswalk).
+#
+# One entry per mapped value:
+#   value    <profile>.<axis>:<value> — the profile's side (a namespaced
+#            profile family and one of its values, in the profile's own shape)
+#   parent   <platform_family>:<value> — the platform value it maps to
+#            (REQUIRED, and the family must be a platform family)
+#   notes    the human sentence naming the counterpart
+#
+# A value with no row is UNMAPPED — readers leave it alone; nothing is
+# inferred, and a missing pair is a visible absence, not a guess. The rows are
+# append-only data: a retired pair is deprecated, never deleted.
+#
+# The two rows below are the exemplar's examples: a profile may carry its own
+# copy of a platform TAXON family as exactly `<profile>.<family>`
+# (schemas/vocabulary.py PROFILE_OVERRIDABLE_FAMILIES), and a crosswalk row
+# says which platform value a value of that copy stands for. A second profile
+# adds its own rows (`sanctions.<axis>:<value>`) under its own namespace.
+identity:
+  id: crosswalk
+  schema_uri: legba/vocabulary/1.0.0
+family: crosswalk
+entries:
+  - value: "geopolitics.band:elevated"
+    parent: "band:elevated"
+    notes: the geopolitics band copy's `elevated` is the platform band ladder's `elevated` (rung 2 of 4)
+  - value: "geopolitics.source_layer:official"
+    parent: "source_layer:official"
+    notes: the geopolitics source-layer copy's `official` is the platform source layer `official`

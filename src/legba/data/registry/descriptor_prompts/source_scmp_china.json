@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.scmp.china": {
+      "source": "source_scmp_china.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -89,7 +89,9 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
+from ..principals import handle_for_actor
 from .api import RegistryAPIDeps, require_bearer, sunset_headers
+from .route_roles import recorded_author
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +174,7 @@ async def _upsert_row(
     score: float,
     score_rationale: str | None,
     scored_by: str,
+    written_by: str | None = None,
     conn: Any | None = None,
 ) -> tuple[SourceCredibilityRow, bool]:
     """Insert-or-update one row.  Returns ``(row, inserted)``.
@@ -184,17 +187,19 @@ async def _upsert_row(
     """
     sql = """
         INSERT INTO source_credibility
-            (source_host, score, score_rationale, scored_by, last_updated)
-        VALUES ($1, $2, $3, $4, NOW())
+            (source_host, score, score_rationale, scored_by, last_updated,
+             written_by)
+        VALUES ($1, $2, $3, $4, NOW(), legba_principal($5))
         ON CONFLICT (source_host) DO UPDATE
         SET score = EXCLUDED.score,
             score_rationale = EXCLUDED.score_rationale,
             scored_by = EXCLUDED.scored_by,
-            last_updated = NOW()
+            last_updated = NOW(),
+            written_by = EXCLUDED.written_by
         RETURNING source_host, score, score_rationale, scored_by,
                   last_updated, (xmax = 0) AS inserted
     """
-    args = (host, score, score_rationale, scored_by)
+    args = (host, score, score_rationale, scored_by, written_by)
     if conn is not None:
         row = await conn.fetchrow(sql, *args)
     else:
@@ -393,7 +398,8 @@ def build_source_credibility_router(deps: RegistryAPIDeps) -> APIRouter:
             host=host,
             score=body.score,
             score_rationale=body.score_rationale,
-            scored_by=body.scored_by,
+            scored_by=recorded_author(_principal, body.scored_by),
+            written_by=handle_for_actor(_principal),
         )
         return out
 
@@ -452,6 +458,7 @@ def build_source_credibility_router(deps: RegistryAPIDeps) -> APIRouter:
                             score=score,
                             score_rationale=rationale,
                             scored_by=scored_by,
+                            written_by=handle_for_actor(_principal),
                             conn=conn,
                         )
                     except Exception as exc:  # pragma: no cover — DB failure

@@ -87,6 +87,11 @@ class PackGovernor(BaseModel):
     crawl_max_depth: int | None = Field(default=None, ge=0)
     crawl_max_pages: int | None = Field(default=None, ge=0)
     api_rate_per_minute: int | None = Field(default=None, ge=0)
+    # C-1b — admitted invocations per RUN (one consult turn's case). Generic,
+    # but enforced by the CALLER from the run's own count (the consult case
+    # gate, ``analysts/consult_case.py``), not by the per-pack ledger windows
+    # above: a run is not a time window. None = no per-run cap.
+    max_invocations_per_run: int | None = Field(default=None, ge=0)
 
 
 class ActionPack(BaseModel):

@@ -53,10 +53,12 @@ insert.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 from uuid import UUID
 
+from .._url_canon import canonical_url_hash
 from .dedupe import Dedupe4TierHandler
 from ..sources._contract import Signal
 
@@ -78,6 +80,40 @@ _REASON_CONTENT = "content_hash"
 
 # Exact-key matches are certain → score 1.0 (same convention as the analyst).
 _EXACT_SCORE = 1.0
+
+# N-S: ``payload.source_url`` is the address the SOURCE fetched — the RSS feed,
+# the GeoJSON endpoint, the JSON API (UKMTO's ``/api/ukmto/all`` serves ~60
+# incidents from one address). Every item of a fetch shares it, so it names no
+# document and is never a tier-1 key: a signal whose ONLY URL is this one skips
+# tier 1 and is decided by tier 2 (its content hash, which for a json_api item
+# folds in the item's own id). Before N-S such a probe could only match a row
+# whose stored ``canonical_url`` happened to equal the endpoint — measured on
+# live 2026-11-13 over all 50,854 rows that probe this way (NWS alerts, WHO
+# DON, UKMTO): zero ever matched, so the rule changes no past outcome; it
+# forecloses the one that would have collapsed a whole feed into one row.
+_ENDPOINT_ORIGIN = "source_url"
+
+# Fallback-scan logging: one INFO line per interval with the cumulative count,
+# so a backfill in progress is visible without a line per written signal.
+_FALLBACK_LOG_INTERVAL_S = 60.0
+_fallback_state = {"calls": 0, "rows": 0, "last_log": 0.0}
+
+
+def _note_fallback(rows: int) -> None:
+    st = _fallback_state
+    st["calls"] += 1
+    st["rows"] += rows
+    now = time.monotonic()
+    if now - st["last_log"] >= _FALLBACK_LOG_INTERVAL_S:
+        logger.info(
+            "ingest_dedupe.url_hash.fallback_scan calls=%d rows_read=%d "
+            "(rows without canonical_url_hash; run "
+            "scripts/backfill_signal_url_hash.py until this stops)",
+            st["calls"], st["rows"],
+        )
+        st["last_log"] = now
+        st["calls"] = 0
+        st["rows"] = 0
 
 
 @dataclass
@@ -123,30 +159,42 @@ class IngestDedupe:
     # -- hashing (shared with the target-side handler for byte-parity) --------
 
     @staticmethod
-    def url_hash(signal: Signal) -> str | None:
-        """Canonical-URL SHA-256 for tier 1, or ``None`` if no URL is present.
+    def probe_url(signal: Signal) -> tuple[str, str]:
+        """The URL tier 1 probes with, and which field it came from.
 
-        Reuses :meth:`Dedupe4TierHandler._canonical_url_hash` so the ingest
-        hash matches the target-side tier-1 hash exactly.
+        ``(url, origin)`` with origin one of ``canonical_url`` / ``url`` /
+        ``link`` / ``source_url``, or ``("", "")`` when the signal carries none.
+        Same precedence as the target-side handler's tier-1 key.
         """
-        # The static-ish helper reads ``signal.canonical_url`` + the usual
-        # payload url/link/source_url fallbacks. It's an instance method only
-        # because it reaches ``self.canonical_url`` (a staticmethod); call it
-        # unbound with a throwaway via the staticmethod directly.
-        url = (
-            signal.canonical_url
-            or _payload_str(signal, "url")
-            or _payload_str(signal, "link")
-            or _payload_str(signal, "source_url")
-        )
-        if not url:
-            return None
-        import hashlib
+        for origin, url in (
+            ("canonical_url", signal.canonical_url or ""),
+            ("url", _payload_str(signal, "url")),
+            ("link", _payload_str(signal, "link")),
+            ("source_url", _payload_str(signal, "source_url")),
+        ):
+            if url:
+                return url, origin
+        return "", ""
 
-        canon = Dedupe4TierHandler.canonical_url(url)
-        if not canon:
+    @staticmethod
+    def url_hash(signal: Signal) -> str | None:
+        """Canonical-URL SHA-256 for tier 1, or ``None`` if tier 1 has no key.
+
+        ``None`` when the signal carries no URL, when the URL canonicalises to
+        nothing, and — N-S, see :data:`_ENDPOINT_ORIGIN` — when the only URL
+        is ``payload.source_url``, the address the SOURCE fetched (an RSS feed,
+        a GeoJSON endpoint, a JSON API such as UKMTO's
+        ``/api/ukmto/all``), which is shared by every item of that fetch and
+        identifies no document. The key itself is
+        :func:`legba.data._url_canon.canonical_url_hash`, byte-identical to the
+        target-side handler's tier-1 hash and to ``signals.canonical_url_hash``.
+        """
+        url, origin = IngestDedupe.probe_url(signal)
+        if not url or origin == _ENDPOINT_ORIGIN:
             return None
-        return hashlib.sha256(canon.encode("utf-8")).hexdigest()
+        if not Dedupe4TierHandler.canonical_url(url):
+            return None
+        return canonical_url_hash(url)
 
     @staticmethod
     def content_hash(signal: Signal) -> str:
@@ -229,43 +277,90 @@ class IngestDedupe:
     async def _lookup_by_url_hash(
         self, conn: Any, signal: Signal, url_hash: str,
     ) -> "dict[str, Any] | None":
-        """Earliest existing row whose canonical-URL equals this signal's.
+        """Earliest existing row whose canonical URL equals this signal's.
 
-        The stored ``signals.canonical_url`` is the source-provided URL as
-        landed: the baseline does NOT canonicalise it (it stays the display
-        URL the lineage / substrate-read APIs surface). So a raw exact match
-        against the *canonicalised* probe was inert for every row whose stored
-        URL differed only by fragment / query order / default port / host case
-        — the dedupe silently never fired. We therefore canonicalise BOTH
-        sides: scan the tenant's rows that carry a ``canonical_url`` and pick
-        the earliest whose ``Dedupe4TierHandler.canonical_url(stored)`` equals
-        the canonicalised probe. This is the lower-risk of the two fixes — it
-        touches only this lookup, leaving the stored/displayed URL and the
-        content-hash backstop (which hashes the raw ``canonical_url``)
-        untouched. There is no index on ``canonical_url`` either way (see the
-        signals migration), so this matches the prior query's cost profile.
+        The stored ``signals.canonical_url`` is the URL as landed (the display
+        URL; the baseline does not canonicalise it), so the comparison has
+        always been canonical-form to canonical-form. Until N-S that meant
+        reading EVERY non-empty ``canonical_url`` row of the tenant and
+        canonicalising each in Python, once per written signal — 380,879 rows
+        and ~7 s per call on 2026-11-13, the dominant per-signal cost of the
+        whole write path. Migration 0247 stores the canonical form's hash
+        (``canonical_url_hash``, minted by the same
+        :func:`~legba.data._url_canon.canonical_url_hash` as the probe), so the
+        lookup is one indexed equality.
+
+        Rows written before 0247 carry no hash until
+        ``scripts/backfill_signal_url_hash.py`` reaches them. They are still
+        matched, by the old canonicalise-in-Python comparison restricted to
+        the UN-HASHED rows (a partial index serves exactly that set, and it
+        shrinks to nothing as the backfill proceeds), and only rows earlier
+        than the indexed hit are read. Same matches, same misses, same
+        earliest-row choice as the full scan — proven in
+        ``tests/data_pkg/test_ingest_dedupe_url_hash_equivalence.py`` against
+        the frozen pre-N-S module.
         """
-        canon = signal.canonical_url or _payload_str(signal, "url") or \
-            _payload_str(signal, "link") or _payload_str(signal, "source_url")
+        url, _origin = self.probe_url(signal)
+        canon = Dedupe4TierHandler.canonical_url(url) if url else ""
         if not canon:
             return None
-        canon = Dedupe4TierHandler.canonical_url(canon)
-        if not canon:
+        params: list[Any] = [signal.signal_id, url_hash]
+        tclause, params = self._tenant_clause(params)
+        hit = await conn.fetchrow(
+            f"""
+            SELECT id, canonical_signal_id, fetched_at
+            FROM signals
+            WHERE canonical_url_hash = $2
+              AND id <> $1
+              {tclause}
+            ORDER BY fetched_at ASC, id ASC
+            LIMIT 1
+            """,
+            *params,
+        )
+        hit = dict(hit) if hit is not None else None
+        older = await self._lookup_unhashed(conn, signal, canon, before=hit)
+        best = older if older is not None else hit
+        if best is None:
             return None
+        return {"id": best["id"], "canonical_signal_id": best["canonical_signal_id"]}
+
+    async def _lookup_unhashed(
+        self, conn: Any, signal: Signal, canon: str,
+        *, before: "dict[str, Any] | None",
+    ) -> "dict[str, Any] | None":
+        """The pre-0247 comparison over rows not yet carrying a hash.
+
+        Bounded by construction: it reads only rows whose
+        ``canonical_url_hash`` is NULL while their ``canonical_url`` is not
+        empty (served by ``idx_signals_canonical_url_unhashed``, which the
+        backfill empties), and, when the indexed lookup already found a row,
+        only rows ordered before it. Logs whenever it reads anything, so a
+        backfill that never ran — or an insert path that stopped writing the
+        hash — shows up in the logs instead of as a slow write path.
+        """
         params: list[Any] = [signal.signal_id]
+        bound = ""
+        if before is not None:
+            params += [before["fetched_at"], before["id"]]
+            bound = " AND (fetched_at, id) < ($2::timestamptz, $3::uuid)"
         tclause, params = self._tenant_clause(params)
         rows = await conn.fetch(
             f"""
-            SELECT id, canonical_signal_id, canonical_url
+            SELECT id, canonical_signal_id, canonical_url, fetched_at
             FROM signals
-            WHERE id <> $1
+            WHERE canonical_url_hash IS NULL
               AND canonical_url IS NOT NULL
               AND canonical_url <> ''
+              AND id <> $1{bound}
               {tclause}
             ORDER BY fetched_at ASC, id ASC
             """,
             *params,
         )
+        if not rows:
+            return None
+        _note_fallback(len(rows))
         for row in rows:
             stored = row["canonical_url"]
             if stored and Dedupe4TierHandler.canonical_url(stored) == canon:

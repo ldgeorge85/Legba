@@ -41,6 +41,7 @@ instruction, in terms: its NOTE is the only record that survives.
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import asyncio
 import inspect
@@ -242,14 +243,8 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "The search query."},
-                "time_range": {
-                    "type": "string",
-                    "enum": ["", "day", "week", "month", "year"],
-                    "description": (
-                        "Optional recency filter. 'month' usually suits a "
-                        "14-day window."
-                    ),
-                },
+                # W11-F11: no ``time_range`` — the pack refuses it by name and
+                # every refusal cost the build; recency is the fence's job.
             },
             "required": ["query"],
         },
@@ -359,8 +354,13 @@ class ToolPlane:
         args: dict[str, Any] = {
             "query": query, "limit": SEARCH_RESULTS_TO_MODEL * 3,
         }
+        # W11-F11: a ``time_range`` the model still emits is never forwarded;
+        # it is recorded on the search ledger so the trace shows the ask.
         if time_range:
-            args["time_range"] = time_range
+            self.searches.append({
+                "query": query, "note": f"time_range={time_range!r} dropped (W11-F11)",
+                "results": None,
+            })
         try:
             outcome = await asyncio.wait_for(
                 self.binding.run_tool("web_search", args),
@@ -961,7 +961,7 @@ async def run_loop(
     dimensions: Sequence[str],
     tool_call_cap: int,
     note_gate: NoteGate,
-    temperature: float = 1.0,
+    temperature: float = HOUSE_TEMPERATURE,
     round_timeout: float = 240.0,
     min_noted: int = MIN_NOTED_DEVELOPMENTS,
     max_seconds: float | None = None,

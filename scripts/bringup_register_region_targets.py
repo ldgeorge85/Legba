@@ -22,12 +22,18 @@ carry from S1-T1, so the region_composition analyst reads the country reads in
 its region by that tag.
 
 Registration goes through the registry REST surface (POST /descriptors/target),
-mirroring ``bringup_register_multi_country_targets.py`` + ``_token.py`` auth.
+mirroring ``attic/bringup_register_multi_country_targets.py`` + ``_token.py`` auth.
 CREATE-only + idempotent: a frame whose head row already exists is left alone
 (reported ``exists``), never PUT — bringup does not mutate live descriptors.
 
 Every synthesised body is validated against the real pydantic
 ``TargetDescriptor`` schema before it touches the registry.
+
+FRAME-KIND AWARE (W10 TAX-2): with ``LEGBA_FRAME_FAMILY`` on and the ``frame``
+family loaded (read from the registry; from ``descriptors/vocabulary_frame.yaml``
+on ``--dry-run``), the frame list is the family's ``region`` groups (not the
+literal below) and each head is also tagged ``frame:region``. Off — the default
+— every body is byte-identical to the pre-TAX-2 one (``_frame_kind``).
 
 Env:
   * ``LEGBA_REGISTRY_URL``       — defaults to http://127.0.0.1:8090/api/v1/registry
@@ -47,6 +53,14 @@ import httpx
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from _bringup_http import registry_base, registry_client  # noqa: E402
+from _frame_kind import (  # noqa: E402
+    catalog_from_registry,
+    family_live,
+    frame_family_enabled,
+    frame_groups,
+    frame_kind_tags,
+    tree_catalog,
+)
 from _token import resolve_token  # noqa: E402
 
 from legba.data.schemas.target import TargetDescriptor  # noqa: E402
@@ -54,6 +68,9 @@ from legba.data.schemas.target import TargetDescriptor  # noqa: E402
 BASE = registry_base()
 
 FAMILY = "target"
+
+#: The frame kind these heads are (the ``frame`` family's ``region`` entry).
+REGION_KIND = "region"
 
 # The five macro-region frames. ``slug`` is both the id suffix (region_<slug>)
 # and the per-region coverage tag (region_<slug>) the country desks carry from
@@ -101,12 +118,33 @@ RELATIONSHIP_TYPES = [
 ]
 
 
-def build_body(region: dict) -> dict:
+def region_rows(catalog=None) -> list[dict]:
+    """The region frames: the ``frame`` family's ``region`` groups when the
+    family is live (themes and the display name kept from :data:`REGIONS` for a
+    frame it already names; a frame it does not gets its label and no themes),
+    else :data:`REGIONS` itself."""
+    if not family_live(catalog):
+        return REGIONS
+    by_id = {f"region_{r['slug']}": r for r in REGIONS}
+    rows: list[dict] = []
+    for frame in frame_groups(REGION_KIND, catalog):
+        legacy = by_id.get(frame.id)
+        rows.append({
+            "id": frame.id,
+            "slug": frame.id.removeprefix("region_"),
+            "name": legacy["name"] if legacy else frame.label.removeprefix("Region — "),
+            "themes": list(legacy["themes"]) if legacy else [],
+        })
+    return rows
+
+
+def build_body(region: dict, catalog=None) -> dict:
     """Synthesise the plain-dict TargetDescriptor body for one region frame."""
     slug = region["slug"]
+    rid = region.get("id") or f"region_{slug}"
     return {
         "identity": {
-            "id": f"region_{slug}",
+            "id": rid,
             "name": f"Region — {region['name']}",
             "schema_uri": "legba/target/2.0.0",
             "version": "0" * 16,  # placeholder; registry stamps the content hash
@@ -131,7 +169,8 @@ def build_body(region: dict) -> dict:
             # `region` = the generic frame tag S2-T2's read filter keys on;
             # `region_<slug>` = the per-region coverage tag the 24 desks carry
             # (S1-T1) so region_composition fuses its region's country reads.
-            "tags": ["region", f"region_{slug}", "geopolitical"],
+            # `frame:region` joins them when the frame family is live (TAX-2).
+            "tags": frame_kind_tags(rid, ["region", rid, "geopolitical"], catalog),
         },
         # Broad news selector — purely to satisfy the "active target must
         # declare at least one source" schema constraint (same permissive
@@ -154,11 +193,11 @@ def build_body(region: dict) -> dict:
     }
 
 
-def build_region_frames() -> list[tuple[str, dict, TargetDescriptor]]:
+def build_region_frames(catalog=None) -> list[tuple[str, dict, TargetDescriptor]]:
     """Build + validate every region frame. Returns (id, body, descriptor)."""
     out: list[tuple[str, dict, TargetDescriptor]] = []
-    for region in REGIONS:
-        body = build_body(region)
+    for region in region_rows(catalog):
+        body = build_body(region, catalog)
         # Validate against the real schema before anything touches the network.
         desc = TargetDescriptor.model_validate(body, strict=False)
         out.append((desc.identity.id, body, desc))
@@ -177,7 +216,9 @@ def _get_head(client: httpx.Client, descriptor_id: str) -> dict | None:
     )
 
 
-def register_frames(client: httpx.Client) -> tuple[list[tuple[str, str, str]], list[str]]:
+def register_frames(
+    client: httpx.Client, catalog=None,
+) -> tuple[list[tuple[str, str, str]], list[str]]:
     """CREATE each region frame that does not already exist (idempotent).
 
     Returns ``(results, failures)`` where results is a list of
@@ -186,8 +227,10 @@ def register_frames(client: httpx.Client) -> tuple[list[tuple[str, str, str]], l
     """
     results: list[tuple[str, str, str]] = []
     failures: list[str] = []
+    if catalog is None and frame_family_enabled():
+        catalog = catalog_from_registry(client)
 
-    for desc_id, body, _desc in build_region_frames():
+    for desc_id, body, _desc in build_region_frames(catalog):
         try:
             head = _get_head(client, desc_id)
         except Exception as exc:  # noqa: BLE001 — surface a per-frame failure
@@ -229,7 +272,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.dry_run:
         # No network: prove every body validates, then report what WOULD register.
-        frames = build_region_frames()
+        frames = build_region_frames(tree_catalog() if frame_family_enabled() else None)
         print("Region frames (dry-run — nothing written):")
         for desc_id, _body, desc in frames:
             print(f"  would-register  {FAMILY}/{desc_id}  tags={desc.scope.tags}")

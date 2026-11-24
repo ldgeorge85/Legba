@@ -2,7 +2,7 @@
 # Started from scripts/gen_layer_map_draft.py --country CN (the generator's
 # own derived output, every reason "derived:", every aperture unmeasured —
 # see planning/LAYER_MAP_DRAFTS_2026-09-24/layer_map_cn.yaml for that
-# baseline). Curated per docs/LAYERS.md and the wave-E curate_cn brief:
+# baseline). Curated per docs/DATA_SOURCES.md and the wave-E curate_cn brief:
 #
 #   * Every entries[] reason is now either "curated: ..." (the layer/reading
 #     was actively assessed for China and the reason rewritten to say why —

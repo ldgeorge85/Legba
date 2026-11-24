@@ -1,0 +1,130 @@
+# options_contest/2 — options_contest/1 re-sized and re-judged (lane G-6): the
+# fixture that gives `debate`, `select` and `branch` an executed example.
+# Same shape as /1. What changed: deadlines from measurement (thinking ON
+# p95 121 s -> 180 s; thinking OFF p95 14.5 s -> 60 s); every model seat
+# retries once, handed the refusal's reasons; the three rank judges are
+# verdict/2 judges on their own card (cards/judges/rank.md), each allowed to
+# count only with a passing calibration record. The moderator settles the
+# debate (verdict/1 `settled`); it is not a panel judge.
+round:
+  id: options_contest
+  version: 2
+  about: rank competing options, debate the shortlist, and close by rule
+  inputs:
+    subject: {type: subject_ref}
+    question: {type: text}
+    as_of: {type: timestamp}
+  seats:
+    freeze:
+      kind: code
+      fn: scope_and_freeze
+      reads: [{from: input.subject}, {from: input.as_of}]
+      output: frozen_scope/1
+      deadline_s: 30
+    framer:
+      kind: model
+      card: cards/option_framer.md
+      plane: llm.primary.openai_compat
+      thinking: on
+      reads: [{from: input.question}, {from: freeze}]
+      output: hypothesis_set/1
+      deadline_s: 180
+      retries: 1
+      repair: reasons
+      on_failure: stop_round
+    pitch:          # one instance per option, blind to the other pitches
+      kind: model
+      card: cards/option_pitch.md
+      plane: llm.primary.openai_compat
+      thinking: off
+      reads: [{from: item.option}, {from: freeze}]
+      output: position/1
+      gates: [handed_rows, quote_in_source]
+      deadline_s: 60
+      retries: 1
+      repair: reasons
+    table:
+      kind: code
+      fn: sentence_table
+      reads: [{from: pitches.sealed, view: rows}]
+      output: sentence_table/1
+      deadline_s: 30
+    rank_a:
+      kind: judge
+      card: cards/judges/rank.md
+      plane: llm.verify.innoai_gemma.openai_compat
+      family_rule: {differs_from: [pitch, advocate_for, advocate_against]}
+      reads: [{from: table, view: sentence_table}]
+      output: verdict/2
+      deadline_s: 120
+      retries: 1
+      repair: reasons
+    rank_b: {seat_ref: rank_a}
+    rank_c: {seat_ref: rank_a, plane: llm.grader.innoai_lightning.openai_compat}
+    advocate_for:
+      kind: model
+      card: cards/advocate_for.md
+      plane: llm.primary.openai_compat
+      thinking: on
+      reads: [{from: shortlist}, {from: table, view: sentence_table}]
+      output: turn/1
+      gates: [handed_rows]
+      deadline_s: 180
+    advocate_against: {seat_ref: advocate_for, card: cards/advocate_against.md}
+    moderator:
+      kind: judge
+      card: cards/moderator.md
+      plane: llm.verify.innoai_gemma.openai_compat
+      family_rule: {differs_from: [advocate_for, advocate_against]}
+      reads: [{from: floor.sealed, view: sentence_table}]
+      output: verdict/1
+      deadline_s: 60
+    tiebreak:
+      kind: model
+      card: cards/tiebreak.md
+      plane: llm.primary.openai_compat
+      thinking: on
+      reads: [{from: rank.tally}, {from: floor.sealed, view: sentence_table}, {from: shortlist}]
+      output: ruling/1
+      gates: [handed_rows]
+      deadline_s: 180
+    confirm:
+      kind: model
+      card: cards/confirm.md
+      plane: llm.primary.openai_compat
+      thinking: off
+      reads: [{from: rank.tally}, {from: floor.sealed, view: sentence_table}, {from: shortlist}]
+      output: ruling/1
+      gates: [handed_rows]
+      deadline_s: 60
+      retries: 1
+      repair: reasons
+    editor:
+      kind: model
+      card: cards/editor.md
+      plane: llm.primary.openai_compat
+      thinking: off
+      reads: [{from: close}, {from: rank.tally}, {from: table, view: sentence_table}]
+      output: read/1
+      gates: [every_sentence_maps_to_rows]
+      deadline_s: 60
+      retries: 1
+      repair: reasons
+  flow:
+    seq:
+      - {seat: freeze}
+      - {seat: framer}
+      - {map: {over: framer.hypotheses, as: option, body: {seat: pitch}, max_items: 6, concurrency: 3}, id: pitches, deadline_s: 450, blind: true}
+      - {seat: table}
+      - {panel: {judges: [rank_a, rank_b, rank_c], on: table, tally: borda}, id: rank, deadline_s: 240}
+      - {select: {from: pitches, by: rank, keep: {top: 2}}, id: shortlist}
+      - {debate: {seats: [advocate_for, advocate_against], order: fixed, max_turns: 4, settle_by: moderator}, id: floor, deadline_s: 900}
+      - branch:
+          cases:
+            - {when: "tally.rank.outcome == tie", do: {seat: tiebreak}}
+          default: {seat: confirm}
+        id: close
+      - {seat: editor}
+    id: main
+  budgets: {wall_s: 2700, model_calls: 40, max_parallel: 4}
+  publishes: none

@@ -67,6 +67,15 @@ export interface CitedAssessmentProps {
    * them) chips nothing, exactly as before this existed.
    */
   contentions?: Map<number, ContentionRow> | null
+  /**
+   * Fix 2 — the record has NOT been read yet (the optimistic first paint off
+   * the clicked row's prose). An empty citation list then means "not read",
+   * not "uncited", and there is no verification to judge: the card prints a
+   * neutral "reading…" in place of the citation marker and the verdict, so
+   * no "uncited (legacy finding)" / "unverified" / "unstated" verdict is
+   * printed before the record answered.
+   */
+  pending?: boolean
 }
 
 /**
@@ -83,6 +92,7 @@ export default function CitedAssessment({
   targetId = null,
   corroboration = null,
   contentions = null,
+  pending = false,
 }: CitedAssessmentProps) {
   const cited = citations.length > 0
   const verdict = buildVerdict({
@@ -97,7 +107,17 @@ export default function CitedAssessment({
   return (
     <div data-testid="cited-assessment">
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        {cited ? (
+        {pending ? (
+          <span
+            className="inline-flex items-center gap-1 text-label text-ink-3"
+            data-testid="cited-pending"
+            aria-busy="true"
+            title="The record is still being read — its citations and verdict print once it answers"
+          >
+            <FileText className="h-3 w-3" aria-hidden />
+            citations – · verdict reading…
+          </span>
+        ) : cited ? (
           <span className="inline-flex items-center gap-1 text-label text-ink-2" data-testid="cited-marker">
             <FileText className="h-3 w-3" aria-hidden />
             {citations.length} citation{citations.length === 1 ? '' : 's'}
@@ -112,7 +132,7 @@ export default function CitedAssessment({
             uncited (legacy finding)
           </span>
         )}
-        <VerdictBadge verdict={verdict} showLegend />
+        {!pending && <VerdictBadge verdict={verdict} showLegend />}
         <UnitEvalBadge analystId={analystId} />
         {/* G2 — correctness against an independent reference, a DIFFERENT
             measurement from the faithfulness verdict beside it and never
@@ -122,7 +142,7 @@ export default function CitedAssessment({
 
       {/* P0-4 — one-line subtext for a verify-EXEMPT structural read, so the
           exception is stated in place (the badge tooltip repeats it). */}
-      {verdict.structural && verdict.confidence === 'unassessed' && (
+      {!pending && verdict.structural && verdict.confidence === 'unassessed' && (
         <div
           className="mb-2 text-label italic text-ink-3"
           data-testid="structural-exempt-note"
@@ -149,6 +169,7 @@ export default function CitedAssessment({
           claimTags
           corroboration={corroboration}
           contentions={contentions}
+          crossFramingTargetId={targetId}
         />
       </div>
 
@@ -190,7 +211,7 @@ export default function CitedAssessment({
                     // design — labeled with its KIND and non-drilling, never
                     // a dead link and never an "unresolved" chip.
                     <span className="text-body text-fg-muted" data-testid="evidence-nonlink">
-                      <span className="mr-1 rounded bg-surf-2 px-1 text-[10px] leading-tight text-ink-3">
+                      <span className="mr-1 rounded bg-surf-2 px-1 text-label leading-tight text-ink-3">
                         {citationKindLabel(c)}
                       </span>
                       {c.title ?? citationKindLabel(c)}

@@ -31,6 +31,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Mode, PanelRegistration } from '@/types'
 import { apiGet, fetchUiPanels } from '@/lib/api'
+import { ANALYST_ROSTER_ROUTE, SUBJECT_ROSTER_ROUTE } from '@/lib/deskNames'
 import { subscribeRegistryEvents } from '@/lib/ws'
 import {
   mergeRegistrations,
@@ -39,12 +40,15 @@ import {
 } from './synthesize'
 
 /** Soft descriptor-head fetch — empty on any failure so the sidebar always
- *  degrades to the real registration rows rather than erroring out. */
+ *  degrades to the real registration rows rather than erroring out. The
+ *  synthesis reads an id, a name and a state, so it asks the summary weight
+ *  (the subject roster's own route, one request between them): roll 84's live
+ *  walk measured the whole analyst bodies at 546 KB on every landing. */
 async function softDescriptorHeads(family: 'target' | 'analyst'): Promise<RecordDescriptor[]> {
   try {
-    return await apiGet<RecordDescriptor[]>(
-      `/registry/descriptors?family=${family}&head_only=true&limit=500`,
-    )
+    const rows = await apiGet<RecordDescriptor[]>(family === 'target' ? SUBJECT_ROSTER_ROUTE : ANALYST_ROSTER_ROUTE)
+    // a body that is not a listing is no roster (never a crash in the synthesis)
+    return Array.isArray(rows) ? rows : []
   } catch {
     return []
   }

@@ -245,11 +245,11 @@ describe('EvalBandCalibration — a graded section', () => {
     for (const o of ['insufficient', 'unresolvable']) {
       const row = screen.getByTestId(`band-calibration-outcome-14d-${o}`)
       expect(row).toHaveTextContent('excluded from both rates')
-      expect(row.className).toContain('text-slate-500')
+      expect(row.className).toContain('text-ink-3')
     }
     // The confirming outcomes are not muted.
     expect(screen.getByTestId('band-calibration-outcome-14d-held').className).toContain(
-      'text-slate-300',
+      'text-ink-1',
     )
   })
 

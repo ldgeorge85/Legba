@@ -79,7 +79,7 @@ def run_check(target: str) -> int:
     try:
         # ---- preflight: reachable stack + a finding for the target ----------
         try:
-            page = _get(client, base, "/api/v1/findings", target_id=target, limit=50)
+            page = _get(client, base, "/api/v1/findings", target_id=target, limit=50, fields="full")
         except Exception as exc:  # noqa: BLE001
             print(f"  stack unreachable at {base}: {exc!r}", file=sys.stderr)
             return 2

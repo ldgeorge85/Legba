@@ -700,6 +700,69 @@ async def test_analyst_runs_pagination(api_app, client: AsyncClient):
 
 
 # ---------------------------------------------------------------------------
+# /outputs — P-8: light by default, full by name.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_analyst_outputs_default_is_light_and_full_is_by_name(
+    api_app, client: AsyncClient,
+):
+    _, _, pg_store = api_app
+    aid = f"analyst_w_{uuid4().hex[:8]}"
+    oid = await _insert_analyst_output(
+        pg_store, analyst_id=aid, data={"assembly": {"blocks": ["x" * 20_000]}},
+    )
+    async with pg_store.acquire() as conn:
+        await conn.execute(
+            "UPDATE analyst_outputs SET body = $2 WHERE id = $1", oid, "b" * 2_000)
+    light = await client.get(f"/api/v1/analysts/{aid}/outputs")
+    assert light.status_code == 200, light.text
+    row = light.json()["items"][0]
+    assert "data" not in row
+    assert row["body"] == "b" * 600 and row["body_truncated"] is True
+    assert len(light.content) < 4_000
+    full = await client.get(f"/api/v1/analysts/{aid}/outputs", params={"fields": "full"})
+    assert full.status_code == 200, full.text
+    frow = full.json()["items"][0]
+    assert frow["body"] == "b" * 2_000
+    assert frow["data"]["assembly"]["blocks"][0] == "x" * 20_000
+    bad = await client.get(f"/api/v1/analysts/{aid}/outputs", params={"fields": "bogus"})
+    assert bad.status_code == 422
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_analyst_outputs_default_page_stays_under_its_byte_budget(
+    api_app, client: AsyncClient,
+):
+    """P-8 — 50 desk-width outputs (a ~100 KB document and a 12 KB body each,
+    as world_assessor's rows are on live) at the default weight stay under
+    ``list_weights``' budget for the route."""
+    from legba.data.registry.list_weights import LIST_ROUTES
+
+    route = "/api/v1/analysts/{analyst_id}/outputs"
+    budget = LIST_ROUTES[route].page_budget
+    _, _, pg_store = api_app
+    aid = f"analyst_b_{uuid4().hex[:8]}"
+    for i in range(50):
+        oid = await _insert_analyst_output(
+            pg_store, analyst_id=aid, title=f"A desk read headline {i}",
+            data={"assembly": {"blocks": ["Quoted prose. " * 7_000]}},
+        )
+        async with pg_store.acquire() as conn:
+            await conn.execute(
+                "UPDATE analyst_outputs SET body = $2 WHERE id = $1",
+                oid, "Body prose of a desk read. " * 450)
+    r = await client.get(f"/api/v1/analysts/{aid}/outputs")
+    assert r.status_code == 200, r.text
+    assert len(r.json()["items"]) == 50
+    assert len(r.content) <= budget, (
+        f"{route}: default page is {len(r.content)} bytes, budget {budget}")
+
+
+# ---------------------------------------------------------------------------
 # /outputs — pagination + kind filter.
 # ---------------------------------------------------------------------------
 

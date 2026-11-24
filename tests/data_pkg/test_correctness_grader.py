@@ -736,9 +736,14 @@ def test_the_guard_stops_before_the_call_that_would_breach():
     assert GRADE.would_breach(0.0, 0.0, 0.0015), "a $0 ceiling admits no paid call"
 
 
-def test_a_paid_call_that_reports_no_cost_is_priced_from_the_registry():
+def test_a_paid_call_that_reports_no_cost_is_priced_from_the_registry(monkeypatch):
     """An unpriced component would otherwise make a paid run look free, and a
     ceiling that cannot see spend is not a ceiling."""
+    # Since the 2026-10-23 cutover F2 is a $0 lane on our own box; the fallback
+    # pricing is exercised here with a PAID price on the same table entry.
+    monkeypatch.setitem(GRADE.FAMILIES["F2"], "price_in", 0.13)
+    monkeypatch.setitem(GRADE.FAMILIES["F2"], "price_out", 0.40)
+    monkeypatch.setitem(GRADE.FAMILIES["F2"], "paid", True)
     cost, source = GRADE.call_cost_usd("F2", _Usage(cost=0.0, tin=7000, tout=300))
     assert cost > 0 and source == "registered_price_fallback"
     cost, source = GRADE.call_cost_usd("F2", _Usage(cost=0.004))
@@ -768,9 +773,14 @@ async def test_at_a_zero_ceiling_the_paid_families_are_never_called():
 
 
 @pytest.mark.asyncio
-async def test_the_paid_families_are_never_called_past_the_ceiling():
+async def test_the_paid_families_are_never_called_past_the_ceiling(monkeypatch):
     """Two claims, a ceiling that affords one paid call. The guard fires BEFORE
-    the second, not after it."""
+    the second, not after it. (F2 is a $0 lane since the 2026-10-23 cutover; the
+    guard is exercised with a paid price patched onto its table entry.)"""
+    monkeypatch.setitem(GRADE.FAMILIES["F2"], "price_in", 0.13)
+    monkeypatch.setitem(GRADE.FAMILIES["F2"], "price_out", 0.40)
+    monkeypatch.setitem(GRADE.FAMILIES["F2"], "paid", True)
+    monkeypatch.setitem(GRADE.FAMILIES["F2"], "est_first_cost_usd", 0.0015)
     items = [
         dict(_item(), p1_id="CR-078760a8"),
         dict(_item(), p1_id="CR-2ef7e057"),
@@ -1930,11 +1940,18 @@ def test_the_f3_family_names_the_model_the_component_now_serves():
     2026-09-20 and the judge component was repointed at mistral-medium-3.1. The
     component id does not move; the model id and the prices that back the
     ceiling do."""
+    # Cutover 2026-10-23: F3 moved again, off OpenRouter onto our own box
+    # (Nemotron Lightning via the innoai gateway, a $0 lane); F2 moved with it
+    # (Gemma 4). The same property holds: the table names what is served.
     f3 = GRADE.FAMILIES["F3"]
-    assert f3["model"] == "mistralai/mistral-medium-3.1"
-    assert f3["component"] == "llm.judge.openrouter_mistral_large.openai_compat"
-    assert (f3["price_in"], f3["price_out"]) == (0.40, 2.00)
-    assert GRADE.model_ids()["F3"] == "mistralai/mistral-medium-3.1"
+    assert f3["model"] == "lightning"
+    assert f3["component"] == "llm.grader.innoai_lightning.openai_compat"
+    assert (f3["price_in"], f3["price_out"]) == (0.0, 0.0)
+    assert GRADE.model_ids()["F3"] == "lightning"
+    f2 = GRADE.FAMILIES["F2"]
+    assert f2["model"] == "gemma"
+    assert f2["component"] == "llm.verify.innoai_gemma.openai_compat"
+    assert GRADE.model_ids()["F2"] == "gemma"
 
 
 def test_the_repointed_f3_is_outside_the_v4_gate_until_a_re_gate_lands():

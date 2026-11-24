@@ -982,6 +982,37 @@ async def test_a_world_assembly_publishes_a_roster_and_a_ledger(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_world_run_carries_sixteen_through_the_real_binding_path(
+    monkeypatch,
+):
+    """CONSULT_REVIEW_2026-09-28 §B.5, through ``run_method`` — the actual
+    dispatcher a live world_assessor tick calls, not a direct
+    ``build_assembly`` construction. A 20-candidate world pool (more than both
+    the old flat ``BLOCK_CAP`` (8) and the new ``WORLD_BLOCK_CAP`` (16)) proves
+    the wider world cap is wired all the way from ``meta_findings_synthesizer``
+    through ``assembly_payload.select_carried``, not just correct in
+    isolation."""
+    monkeypatch.setenv(ap.ASSEMBLY_ENV, "1")
+    rows = [
+        _country_assembly_row(f"country_watch_{i:02d}", uid=f"head-{i:02d}")
+        for i in range(20)
+    ]
+
+    from types import SimpleNamespace
+
+    result = await synth.run_method(
+        rows,
+        {"analyst_id": "world_assessor", "composition": True, "run_id": uuid4()},
+        SimpleNamespace(llm=_NeverCalledLLM()),
+    )
+    assembly = result.finding.data["assembly"]
+    assert assembly["tier"] == ap.TIER_WORLD
+    assert len(assembly["blocks"]) == ap.WORLD_BLOCK_CAP == 16
+    assert assembly["drops"]["counts"]["carried"] == 16
+    assert assembly["drops"]["counts"]["not_selected"] == 4
+
+
+@pytest.mark.asyncio
 async def test_a_world_run_without_the_stamp_is_byte_for_byte_unchanged(monkeypatch):
     """The guard is PRESENCE of the stamp. A legacy world run, or any direct
     caller, carries no roster — and then the tier is exactly what it was."""

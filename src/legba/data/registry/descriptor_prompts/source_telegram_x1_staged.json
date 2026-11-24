@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.telegram.x1_staged_channels": {
+      "source": "source_telegram_x1_staged.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:corpus_retention": {
+      "source": "analyst_corpus_retention.yaml",
+      "state": "active"
+    }
+  }
+}

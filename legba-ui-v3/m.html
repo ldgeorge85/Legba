@@ -2,16 +2,31 @@
 <html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <!-- viewport-fit=cover so the consult sheet can pay out the iOS home-indicator
-         inset via env(safe-area-inset-bottom). -->
+    <!-- viewport-fit=cover so the phone shell pays out the notch and the home
+         indicator via env(safe-area-inset-*); interactive-widget so Android
+         resizes the page for the keyboard (iOS: the shell follows
+         visualViewport). -->
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
     />
-    <meta name="color-scheme" content="dark light" />
-    <meta name="theme-color" content="#0a0c10" />
+    <!-- The phone is dark only (M-0a); theme-color is the app's ground. -->
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#11161a" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <title>Legba — Reports</title>
+
+    <!-- P-1 — installable: the app manifest (with credentials, so it still
+         loads where the edge asks for the perimeter password), the iOS
+         Home Screen icon and title, and the standalone status bar: translucent,
+         so the app's dark ground runs under it (the shell pays out
+         env(safe-area-inset-top)). Base-relative hrefs are rewritten under /m/. -->
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Legba" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>Legba</title>
   </head>
   <body class="bg-surface-200 text-slate-200 antialiased">
     <div id="root"></div>

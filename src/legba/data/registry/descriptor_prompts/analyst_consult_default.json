@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:consult_default": {
+      "source": "analyst_consult_default.yaml",
+      "state": "active"
+    }
+  }
+}

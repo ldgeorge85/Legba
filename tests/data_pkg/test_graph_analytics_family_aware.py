@@ -43,7 +43,7 @@ from legba.data.analysts.deterministic_handlers.graph_mining import (
 from legba.data.analysts.deterministic_handlers.structural_balance import (
     BALANCE_FAMILIES,
 )
-from legba.data.analysts.handler_options import resolve_handler_options
+from legba.data.option_catalog.handler_options import resolve_handler_options
 from legba.data.config import PostgresConfig
 
 

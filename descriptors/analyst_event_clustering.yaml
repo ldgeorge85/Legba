@@ -65,6 +65,9 @@ method:
     tower_floor: 0.5
     max_tower_candidates: 50
     max_lifecycle_events: 5000
+    # W6 SPLIT-1 fold, 2026-10-04: the live head carries this; the tree now does too:
+    pair_block_window_hours: 1.0
+    tower_budget_share: 0.5
 
 cadence:
   fallback_schedule: "14-54/20 * * * *"

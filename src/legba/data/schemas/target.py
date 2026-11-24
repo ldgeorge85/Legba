@@ -7,11 +7,19 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from .lifecycle import AbstractionLevel, LifecycleState, WireEnumCoercion
 from .properties import Cron, FactoryValue
-from .source import SourceRef
+from .source import SourceRef, Tag
 from .action_pack import ActionPackRef
 
 if TYPE_CHECKING:                                                # pragma: no cover
@@ -50,6 +58,19 @@ class TargetIdentity(WireEnumCoercion):
 _GeoCode = Annotated[str, Field(pattern=r"^[A-Z]{2,3}$")]
 _Lang = Annotated[str, Field(pattern=r"^[a-z]{2}(-[A-Z]{2})?$")]
 _ScopeTag = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=64)]
+#: A target's ``scope.tags`` entry: the source schema's ``Tag`` (W10 TAX-2) — a
+#: bare value as before, or ``<family>:<value>`` (the frame-kind-aware
+#: registrars tag a frame head ``frame:<kind>`` when the frame family is live).
+_TargetTag = Tag
+#: A SIGNAL tag as a slice filter names it (W8 TAX-1): ``<family>:<value>`` or a
+#: bare legacy value (= ``src:<value>``), per ``data/tags.py:bind_tag``. Shape
+#: only here — the registry refuses, by name, a tag whose family it has not
+#: loaded or whose value the family does not have (``_validate_or_dlq``).
+_SignalTag = Annotated[str, Field(min_length=1, max_length=200, pattern=r"^\S(.*\S)?$")]
+#: A target's declared SUBJECT CODE (W10 SUBJECT-1): the code the reference and
+#: the grader key the subject by when neither a single ``geo`` code nor the id is
+#: the right one. ``legba.data.subject.subject_code`` reads it first.
+_SubjectCode = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")]
 
 
 class _ScopeBase(BaseModel):
@@ -67,7 +88,7 @@ class _ScopeBase(BaseModel):
     relationship_types: list[RelationshipType] = Field(default_factory=list)
     time_horizon_days: int = Field(default=90, ge=1, le=3650)
     predicate: str | None = None  # Starlark, compiled at registration per L-104
-    tags: list[_ScopeTag] = Field(
+    tags: list[_TargetTag] = Field(
         default_factory=list,
         max_length=32,
         description=(
@@ -76,6 +97,82 @@ class _ScopeBase(BaseModel):
             "target's source-selector SourceRefs. snake_case identifiers."
         ),
     )
+
+    signal_tags: list[_SignalTag] = Field(
+        default_factory=list,
+        max_length=64,
+        description=(
+            "Slice include filter over signals.tags (W8 TAX-1): a signal is in "
+            "this target's slice only if it carries one of these tags "
+            "(`tags && $n`, strict — an untagged signal is not). "
+            "`<family>:<value>` or a bare legacy value; `x` and `src:x` are "
+            "one tag (data/tags.py signal_tag_match_forms). Empty = no filter."
+        ),
+    )
+    exclude_signal_tags: list[_SignalTag] = Field(
+        default_factory=list,
+        max_length=64,
+        description=(
+            "Slice exclude filter over signals.tags (W8 TAX-1): a signal "
+            "carrying any of these is out (`NOT (tags && $m)`), whatever else "
+            "admits it. Same tag forms as signal_tags. Empty = no filter."
+        ),
+    )
+
+    # Lane K-1 — the TEXT ARM of the slice include (signal_slice_scope): a
+    # signal is also in this target's slice when its title + summary names one
+    # of these terms (word-start, case-insensitive), OR-ed with signal_tags.
+    # For a desk with no place (cyber). Empty is left out of the dump, so every
+    # existing body keeps its content hash.
+    signal_text_terms: list[str] = Field(
+        default_factory=list,
+        max_length=64,
+        description=(
+            "Slice include, TEXT ARM (lane K-1): a signal whose title + summary "
+            "names one of these terms is in this target's slice, OR-ed with "
+            "signal_tags (`tags && $n OR text ~* $m`). Lowercase words joined "
+            "by one space or hyphen; word-start match, so a stem matches its "
+            "inflections; a trailing hyphen ('cve-') matches an identifier. "
+            "Empty = no text arm."
+        ),
+    )
+
+    subject_code: _SubjectCode | None = Field(
+        default=None,
+        description=(
+            "The subject's declared code (W10 SUBJECT-1), read first by "
+            "legba.data.subject.subject_code: the reference item ids, the "
+            "grader's packet kind and every per-subject key take it. Unset = "
+            "the single scope.geo code, else the target id. Never derived "
+            "from the id's spelling."
+        ),
+    )
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_subject_code(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        """ADDITIVE, byte for byte: an unset ``subject_code`` is left out of
+        the dump, so every descriptor that does not declare one keeps the
+        content hash it had before the field existed."""
+        data = handler(self)
+        if isinstance(data, dict) and data.get("subject_code") is None:
+            data.pop("subject_code", None)
+        if isinstance(data, dict) and not data.get("signal_text_terms"):
+            data.pop("signal_text_terms", None)
+        return data
+
+    @field_validator("signal_text_terms", mode="after")
+    @classmethod
+    def _text_terms_shape(cls, v: list[str]) -> list[str]:
+        """Each term is validated by the slice's own rule (one grammar)."""
+        from ..signal_slice_scope import text_term_error
+
+        for term in v:
+            err = text_term_error(term)
+            if err is not None:
+                raise ValueError(err)
+        return v
 
     @field_validator("predicate", mode="after")
     @classmethod

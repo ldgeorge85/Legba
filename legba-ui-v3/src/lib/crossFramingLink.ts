@@ -1,27 +1,18 @@
 /**
- * crossFramingLink — the deep link into the Cross-framing panel
- * (`analysis.cross_framing`), and the durable slot that makes it survive a
- * first click.
+ * crossFramingLink — the deep link into the Cross-framing drill
+ * (`analysis.cross_framing`).
  *
- * The house idiom for "open THAT panel on THIS subject" is the one
- * `Optimizer` → `OptimizerDiff` established: park the request on `window` as a
- * replayable pending slot AND fire a DOM event. The event serves the already-
- * mounted case; the slot serves the first-open case, because a `CustomEvent`
- * with no listener is simply lost. The panel drains the slot once on mount, so
- * a remount never replays a stale subject and a fresh click re-parks a fresh
- * one.
- *
- * The panel materialisation itself — turning the event into an `addPanel` when
- * no tile is open yet — is the central bridge in `App.tsx`, and it is the
- * integrator's line to add (three `system.optimizer.diff` lines sit beside it
- * already). Until it exists, the subject still reaches the panel: the operator
- * opens Cross-framing from ⌘K and the parked subject is waiting. Nothing is
- * lost either way, which is the whole point of parking rather than only firing.
+ * UI-B1/shell retired the bridge this file used to be: the `window` park plus
+ * the `legba:open-cross-framing` DOM event are gone (UI-D1 §3 — "a surface
+ * reachable only by an event is unaddressable"). A request is now an ordinary
+ * `open_panel` drive action with the claim in its params
+ * (`lib/commands.ts::bridgeActions.crossFraming`), run through the ONE
+ * executor; the claim reaches the tile through `state/panelParams`, which
+ * serves the first-open case (written before the tile mounts) and the
+ * already-mounted case (the tile subscribes) without a park.
  */
-
-/** Kept in sync by literal with `panels/analysis/CrossFraming.tsx`. */
-export const OPEN_CROSS_FRAMING_EVENT = 'legba:open-cross-framing'
-const PENDING_CROSS_FRAMING_KEY = '__legbaPendingCrossFraming'
+import { drive } from '@/lib/applyAction'
+import { bridgeActions } from '@/lib/commands'
 
 /**
  * What a caller knows about the claim it wants framed.
@@ -40,23 +31,26 @@ export interface CrossFramingSubject {
   origin?: string
 }
 
-function slot(): Record<string, CrossFramingSubject | undefined> {
-  return window as unknown as Record<string, CrossFramingSubject | undefined>
-}
-
-/** Park the subject AND fire the open event. */
+/** Open (or focus) the Cross-framing drill on this claim. */
 export function requestCrossFraming(subject: CrossFramingSubject): void {
-  slot()[PENDING_CROSS_FRAMING_KEY] = subject
-  window.dispatchEvent(
-    new CustomEvent<CrossFramingSubject>(OPEN_CROSS_FRAMING_EVENT, { detail: subject }),
-  )
+  drive(bridgeActions.crossFraming(subject))
 }
 
-/** Read AND clear the parked subject. Returns `null` when nothing is parked. */
-export function drainPendingCrossFraming(): CrossFramingSubject | null {
-  const w = slot()
-  const subject = w[PENDING_CROSS_FRAMING_KEY]
-  if (!subject) return null
-  delete w[PENDING_CROSS_FRAMING_KEY]
-  return subject
+/**
+ * Read a Cross-framing subject back out of an `open_panel`'s params (the
+ * `subject` ref plus `claim_id` / `claim_text` / `origin`). Null when the
+ * params name no desk.
+ */
+export function crossFramingSubjectFromParams(
+  params: Readonly<Record<string, unknown>>,
+): CrossFramingSubject | null {
+  const subject = params.subject as { kind?: unknown; id?: unknown } | undefined
+  const targetId = subject && subject.kind === 'target' && typeof subject.id === 'string' ? subject.id : null
+  if (!targetId) return null
+  return {
+    targetId,
+    claimId: typeof params.claim_id === 'string' ? params.claim_id : null,
+    claimText: typeof params.claim_text === 'string' ? params.claim_text : null,
+    ...(typeof params.origin === 'string' ? { origin: params.origin } : {}),
+  }
 }

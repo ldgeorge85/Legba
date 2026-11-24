@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.aib.news": {
+      "source": "source_aib_burkina.yaml",
+      "state": "draft"
+    }
+  }
+}

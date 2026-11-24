@@ -78,6 +78,15 @@ straddles a judge-pipeline stamp change shows two rows instead of one pooled
 average. Pooling faithfulness across judge swaps is a known way to launder a
 regression into a flat line; this grain makes the swap visible in the data.
 
+X4 / ESC (W11-F52) - ``uncited``. A second, independent block: per analyzed unit
+per day, the fact-asserting sentences the deterministic floor counts in the unit's
+bodies, how many carry no citation marker, and how many BLUFs went out without
+one (``provenance/uncited_share.py``, stamped on the critique by ``actor_critic``).
+It exists because the LLM judge forgives most uncited sentences and the floor
+counts every one, so the cost of an uncited body is invisible until the judge is
+out. Its own ``measured`` flag, like ``health``; critiques written before the
+stamp existed are not counted (a missing stamp is not a zero).
+
 House rules for the ``/system/*`` family, both observed here: bearer-gated, and a
 read failure logs at INFO and returns an honest empty payload at HTTP 200 with
 ``measured: false`` — never a 500, because a polling panel would hammer it, and
@@ -87,30 +96,50 @@ table that reads as all-clear.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, AsyncIterator, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
+from ..provenance.judge_failure_class import classify_status
 from ..provenance.judge_transport import JUDGE_STATUS_PARTIAL
 from .api import RegistryAPIDeps, require_bearer
+from .read_latency import TTLCache
 
 logger = logging.getLogger(__name__)
 
 _ROUTE = "/system/judge-stats"
+#: JUDGE-2 — the health block alone (no cube), for status polls.
+_HEALTH_ROUTE = "/system/judge-stats/health"
 
 #: Default / maximum trailing window. The lateral unnest over `llm_calls` has no
 #: index to lean on and `analyst_traces` grows ~7.2k rows/day, so the window is
 #: bounded hard — every gauge that reads receipts does the same.
 DEFAULT_WINDOW_DAYS = 14
 MAX_WINDOW_DAYS = 90
+#: The health read's default window: long enough to hold a weekend outage AND
+#: the last adjudicated critique before it, short enough for a status poll.
+DEFAULT_HEALTH_WINDOW_DAYS = 7
 
 #: A run's judge calls may start slightly before the critique window opens (the
 #: critique is written later in the same run). Widening the TRACE side by one day
 #: stops boundary runs from being reported as `(no receipt)` when they have one.
 _TRACE_SLACK = "1 day"
+
+#: Seconds a computed judge-stats payload is reused (R-1).
+JUDGE_STATS_TTL_S = 60.0
+#: P-3 — for this long past its TTL a payload is still served AT ONCE while one
+#: background refresh replaces it (stale-while-revalidate; ``generated_at`` is
+#: its as-of). The reads are 0.3-0.9 s warm on live after the P-3 rewrite, but
+#: the receipts and health reads must still detoast every judge-receipts array
+#: in the window (no index can narrow that), and those TOAST pages fall out of
+#: cache between landings: the cold read that started P-3 pulled ~17.9k pages
+#: from disk in ~20 s. A landing must not wait on that.
+JUDGE_STATS_STALE_S = 600.0
 
 #: The critique family. `title LIKE 'Faithfulness verify%'` is load-bearing and
 #: pinned by ~13 laterals across the tree — the `Structural verify%` family is a
@@ -177,28 +206,105 @@ _NON_ADJUDICABLE = frozenset({"unsampled"})
 # that error would have surfaced only as a permanent `measured: false` — a route
 # that always says "I measured nothing" and never says why.
 
-_JUDGE_CALLS_CTE = f"""
+#
+# P-3 (2026-11-14) — READ COST. Measured on live (EXPLAIN ANALYZE, 14-day
+# window: ~38k traces, ~8.8k critiques) the cube took 22.5 s from a cold cache
+# and 2.4 s warm. Three causes, each fixed below without changing a result row:
+#
+#   1. DETOAST PER OPERATOR. Every ``o.data->...`` expression detoasts the whole
+#      critique ``data`` document again, and the cube had eight of them (~29
+#      buffer touches per critique). The verification block is now extracted
+#      ONCE per row, in a ``LATERAL (... OFFSET 0)`` the planner cannot inline
+#      back into each use (``_VERIFICATION_ONCE``), and every field is read from
+#      that in-memory copy. Same for the streak and the uncited reads.
+#   2. THE CUBE UNNESTED EVERY TRACE IN THE WINDOW. Only runs that HAVE a
+#      critique can be joined to one, so the cube's trace side now reads just
+#      those runs by primary key (``run_id IN (SELECT run_id FROM crit)``) —
+#      exactly the rows the LEFT JOIN could ever match. The old plan also ran
+#      the whole unnest once per parallel worker (x3) under the Gather.
+#   3. A MEMOIZE KEYED ON THE WHOLE ``llm_calls`` DOCUMENT. The lateral
+#      ``jsonb_array_elements`` join drew a Memoize node that detoasted and
+#      hashed every receipts array just to build its cache key. The verify-judge
+#      calls are now pulled with ``jsonb_path_query`` as a set-returning
+#      function in the select list (no join, so no Memoize), and the leg filter
+#      runs inside the path engine instead of on every emitted element.
+#
+# ``strict`` keeps the path filter equal to ``c->>'leg' = 'verify_judge'``: in
+# strict mode an element without a ``leg`` key, a non-object element, or a
+# nested array is an error inside the filter, which is "unknown" — excluded,
+# exactly as the ``->>`` comparison excluded it (lax mode would unwrap a nested
+# array and could match where the old predicate did not). A non-array
+# ``llm_calls`` still raises, as ``jsonb_array_elements`` did.
+_VERIFY_JUDGE_PATH = """'strict $[*] ? (@.leg == "verify_judge")'"""
+
+#: The critique's verification block, detoasted once per row (see cause 1).
+_VERIFICATION_ONCE = """CROSS JOIN LATERAL (
+                SELECT o.data->'data'->'verification' AS v OFFSET 0) x"""
+
+
+def _judge_calls_cte(trace_filter: str = "") -> str:
+    """The ``judge_calls`` CTE, with an optional extra predicate on the trace
+    row (``t``) — the cube narrows it to the runs it can join."""
+    return f"""
     judge_calls AS (
-        SELECT t.run_id,
-               coalesce(c->>'served_by', '{SENTINEL_UNROUTED}') AS provider,
-               c->>'status'              AS call_status,
-               (c->>'duration_ms')::float8 AS duration_ms,
-               t.run_started_at          AS call_at
-          FROM public.analyst_traces t
-          CROSS JOIN LATERAL jsonb_array_elements(
-                 coalesce(t.llm_calls, '[]'::jsonb)) AS c
-         WHERE t.run_started_at > $1::timestamptz - interval '{_TRACE_SLACK}'
-           AND c->>'leg' = 'verify_judge'
+        SELECT j.run_id,
+               coalesce(j.c->>'served_by', '{SENTINEL_UNROUTED}') AS provider,
+               j.c->>'status'                AS call_status,
+               (j.c->>'duration_ms')::float8 AS duration_ms,
+               j.run_started_at              AS call_at
+          FROM (SELECT t.run_id, t.run_started_at,
+                       jsonb_path_query(
+                           coalesce(t.llm_calls, '[]'::jsonb),
+                           {_VERIFY_JUDGE_PATH}) AS c
+                  FROM public.analyst_traces t
+                 WHERE t.run_started_at > $1::timestamptz - interval '{_TRACE_SLACK}'{trace_filter}
+               ) j
     )
 """
+
+
+_JUDGE_CALLS_CTE = _judge_calls_cte()
 
 #: The cube: day x served_by x judge_status x judge_pipeline_version.
 #:
 #: `run_provider` collapses each run to ONE label BEFORE the join, which is what
 #: keeps receipt fan-out from multiplying verdict counts. `min(provider)` is safe
 #: only in the single-distinct-value branch, where it IS that value.
+#:
+#: `crit` comes first so `judge_calls` can be narrowed to its runs (P-3 cause 2).
 _CUBE_SQL = f"""
-WITH {_JUDGE_CALLS_CTE},
+WITH crit AS MATERIALIZED (
+        SELECT date_trunc('day', o.created_at)::date AS day,
+               o.run_id,
+               coalesce(
+                   x.v->>'judge_status',
+                   '{SENTINEL_UNKNOWN_STATUS}') AS judge_status,
+               coalesce(
+                   x.v->>'judge_pipeline_version',
+                   '{SENTINEL_UNKNOWN_STATUS}') AS pipeline_version,
+               (x.v->>'faithfulness_score')::float8
+                   AS faithfulness,
+               -- H3 (2026-09-25/1) — the alignment audit. Absent on every row
+               -- written before this stamp (and on every deterministic /
+               -- unsampled row, which never called the judge): coalesced to 0,
+               -- never guessed, so a legacy row cannot inflate either share.
+               coalesce(
+                   (x.v->>'aligned_by_id')::int, 0)
+                   AS aligned_by_id,
+               coalesce(
+                   (x.v->>'aligned_positionally')::int, 0)
+                   AS aligned_positionally,
+               (coalesce(
+                   (x.v->>'miscount_claims')::int, 0)
+                   <> 0)::int AS miscounted
+          FROM public.analyst_outputs o
+          {_VERIFICATION_ONCE}
+         WHERE o.kind = 'critique'
+           AND o.title LIKE $3::text
+           AND o.created_at > $1::timestamptz
+           AND ($2::text IS NULL OR o.data->>'analyzed_analyst_id' = $2)
+    ),
+    {_judge_calls_cte(chr(10) + "                   AND t.run_id IN (SELECT run_id FROM crit)")},
     run_provider AS (
         SELECT run_id,
                CASE WHEN count(DISTINCT provider) = 1
@@ -207,36 +313,6 @@ WITH {_JUDGE_CALLS_CTE},
                END AS provider
           FROM judge_calls
          GROUP BY run_id
-    ),
-    crit AS (
-        SELECT date_trunc('day', o.created_at)::date AS day,
-               o.run_id,
-               coalesce(
-                   o.data->'data'->'verification'->>'judge_status',
-                   '{SENTINEL_UNKNOWN_STATUS}') AS judge_status,
-               coalesce(
-                   o.data->'data'->'verification'->>'judge_pipeline_version',
-                   '{SENTINEL_UNKNOWN_STATUS}') AS pipeline_version,
-               (o.data->'data'->'verification'->>'faithfulness_score')::float8
-                   AS faithfulness,
-               -- H3 (2026-09-25/1) — the alignment audit. Absent on every row
-               -- written before this stamp (and on every deterministic /
-               -- unsampled row, which never called the judge): coalesced to 0,
-               -- never guessed, so a legacy row cannot inflate either share.
-               coalesce(
-                   (o.data->'data'->'verification'->>'aligned_by_id')::int, 0)
-                   AS aligned_by_id,
-               coalesce(
-                   (o.data->'data'->'verification'->>'aligned_positionally')::int, 0)
-                   AS aligned_positionally,
-               (coalesce(
-                   (o.data->'data'->'verification'->>'miscount_claims')::int, 0)
-                   <> 0)::int AS miscounted
-          FROM public.analyst_outputs o
-         WHERE o.kind = 'critique'
-           AND o.title LIKE $3::text
-           AND o.created_at > $1::timestamptz
-           AND ($2::text IS NULL OR o.data->>'analyzed_analyst_id' = $2)
     )
 SELECT crit.day                                        AS day,
        coalesce(rp.provider, '{SENTINEL_NO_RECEIPT}')  AS served_by,
@@ -274,6 +350,166 @@ SELECT provider                                        AS served_by,
  GROUP BY 1
  ORDER BY 2 DESC
 """
+
+
+# ---------------------------------------------------------------------------
+# JUDGE-2 (W11b) — THE HEALTH FACT: is the judge answering, and since when not?
+# ---------------------------------------------------------------------------
+# The 2026-10-02 → 10-05 OpenRouter 402 outage published 1,269 floor-only
+# critiques on 10-03/10-04 under a green run counter, and no reader surface said
+# so. These two statements are the fact every reader can now show.
+#
+# Per judge COMPONENT, off the ``verify_judge`` receipts (every chain rung that
+# was asked is tagged by position, so a fallback rung appears as its own row):
+# the newest success, the newest failure and its status, and how many failures
+# came after the newest success (the CURRENT run of failures; 0 when the newest
+# call succeeded).
+_HEALTH_CALLS_SQL = f"""
+WITH calls AS (
+    SELECT c->>'component_id'                           AS component_id,
+           c->>'status'                                 AS status,
+           c->>'http_status'                            AS http_status,
+           c->>'model'                                  AS model,
+           coalesce(CASE WHEN c->>'at' IS NOT NULL
+                         THEN (c->>'at')::timestamptz END,
+                    j.run_started_at)                   AS at
+      FROM (SELECT t.run_started_at,
+                   jsonb_path_query(
+                       coalesce(t.llm_calls, '[]'::jsonb),
+                       {_VERIFY_JUDGE_PATH}) AS c
+              FROM public.analyst_traces t
+             WHERE t.run_started_at > $1::timestamptz - interval '1 day'
+               AND ($2::text IS NULL OR t.analyst_id = $2)
+           ) j
+     WHERE coalesce(c->>'component_id', '') <> ''
+),
+last AS (
+    SELECT component_id,
+           max(at) FILTER (WHERE status = 'success')               AS last_success_at,
+           max(at) FILTER (WHERE status IS DISTINCT FROM 'success') AS last_failure_at
+      FROM calls GROUP BY 1
+)
+SELECT l.component_id,
+       l.last_success_at,
+       l.last_failure_at,
+       count(*)::int                                               AS calls,
+       count(*) FILTER (
+           WHERE c.status IS DISTINCT FROM 'success'
+             AND (l.last_success_at IS NULL OR c.at > l.last_success_at))::int
+                                                                   AS consecutive_failures,
+       (array_agg(c.http_status ORDER BY c.at DESC)
+           FILTER (WHERE c.status IS DISTINCT FROM 'success'))[1]  AS last_failure_http_status,
+       (array_agg(c.status ORDER BY c.at DESC)
+           FILTER (WHERE c.status IS DISTINCT FROM 'success'))[1]  AS last_failure_status,
+       max(c.model)                                                AS model
+  FROM last l JOIN calls c USING (component_id)
+ GROUP BY l.component_id, l.last_success_at, l.last_failure_at
+"""
+
+#: The CURRENT floor-only streak, fleet-wide (``scope = 'fleet'``) and per judge
+#: ref (``scope = 'component'``): critiques whose judge was ASKED and did not
+#: answer (``deterministic`` + ``judge_error``/``judge_empty`` — an unsampled or
+#: flag-off row never asked anyone and neither joins nor breaks a streak), newer
+#: than the newest ADJUDICATED critique (``llm`` / ``partial``). No such row ⇒ no
+#: streak ⇒ ``unverified_since`` NULL. ``open_at_window_start`` says the streak
+#: may be older than the window (nothing adjudicated inside it at all).
+_HEALTH_STREAK_SQL = f"""
+WITH crit AS (
+    SELECT o.created_at,
+           coalesce(x.v->>'judge_llm_ref', '') AS ref,
+           x.v->>'judge_status'                AS st,
+           x.v->>'judge_unavailable_reason'    AS reason
+      FROM public.analyst_outputs o
+      {_VERIFICATION_ONCE}
+     WHERE o.kind = 'critique'
+       AND o.title LIKE $3::text
+       AND o.created_at > $1::timestamptz
+       AND ($2::text IS NULL OR o.data->>'analyzed_analyst_id' = $2)
+),
+ok_ref AS MATERIALIZED (
+    SELECT ref, max(created_at) AS ok_at FROM crit
+     WHERE st IN ('llm', 'partial') GROUP BY ref
+),
+ok_fleet AS MATERIALIZED (
+    SELECT max(created_at) AS ok_at FROM crit WHERE st IN ('llm', 'partial')
+),
+floored AS (
+    SELECT * FROM crit
+     WHERE st = 'deterministic' AND reason IN ('judge_error', 'judge_empty')
+)
+SELECT 'fleet'::text AS scope, NULL::text AS ref,
+       min(f.created_at) AS unverified_since, count(*)::int AS floor_n,
+       bool_or(k.ok_at IS NULL) AS open_at_window_start
+  FROM floored f CROSS JOIN ok_fleet k
+ WHERE k.ok_at IS NULL OR f.created_at > k.ok_at
+UNION ALL
+SELECT 'component', f.ref,
+       min(f.created_at), count(*)::int, bool_or(r.ok_at IS NULL)
+  FROM floored f LEFT JOIN ok_ref r ON r.ref = f.ref
+ WHERE r.ok_at IS NULL OR f.created_at > r.ok_at
+ GROUP BY f.ref
+"""
+
+
+# ---------------------------------------------------------------------------
+# X4 / ESC (W11-F52) - THE UNCITED-SENTENCE SHARE, per analyzed unit per day.
+# ---------------------------------------------------------------------------
+# ``actor_critic`` stamps ``fact_sentences`` / ``uncited_fact_sentences`` /
+# ``bluf_marker`` on every UNIT critique's ``verification`` block
+# (``provenance/uncited_share.py``): the floor's own count of fact-asserting
+# sentences on the body, how many carry no marker, and whether the BLUF does.
+# A row stamped before this field existed has no ``fact_sentences`` key and is
+# NOT counted (a missing stamp is not a zero), so the first day after a roll
+# reads as a partial day - ``reads`` beside every share says how partial.
+#: P-3: ``analyzed_analyst_id`` sits outside the verification block, so it is
+#: the one other detoast here; it rides in the same once-per-row LATERAL.
+#: P-5: the four leaves are read off ``v`` in a second LATERAL, so the GROUP
+#: BY's sort carries scalars, not every row's whole verification block. With
+#: migration 0257's critique (created_at, id) index the planner reads the
+#: window by bitmap and sorts above the join; carrying ``v`` that sort spilled
+#: 42 MB to disk (0.49 s -> 0.66 s on a live-sized copy); carrying scalars it
+#: is 565 kB in memory (0.44 s). Same rows (compared on that copy).
+_UNCITED_SQL = """
+SELECT date_trunc('day', o.created_at)::date                         AS day,
+       y.analyst_id                                                  AS analyst_id,
+       count(*)::int                                                 AS reads,
+       sum(y.fact_sentences)::int                                    AS fact_sentences,
+       sum(y.uncited_fact_sentences)::int                            AS uncited_fact_sentences,
+       count(*) FILTER (WHERE y.bluf_marker
+                              IN ('cited', 'uncited'))::int          AS bluf_reads,
+       count(*) FILTER (WHERE y.bluf_marker
+                              = 'uncited')::int                      AS bluf_uncited_reads
+  FROM public.analyst_outputs o
+  CROSS JOIN LATERAL (
+        SELECT o.data->'data'->'verification' AS v,
+               o.data->>'analyzed_analyst_id'  AS analyst_id
+        OFFSET 0) x
+  CROSS JOIN LATERAL (
+        SELECT x.analyst_id,
+               (x.v->>'fact_sentences')::int          AS fact_sentences,
+               (x.v->>'uncited_fact_sentences')::int  AS uncited_fact_sentences,
+               x.v->>'bluf_marker'                    AS bluf_marker
+        OFFSET 0) y
+ WHERE o.kind = 'critique'
+   AND o.title LIKE $3::text
+   AND o.created_at > $1::timestamptz
+   AND ($2::text IS NULL OR o.data->>'analyzed_analyst_id' = $2)
+   AND x.v ? 'fact_sentences'
+ GROUP BY 1, 2
+ ORDER BY 1 DESC, 2
+"""
+
+
+def _failure_class(http_status: Any, status: Any) -> str | None:
+    """The newest failure's class (``judge_failure_class``), from its http status
+    when the receipt has one, else from the receipt's status token."""
+    if http_status not in (None, ""):
+        return classify_status(str(http_status))
+    if status in (None, "", "success"):
+        return None
+    if status in ("timeout", "transient_fail"):
+        return "timeout"
+    return "error"
 
 
 # ---------------------------------------------------------------------------
@@ -395,6 +631,74 @@ class JudgeStatsTotals(BaseModel):
     judge_call_errors: int = 0
 
 
+class JudgeComponentHealth(BaseModel):
+    """JUDGE-2 — one judge component's health, off its own receipts and the
+    critiques stamped with its ref. Every timestamp is absent (never epoch 0)
+    when nothing in the window says it; ``unverified_since`` is NULL whenever
+    this component's newest adjudicated critique is newer than its newest
+    floor-only one."""
+
+    component_id: str
+    model: Optional[str] = None
+    calls: int = 0
+    last_success_at: Optional[datetime] = None
+    last_failure_at: Optional[datetime] = None
+    #: ``auth`` | ``credit`` | ``retired`` | ``rate_limited`` | ``server_error`` |
+    #: ``timeout`` | ``error`` — the NEWEST failure's class; None = no failure.
+    failure_class: Optional[str] = None
+    last_failure_http_status: Optional[str] = None
+    #: Failures after the newest success — 0 when the newest call succeeded.
+    consecutive_failures: int = 0
+    unverified_since: Optional[datetime] = None
+    unverified_n: int = 0
+    #: True when nothing adjudicated by this ref sits in the window at all, so
+    #: the streak may have begun before ``unverified_since``.
+    open_at_window_start: bool = False
+
+
+class JudgeHealthOut(BaseModel):
+    """JUDGE-2 — "is the checking layer answering, and since when not?"
+
+    ``unverified_since`` (fleet) is the earliest critique in the CURRENT
+    floor-only streak: critiques whose judge was asked and did not answer, newer
+    than the newest adjudicated critique anywhere. NULL = the judge is answering.
+    ``unverified_n`` counts that streak. ``measured: false`` = the read failed
+    (never "healthy")."""
+
+    measured: bool = False
+    unverified_since: Optional[datetime] = None
+    unverified_n: int = 0
+    open_at_window_start: bool = False
+    components: list[JudgeComponentHealth] = Field(default_factory=list)
+
+
+class JudgeUncitedUnitDay(BaseModel):
+    """X4 / ESC - one analyzed unit on one day: of the fact-asserting sentences
+    the deterministic floor counts in that unit's bodies, how many carry no
+    citation marker, and how many BLUFs went out without one. ``reads`` is the
+    number of stamped critiques the sums are over; every share sits beside the
+    count it was computed from, and is absent (never 0.0) over zero."""
+
+    day: date
+    analyst_id: str
+    reads: int = 0
+    fact_sentences: int = 0
+    uncited_fact_sentences: int = 0
+    uncited_share: Optional[float] = None
+    bluf_reads: int = 0
+    bluf_uncited_reads: int = 0
+    bluf_uncited_share: Optional[float] = None
+
+
+class JudgeUncitedOut(BaseModel):
+    """The uncited-sentence block. Its own ``measured``: a failed read leaves
+    the cube intact and says so here - an empty ``rows`` with ``measured: true``
+    means no stamped critique in the window, not an all-clear."""
+
+    measured: bool = False
+    rows: list[JudgeUncitedUnitDay] = Field(default_factory=list)
+
+
 class JudgeStatsOut(BaseModel):
     """The whole read. `measured: false` with empty collections is the honest
     degraded return — distinguishable from a healthy engine that judged nothing."""
@@ -411,6 +715,12 @@ class JudgeStatsOut(BaseModel):
     #: Sentinel label -> what it means, so no client hardcodes the glossary.
     sentinels: dict[str, str] = Field(default_factory=lambda: dict(SENTINEL_GLOSSARY))
     judge_statuses: list[str] = Field(default_factory=lambda: list(JUDGE_STATUSES))
+    #: JUDGE-2 — the health fact (its own ``measured``: a failed health read
+    #: leaves the cube intact and says so here).
+    health: JudgeHealthOut = Field(default_factory=JudgeHealthOut)
+    #: X4 / ESC (W11-F52) - the uncited-sentence share per analyzed unit per day
+    #: (its own ``measured``, like ``health``).
+    uncited: JudgeUncitedOut = Field(default_factory=JudgeUncitedOut)
 
 
 # ---------------------------------------------------------------------------
@@ -647,13 +957,143 @@ def build_payload(
     )
 
 
+def build_health(
+    call_rows: list[dict[str, Any]], streak_rows: list[dict[str, Any]],
+) -> JudgeHealthOut:
+    """Fold the two health result sets (pure — testable without a substrate)."""
+    comps: dict[str, JudgeComponentHealth] = {}
+    for r in call_rows:
+        cid = str(r["component_id"])
+        comps[cid] = JudgeComponentHealth(
+            component_id=cid,
+            model=r.get("model"),
+            calls=int(r.get("calls") or 0),
+            last_success_at=r.get("last_success_at"),
+            last_failure_at=r.get("last_failure_at"),
+            failure_class=(
+                _failure_class(r.get("last_failure_http_status"), r.get("last_failure_status"))
+                if r.get("last_failure_at") is not None else None
+            ),
+            last_failure_http_status=(
+                str(r["last_failure_http_status"])
+                if r.get("last_failure_http_status") not in (None, "") else None
+            ),
+            consecutive_failures=int(r.get("consecutive_failures") or 0),
+        )
+    out = JudgeHealthOut(measured=True)
+    for r in streak_rows:
+        since = r.get("unverified_since")
+        n = int(r.get("floor_n") or 0)
+        open_ = bool(r.get("open_at_window_start")) and since is not None
+        if r.get("scope") == "fleet":
+            out.unverified_since, out.unverified_n = since, n
+            out.open_at_window_start = open_
+            continue
+        ref = str(r.get("ref") or "")
+        if not ref or since is None:
+            continue
+        comp = comps.setdefault(ref, JudgeComponentHealth(component_id=ref))
+        comp.unverified_since, comp.unverified_n = since, n
+        comp.open_at_window_start = open_
+    out.components = sorted(comps.values(), key=lambda c: c.component_id)
+    return out
+
+
+def build_uncited(rows: list[dict[str, Any]]) -> JudgeUncitedOut:
+    """Fold the uncited-share result set (pure - testable without a substrate)."""
+    out = JudgeUncitedOut(measured=True)
+    for r in rows:
+        facts = int(r.get("fact_sentences") or 0)
+        unc = int(r.get("uncited_fact_sentences") or 0)
+        bluf = int(r.get("bluf_reads") or 0)
+        bluf_unc = int(r.get("bluf_uncited_reads") or 0)
+        out.rows.append(
+            JudgeUncitedUnitDay(
+                day=r["day"],
+                analyst_id=str(r["analyst_id"]),
+                reads=int(r.get("reads") or 0),
+                fact_sentences=facts,
+                uncited_fact_sentences=unc,
+                uncited_share=round(unc / facts, 4) if facts > 0 else None,
+                bluf_reads=bluf,
+                bluf_uncited_reads=bluf_unc,
+                bluf_uncited_share=round(bluf_unc / bluf, 4) if bluf > 0 else None,
+            )
+        )
+    return out
+
+
+async def _read_uncited(
+    conn: Any, cutoff: datetime, analyst_id: str | None
+) -> JudgeUncitedOut:
+    try:
+        rows = await conn.fetch(
+            _UNCITED_SQL, cutoff, analyst_id, _CRITIQUE_TITLE_PREFIX
+        )
+    except Exception as exc:  # noqa: BLE001 - the block degrades on its own
+        logger.info("v3.system.judge_uncited.unavailable err=%s", exc)
+        return JudgeUncitedOut(measured=False)
+    return build_uncited([dict(r) for r in rows])
+
+
+async def _read_health(conn: Any, cutoff: datetime, analyst_id: str | None) -> JudgeHealthOut:
+    try:
+        calls = await conn.fetch(_HEALTH_CALLS_SQL, cutoff, analyst_id)
+        streak = await conn.fetch(
+            _HEALTH_STREAK_SQL, cutoff, analyst_id, _CRITIQUE_TITLE_PREFIX
+        )
+    except Exception as exc:  # noqa: BLE001 — the health half degrades on its own
+        logger.info("v3.system.judge_health.unavailable err=%s", exc)
+        return JudgeHealthOut(measured=False)
+    return build_health([dict(r) for r in calls], [dict(r) for r in streak])
+
+
 # ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
 
 
+def _cacheable(out: JudgeStatsOut) -> bool:
+    """A degraded read (any ``measured: false``) is never cached."""
+    return out.measured and out.health.measured and out.uncited.measured
+
+
 def build_judge_stats_router(deps: RegistryAPIDeps) -> APIRouter:
-    router = APIRouter(tags=["system"])
+    # R-1 — a trailing-days aggregate over every critique and judge receipt in
+    # the window: the same for every caller, and it moves by a few critiques a
+    # minute. Reused for JUDGE_STATS_TTL_S per (days, analyst_id), single
+    # flight; ``generated_at`` on the payload is when it was computed (its
+    # as-of). A degraded read (any ``measured: false``) is never cached.
+    # P-3 — then served stale for JUDGE_STATS_STALE_S while it refreshes.
+    stats_cache: TTLCache[JudgeStatsOut] = TTLCache(
+        JUDGE_STATS_TTL_S, stale_s=JUDGE_STATS_STALE_S
+    )
+
+    @contextlib.asynccontextmanager
+    async def _prewarm(_app: Any) -> AsyncIterator[None]:
+        """P-3 — compute the console's default read once at startup, in the
+        background, so the first landing after a roll is not the one that
+        pays for a cold cache. Never blocks or fails startup; cancelled at
+        shutdown. (Runs only where the app's lifespan runs — the merged
+        router lifespan; a bare test app over ASGI does not start it.)"""
+        task = None
+        try:
+            task = stats_cache.refresh_in_background(
+                (DEFAULT_WINDOW_DAYS, None),
+                lambda: _compute(deps, DEFAULT_WINDOW_DAYS, None),
+                should_cache=_cacheable,
+            )
+        except Exception as exc:  # noqa: BLE001 - a warm-up is optional
+            logger.info("v3.system.judge_stats.prewarm_skipped err=%s", exc)
+        try:
+            yield
+        finally:
+            if task is not None and not task.done():
+                task.cancel()
+                with contextlib.suppress(BaseException):
+                    await task
+
+    router = APIRouter(tags=["system"], lifespan=_prewarm)
 
     def _get_deps(request: Request) -> RegistryAPIDeps:
         return getattr(request.app.state, "registry_deps", deps)
@@ -671,24 +1111,84 @@ def build_judge_stats_router(deps: RegistryAPIDeps) -> APIRouter:
         _principal: str = Depends(require_bearer),
         deps_: RegistryAPIDeps = Depends(_get_deps),
     ) -> JudgeStatsOut:
+        cached = await stats_cache.get_or_compute(
+            (days, analyst_id),
+            lambda: _compute(deps_, days, analyst_id),
+            should_cache=_cacheable,
+        )
+        return cached.value
+
+    async def _compute(
+        deps_: RegistryAPIDeps, days: int, analyst_id: str | None
+    ) -> JudgeStatsOut:
+        """The four reads, each on its own pooled connection and concurrently
+        (R-1: ~6 s of database time in sequence on live, 2026-11-14, bounded
+        now by the slowest one). Failure semantics unchanged: the cube or the
+        receipts failing is the honest blank; health and uncited degrade on
+        their own."""
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(days=days)
-        try:
-            async with deps_.descriptor_registry.pg.acquire() as conn:
-                cube = await conn.fetch(
-                    _CUBE_SQL, cutoff, analyst_id, _CRITIQUE_TITLE_PREFIX
-                )
-                receipts = await conn.fetch(_RECEIPTS_SQL, cutoff)
-        except Exception as exc:  # noqa: BLE001 — a polling panel must not get a 500
-            logger.info("v3.system.judge_stats.unavailable err=%s", exc)
-            return _blank(days)
+        pool = deps_.descriptor_registry.pg
 
-        return build_payload(
+        async def _fetch(sql: str, *args: Any) -> list[Any]:
+            async with pool.acquire() as conn:
+                return await conn.fetch(sql, *args)
+
+        async def _on_conn(read: Any) -> Any:
+            async with pool.acquire() as conn:
+                return await read(conn, cutoff, analyst_id)
+
+        results = await asyncio.gather(
+            _fetch(_CUBE_SQL, cutoff, analyst_id, _CRITIQUE_TITLE_PREFIX),
+            _fetch(_RECEIPTS_SQL, cutoff),
+            _on_conn(_read_health),
+            _on_conn(_read_uncited),
+            return_exceptions=True,
+        )
+        cube, receipts, health, uncited = results
+        for exc in (cube, receipts):
+            if isinstance(exc, BaseException):
+                logger.info("v3.system.judge_stats.unavailable err=%s", exc)
+                return _blank(days)
+        if isinstance(health, BaseException):  # acquire failed: same degrade
+            logger.info("v3.system.judge_health.unavailable err=%s", health)
+            health = JudgeHealthOut(measured=False)
+        if isinstance(uncited, BaseException):
+            logger.info("v3.system.judge_uncited.unavailable err=%s", uncited)
+            uncited = JudgeUncitedOut(measured=False)
+
+        out = build_payload(
             [dict(r) for r in cube],
             [dict(r) for r in receipts],
             window_days=days,
             generated_at=now,
         )
+        out.health = health
+        out.uncited = uncited
+        return out
+
+    @router.get(_HEALTH_ROUTE, response_model=JudgeHealthOut)
+    async def system_judge_health(
+        days: int = Query(
+            default=DEFAULT_HEALTH_WINDOW_DAYS, ge=1, le=MAX_WINDOW_DAYS,
+            description="Trailing window in days.",
+        ),
+        analyst_id: str | None = Query(
+            default=None,
+            description="Restrict to one analyzed analyst's critiques and runs.",
+        ),
+        _principal: str = Depends(require_bearer),
+        deps_: RegistryAPIDeps = Depends(_get_deps),
+    ) -> JudgeHealthOut:
+        """JUDGE-2 — the health block alone (cheap enough for a status poll:
+        no cube). Same honesty rule: a failed read is ``measured: false``."""
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        try:
+            async with deps_.descriptor_registry.pg.acquire() as conn:
+                return await _read_health(conn, cutoff, analyst_id)
+        except Exception as exc:  # noqa: BLE001 — a polling surface must not get a 500
+            logger.info("v3.system.judge_health.unavailable err=%s", exc)
+            return JudgeHealthOut(measured=False)
 
     return router
 
@@ -703,10 +1203,17 @@ __all__ = [
     "SENTINEL_UNKNOWN_STATUS",
     "SENTINEL_UNROUTED",
     "JudgePipelineVersionRow",
+    "DEFAULT_HEALTH_WINDOW_DAYS",
+    "JudgeComponentHealth",
+    "JudgeHealthOut",
     "JudgeStatsCell",
     "JudgeStatsOut",
     "JudgeStatsProvider",
     "JudgeStatsTotals",
+    "JudgeUncitedOut",
+    "JudgeUncitedUnitDay",
     "build_judge_stats_router",
+    "build_health",
     "build_payload",
+    "build_uncited",
 ]

@@ -29,16 +29,21 @@ focal situation/topic:
      unavailable or its output is unusable, so the matrix still gets built.
   3. **SCORE the ACH evidence x hypothesis MATRIX**: every evidence item is scored
      for CONSISTENCY with each hypothesis (CC / C / N / I / II in Heuer's notation,
-     mapped to +2..-2). Then each item's DIAGNOSTICITY is computed: evidence that
-     DISCRIMINATES between the hypotheses (high spread of consistency across
-     hypotheses) weighs MORE; evidence consistent with every hypothesis is
-     non-diagnostic and weighs ~0 (the core ACH insight — you reason from the
-     evidence that *separates* hypotheses, not the evidence that fits all).
+     mapped to +2..-2). Then each item's DIAGNOSTICITY is computed two ways
+     (W11-F139): the SPREAD across hypotheses (the refutation weight — a
+     refutation is already diagnostic) and the SHARE count ``consistent_with``
+     (how many live hypotheses the item is consistent with). An item's support
+     for each hypothesis it fits is DIVIDED by that count — evidence consistent
+     with all N rows banks 1/N in each, so consistency shared between competing
+     theses can no longer carry a row over the confirm threshold (the core ACH
+     insight — you reason from the evidence that *separates* hypotheses, not
+     the evidence that fits all). ``diagnosticity_mode: off`` restores the
+     pre-W11-F139 spread-only weighting for comparison.
   4. **COMPUTE the integer EVIDENCE BALANCE** per hypothesis (the
-     diagnosticity-weighted, sign-of-consistency count — robust to confidence
-     gaming, the old ACH invariant) and AUTO-TRANSITION the LEAD hypothesis
-     ``active -> confirmed`` (balance >= +K) / a dominated one ``active ->
-     refuted`` (balance <= -K).
+     share-divided / diagnosticity-weighted, sign-of-consistency count —
+     robust to confidence gaming, the old ACH invariant) and AUTO-TRANSITION
+     the LEAD hypothesis ``active -> confirmed`` (balance >= +K) / a dominated
+     one ``active -> refuted`` (balance <= -K).
   5. **WRITE** one ``OutputKind.HYPOTHESIS`` row per hypothesis via the LIVE
      ``write_hypothesis`` path (the ``hypotheses`` table + ``OutputKind.HYPOTHESIS``
      already exist — REUSED, no new write plumbing). Each row carries the ACH
@@ -62,6 +67,7 @@ Discipline (the ``relationship_reifier`` precedent):
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import json
 import logging
@@ -115,7 +121,7 @@ DEFAULT_MAX_TOKENS: int = 1024
 """Completion budget per hypothesis-generation call. The output is a small JSON
 list of competing theses + counter-theses — one call per focal topic."""
 
-DEFAULT_TEMPERATURE: float = 0.2
+DEFAULT_TEMPERATURE: float = HOUSE_TEMPERATURE
 """ACH hypothesis generation wants determinism (reproducible competing set)."""
 
 MAX_TOPICS_PER_RUN: int = 12
@@ -134,6 +140,17 @@ status-quo)."""
 # evidence_balance thresholds for the auto-transitions (the old ACH ±2).
 CONFIRM_K: int = 2
 REFUTE_K: int = 2
+
+#: W11-F139 — how the matrix weighs a piece of evidence toward each hypothesis
+#: it is CONSISTENT with. ``shared`` (the default) divides the item's unit
+#: support by ``consistent_with`` (the number of live hypotheses it fits), so
+#: evidence compatible with several competing theses banks 1/N in each and can
+#: no longer drive them all over +K on the same indices; ``off`` restores the
+#: pre-W11-F139 spread-diagnosticity weighting so the operator can compare.
+#: Declared as a kind option (`diagnosticity_mode`) in
+#: ``option_catalog.handler_options_catalog.ANALYST_KIND_OPTIONS``.
+DIAGNOSTICITY_MODES: tuple[str, str] = ("shared", "off")
+DEFAULT_DIAGNOSTICITY_MODE: str = "shared"
 
 # EXOGENOUS resolution (closes the circular Brier): a hypothesis is resolved
 # against facts produced AFTER it, not its own evidence_balance.
@@ -904,7 +921,7 @@ async def _score_consistency_matrix_llm(
         response = await deps.llm.chat_complete(
             [{"role": "user", "content": user_prompt}],
             max_tokens=deps.max_tokens,
-            temperature=0.0,  # the matrix wants the most-deterministic call
+            temperature=HOUSE_TEMPERATURE,  # house rule: 1.0 everywhere, the matrix call included
             system=_CONSISTENCY_SYSTEM_PROMPT,
         )
     except Exception as exc:
@@ -950,6 +967,7 @@ def build_ach_matrix(
     evidence: Sequence[Mapping[str, Any]],
     *,
     cell_scores: Mapping[tuple[int, int], int] | None = None,
+    diagnosticity_mode: str = DEFAULT_DIAGNOSTICITY_MODE,
 ) -> dict[str, Any]:
     """Build the full ACH evidence x hypothesis matrix + diagnosticity + the
     diagnosticity-weighted integer evidence balance per hypothesis.
@@ -961,26 +979,45 @@ def build_ach_matrix(
     ``None``) is scored by the deterministic lexical :func:`_score_consistency`
     — so the matrix is identical whether the LLM is enriching it or exhausted.
 
+    ``diagnosticity_mode`` selects how an item's CONSISTENT cells are weighed
+    (W11-F139): ``shared`` (the default) divides the item's unit support by
+    ``consistent_with`` — the number of live hypotheses it is consistent with —
+    so evidence compatible with all N rows banks 1/N in each; ``off`` restores
+    the pre-W11-F139 spread-diagnosticity weighting exactly. The REFUTATION
+    side is identical in both modes: a negative cell subtracts the item's
+    spread diagnosticity (a refutation is already diagnostic).
+
     Returns a dict carrying:
 
       * ``hypotheses`` — ``[{thesis, counter_thesis}]`` (echoed for the payload).
-      * ``evidence``   — ``[{id, kind, text, diagnosticity}]`` per item.
+      * ``evidence``   — ``[{id, kind, text, diagnosticity, consistent_with,
+        weight}]`` per item.
       * ``matrix``     — list of rows; row ``i`` = ``{evidence_index, cells:
-        [{hypothesis_index, consistency, label}], diagnosticity}``.
+        [{hypothesis_index, consistency, label}], diagnosticity,
+        consistent_with, weight}``.
+      * ``evidence_diagnosticity`` — ``{<evidence_ref>: {consistent_with,
+        weight}}`` per item (``<evidence_ref>`` = the evidence id, else its
+        index), for the row's ``diagnostic_evidence`` so a reader can see why
+        a hypothesis moved.
+      * ``diagnosticity_mode`` — the mode that actually ran.
       * ``balance``    — ``[int]`` parallel to ``hypotheses``: the
         diagnosticity-weighted, sign-of-consistency integer balance.
       * ``lead_index`` / ``refuted_indices`` — the auto-transition decisions.
 
     The balance is an INTEGER (the old ACH invariant — robust to confidence
-    gaming): for each hypothesis we sum the SIGN of each evidence cell's
-    consistency, but only count cells whose item is DIAGNOSTIC (diagnosticity >
-    0). Non-diagnostic evidence contributes nothing — the ACH core.
+    gaming). Under ``shared`` each consistent cell contributes ``weight``
+    (1 / consistent_with) and each inconsistent cell subtracts the item's
+    diagnosticity; under ``off`` each cell contributes the SIGN of its
+    consistency times the item's diagnosticity, counted only when the item is
+    diagnostic (diagnosticity > 0).
     """
+    shared = diagnosticity_mode != "off"
     n_hyp = len(hypotheses)
     matrix_rows: list[dict[str, Any]] = []
     # raw weighted contributions accumulate as floats, rounded to int at the end
     weighted: list[float] = [0.0 for _ in range(n_hyp)]
     ev_out: list[dict[str, Any]] = []
+    evidence_diagnosticity: dict[str, dict[str, Any]] = {}
 
     for ev_idx, ev in enumerate(evidence):
         ev_text = str(ev.get("text") or "")
@@ -995,6 +1032,11 @@ def build_ach_matrix(
                     _score_consistency(ev_text, ev_pol, str(h.get("thesis") or ""))
                 )
         diag = _diagnosticity(row_scores)
+        # W11-F139 — the SHARE count: how many live hypotheses this item is
+        # consistent with. Its support toward each is 1/N (shared) or the
+        # item's spread (off); the refutation path is unchanged either way.
+        consistent_with = sum(1 for s in row_scores if s > 0)
+        weight = round(1.0 / consistent_with, 4) if consistent_with else 0.0
         cells = [
             {
                 "hypothesis_index": h_idx,
@@ -1003,10 +1045,15 @@ def build_ach_matrix(
             }
             for h_idx in range(n_hyp)
         ]
+        ev_ref = (
+            str(ev.get("id")) if ev.get("id") is not None else str(ev_idx)
+        )
         matrix_rows.append({
             "evidence_index": ev_idx,
             "evidence_id": str(ev.get("id")) if ev.get("id") is not None else None,
             "diagnosticity": diag,
+            "consistent_with": consistent_with,
+            "weight": weight,
             "cells": cells,
         })
         ev_out.append({
@@ -1014,9 +1061,22 @@ def build_ach_matrix(
             "kind": ev.get("kind"),
             "text": str(ev.get("text") or "")[:240],
             "diagnosticity": diag,
+            "consistent_with": consistent_with,
+            "weight": weight,
         })
+        evidence_diagnosticity[ev_ref] = {
+            "consistent_with": consistent_with,
+            "weight": weight,
+        }
         # Diagnosticity-weighted sign accumulation.
-        if diag > 0.0:
+        if shared:
+            for h_idx in range(n_hyp):
+                s = row_scores[h_idx]
+                if s > 0:
+                    weighted[h_idx] += weight
+                elif s < 0 and diag > 0.0:
+                    weighted[h_idx] -= diag
+        elif diag > 0.0:
             for h_idx in range(n_hyp):
                 s = row_scores[h_idx]
                 if s > 0:
@@ -1036,6 +1096,8 @@ def build_ach_matrix(
         ],
         "evidence": ev_out,
         "matrix": matrix_rows,
+        "evidence_diagnosticity": evidence_diagnosticity,
+        "diagnosticity_mode": "shared" if shared else "off",
         "balance": balance,
         "lead_index": lead_index,
         "refuted_indices": refuted_indices,
@@ -1374,6 +1436,11 @@ async def run_method(
     if not isinstance(run_id, UUID):
         run_id = uuid4()
     system_prompt = deps.system_prompt or _SYSTEM_PROMPT
+    # W11-F139 — `shared` (default) divides shared support by consistent_with;
+    # `off` reproduces the pre-W11-F139 spread-only scoring for comparison.
+    diagnosticity_mode = str(
+        options.get("diagnosticity_mode") or DEFAULT_DIAGNOSTICITY_MODE
+    )
 
     total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0}
     pool = deps.pg_pool
@@ -1455,7 +1522,10 @@ async def run_method(
         )
         for k in total_usage:
             total_usage[k] += int(matrix_usage.get(k, 0) or 0)
-        ach = build_ach_matrix(hyps, evidence, cell_scores=cell_scores)
+        ach = build_ach_matrix(
+            hyps, evidence, cell_scores=cell_scores,
+            diagnosticity_mode=diagnosticity_mode,
+        )
 
         # 5) Side-write one HYPOTHESIS row per competing hypothesis (the LIVE
         #    write_hypothesis path). The no-pool path counts the matrix but has
@@ -1516,6 +1586,11 @@ async def run_method(
                     "balance": int(ach["balance"][h_idx]),
                     "matrix": ach["matrix"],
                     "evidence": ach["evidence"],
+                    # W11-F139 — which diagnosticity rule produced the balance
+                    # + the per-item {consistent_with, weight} map, so a brief
+                    # page can show WHY a row moved.
+                    "diagnosticity_mode": ach["diagnosticity_mode"],
+                    "evidence_diagnosticity": ach["evidence_diagnosticity"],
                     "competing_theses": [hh["thesis"] for hh in ach["hypotheses"]],
                     # how the consistency matrix was scored: "llm" when the
                     # per-cell LLM scorer ran, "lexical" when it fell back to the

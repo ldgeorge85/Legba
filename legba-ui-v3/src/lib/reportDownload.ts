@@ -18,7 +18,7 @@ export interface ReportDoc {
   /** ISO / display timestamp string, when known. */
   producedAt?: string | null
   severity?: string | null
-  /** Scope label, e.g. "country_g20_us · country assessment". */
+  /** Scope label, as the caller words it (`<subject id> · <tier> read`); printed verbatim, never parsed. */
   scope?: string | null
   citations?: Citation[]
 }

@@ -104,16 +104,19 @@ def _payload(*, names):
     from a hand-written dict, and the naming is exercised on the producer's own
     output.
     """
+    # N-C (2026-11-11): a tension is ONE entity (``tension_pairing`` rule 0),
+    # so the three heads are all reads of the unit the voice mistranslated —
+    # which is the side whose name this fixture exists to carry.
     rows = [
-        _row(IDS["country_g20_ru"], target_id="country_g20_ru",
-             bluf="Russia's energy-security pressure is pushing escalation "
+        _row(IDS["country_g20_ru"], target_id=KP,
+             bluf="the peninsula's energy-security pressure is pushing escalation "
                   "risk upward with a sharp rise in refinery outages"),
         _row(IDS[KP], target_id=KP, sigs=("s2",),
              bluf="the peninsula's energy-security pressure is easing with a "
                   "marked drop in supply disruptions"),
-        _row(IDS["country_g20_cn"], target_id="country_g20_cn", sigs=("s3",),
-             bluf="China's energy-security pressure remains high with no sign "
-                  "of easing"),
+        _row(IDS["country_g20_cn"], target_id=KP, sigs=("s3",),
+             bluf="the peninsula's energy-security pressure remains high with no "
+                  "sign of easing"),
     ]
     ap.attach_cited_salience(rows, {"s1": 0.95, "s2": 0.70, "s3": 0.50})
     ordered = sorted(rows, key=ap.order_key)

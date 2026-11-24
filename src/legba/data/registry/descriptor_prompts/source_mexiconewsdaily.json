@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.mexiconewsdaily.news": {
+      "source": "source_mexiconewsdaily.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -173,13 +173,13 @@ def _deps(pool) -> SimpleNamespace:
 
 def test_version_marker() -> None:
     """The deploy marker is the runbook's grep target."""
-    assert graph_projector.GRAPH_PROJECTION_VERSION == "2026-09/p4b"
+    assert graph_projector.GRAPH_PROJECTION_VERSION == "2026-11/p7"
 
 
 def test_source_table_vocabulary_matches_the_shared_leaf() -> None:
     """The projector's src_table keys == GRAPH_ARC_SOURCE_TABLES — the leaf
     the S-1 gauge reads, so a dropped leg or a renamed source fails here."""
-    projected = {src for src, _sql in graph_projector._SOURCES}
+    projected = {src.src_table for src in graph_projector._SOURCES}
     assert projected == set(GRAPH_ARC_SOURCE_TABLES)
 
 
@@ -331,7 +331,10 @@ async def test_build_twice_row_identical(pg_pool) -> None:
     await graph_projector.handle([], {}, _deps(pg_pool))
     async with pg_pool.acquire() as conn:
         first = await _all_arcs(conn)
-    await graph_projector.handle([], {}, _deps(pg_pool))
+    # A real second build (the P-7 skip rule would otherwise prove nothing).
+    await graph_projector.handle(
+        [], {"skip_when_unchanged": False}, _deps(pg_pool)
+    )
     async with pg_pool.acquire() as conn:
         second = await _all_arcs(conn)
     assert first == second
@@ -384,7 +387,11 @@ async def test_plane_assignment_per_source(pg_pool) -> None:
             "UPDATE situations SET derived_from = $2::uuid[] WHERE id = $1",
             sit, [f1],
         )
-    await graph_projector.handle([], {}, _deps(pg_pool))
+    # The lineage copies are off by default (P-7 arc diet); this test is
+    # about plane assignment, so it projects them.
+    await graph_projector.handle(
+        [], {"include_lineage_copies": True}, _deps(pg_pool)
+    )
     planes = await pg_pool.fetch(
         "SELECT arc_type, plane FROM graph_arcs"
     )
@@ -711,7 +718,9 @@ async def test_readers_keep_the_substrate_read_while_the_flag_is_off(
     assert "FROM graph_arcs" not in conn.sql[0]
 
 
-@pytest.mark.parametrize("state", ["projection_empty", "projection_stale"])
+@pytest.mark.parametrize(
+    "state", ["projection_empty", "projection_stale", "projection_rebuilding"]
+)
 @pytest.mark.asyncio
 async def test_readers_contribute_nothing_on_an_empty_or_stale_projection(
     monkeypatch, state
@@ -754,4 +763,259 @@ async def test_build_lands_in_public_under_the_age_first_search_path(
             assert await conn.fetchval("SELECT count(*) FROM public.graph_arcs_meta") == 1
     finally:
         await pool.close()
+
+
+# ---------------------------------------------------------------------------
+# P-7 (2026-11-14) — unlogged build, indexes after load, arc diet, skip rule,
+# crash-emptied table. The crash is simulated with TRUNCATE: crash recovery
+# resets an unlogged table to its empty init fork, which is the same
+# reader-visible state (receipt present, table empty).
+# ---------------------------------------------------------------------------
+
+
+async def _flush_stats(conn) -> None:
+    """Make this session's pending table counters visible to the skip
+    watermark at once (they are otherwise flushed lazily, within ~10 s —
+    irrelevant on an hourly cadence, flaky in a test)."""
+    await conn.execute("SELECT pg_stat_force_next_flush()")
+
+
+async def _all_rows(pool) -> list[tuple]:
+    async with pool.acquire() as conn:
+        return await _all_arcs(conn)
+
+
+async def _seed_world_and_lineage(conn) -> dict:
+    """Two entities + a hostile edge, a mention, a finding citing a signal and
+    a consumption row — CORE arcs and lineage copies side by side."""
+    a = await _entity(conn, "Alpha")
+    b = await _entity(conn, "Beta")
+    sig = await _signal(conn, "s")
+    f1 = await _finding(conn, derived_from=[sig])
+    f2 = await _finding(conn)
+    await conn.execute(
+        "INSERT INTO entity_edges (src_id, dst_id, edge_type, edge_family, "
+        "polarity) VALUES ($1, $2, 'HostileTo', 'relation', -1)", a, b,
+    )
+    await conn.execute(
+        "INSERT INTO signal_entity_links (signal_id, entity_id, role) "
+        "VALUES ($1, $2, 'subject')", sig, a,
+    )
+    await conn.execute(
+        "INSERT INTO output_consumption "
+        "(consumer_id, consumer_kind, consumed_id, context) "
+        "VALUES ($1, 'finding', $2, 'composition')", f2, f1,
+    )
+    await _flush_stats(conn)
+    return {"a": a, "b": b, "sig": sig, "f1": f1, "f2": f2}
+
+
+async def test_default_build_is_unlogged_with_reader_indexes_only(pg_pool) -> None:
+    """The serving table is UNLOGGED after the swap, ANALYZEd, and carries
+    exactly the arc key plus the two reader indexes; logged stays available
+    behind the option."""
+    async with pg_pool.acquire() as conn:
+        await _seed_world_and_lineage(conn)
+    res = await graph_projector.handle([], {}, _deps(pg_pool))
+    assert res.finding.data["persistence"] == "unlogged"
+    async with pg_pool.acquire() as conn:
+        assert await conn.fetchval(
+            "SELECT relpersistence::text FROM pg_class "
+            "WHERE oid = 'public.graph_arcs'::regclass"
+        ) == "u"
+        defs = [
+            r["d"].split(" USING btree ")[1]
+            for r in await conn.fetch(
+                "SELECT indexdef d FROM pg_indexes "
+                "WHERE schemaname = 'public' AND tablename = 'graph_arcs'"
+            )
+        ]
+        assert sorted(defs) == sorted([
+            "(from_kind, from_id, to_kind, to_id, arc_type)",
+            "(src_table)",
+            "(to_kind, to_id, plane) WHERE (valid_until IS NULL)",
+        ])
+        meta = await conn.fetchrow("SELECT * FROM graph_arcs_meta")
+        assert meta["persistence"] == "unlogged"
+        assert meta["last_outcome"] == "built"
+        assert await conn.fetchval(
+            "SELECT last_analyze IS NOT NULL OR last_autoanalyze IS NOT NULL "
+            "FROM pg_stat_user_tables WHERE relid = 'public.graph_arcs'::regclass"
+        )
+    await graph_projector.handle(
+        [], {"unlogged": False, "skip_when_unchanged": False}, _deps(pg_pool)
+    )
+    assert await pg_pool.fetchval(
+        "SELECT relpersistence::text FROM pg_class "
+        "WHERE oid = 'public.graph_arcs'::regclass"
+    ) == "p"
+
+
+async def test_arc_diet_drops_lineage_copies_and_contention_by_default(
+    pg_pool,
+) -> None:
+    """Default: no cites / member_of / contends_with arcs, the switched-off
+    sources are named on the receipt, the CORE arcs are identical to a full
+    build's; the options bring each group back."""
+    async with pg_pool.acquire() as conn:
+        ids = await _seed_world_and_lineage(conn)
+        fa = await conn.fetchval(
+            "INSERT INTO facts (subject, predicate, value) "
+            "VALUES ('Alpha', 'capital', 'X') RETURNING id"
+        )
+        fb = await conn.fetchval(
+            "INSERT INTO facts (subject, predicate, value) "
+            "VALUES ('Alpha', 'capital', 'Y') RETURNING id"
+        )
+        cid = await conn.fetchval(
+            "INSERT INTO fact_contention (subject_key, predicate_key) "
+            "VALUES ('alpha', 'capital') RETURNING id"
+        )
+        for fid, vk in ((fa, "x"), (fb, "y")):
+            await conn.execute(
+                "INSERT INTO fact_contention_values "
+                "(contention_id, value_key, representative_fact_id) "
+                "VALUES ($1, $2, $3)", cid, vk, fid,
+            )
+    res = await graph_projector.handle([], {}, _deps(pg_pool))
+    assert res.finding.data["excluded_sources"] == [
+        "fact_contention_values", "output_consumption", "situations",
+    ]
+    diet = await _all_rows(pg_pool)
+    types = {r[4] for r in diet}
+    assert {"cites", "member_of", "contends_with"}.isdisjoint(types)
+    assert {"HostileTo", "mentions", "subject_of"} <= types
+    assert "output_consumption" in json.loads(
+        await pg_pool.fetchval("SELECT excluded_sources FROM graph_arcs_meta")
+    )
+
+    res = await graph_projector.handle(
+        [],
+        {"include_lineage_copies": True, "include_contention_arcs": True},
+        _deps(pg_pool),
+    )
+    assert res.finding.data["excluded_sources"] == []
+    full = await _all_rows(pg_pool)
+    assert {"cites", "contends_with"} <= {r[4] for r in full}
+    cites = {(r[1], r[3]) for r in full if r[4] == "cites"}
+    assert (ids["f1"], ids["sig"]) in cites
+    assert (ids["f2"], ids["f1"]) in cites
+    # The diet removes kinds; it changes nothing it keeps.
+    assert [r for r in full if r[4] in types] == diet
+
+
+async def test_skip_when_inputs_unchanged_then_rebuild_on_change(pg_pool) -> None:
+    """Unchanged inputs → the tick skips (a successful trace-only run) and
+    records checked_at; a write to a read table or a changed option → the
+    next tick rebuilds."""
+    async with pg_pool.acquire() as conn:
+        ids = await _seed_world_and_lineage(conn)
+    first = await graph_projector.handle([], {}, _deps(pg_pool))
+    assert first.finding.data["skipped"] is False
+    built_at = await pg_pool.fetchval("SELECT projected_at FROM graph_arcs_meta")
+
+    second = await graph_projector.handle([], {}, _deps(pg_pool))
+    assert second.finding.data["skipped"] is True
+    assert second.finding.data["reason"] == "inputs_unchanged"
+    assert second.force_trace_only is True
+    meta = await pg_pool.fetchrow("SELECT * FROM graph_arcs_meta")
+    assert meta["last_outcome"] == "skipped_unchanged"
+    assert meta["projected_at"] == built_at
+    assert meta["checked_at"] >= built_at
+
+    async with pg_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO entity_edges (src_id, dst_id, edge_type, "
+            "edge_family) VALUES ($1, $2, 'AlliedWith', 'relation')",
+            ids["b"], ids["a"],
+        )
+        await _flush_stats(conn)
+    third = await graph_projector.handle([], {}, _deps(pg_pool))
+    assert third.finding.data["skipped"] is False
+    assert third.finding.data["rebuild_reason"] == "inputs_changed"
+    assert await pg_pool.fetchval(
+        "SELECT count(*) FROM graph_arcs WHERE arc_type = 'AlliedWith'"
+    ) == 1
+
+    fourth = await graph_projector.handle(
+        [], {"include_lineage_copies": True}, _deps(pg_pool)
+    )
+    assert fourth.finding.data["skipped"] is False
+
+
+async def test_skip_counts_as_fresh_for_readers(arcs_client, pg_pool) -> None:
+    """An old build re-proven current by a skip (checked_at) is NOT stale."""
+    await pg_pool.execute(
+        "INSERT INTO graph_arcs (from_kind, from_id, to_kind, to_id, "
+        "arc_type, plane, src_table) VALUES ('entity', $1, 'entity', $2, "
+        "'AlliedWith', 'world', 'entity_edges')",
+        uuid4(), uuid4(),
+    )
+    await pg_pool.execute(
+        "INSERT INTO graph_arcs_meta (id, projected_at, arc_count, "
+        "source_counts, build_seconds, checked_at) "
+        "VALUES (true, $1, 1, '{}', 1.0, now())",
+        datetime.now(timezone.utc) - timedelta(hours=4),
+    )
+    r = await arcs_client.get(
+        "/api/v1/v3/graph/arcs",
+        params={"node_kind": "entity", "node_id": str(uuid4())},
+    )
+    assert r.status_code == 200
+
+
+async def test_crash_emptied_projection_reads_rebuilding_then_rebuilds(
+    arcs_client, pg_pool
+) -> None:
+    """Receipt present + empty unlogged table (crash recovery) → readers get
+    409 projection_rebuilding, the gauge is quiet with that reason (not a
+    parity deficit), and the next tick rebuilds instead of skipping."""
+    async with pg_pool.acquire() as conn:
+        ids = await _seed_world_and_lineage(conn)
+    await graph_projector.handle([], {}, _deps(pg_pool))
+    await pg_pool.execute("TRUNCATE public.graph_arcs")
+
+    r = await arcs_client.get(
+        "/api/v1/v3/graph/arcs",
+        params={"node_kind": "entity", "node_id": str(ids["a"])},
+    )
+    assert r.status_code == 409
+    assert r.json()["detail"]["state"] == "projection_rebuilding"
+
+    async with pg_pool.acquire() as conn:
+        (g,) = await read_projection_loops(
+            conn, now=datetime.now(timezone.utc), cfg=GaugeConfig()
+        )
+    assert g.state == "ungauged"
+    assert g.quiet_reason == "projection_rebuilding"
+
+    res = await graph_projector.handle([], {}, _deps(pg_pool))
+    assert res.finding.data["skipped"] is False
+    assert res.finding.data["rebuild_reason"] == "serving_table_empty"
+    # direction=out: the route's default ``both`` ORs the incoming branch
+    # outside the plane/temporal predicates (a pre-existing precedence
+    # defect, reported by P-7, not changed here).
+    r = await arcs_client.get(
+        "/api/v1/v3/graph/arcs",
+        params={
+            "node_kind": "entity", "node_id": str(ids["a"]), "direction": "out",
+        },
+    )
+    assert r.status_code == 200
+    assert [a["arc_type"] for a in r.json()["arcs"]] == ["HostileTo"]
+
+
+async def test_gauge_excluded_source_is_not_a_missing_leg(pg_pool) -> None:
+    """output_consumption is a guaranteed-arc source; switched off by the arc
+    diet it must not read as a broken leg."""
+    async with pg_pool.acquire() as conn:
+        await _seed_world_and_lineage(conn)
+        await conn.execute("ANALYZE output_consumption")
+    await graph_projector.handle([], {}, _deps(pg_pool))
+    async with pg_pool.acquire() as conn:
+        (g,) = await read_projection_loops(
+            conn, now=datetime.now(timezone.utc), cfg=GaugeConfig()
+        )
+    assert "output_consumption" not in g.evidence["missing_legs"]
+    assert "output_consumption" in g.evidence["excluded_sources"]
 

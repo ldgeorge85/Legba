@@ -58,6 +58,7 @@ from legba.data.stack.search import (
     BraveSearchHandler,
     SearchLivenessCache,
     SearchProviderUnresolved,
+    deferral_from_tool_output,
     resolve_tool_search_ladder,
 )
 from legba.data.stack.search.brave import (
@@ -188,6 +189,20 @@ class _LadderFixtureHandler(BaseHTTPRequestHandler):
             "/res/v1/web/search": _BRAVE_WEB,
             "/res/v1/news/search": _BRAVE_NEWS,
         }
+        refusals = {
+            "/res/v1/web/search-credits": (
+                400, {"message": "Not enough credits", "statusCode": 400}),
+            "/res/v1/web/search-badquery": (
+                400, {"message": "Query must not be empty", "statusCode": 400}),
+            "/res/v1/web/search-keyleak": (
+                400, {"message": "Invalid API key",
+                      "api_key": "sk-live-ABCDEF0123456789abcdef0123456789",
+                      "hint": "sent Bearer ZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"}),
+            "/res/v1/web/search-401": (401, {"message": "Unauthorized"}),
+        }
+        if path in refusals:
+            self._json(refusals[path][1], status=refusals[path][0])
+            return
         if path == "/search-500":
             self.send_response(503)
             self.send_header("Content-Length", "0")
@@ -432,8 +447,13 @@ async def test_ladder_absent_is_byte_identical(server):
         "absence_warning": "",
         "provider_route": "config.provider",
         "provider_route_class": "configured",
+        # X1/B5: the per-engine health block rides on every search output.
+        "health": result.output["health"],
     }
     assert result.output == expected
+    health = result.output["health"]
+    assert health["engines_answered"] == ["duckduckgo"]
+    assert health["engines_errored"] == [] and health["result_count"] == 1
 
 
 async def test_ladder_absent_keeps_the_degraded_empty_failure_shape(server):
@@ -559,6 +579,149 @@ async def test_a_transient_rung0_escalates(server):
     assert sum(
         1 for r in _LadderFixtureHandler.requests if r["path"] == "/search-500"
     ) == 1, "a rung is attempted AT MOST ONCE per run"
+
+
+def _paid_only(server, path: str):
+    registry = _registry(server, {
+        SEARXNG_COMPONENT: _searxng_row(f"{server}/search"),
+        BRAVE_COMPONENT: _brave_row(f"{server}{path}"),
+    })
+    pack = _pack(
+        {"provider": _ref(SEARXNG_COMPONENT),
+         "fallback_providers": [_ref(BRAVE_COMPONENT)]},
+        max_cost_usd_per_day=1.0,
+    )
+    return registry, pack
+
+
+async def test_a_failed_paid_call_is_not_charged_and_keeps_the_provider_body(
+    server,
+):
+    """SW-6: a paid rung that answered nothing books $0, the error carries the
+    provider's own words, and a credits-class failure escalates.
+
+    Before: ``cost_usd`` was ``cost_per_query * queries`` on every hard
+    failure and the error read ``serper HTTP 400`` — two days of flat ~$0.34
+    charges for calls that all failed, and nobody could see "credits".
+    """
+    registry, pack = _paid_only(server, "/res/v1/web/search-credits")
+    ctx = await _bind(pack, registry)
+    ctx.search_cost_ledger = _Ledger()
+    call = ToolCall(
+        pack_id="web_access", tool_name="web_search", budget_account="web_access",
+        args={"query": "q", "provider": "brave"},
+    )
+    result = await web_search_tool(call, pack, ctx)
+    assert result.status == "failed"
+    assert result.cost_usd == 0.0, "an unanswered paid query is never charged"
+    assert "brave HTTP 400" in result.error
+    assert "Not enough credits" in result.error
+    advice = deferral_from_tool_output(result.output)
+    assert advice is not None and advice.escalate is True
+    assert advice.reason == "search_credentials_or_credits"
+    assert advice.retry_after_seconds >= 3600.0 * 6 - 1, "an operator hold"
+    # One request really went out: attempted, not answered, not billed.
+    assert sum(
+        1 for r in _LadderFixtureHandler.requests
+        if r["path"] == "/res/v1/web/search-credits"
+    ) == 1
+
+
+async def test_a_credits_failure_holds_the_rung_out_of_the_ladder(server):
+    """Escalated means the ladder STOPS asking: the next laddered call skips
+    the rung (no second request), and its ladder entry shows $0 / 0 answered."""
+    registry = _registry(server, {
+        SEARXNG_COMPONENT: _searxng_row(f"{server}/search-500"),
+        BRAVE_COMPONENT: _brave_row(f"{server}/res/v1/web/search-credits"),
+    })
+    pack = _pack(
+        {"provider": _ref(SEARXNG_COMPONENT),
+         "fallback_providers": [_ref(BRAVE_COMPONENT)]},
+        max_cost_usd_per_day=1.0,
+    )
+    ctx = await _bind(pack, registry)
+    ctx.search_cost_ledger = _Ledger()
+
+    first = await web_search_tool(_call("one"), pack, ctx)
+    assert first.status == "failed"
+    assert first.cost_usd == 0.0
+    entry = {e["provider"]: e for e in first.output["ladder"]}[BRAVE_COMPONENT]
+    assert entry["outcome"] == "search_hard_failure"
+    assert (entry["queries"], entry["answered_queries"], entry["cost_usd"]) == (
+        1, 0, 0.0)
+    assert "Not enough credits" in first.error
+
+    hits = sum(1 for r in _LadderFixtureHandler.requests
+               if r["path"] == "/res/v1/web/search-credits")
+    assert hits == 1
+    second = await web_search_tool(_call("two"), pack, ctx)
+    # Both rungs are inside their windows (rung 0 transient, rung 1 operator
+    # hold): nothing is runnable, and NO request goes to either.
+    assert second.status == "failed"
+    assert "no search rung was runnable" in second.error
+    assert sum(1 for r in _LadderFixtureHandler.requests
+               if r["path"] == "/res/v1/web/search-credits") == hits
+
+
+async def test_an_auth_status_escalates_whatever_the_body_says(server):
+    registry, pack = _paid_only(server, "/res/v1/web/search-401")
+    ctx = await _bind(pack, registry)
+    ctx.search_cost_ledger = _Ledger()
+    call = ToolCall(
+        pack_id="web_access", tool_name="web_search", budget_account="web_access",
+        args={"query": "q", "provider": "brave"},
+    )
+    result = await web_search_tool(call, pack, ctx)
+    assert result.cost_usd == 0.0
+    assert "HTTP 401" in result.error and "Unauthorized" in result.error
+    assert deferral_from_tool_output(result.output).escalate is True
+
+
+async def test_an_ordinary_bad_request_is_free_but_not_escalated(server):
+    """A 400 about the QUERY is not an account problem: still $0, still carries
+    the provider's words, but no deferral — waiting for an operator is wrong."""
+    registry, pack = _paid_only(server, "/res/v1/web/search-badquery")
+    ctx = await _bind(pack, registry)
+    ctx.search_cost_ledger = _Ledger()
+    call = ToolCall(
+        pack_id="web_access", tool_name="web_search", budget_account="web_access",
+        args={"query": "q", "provider": "brave"},
+    )
+    result = await web_search_tool(call, pack, ctx)
+    assert result.cost_usd == 0.0
+    assert "Query must not be empty" in result.error
+    assert deferral_from_tool_output(result.output) is None
+
+
+async def test_key_shaped_text_in_a_provider_body_is_redacted(server):
+    registry, pack = _paid_only(server, "/res/v1/web/search-keyleak")
+    ctx = await _bind(pack, registry)
+    ctx.search_cost_ledger = _Ledger()
+    call = ToolCall(
+        pack_id="web_access", tool_name="web_search", budget_account="web_access",
+        args={"query": "q", "provider": "brave"},
+    )
+    result = await web_search_tool(call, pack, ctx)
+    assert "Invalid API key" in result.error
+    assert "sk-live" not in result.error
+    assert "ABCDEF0123456789" not in result.error
+    assert "ZZZZZZZZ" not in result.error
+    assert "[redacted]" in result.error
+    assert len(result.error) < 300, "status + at most 200 chars of body"
+
+
+async def test_a_served_paid_call_is_still_charged(server):
+    """The other half of the acceptance: a 200 costs exactly as before."""
+    registry, pack = _paid_only(server, "/res/v1/web/search")
+    ctx = await _bind(pack, registry)
+    ctx.search_cost_ledger = _Ledger()
+    call = ToolCall(
+        pack_id="web_access", tool_name="web_search", budget_account="web_access",
+        args={"query": "q", "provider": "brave"},
+    )
+    result = await web_search_tool(call, pack, ctx)
+    assert result.status == "completed"
+    assert result.cost_usd == pytest.approx(0.005)
 
 
 async def test_a_deferred_rung_is_skipped_not_hammered(server):

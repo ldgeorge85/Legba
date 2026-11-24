@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.dailymaverick.news": {
+      "source": "source_dailymaverick.yaml",
+      "state": "draft"
+    }
+  }
+}

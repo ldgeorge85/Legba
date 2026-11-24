@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:forecast_scoreboard": {
+      "source": "analyst_forecast_scoreboard.yaml",
+      "state": "active"
+    }
+  }
+}

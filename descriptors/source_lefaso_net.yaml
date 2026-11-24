@@ -31,7 +31,7 @@
 # news (health campaigns, security-forces items, local government, an
 # AES-bloc political item) plus classifieds/obituaries/lottery results — noise
 # for the desk, but all still Burkina-local, not a geo hazard (see below).
-# Keyless, `robots.txt` explicitly permissive (see LICENCE note).
+# Keyless, `robots.txt` explicitly permissive (see ROBOTS below).
 #
 # NOT A DUPLICATE: no head row in source_descriptors points at lefaso.net.
 #
@@ -52,12 +52,9 @@
 # under and that the credibility host score should price in honestly at
 # registration time).
 #
-# LICENCE/ROBOTS POSTURE: `robots.txt` present and explicit —
+# ROBOTS: `robots.txt` present and explicit —
 # `User-agents: * / Allow: /` (a nonstandard `User-agents` directive, but the
-# intent is unambiguous: everything allowed). No machine-readable licence
-# declaration found on-site. `scope.license_class` left UNSET (honest
-# absence, the LIC-2 default), which lands ingested signals at teaser depth
-# until an operator reviews it.
+# intent is unambiguous: everything allowed).
 #
 # state: draft — bulk registration creates NO live actor; activation
 # (draft -> configured -> active) is the operator's after the route is

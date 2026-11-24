@@ -1,153 +1,74 @@
 /**
- * mobileCache — the last-known-good read, kept on the phone.
+ * mobileCache — what the phone keeps on the device: NOTHING of the record.
  *
- * A phone loses the network in ways a desk browser does not: a lift, a tunnel,
- * a train. The workstation can afford to render an error state because the
- * operator is sitting in front of a working connection; a phone cannot, and a
- * Morning Read that is unreadable on the platform at 07:40 is a Morning Read
- * that does not get read.
+ * Until M-0a (2026-11-14) this module mirrored the navigator list and up to
+ * eight full report bodies into `localStorage`, so a phone could show
+ * yesterday's read in a tunnel. The phone plan (§5c) ends that on purpose: a
+ * sensitive record does not belong in a phone's storage, where it outlives the
+ * session, sign-out and the person who signed in. What the phone shows offline
+ * is what it already loaded IN MEMORY this session, labelled with when it was
+ * loaded — never a data archive on the device.
  *
- * So both the navigator list and the last opened report are mirrored into
- * `localStorage` on every successful fetch, and served from there when the API
- * fails. The cache ALWAYS carries the time it was written, and the UI always
- * shows it — a stale read presented as live would corrupt the very measurement
- * the read telemetry exists to take.
+ * So this module now does two things:
  *
- * Every accessor is total: storage can be full, disabled (private mode), or
- * carrying a payload written by an older build. All three are treated the same
- * way — the cache reports a miss and the caller falls back to the network.
- * Nothing here ever throws.
+ *   1. `purgeStoredReads()` deletes what earlier builds wrote (the list key and
+ *      every `legba_mobile_report_v1:*` body), once per page load, so a phone
+ *      that ran the old build stops carrying the record.
+ *   2. `loadedAtLabel()` words the honest offline line: "No connection.
+ *      Showing what was loaded at 14:52 UTC."
+ *
+ * Every accessor is total: storage can be disabled (private mode) or full.
  */
 
-import type { ReadFindingRow } from '@/lib/assemblyModel'
-import type { ReportRow } from './mobileModel'
+const LEGACY_LIST_KEY = 'legba_mobile_reports_v1'
+const LEGACY_REPORT_PREFIX = 'legba_mobile_report_v1:'
 
-const LIST_KEY = 'legba_mobile_reports_v1'
-const REPORT_PREFIX = 'legba_mobile_report_v1:'
-
-/** Bump when a cached shape changes; an older `v` is discarded, never coerced. */
-const CACHE_VERSION = 1
-
-/** How many report bodies to keep. Each is tens of KB; a phone quota is ~5 MB. */
-export const MAX_CACHED_REPORTS = 8
-
-export interface CachedList {
-  v: number
-  savedAt: string
-  rows: ReportRow[]
-}
-
-export interface CachedReport {
-  v: number
-  savedAt: string
-  row: ReadFindingRow
-}
-
-function read<T extends { v: number }>(key: string): T | null {
+/** Delete every read an earlier build stored on this device. Returns how many keys went. */
+export function purgeStoredReads(): number {
+  let removed = 0
   try {
-    const raw = localStorage.getItem(key)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as T
-    if (!parsed || typeof parsed !== 'object' || parsed.v !== CACHE_VERSION) return null
-    return parsed
-  } catch {
-    return null
-  }
-}
-
-function write(key: string, value: unknown): void {
-  try {
-    localStorage.setItem(key, JSON.stringify(value))
-  } catch {
-    // Quota exceeded / storage disabled. Evicting the oldest report body is
-    // worth one retry: the list is the cheaper and more valuable of the two.
-    try {
-      evictOldestReport()
-      localStorage.setItem(key, JSON.stringify(value))
-    } catch {
-      // Genuinely no room. The surface still works online; nothing is lost
-      // except the offline fallback, so this stays silent.
+    const doomed: string[] = []
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const k = localStorage.key(i)
+      if (k && (k === LEGACY_LIST_KEY || k.startsWith(LEGACY_REPORT_PREFIX))) doomed.push(k)
     }
+    for (const k of doomed) {
+      localStorage.removeItem(k)
+      removed += 1
+    }
+  } catch {
+    // Storage disabled: there is nothing stored to remove.
   }
+  return removed
 }
 
-function reportKeys(): string[] {
-  const keys: string[] = []
+/** True when this device still holds a read an earlier build stored (test seam). */
+export function hasStoredReads(): boolean {
   try {
     for (let i = 0; i < localStorage.length; i += 1) {
       const k = localStorage.key(i)
-      if (k && k.startsWith(REPORT_PREFIX)) keys.push(k)
+      if (k && (k === LEGACY_LIST_KEY || k.startsWith(LEGACY_REPORT_PREFIX))) return true
     }
   } catch {
-    return []
+    return false
   }
-  return keys
+  return false
 }
 
-function evictOldestReport(): void {
-  const entries = reportKeys()
-    .map((k) => ({ k, at: read<CachedReport>(k)?.savedAt ?? '' }))
-    .sort((a, b) => a.at.localeCompare(b.at))
-  const oldest = entries[0]
-  if (oldest) {
-    try {
-      localStorage.removeItem(oldest.k)
-    } catch {
-      /* nothing further to try */
-    }
-  }
-}
-
-// ── the navigator list ───────────────────────────────────────────────────────
-
-export function saveReportsList(rows: ReportRow[]): void {
-  write(LIST_KEY, { v: CACHE_VERSION, savedAt: new Date().toISOString(), rows })
-}
-
-export function loadReportsList(): CachedList | null {
-  const hit = read<CachedList>(LIST_KEY)
-  return hit && Array.isArray(hit.rows) ? hit : null
-}
-
-// ── one report body ──────────────────────────────────────────────────────────
-
-export function saveReport(row: ReadFindingRow): void {
-  if (!row?.id) return
-  const existing = reportKeys()
-  if (existing.length >= MAX_CACHED_REPORTS && !existing.includes(REPORT_PREFIX + row.id)) {
-    evictOldestReport()
-  }
-  write(REPORT_PREFIX + row.id, { v: CACHE_VERSION, savedAt: new Date().toISOString(), row })
-}
-
-export function loadReport(id: string): CachedReport | null {
-  if (!id) return null
-  const hit = read<CachedReport>(REPORT_PREFIX + id)
-  return hit && hit.row && typeof hit.row === 'object' ? hit : null
-}
-
-/** Test seam — drop every mobile cache entry. */
-export function __clearMobileCache(): void {
-  try {
-    localStorage.removeItem(LIST_KEY)
-    for (const k of reportKeys()) localStorage.removeItem(k)
-  } catch {
-    /* nothing to clear */
-  }
-}
+/** The legacy key names, for the test that proves they are purged. */
+export const __LEGACY_KEYS = { list: LEGACY_LIST_KEY, reportPrefix: LEGACY_REPORT_PREFIX }
 
 /**
- * "Cached at 07:41 UTC" — the line that must accompany every cached render.
+ * "No connection. Showing what was loaded at 07:41 UTC." — the line that must
+ * accompany a screen drawn from what was loaded earlier in this session.
  *
- * Deliberately UTC and deliberately explicit: the operator reads across time
- * zones and a bare "07:41" would be the kind of ambiguity that makes a stale
- * read look current.
+ * Deliberately UTC and explicit: a bare "07:41" read across time zones is the
+ * ambiguity that makes an old read look current.
  */
-export function cachedAtLabel(savedAt: string | null | undefined): string {
-  if (!savedAt) return 'cached'
-  const d = new Date(savedAt)
-  if (Number.isNaN(d.getTime())) return 'cached'
+export function loadedAtLabel(loadedAtMs: number | null | undefined): string {
+  if (!loadedAtMs || !Number.isFinite(loadedAtMs)) return 'No connection.'
+  const d = new Date(loadedAtMs)
   const hh = String(d.getUTCHours()).padStart(2, '0')
   const mm = String(d.getUTCMinutes()).padStart(2, '0')
-  return `cached ${d.toISOString().slice(0, 10)} ${hh}:${mm} UTC`
+  return `No connection. Showing what was loaded at ${hh}:${mm} UTC.`
 }

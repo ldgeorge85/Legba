@@ -28,7 +28,8 @@ repeating the measurement.
 [5 Gate governance](#5-gate-governance) ·
 [6 Expectations timeline](#6-expectations-timeline) ·
 [7 The models host](#7-the-models-host) ·
-[8 The MCP surface](#8-the-mcp-surface)
+[8 The MCP surface](#8-the-mcp-surface) ·
+[9 Turning on sign-in](#9-turning-on-sign-in)
 
 ---
 
@@ -785,7 +786,7 @@ operator token and blocks for up to five minutes while the tool loop runs. Build
 `docker compose --profile mcp build`, then point the client at it per conversation:
 
 ```bash
-docker run -i --rm --network=legba_default --env-file=/usr/local/deployments/active/legba/.env legba/legba-mcp:latest
+docker run -i --rm --network=legba_default --env-file=.env legba/legba-mcp:latest   # from the deploy directory
 ```
 
 The network flag lets the container reach the registry host named in the URL. The host-mode
@@ -794,6 +795,115 @@ clean for the protocol; every tool fails loud, returning a described error for a
 `registry_unreachable` object for a transport failure, and the available-tool list for an unknown
 tool. Transport is stdio only, and the descriptor-declared catalog is empty in a standalone process:
 only the built-ins survive without a shared runtime.
+
+---
+
+## 9. Turning on sign-in
+
+Out of the box the edge (`legba-caddy`) asks every browser for one perimeter password and then hands
+it the shared admin token, so every person is the same admin. One switch, `LEGBA_AUTH_SIGNIN`, turns on
+real accounts. It is off by default, and while it is off nothing below changes anything.
+
+With `LEGBA_AUTH_SIGNIN=1`:
+
+- **People sign in.** Local accounts, passwords stored as argon2id, a session held in an
+  `HttpOnly; Secure; SameSite=Lax` cookie (72 hours at most, ended after 12 idle hours, set with
+  `LEGBA_SESSION_IDLE_HOURS`). A write sent from another site with that cookie is refused. The edge
+  no longer hands any browser a token: a browser without a session reaches the registry with no
+  credential and the console shows its sign-in screen.
+- **Three roles.** The owner is an admin who cannot be demoted or disabled through the API. Every
+  route's minimum role is listed in [API_ROLES.md](API_ROLES.md) under "With sign-in on".
+
+  | Role | Can | Cannot |
+  |---|---|---|
+  | `reader` | read every reader surface (the Board, subjects, the Ledger, Watch, the Record sheet) and the engine figures those surfaces print; ask Consult and keep their own Consult sessions, watch list, read receipts and exports; use the phone shell | change anything shared: no grading, no decisions, no alert acknowledgement, no source, descriptor or user change, no Consult turn that writes; see the operator side, another person's Consult sessions, the private source-rating annex or unit-correctness claim spans |
+  | `contributor` | everything a reader can, plus grading labels and the gold-set worksheet, journal proposal decisions, forecast outcome decisions in the resolution queue, and acknowledging or snoozing alerts | change configuration (sources, descriptors, the stack, the vault, users) or make a Consult turn that writes (SEAMS #86) |
+  | `admin` | everything: sources, descriptors, the stack, the vault, users, curation, Consult-driven changes, and the engine's own surfaces | demote or disable the owner |
+
+  The console reads the role from `GET /api/v1/auth/me`: a reader is offered no way across to the
+  operator side, and a control that needs a higher role says which role instead of sending a request
+  that will be refused. The registry enforces every route either way.
+- **Every write names who made it.** Where a table has an author column (`watchlist.created_by`,
+  `collection_requirements.reviewed_by`, the label tables' `labeled_by`, `source_credibility.scored_by`,
+  the optimizer review's reviewer, the audit log's actor), the server records the signed-in person
+  (`user:<id>`) or the service; a name in the request body is ignored.
+- **Every judgement row names its writer, switch on or off.** The tables that hold labels,
+  decisions, descriptor versions, watch lists and entered knowledge carry `written_by`, a reference
+  to a row in `principals`: a person (`user:<id>`), a service (`service:<name>`), an analyst seat
+  (`agent:<descriptor>@<version>`), a deterministic rule (`rule:<name>`), or the shared admin
+  credential (`shared:admin-token`). With the switch off every person writes as
+  `shared:admin-token` and the author columns above keep the name the request gave, exactly as
+  before. Principals are created on first use, never by hand. Which tables carry the column, and
+  which already name their writer another way, is declared in `src/legba/data/write_attribution.py`
+  ([TYPES.md](TYPES.md), "Principal kinds"); `scripts/report_written_by.py --stored` counts them.
+- **Each service has its own credential.** The registry, the runtime, the workflow worker and the
+  console each read `LEGBA_SERVICE_TOKEN_REGISTRY`, `_RUNTIME`, `_WORKER` and `_CONSOLE`, and are
+  recorded as `service:<name>`. The stock console needs none: its edge forwards the person's
+  session. The shared `LEGBA_REGISTRY_API_TOKEN` keeps working as a break-glass credential; every
+  use is logged at WARNING (`registry.auth.break_glass`).
+
+- **The perimeter can go.** With sign-in on, `LEGBA_EDGE_PERIMETER=0` drops the edge's perimeter
+  password from the console, so the registry's sign-in is the only gate. The default (`1`) keeps the
+  password as an outer wall in front of sign-in. The edge refuses to start on `0` with sign-in off,
+  because then it would hand the admin token to anyone. The ntfy site keeps its password whatever
+  this says.
+- **The phone shell installs.** With sign-in on, the edge serves the phone shell's manifest, worker
+  script and icons without the perimeter password, so `/m/` can be installed from the browser as a
+  web app ([UI.md](UI.md#the-phone-shell)). Every page and API route keeps its gate.
+
+### Turn it on
+
+1. **Apply the migration** (0255 adds the owner flag, the three role names and the idle clock):
+   `docker compose exec legba-registry python -m legba.data.migrate`.
+2. **Create the owner, once, on the host.** The command asks for the password twice without echo;
+   nothing secret is passed on the command line, written to the repository or logged:
+
+   ```bash
+   docker compose exec legba-registry python -m legba.data.users_bootstrap --email you@example.org --name "Your Name"
+   ```
+
+   It refuses if an owner already exists.
+3. **Give each service its own credential.** Generate one random value per service (for example
+   `python3 -c 'import secrets; print(secrets.token_urlsafe(32))'`) and put it in `.env` (or the
+   vault you load `.env` from) under the names `LEGBA_SERVICE_TOKEN_RUNTIME`,
+   `LEGBA_SERVICE_TOKEN_WORKER` and `LEGBA_SERVICE_TOKEN_REGISTRY`. The registry must hold all of them
+   (it checks them); each service presents only its own. A service whose own key is unset falls back
+   to `LEGBA_REGISTRY_SERVICE_TOKEN` and says so at startup (`principal=shared`).
+4. **Flip the switch.** Add `LEGBA_AUTH_SIGNIN=1` to `.env`, then recreate the registry first, wait
+   for it to be healthy, then the runtime, the workflow worker and the edge (`legba-caddy` reads
+   the switch to stop handing out the admin token).
+5. **Check.** Open the console: the sign-in screen appears; sign in as the owner; the identity chip
+   shows your name, `admin` and `owner`. `GET /api/v1/auth/me` with each service token answers
+   `kind: service` and its name. The registry log shows no `principal=shared` line and no
+   `registry.auth.break_glass` line from a service.
+6. **Invite people.** The console has no user-management screen; an admin calls the API. From the
+   host, with the break-glass token (logged on every use):
+
+   ```bash
+   curl -s -X POST -H "Authorization: Bearer $LEGBA_REGISTRY_API_TOKEN" -H "Content-Type: application/json" \
+     -d '{"email":"someone@example.org","role":"reader","display_name":"Someone"}' \
+     http://127.0.0.1:8090/api/v1/auth/invite
+   ```
+
+   The answer carries `invite_path` (`/#invite=<token>`) once; send the person your instance's address
+   with that fragment, and they choose a password on the invitation screen. Each link works once.
+   `GET /api/v1/auth/users` lists accounts; `PATCH /api/v1/auth/users/{user_id}` changes a role or
+   disables an account, which ends every session it holds.
+7. **Optionally drop the perimeter.** Once sign-in works for everyone who needs it, set
+   `LEGBA_EDGE_PERIMETER=0` and recreate the edge.
+
+### Turn it off
+
+Set `LEGBA_EDGE_PERIMETER=1` (or remove the line) first if you had dropped it, then set
+`LEGBA_AUTH_SIGNIN=0` (or remove the line) and recreate the registry, the runtime, the worker and the
+edge in the same order. The edge injects the admin token again, the per-service tokens stop being
+accepted (services fall back to `LEGBA_REGISTRY_SERVICE_TOKEN`), and the single shared credential
+returns. Accounts, sessions and the owner flag stay in the database, unused; turning the switch on
+again picks them up. The switch takes only `0` or `1`; the edge refuses to start on any other value.
+
+What this step does not do yet — groups, single sign-on, per-source and per-set permissions, a
+contributor's own Consult changes, narrowed service credentials — is listed in
+[SEAMS.md](SEAMS.md) #83–#87.
 
 ## The loop
 

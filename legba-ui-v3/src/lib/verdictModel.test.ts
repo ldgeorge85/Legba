@@ -12,9 +12,40 @@ import {
   STRUCTURAL_EXEMPT_NOTE,
   STRUCTURAL_VERIFY_EXEMPT_ANALYSTS,
   buildVerdict,
+  fallbackJudgeLine,
   isStructuralExempt,
   isStructuralVerified,
+  unverifiedFact,
 } from './verdictModel'
+
+// JUDGE-2 (W11b) — the unverified fact + the fallback-rung stamp.
+describe('JUDGE-2 unverified fact and fallback judge', () => {
+  it('reads the http status as the cause, the class when there is none', () => {
+    expect(
+      unverifiedFact({ unverified_reason: { http_status: '402', class: 'credit', at: 'x' } }),
+    ).toEqual({ since: 'x', cause: '402' })
+    expect(unverifiedFact({ unverified_reason: { class: 'timeout' } })).toEqual({
+      since: null,
+      cause: 'timeout',
+    })
+    expect(unverifiedFact({ judge_status: 'deterministic' })).toBeNull()
+    expect(unverifiedFact(null)).toBeNull()
+  })
+
+  it('names a weak fallback rung and never pools it silently', () => {
+    const v = buildVerdict({
+      confidence: 0.6,
+      verification: {
+        faithfulness_score: 0.7,
+        judge_status: 'llm',
+        judge_chain: { used: 'llm.inhouse.small', rung: 3, model: 'small-8b', weak: true },
+      },
+    })
+    expect(v.fallbackJudge).toEqual({ model: 'small-8b', rung: 3, weak: true })
+    expect(fallbackJudgeLine(v.fallbackJudge!)).toContain('WEAK in-house judge')
+    expect(buildVerdict({ verification: { judge_status: 'llm' } }).fallbackJudge).toBeNull()
+  })
+})
 
 describe('isStructuralExempt', () => {
   it('classifies every registry analyst as structural-exempt', () => {

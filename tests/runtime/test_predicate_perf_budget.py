@@ -50,7 +50,7 @@ from legba.runtime.subscription.filter import _signal_residual_ctx
 # boolean ops. Deliberately non-trivial so a real eval-cost regression has
 # something to bite on, while staying within the documented helper catalog.
 _REPRESENTATIVE_PREDICATE = (
-    'mentions("generator") and has_tag("energy") '
+    'mentions("generator") and has_tag("src:energy") '
     'and severity_at_least("medium") and credibility() >= 0.4'
 )
 

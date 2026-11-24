@@ -22,16 +22,41 @@ import {
   READ_ANALYST_CSV,
   reportEntities,
   reportFindings,
+  readerBlockName,
+  readerReportTitle,
   reportSignals,
   rowsForDay,
   tierOf,
+  titleLead,
   toReportRow,
+  fullReadQuery,
 } from './mobileModel'
 
 const WORLD = worldRow as unknown as ReadFindingRow
 const COUNTRY = countryRow as unknown as ReadFindingRow
 const THEMATIC = thematicRow as unknown as ReadFindingRow
 const ASSESSMENT = assessmentRow as unknown as ReadFindingRow
+
+/** A row reduced to the `fields=summary` projection's scalar keys (no data, no body). */
+function summaryOf(r: ReadFindingRow): ReadFindingRow {
+  const { id, analyst_id, target_id, title, produced_at, severity, confidence } = r
+  return { id, analyst_id, target_id, title, produced_at, severity, confidence }
+}
+
+describe('M-0a / roll 84: the full read is read by id', () => {
+  const rows = [WORLD, COUNTRY, THEMATIC, ASSESSMENT].map((r) => toReportRow(summaryOf(r), null)!)
+
+  it('asks GET /findings/{id} for exactly the opened row, with no list filters', () => {
+    const u = new URL(fullReadQuery(String(WORLD.id), rows)!, 'http://x')
+    expect(u.pathname).toBe(`/findings/${encodeURIComponent(String(WORLD.id))}`)
+    expect([...u.searchParams.keys()]).toEqual([])
+    expect(fullReadQuery(String(COUNTRY.id), rows)).toBe(`/findings/${encodeURIComponent(String(COUNTRY.id))}`)
+  })
+
+  it('is null for a row not in the loaded page', () => {
+    expect(fullReadQuery('not-here', rows)).toBeNull()
+  })
+})
 
 describe('tier resolution', () => {
   it('resolves every tier from the producing analyst id', () => {
@@ -66,14 +91,37 @@ describe('tier resolution', () => {
 })
 
 describe('navigator rows', () => {
-  it('projects a world read into a row with lead, verify and day', () => {
+  it('projects a world read into a row with lead, producer and day', () => {
     const row = toReportRow(WORLD, projectAssembly(WORLD))
     expect(row).not.toBeNull()
     expect(row!.tier).toBe('world')
+    expect(row!.analystId).toBe('world_assessor')
     expect(row!.day).toBe('2026-09-03')
     expect(row!.leadThread.length).toBeGreaterThan(20)
-    expect(row!.verifyScore).toBeTypeOf('number')
-    expect(row!.verifyState).toBe('scored')
+    expect(row).not.toHaveProperty('verifyScore')
+  })
+
+  it('M-0a: the World read\'s card is titled for the world, never for the first block\'s country', () => {
+    const assembly = projectAssembly(WORLD)!
+    expect(assembly.blocks.some((b) => b.target_name)).toBe(true)
+    const full = toReportRow(WORLD, assembly)!
+    const summary = toReportRow(summaryOf(WORLD), null)!
+    expect(full.target).toBe(summary.target)
+    for (const b of assembly.blocks) if (b.target_name) expect(full.target).not.toBe(b.target_name)
+    expect(full.target).toMatch(/world/i)
+    // a targeted read is still its target's name
+    expect(toReportRow(COUNTRY, projectAssembly(COUNTRY))!.target).toMatch(/Taiwan/)
+    expect(toReportRow(summaryOf(COUNTRY), null)!.target).not.toMatch(/country_watch_tw/)
+  })
+
+  it('M-0a: a summary row (no blocks, no body) leads with its title\'s headline', () => {
+    const row = toReportRow(summaryOf(WORLD), null)!
+    expect(row.leadThread).toMatch(/^Saudi Arabia remains under high energy/)
+    expect(row.leadThread).not.toMatch(/World read|3 Sep|“|”/)
+    expect(titleLead('Region — Africa, 2026-11-13 — 6 of 6 desks note')).toBe('6 of 6 desks note')
+    expect(titleLead('A headline with no prefix')).toBe('A headline with no prefix')
+    expect(titleLead('**Bold** lead [3]')).toBe('Bold lead')
+    expect(titleLead(null)).toBe('')
   })
 
   it('takes the lead thread from the LEAD block, not merely the first', () => {
@@ -93,7 +141,9 @@ describe('navigator rows', () => {
   })
 
   it('never fabricates a thread when the row carries no prose', () => {
-    expect(leadThread({ ...WORLD, body: null, data: null }, null)).toBe('')
+    expect(leadThread({ ...WORLD, body: null, data: null, title: null }, null)).toBe('')
+    // M-0a — a summary row's title is a real field: its headline is the lead
+    expect(leadThread({ ...WORLD, body: null, data: null }, null)).toMatch(/^Saudi Arabia/)
   })
 
   it('groups mixed tiers in reading order and drops empty ones', () => {
@@ -179,5 +229,58 @@ describe('one selection, everything follows', () => {
   it('leaves the report intact for an entity it does not contain', () => {
     const out = filterToEntity('country_nowhere', findings, signals, entities)
     expect(out.findings).toHaveLength(findings.length)
+  })
+})
+
+describe('reader names, never machine ids (U-1)', () => {
+  // Synthetic: a read whose blocks name no target, titled by the engine.
+  const MACHINE: ReadFindingRow = {
+    ...WORLD,
+    id: 'synthetic-1',
+    target_id: 'country_zz_qq',
+    title: 'country_zz_qq, 2026-01-02 — 2 desks: unit_alpha, unit_beta',
+    data: null,
+  }
+
+  it('titles a card with the subject name, not its id', () => {
+    const named = toReportRow(MACHINE, null, undefined, (id) => (id === 'country_zz_qq' ? 'Zedland' : null))
+    expect(named!.target).toBe('Zedland')
+    // No roster entry: still never the raw id.
+    const unnamed = toReportRow(MACHINE, null)
+    expect(unnamed!.target).not.toBe('country_zz_qq')
+    expect(unnamed!.target).not.toMatch(/_/)
+  })
+
+  it('rewrites an engine-built report title into words', () => {
+    const t = readerReportTitle(MACHINE.title!, 'country_zz_qq', (id) =>
+      id === 'country_zz_qq' ? 'Zedland' : null,
+    )
+    expect(t).toBe('Zedland, 2026-01-02 — 2 desks: unit alpha, unit beta')
+    expect(readerReportTitle('A plain human title', 'country_zz_qq')).toBe('A plain human title')
+  })
+
+  it('shows a block lead as plain prose — no raw markdown or markers', () => {
+    const assembly = projectAssembly(WORLD)!
+    const doctored = {
+      ...assembly,
+      lead: null,
+      blocks: [
+        {
+          ...assembly.blocks[0],
+          spans: [{ ...assembly.blocks[0].spans[0], role: 'bluf', text: '**BLUF:** Ports **reopen** today [1]' }],
+        },
+      ],
+    } as typeof assembly
+    expect(leadThread(WORLD, doctored)).toBe('BLUF: Ports reopen today')
+    expect(reportFindings(doctored)[0].bluf).not.toMatch(/\*\*|\[1\]/)
+  })
+})
+
+describe('U-1 — a block stored with its machine id as its name', () => {
+  it('names the subject when target_name is itself an id, and keeps a real name', () => {
+    expect(readerBlockName('country_zz_qq', 'country_zz_qq', (id) => (id === 'country_zz_qq' ? 'Qualia' : null))).toBe('Qualia')
+    expect(readerBlockName('country_zz_qq', 'country_zz_qq')).not.toMatch(/_/)
+    expect(readerBlockName('Qualia', 'country_zz_qq')).toBe('Qualia')
+    expect(readerBlockName(null, 'country_zz_qq', () => 'Qualia')).toBe('Qualia')
   })
 })

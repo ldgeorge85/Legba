@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.euvsdisinfo.cases": {
+      "source": "source_euvsdisinfo.yaml",
+      "state": "draft"
+    }
+  }
+}

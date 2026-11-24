@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.pancanal.news": {
+      "source": "source_pancanal.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -154,6 +154,7 @@ from ._contract import (
     StateStore,
 )
 from ._egress import guarded_async_client
+from .fetch_capture import fetch_role
 
 logger = logging.getLogger(__name__)
 
@@ -772,10 +773,13 @@ class ScraperSourceHandler:
     async def _fetch_one(
         self, client: httpx.AsyncClient, url: str,
     ) -> httpx.Response:
-        return await client.get(
-            url,
-            headers={"User-Agent": self._config.user_agent},
-        )
+        # N-L: a scraped page IS the article — the fetch receipt keeps it as
+        # the signal's ingest-time page copy (role "page").
+        with fetch_role("page"):
+            return await client.get(
+                url,
+                headers={"User-Agent": self._config.user_agent},
+            )
 
     async def _robots_allow(
         self, client: httpx.AsyncClient, url: str,

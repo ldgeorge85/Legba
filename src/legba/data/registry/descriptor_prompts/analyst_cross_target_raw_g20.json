@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:cross_target_raw_g20": {
+      "source": "analyst_cross_target_raw_g20.yaml",
+      "state": "draft"
+    }
+  }
+}

@@ -1,15 +1,15 @@
 /**
  * gapStripModel — the desk gap-strip state derivation (7b-ii).
  *
- * A desk is nine bounded units (docs/ANALYSIS.md §4.1): `leadership_transition`,
- * `energy_security`, `escalation`, `narrative_coordination`, `internal_stability`,
- * `military_posture`, `economic_coercion` and `proliferation_watch` fan out
- * across the country desks; `disruption_status` is the ninth, tag-scoped off the
- * country plane to the thematic lane instead. A reader today cannot see at a
- * glance which of the nine have a current read, which banded insufficient
- * evidence, which are stale, and which never ran — this module is the pure
- * classifier the gap-strip component renders, kept DOM-free so the four states
- * are tested without a browser.
+ * A desk is the profile's bounded units (docs/ANALYSIS.md §4.1) — ROSTER-2: the
+ * roster is the instance profile's `rosters.units`, read through
+ * `lib/profileUi.ts` (`profileUnits()`), never a list spelled here. On the
+ * exemplar most fan out across the country desks and one is tag-scoped off the
+ * country plane to a thematic lane. A reader today cannot see at a glance which
+ * of the units have a current read, which banded insufficient evidence, which
+ * are stale, and which never ran — this module is the pure classifier the
+ * gap-strip component renders, kept DOM-free so the four states are tested
+ * without a browser.
  *
  * SOURCES — no new backend route, no changed route. Two routes the UI already
  * calls elsewhere carry every field the strip needs:
@@ -38,15 +38,16 @@
  *     unit's own cadence, with grace.
  *   * `current`     — a real latest read inside the unit's cadence.
  *
- * CADENCE. Every one of the nine unit descriptors declares
- * `cadence.fallback_schedule` as a 2×/day staggered cron (e.g.
- * `descriptors/analyst_leadership_transition.yaml`: `"0 1,13 * * *"`,
- * `cooldown_seconds: 39600`) — a 12h interval today, for every unit. `GAP_STRIP_UNITS`
- * carries the interval PER UNIT (never one shared constant read by every cell)
- * so a future descriptor on a different cadence changes only its own row; nothing
- * here assumes the nine stay in lockstep.
+ * CADENCE. Every one of the exemplar's unit descriptors declares
+ * `cadence.fallback_schedule` as a 2×/day staggered cron (e.g. `"0 1,13 * * *"`,
+ * `cooldown_seconds: 39600`) — a 12h interval today, for every unit
+ * (`UNIT_CADENCE_HOURS`). `GAP_STRIP_UNITS` still carries the interval PER UNIT
+ * (never one shared constant read by every cell) so a future descriptor on a
+ * different cadence changes only its own row; nothing here assumes the units
+ * stay in lockstep.
  */
 import { isInsufficient, type DimensionBand } from '@/lib/evalOps'
+import { profileUnits } from '@/lib/profileUi'
 
 export type GapCellState = 'current' | 'insufficient' | 'stale' | 'none'
 
@@ -59,18 +60,17 @@ export interface GapUnit {
   cadenceHours: number
 }
 
-/** The nine bounded units, docs/ANALYSIS.md §4.1, display order. */
-export const GAP_STRIP_UNITS: GapUnit[] = [
-  { id: 'leadership_transition', label: 'Leadership transition', short: 'LT', cadenceHours: 12 },
-  { id: 'energy_security', label: 'Energy security', short: 'ES', cadenceHours: 12 },
-  { id: 'escalation', label: 'Escalation', short: 'ESC', cadenceHours: 12 },
-  { id: 'narrative_coordination', label: 'Narrative / coordination', short: 'NC', cadenceHours: 12 },
-  { id: 'internal_stability', label: 'Internal stability', short: 'IS', cadenceHours: 12 },
-  { id: 'military_posture', label: 'Military posture', short: 'MP', cadenceHours: 12 },
-  { id: 'economic_coercion', label: 'Economic coercion', short: 'EC', cadenceHours: 12 },
-  { id: 'proliferation_watch', label: 'Proliferation watch', short: 'PW', cadenceHours: 12 },
-  { id: 'disruption_status', label: 'Disruption status', short: 'DS', cadenceHours: 12 },
-]
+/** Hours between a unit's scheduled fires: the units' shared descriptor cadence
+ *  today (a 2×/day cron). */
+export const UNIT_CADENCE_HOURS = 12
+
+/** The profile's bounded units, display order (ROSTER-2: `profileUnits()`). */
+export const GAP_STRIP_UNITS: GapUnit[] = profileUnits().map((u) => ({
+  id: u.id,
+  label: u.label,
+  short: u.short,
+  cadenceHours: UNIT_CADENCE_HOURS,
+}))
 
 /**
  * Grace over the cadence interval before a real (non-insufficient) read reads

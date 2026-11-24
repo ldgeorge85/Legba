@@ -1,0 +1,71 @@
+# archive_retention — the evidence archive's deterministic expiry sweep.
+#
+# A `deterministic`-kind META analyst, DAILY, no LLM, no spend. It removes the
+# stored bytes of an `evidence_archive` row whose signal is cited by NOTHING (no
+# analyst_outputs / facts / events row carries it in derived_from) and whose row
+# is older than `retention_days` (default 45), and keeps the row with
+# status='expired_uncited' (migration 0224). A CITED row is never touched: the
+# archive exists to preserve cited evidence. The rule, its safety order and what
+# is not built are in
+# legba.data.analysts.deterministic_handlers.archive_retention's docstring.
+#
+# DOUBLE-GATED, SHIPS INERT:
+#   1. this descriptor is `draft` — registering it does not schedule it;
+#   2. even active, the handler no-ops unless LEGBA_ARCHIVE_RETENTION is on in the
+#      runtime's environment (default OFF). A flag-off tick writes a zeroed
+#      receipt (flag_off=1) and touches neither the database nor the volume.
+#
+# TO TURN ON (operator steps, in this order; none of it is done by merging this):
+#   a. apply migration 0224 (the `expired_uncited` status + two probe indexes);
+#   b. register this descriptor and read a DRY RUN first — set
+#        method.options.dry_run: true
+#      below, activate, set LEGBA_ARCHIVE_RETENTION=1 in .env, recreate the
+#      runtime, and read the cadence receipt's `eligible` / `bytes_removed`;
+#   c. remove `dry_run` to let it act.
+#
+# Method:
+#   * kind = deterministic; impl = the dispatcher module:run_method, routed by
+#     sub_handler. Declared options (retention_days, batch_limit, dry_run) are
+#     validated against ANALYST handler_options_catalog['archive_retention'].
+#
+# Cadence:
+#   * fallback_schedule "53 6 * * *" — daily 06:53 UTC, off every other
+#     maintenance tick (analyst_traces_retention "37 5").
+#   * cooldown 3600 s — a bounded batch per run; an hour re-fire floor.
+
+identity:
+  id: archive_retention
+  name: Archive Retention
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: archive_retention
+
+subscription:
+  # No `targets` block → META analyst: one global sweep per cadence tick.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: archive_retention
+  # No LLM block, no token budget: pure SQL plus a bounded set of file removals.
+  # No `options` block: the shipped defaults (45 days, 200 rows) apply. See the
+  # TO TURN ON note above for the dry-run option.
+
+cadence:
+  fallback_schedule: "53 6 * * *"
+  cooldown_seconds: 3600
+
+outputs: []

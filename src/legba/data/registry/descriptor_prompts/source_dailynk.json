@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.dailynk.english": {
+      "source": "source_dailynk.yaml",
+      "state": "draft"
+    }
+  }
+}

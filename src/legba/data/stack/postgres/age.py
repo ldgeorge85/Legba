@@ -18,12 +18,9 @@ Highlights:
     acquired connection; `create_user_schema` / `drop_user_schema` give
     operators an explicit knob (per DM-7: shared schema is default, but
     per-tenant is supported when a use case demands it).
-  * AGE Cypher helper: `cypher(graph, query, params=None)` wraps the
-    `SELECT * FROM cypher(...)` boilerplate and routes through
-    `PostgresStore.cypher()` for agtype parsing.
-  * AGE vocabulary helpers: `register_vertex_label` /
-    `register_edge_label` idempotently create labels (matches the
-    `create_vlabel` / `create_elabel` pattern in migration 0004).
+  * The Apache AGE graph (`legba_graph`) was removed on 2026-11-15 (it held no
+    row); the cypher and label helpers went with it. The AGE *extension* is
+    still installed and still probed here until the stock-Postgres image swap.
   * Healthcheck combines `SELECT 1` + `SELECT extversion FROM
     pg_extension WHERE extname='age'` so the runtime can distinguish a
     bare Postgres (no AGE) from an AGE-enabled cluster.
@@ -51,12 +48,6 @@ import asyncpg
 from ...config import PostgresConfig
 from ...postgres import PostgresStore
 from ...schemas.stack import PostgresCluster, PostgresClusterConfig
-from ...vocabulary import (
-    ENTITY_CLASSES,
-    RELATIONSHIP_TYPES,
-    normalize_relationship,
-    vertex_label,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -150,18 +141,14 @@ class PostgresClusterHandler:
     handler_version: ClassVar[str] = "0.1.0"
     config_schema: ClassVar[type] = PostgresClusterConfig
 
-    DEFAULT_GRAPH_NAME: ClassVar[str] = PostgresStore.GRAPH_NAME
-
     def __init__(
         self,
         cfg: PostgresClusterConfig | PostgresConfig,
         *,
         component_id: str = "pg.cluster_main",
         password_override: str | None = None,
-        graph_name: str | None = None,
     ) -> None:
         self.component_id = component_id
-        self.graph_name = graph_name or self.DEFAULT_GRAPH_NAME
 
         self._descriptor_config: PostgresClusterConfig | None = None
         self._pg_config: PostgresConfig
@@ -262,7 +249,7 @@ class PostgresClusterHandler:
         await store.connect()
         self._store = store
 
-        # Probe connectivity, AGE presence, and graph existence.
+        # Probe connectivity and AGE presence.
         try:
             async with store.acquire() as conn:
                 val = await conn.fetchval("SELECT 1")
@@ -274,15 +261,6 @@ class PostgresClusterHandler:
                 if not age_version:
                     raise RuntimeError(
                         "AGE extension is not installed on the target database"
-                    )
-                graph_present = await conn.fetchval(
-                    "SELECT 1 FROM ag_catalog.ag_graph WHERE name=$1",
-                    self.graph_name,
-                )
-                if not graph_present:
-                    raise RuntimeError(
-                        f"AGE graph {self.graph_name!r} not present; "
-                        f"expected migration 0004 to have created it"
                     )
         except Exception:
             # On configure failure, tear down the store so a retry starts clean.
@@ -368,7 +346,6 @@ class PostgresClusterHandler:
                 detail={
                     "component_id": self.component_id,
                     "select_one": val,
-                    "graph_name": self.graph_name,
                 },
                 age_version=age_version,
                 pool_size=int(self._pg_config.pool_max),
@@ -478,113 +455,6 @@ class PostgresClusterHandler:
                 name,
             )
         return val is not None
-
-    # --------------------------------------------------------------------
-    # AGE Cypher helper
-    # --------------------------------------------------------------------
-
-    async def cypher(
-        self,
-        graph: str,
-        query: str,
-        params: Mapping[str, Any] | None = None,
-        *,
-        cols: str = "v agtype",
-    ) -> list[dict[str, Any]]:
-        """Execute a Cypher query against `graph` and return parsed rows.
-
-        ``params`` is an optional mapping of substitutions applied to the
-        Cypher source via Python `str.format` — AGE does not bind Cypher
-        parameters through asyncpg, and the legacy `ag_catalog.cypher`
-        function takes a parameter map only when run as a function
-        invocation (incompatible with the `SELECT * FROM cypher(...)`
-        form). Callers MUST supply only trusted / sanitised values.
-
-        Each row is returned as a dict keyed by `cols`. `cols` defaults to
-        ``"v agtype"`` (matches ``RETURN n AS v``). Multi-column returns
-        require an explicit `cols` string, e.g. ``"a agtype, b agtype"``.
-        """
-        if params:
-            try:
-                query = query.format(**params)
-            except (KeyError, IndexError) as exc:
-                raise ValueError(
-                    f"cypher() params do not satisfy template: {exc}"
-                ) from exc
-
-        # Delegate to the store helper for graph + agtype parsing.
-        return await self.store.cypher(query, cols=cols, graph_name=graph)
-
-    # --------------------------------------------------------------------
-    # AGE vocabulary helpers — idempotent label creation
-    # --------------------------------------------------------------------
-
-    async def register_vertex_label(self, label: str) -> bool:
-        """Idempotently create an AGE vertex label.
-
-        Returns True if the label was created in this call, False if it
-        already existed. Label naming follows the L-090 §4.5 PascalCase
-        convention.
-        """
-        return await self._register_label(label, kind="v")
-
-    async def register_edge_label(self, label: str) -> bool:
-        """Idempotently create an AGE edge label.
-
-        UPPER_SNAKE legacy edge names normalise to PascalCase via
-        `vocabulary.RELATIONSHIP_ALIASES` before creation, matching the
-        Cypher-write-time normalization Lewis confirmed in DM-6.
-        """
-        canonical = normalize_relationship(label)
-        return await self._register_label(canonical, kind="e")
-
-    async def _register_label(self, label: str, *, kind: str) -> bool:
-        """Implementation shared by vertex / edge label registration."""
-        _validate_identifier(label, kind=f"AGE {('vertex' if kind=='v' else 'edge')} label")
-
-        async with self.acquire() as conn:
-            # Ensure AGE session state is loaded on this connection.
-            await PostgresStore._prepare_for_cypher(conn)
-            already = await conn.fetchval(
-                """
-                SELECT 1
-                FROM ag_catalog.ag_label l
-                JOIN ag_catalog.ag_graph g ON l.graph = g.graphid
-                WHERE g.name = $1 AND l.name = $2
-                """,
-                self.graph_name,
-                label,
-            )
-            if already:
-                return False
-            func = "create_vlabel" if kind == "v" else "create_elabel"
-            await conn.execute(
-                f"SELECT ag_catalog.{func}($1, $2)", self.graph_name, label
-            )
-            return True
-
-    # --------------------------------------------------------------------
-    # Convenience — seed the L-090 §4.5 trimmed vocabulary (9 + 14)
-    # --------------------------------------------------------------------
-
-    async def ensure_seed_vocabulary(self) -> dict[str, list[str]]:
-        """Ensure all 9 entity_classes and 14 relationship_types exist.
-
-        Returns a dict of `{'vertex': [created...], 'edge': [created...]}
-        ` listing labels actually created (vs already-present). Used by
-        the smoke flow + the L-001 migration in tests where AGE was set
-        up from scratch.
-        """
-        created: dict[str, list[str]] = {"vertex": [], "edge": []}
-        for ec in ENTITY_CLASSES:
-            label = vertex_label(ec)
-            if await self.register_vertex_label(label):
-                created["vertex"].append(label)
-        for rt in RELATIONSHIP_TYPES:
-            if await self.register_edge_label(rt):
-                created["edge"].append(rt)
-        return created
-
 
 # ---------------------------------------------------------------------------
 # Module helpers

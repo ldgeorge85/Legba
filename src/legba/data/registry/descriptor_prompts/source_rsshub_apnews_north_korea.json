@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.rsshub.apnews.north_korea": {
+      "source": "source_rsshub_apnews_north_korea.yaml",
+      "state": "draft"
+    }
+  }
+}

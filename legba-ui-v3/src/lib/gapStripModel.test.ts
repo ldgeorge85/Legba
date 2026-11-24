@@ -22,6 +22,7 @@ import {
   type GapUnit,
 } from './gapStripModel'
 import type { DimensionBand } from './evalOps'
+import { PROFILE_UI } from './profileUi'
 
 const UNIT: GapUnit = { id: 'escalation', label: 'Escalation', short: 'ESC', cadenceHours: 12 }
 const NOW = new Date('2026-09-24T12:00:00Z')
@@ -155,5 +156,20 @@ describe('deriveGapStrip', () => {
       'proliferation_watch',
       'disruption_status',
     ])
+  })
+
+  it('reads every label, glyph and cadence from the profile — today’s literals, byte for byte (ROSTER-2)', () => {
+    expect(GAP_STRIP_UNITS).toEqual([
+      { id: 'leadership_transition', label: 'Leadership transition', short: 'LT', cadenceHours: 12 },
+      { id: 'energy_security', label: 'Energy security', short: 'ES', cadenceHours: 12 },
+      { id: 'escalation', label: 'Escalation', short: 'ESC', cadenceHours: 12 },
+      { id: 'narrative_coordination', label: 'Narrative / coordination', short: 'NC', cadenceHours: 12 },
+      { id: 'internal_stability', label: 'Internal stability', short: 'IS', cadenceHours: 12 },
+      { id: 'military_posture', label: 'Military posture', short: 'MP', cadenceHours: 12 },
+      { id: 'economic_coercion', label: 'Economic coercion', short: 'EC', cadenceHours: 12 },
+      { id: 'proliferation_watch', label: 'Proliferation watch', short: 'PW', cadenceHours: 12 },
+      { id: 'disruption_status', label: 'Disruption status', short: 'DS', cadenceHours: 12 },
+    ])
+    expect(GAP_STRIP_UNITS.map((u) => u.id)).toEqual(PROFILE_UI.rosters.units)
   })
 })

@@ -20,23 +20,33 @@
  * HIDDEN_KINDS — so a saved layout referencing the old id keeps resolving
  * exactly as before.
  */
-import { useState } from 'react'
 import type { PanelProps } from '@/types'
-import { initialTab, PanelTabStrip, type PanelTabDef } from '@/components/PanelTabs'
+import { PanelTabStrip, type PanelTabDef } from '@/components/PanelTabs'
 import { PanelEmbedProvider } from '@/components/PanelEmbedContext'
 import EventLanesTimeline from '@/panels/v4/TimelinePanel'
 import ValidityTimeline from '@/panels/system/Timeline'
+import { pinForSelection, TIMELINE_PIN_KINDS, usePinScope } from '@/lib/consultContext'
+import { useSelection } from '@/state/selection'
+import { useMergedTab } from './useMergedTab'
 
 type Mode = 'events' | 'validity'
 
-const TABS: readonly PanelTabDef[] = [
+export const TIMELINE_TABS: readonly PanelTabDef[] = [
   { id: 'events', label: 'Events' },
   { id: 'validity', label: 'Validity' },
 ]
+const TABS = TIMELINE_TABS
 
 export default function TimelineMerged(props: PanelProps) {
-  // `v4.timeline` retired onto this panel's "events" mode (aliases.ts).
-  const [mode, setMode] = useState<Mode>(() => initialTab(props.initialTab, TABS, 'events') as Mode)
+  // `v4.timeline` retired onto this panel's "events" mode (aliases.ts). UI-B6:
+  // through `useMergedTab`, so an `open_panel {tab}` (a case's, or a retired
+  // id's alias) switches an ALREADY-OPEN Timeline too, not only a fresh one.
+  const [mode, setMode] = useMergedTab<Mode>('system.timeline', props.initialTab, TABS, 'events')
+  // THE PIN HOOK (UI-B6): the record the Timeline holds selected — a mark it
+  // places in time, or the subject the validity view reads — is what the
+  // reader is on. Any other selection pins nothing from here.
+  const selection = useSelection((s) => s.selection)
+  usePinScope(pinForSelection(selection, TIMELINE_PIN_KINDS), 'timeline')
   return (
     <div className="flex h-full w-full flex-col bg-surf-2">
       <div className="flex items-center gap-2 border-b border-line bg-surf-3 px-density py-1.5">

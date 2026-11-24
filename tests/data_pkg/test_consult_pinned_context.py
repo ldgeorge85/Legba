@@ -383,8 +383,11 @@ def test_deep_without_pins_is_byte_identical_to_the_old_shape(monkeypatch):
         "/api/v1/deep_consult", json={"question": "q"},
     )
     assert r.status_code == 202, r.text
+    # Roll 84 (23d3fe71): a deep run that names no model threads the core
+    # component explicitly; nothing else about the pre-pin shape moved.
     assert captured["body"]["inputs"] == [
-        {"question": "q", "scope_predicate": None},
+        {"question": "q", "scope_predicate": None,
+         "llm_component_override": "llm.primary.openai_compat"},
     ]
 
 

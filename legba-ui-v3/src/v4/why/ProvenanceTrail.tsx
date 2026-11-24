@@ -124,7 +124,8 @@ export default function ProvenanceTrail({ selection }: ProvenanceTrailProps) {
     // `report`, `journal_entry`, `absence` and `contention` are not substrate
     // row_kinds — a report IS a finding row, a journal entry has no lineage
     // table at all, an absence names something the substrate does not contain,
-    // and a contention (7a) names a page on the OPEN WEB — so the self-chip
+    // and a contention (7a) names a page on the OPEN WEB (a place, U-7, is
+    // geography) — so the self-chip
     // speaks the walk's vocabulary rather than the selection's. None of them is
     // walkable (`isWalkable` below is false for them), so the chip is the
     // trail: their provenance is their own proof, which the Inspector renders,
@@ -133,7 +134,8 @@ export default function ProvenanceTrail({ selection }: ProvenanceTrailProps) {
       selection.kind === 'report' ||
       selection.kind === 'journal_entry' ||
       selection.kind === 'absence' ||
-      selection.kind === 'contention'
+      selection.kind === 'contention' ||
+      selection.kind === 'place'
         ? 'finding'
         : selection.kind
     const ref: ProvenanceRef = {
@@ -235,14 +237,14 @@ export default function ProvenanceTrail({ selection }: ProvenanceTrailProps) {
         ))}
 
       {hardError && (
-        <p className="text-[10px] text-slate-500">
+        <p className="text-label text-slate-500">
           lineage unavailable
           {error instanceof ApiError ? ` (HTTP ${error.status})` : ''} — showing the selected
           row only
         </p>
       )}
       {walkable && (notFound || (report && steps.length === 1)) && (
-        <p className="text-[10px] text-slate-600">no upstream lineage recorded</p>
+        <p className="text-label text-ink-3">no upstream lineage recorded</p>
       )}
     </div>
   )
@@ -267,7 +269,7 @@ function HopReceipt({ node }: { node: LineageNode }) {
       {r &&
         (r.chain_consistent ? (
           <span
-            className="inline-flex items-center gap-1 rounded bg-accent-ok/15 px-1 py-0.5 text-[9px] leading-none text-accent-ok"
+            className="inline-flex items-center gap-1 rounded bg-accent-ok/15 px-1 py-0.5 text-label leading-none text-accent-ok"
             title={`receipt ${r.receipt_hash.slice(0, 12)}… · re-hash matched`}
           >
             <ShieldCheck className="h-2.5 w-2.5" aria-hidden />
@@ -275,7 +277,7 @@ function HopReceipt({ node }: { node: LineageNode }) {
           </span>
         ) : (
           <span
-            className="inline-flex items-center gap-1 rounded bg-accent-critical/15 px-1 py-0.5 text-[9px] leading-none text-accent-critical"
+            className="inline-flex items-center gap-1 rounded bg-accent-critical/15 px-1 py-0.5 text-label leading-none text-accent-critical"
             title={`receipt ${r.receipt_hash.slice(0, 12)}… · re-hash MISMATCH`}
           >
             <ShieldCheck className="h-2.5 w-2.5" aria-hidden />
@@ -288,7 +290,7 @@ function HopReceipt({ node }: { node: LineageNode }) {
           target="_blank"
           rel="noopener noreferrer"
           title={node.canonical_url}
-          className="inline-flex items-center gap-0.5 text-[9px] text-accent-info hover:underline"
+          className="inline-flex items-center gap-0.5 text-label text-accent-info hover:underline"
         >
           <ExternalLink className="h-2.5 w-2.5" aria-hidden />
           source

@@ -640,7 +640,9 @@ async def test_happy_path_substrate_resolvable_question():
     assert "reason" in phases
     assert "act" in phases
     assert phases.count("reason") == 2          # two LLM rounds
-    assert phases[-1] == "narrate"
+    # W11-F93: the judge runs at the SETTLE POINT, after the narrate frames —
+    # the turn's last frame is its verification, then the answer it judged.
+    assert phases[-1] == "verify" and phases[-2] == "narrate"
 
 
 # ---------------------------------------------------------------------------
@@ -1753,7 +1755,7 @@ async def test_step_publish_mirrors_intermediate_steps():
     assert collected == result.intermediate_steps
     # Sanity: the trace actually has the loop phases.
     phases = [s["phase"] for s in collected]
-    assert "plan" in phases and "act" in phases and phases[-1] == "narrate"
+    assert "plan" in phases and "act" in phases and phases[-1] == "verify"  # W11-F93
 
 
 @pytest.mark.asyncio
@@ -2061,10 +2063,13 @@ async def test_finished_intelligence_tools_are_known_and_dispatchable():
     from legba.data.analysts.consult_on_demand import _KNOWN_TOOLS, _dispatch_tool
 
     for name in (
-        "list_findings", "list_situations", "query_predictions",
+        "list_findings", "list_situations",
         "list_targets", "list_sources",
     ):
         assert name in _KNOWN_TOOLS
+    # W11-F150: the predictions feed is frozen (2026-07-01); the consult is no
+    # longer offered the tool (the port method stays for other callers).
+    assert "query_predictions" not in _KNOWN_TOOLS
 
     fid = uuid4()
     sid = uuid4()
@@ -2105,8 +2110,7 @@ async def test_finished_intelligence_tools_are_known_and_dispatchable():
         substrate, name="query_predictions",
         args={"target_id": "country_g20_ir"}, scope_predicate=None,
     )
-    assert out["refs"] == [str(pid)]
-    assert substrate.calls[-1][0] == "query_predictions"
+    assert out["error"].startswith("unknown_tool")
 
     out = await _dispatch_tool(
         substrate, name="list_targets", args={}, scope_predicate=None,
@@ -2834,3 +2838,326 @@ def test_resolve_output_budget_malformed_env_and_cap_degrade(monkeypatch):
     monkeypatch.delenv("LEGBA_CONSULT_MAX_TOKENS", raising=False)
     assert resolve_output_budget(0) == 2048
     assert resolve_output_budget(-1) == 2048
+
+
+# ---------------------------------------------------------------------------
+# The act-step count probes the payload key the TOOL actually used.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_act_step_counts_a_targets_payload_instead_of_logging_zero():
+    """``compare_targets`` returns ``targets``; the trace probed only
+    ``rows``/``items``, so every compare_targets call ever made logged count
+    0 — a six-target comparison in the 2026-09-28 review read as an empty
+    result and was written up as a broken tool. It is a trace bug, and this
+    is the row that proves it fixed."""
+    substrate = _SubstrateStub()
+    llm = _ScriptedLLMHandler([
+        json.dumps({
+            "tool": "compare_targets",
+            "args": {"target_ids": ["country_g20_ir", "country_g20_il"]},
+        }),
+        json.dumps({
+            "final": True,
+            "answer": "Two targets compared.",
+            "uncertainty": 0.3,
+            "cited_refs": [],
+            "unanswered_aspects": [],
+        }),
+    ])
+    deps = ConsultOnDemandDeps(llm=llm, substrate=substrate)
+
+    result = await run_method(
+        [{"question": "Compare Iran and Israel."}],
+        {"analyst_id": "analyst.consult.default", "run_id": uuid4()},
+        deps,
+    )
+
+    acts = [
+        s for s in result.intermediate_steps
+        if s["phase"] == "act" and s.get("tool") == "compare_targets"
+    ]
+    assert len(acts) == 1
+    assert acts[0]["ok"] is True
+    assert acts[0]["result"]["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_tool_result_count_probes_every_payload_key_in_order():
+    """A tool that reports its own ``count`` still wins; the list keys are the
+    fallback, in the order the whitelist's tools use them. An error result
+    never reaches here (the act step logs the error instead)."""
+    from legba.data.analysts.consult_on_demand import _tool_result_count
+
+    assert _tool_result_count({"count": 7, "rows": [1]}) == 7
+    assert _tool_result_count({"rows": [1, 2, 3]}) == 3
+    assert _tool_result_count({"items": [1, 2]}) == 2
+    assert _tool_result_count({"targets": [1, 2, 3, 4, 5, 6]}) == 6
+    assert _tool_result_count({"compared": ["a", "b"]}) == 2
+    assert _tool_result_count({"entries": [1]}) == 1
+    # Nothing countable — 0, as before, rather than a null in the trace.
+    assert _tool_result_count({"hypothesis_id": "x"}) == 0
+    # ``count`` must be a real integer: a bool is not one.
+    assert _tool_result_count({"count": True, "rows": [1, 2]}) == 2
+# The REF PARSE SEAM (2026-09-28 §B.3)
+#
+# A bare ``UUID(str(item))`` under ``except: continue`` threw away a real id
+# the model had wrapped in a bracket AND a fabricated non-uuid label, in the
+# same silence. These pin both halves of the repair.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "wrapper",
+    ["[{}]", "【{}】", "［{}］", "〔{}〕", "〖{}〗", "({}) ", '"{}"', "`{}`", "**{}**"],
+)
+def test_a_bracketed_cited_ref_still_parses(wrapper):
+    from legba.data.analysts.consult_on_demand import _coerce_refs_audited
+
+    ref = uuid4()
+    refs, malformed = _coerce_refs_audited([wrapper.format(ref)])
+    assert refs == [ref]
+    assert malformed == []
+
+
+def test_two_ids_glued_by_full_width_brackets_both_parse():
+    """``cited_refs: 【a…】【b…】`` is ONE comma-free token holding two real
+    ids. Only well-formed uuids are ever recovered, so this can add a citation
+    the model actually wrote and can never invent one."""
+    from legba.data.analysts.consult_on_demand import _coerce_refs_audited
+
+    a, b = uuid4(), uuid4()
+    refs, malformed = _coerce_refs_audited([f"【{a}】【{b}】"])
+    assert refs == [a, b]
+    assert malformed == []
+
+
+def test_a_non_uuid_citation_token_is_REPORTED_not_dropped():
+    """``sit-001`` is the core-plane run's own fabrication. It vanished at the
+    ``UUID()`` with no record anywhere; now it comes back as malformed."""
+    from legba.data.analysts.consult_on_demand import _coerce_refs_audited
+
+    ref = uuid4()
+    refs, malformed = _coerce_refs_audited(["sit-001", str(ref), "sit-001", ""])
+    assert refs == [ref]
+    assert malformed == ["sit-001"]  # de-duplicated
+
+
+def test_the_malformed_list_is_bounded_in_both_directions():
+    from legba.data.analysts.consult_on_demand import _coerce_refs_audited
+    from legba.data.analysts.consult_reply_parsing import (
+        MALFORMED_REF_MAX_ITEMS,
+        MALFORMED_REF_MAX_LEN,
+    )
+
+    _, malformed = _coerce_refs_audited(
+        [f"sit-{n:04d}" for n in range(MALFORMED_REF_MAX_ITEMS + 10)] + ["x" * 200]
+    )
+    assert len(malformed) == MALFORMED_REF_MAX_ITEMS
+    assert all(len(m) <= MALFORMED_REF_MAX_LEN for m in malformed)
+
+
+def test_a_non_list_cited_refs_is_still_nothing():
+    """Unchanged on purpose: widening this here would be a second change
+    hiding inside the first."""
+    from legba.data.analysts.consult_on_demand import _coerce_refs_audited
+
+    assert _coerce_refs_audited("a-string") == ([], [])
+    assert _coerce_refs_audited(None) == ([], [])
+
+
+@pytest.mark.asyncio
+async def test_a_full_width_header_ref_survives_to_the_citation_set():
+    """End to end through the loop: the core plane writes its cited_refs in
+    ``【】`` and the planner's narrowing is honoured rather than silently
+    replaced by the whole collected set."""
+    observed = uuid4()
+    other = uuid4()
+    substrate = _SubstrateStub(
+        signal_rows=[{"id": str(observed), "title": "a"},
+                     {"id": str(other), "title": "b"}],
+        signal_refs=[observed, other],
+    )
+    llm = _ScriptedLLMHandler([
+        json.dumps({"tool": "search_signals", "args": {"query": "x"}}),
+        (
+            f"{FINAL_SENTINEL}\n"
+            f"cited_refs: 【{observed}】, sit-001\n"
+            "\n"
+            "## Bottom line\n\nSomething happened."
+        ),
+    ])
+    deps = ConsultOnDemandDeps(llm=llm, substrate=substrate)
+    result = await run_method([{"question": "What is going on?"}], {}, deps)
+    consult = result.consult_response
+    # The planner NARROWED to one ref and the bracket no longer hides it.
+    assert consult.cited_substrate_refs == [observed]
+    # And the fabricated label is on the record rather than gone.
+    assert consult.data["cited_refs_malformed"] == ["sit-001"]
+    assert "header_refs_unparsed" not in consult.data
+
+
+@pytest.mark.asyncio
+async def test_a_header_whose_refs_ALL_fail_stamps_why_it_fell_back():
+    """"The planner declined to narrow" and "every ref the planner named
+    failed" used to arrive as the same empty set and leave as the same whole
+    collected set. Three numbers separate them."""
+    observed = uuid4()
+    substrate = _SubstrateStub(
+        signal_rows=[{"id": str(observed), "title": "a"}],
+        signal_refs=[observed],
+    )
+    llm = _ScriptedLLMHandler([
+        json.dumps({"tool": "search_signals", "args": {"query": "x"}}),
+        (
+            f"{FINAL_SENTINEL}\n"
+            "cited_refs: sit-001, sit-002\n"
+            "\n"
+            "## Bottom line\n\nSomething happened."
+        ),
+    ])
+    deps = ConsultOnDemandDeps(llm=llm, substrate=substrate)
+    result = await run_method([{"question": "What is going on?"}], {}, deps)
+    data = result.consult_response.data
+    assert data["header_refs_unparsed"] == 2
+    assert data["header_refs_unconfirmed"] == 0
+    assert data["cited_refs_fallback"] == "collected_set"
+    # The fallback itself STAYS — it is stamped, not removed.
+    assert result.consult_response.cited_substrate_refs == [observed]
+
+
+@pytest.mark.asyncio
+async def test_a_planner_that_simply_declined_to_narrow_is_not_stamped():
+    """The contrast case: no cited_refs header at all is a deliberate breadth,
+    and stamping it would make the stamp meaningless."""
+    observed = uuid4()
+    substrate = _SubstrateStub(
+        signal_rows=[{"id": str(observed), "title": "a"}],
+        signal_refs=[observed],
+    )
+    llm = _ScriptedLLMHandler([
+        json.dumps({"tool": "search_signals", "args": {"query": "x"}}),
+        f"{FINAL_SENTINEL}\n\n## Bottom line\n\nSomething happened.",
+    ])
+    deps = ConsultOnDemandDeps(llm=llm, substrate=substrate)
+    result = await run_method([{"question": "What is going on?"}], {}, deps)
+    data = result.consult_response.data
+    assert "header_refs_unparsed" not in data
+    assert "cited_refs_fallback" not in data
+    assert result.consult_response.cited_substrate_refs == [observed]
+
+
+@pytest.mark.asyncio
+async def test_the_answer_bodys_full_width_markers_are_normalized_and_persisted():
+    """Every other analyst path has normalized ``【3】`` at write time since
+    2026-06-30; consult was the one that did not, because the rule lived in a
+    module it cannot import."""
+    observed = uuid4()
+    substrate = _SubstrateStub(
+        signal_rows=[{"id": str(observed), "title": "a"}],
+        signal_refs=[observed],
+    )
+    llm = _ScriptedLLMHandler([
+        json.dumps({"tool": "search_signals", "args": {"query": "x"}}),
+        (
+            f"{FINAL_SENTINEL}\n"
+            f"cited_refs: {observed}\n"
+            "\n"
+            "## Bottom line\n\nA claim 【3】 and another 【ref:2】."
+        ),
+    ])
+    deps = ConsultOnDemandDeps(llm=llm, substrate=substrate)
+    result = await run_method([{"question": "What is going on?"}], {}, deps)
+    answer = result.consult_response.answer
+    assert "[3]" in answer and "【3】" not in answer
+    assert "[[ref:2]]" in answer
+
+
+@pytest.mark.asyncio
+async def test_the_provenance_hold_banners_an_answer_that_resolved_nothing():
+    """The 2026-09-28 core-plane shape: a confident answer whose citations
+    check out against nothing. It now leads with a line saying so."""
+    from legba.data.analysts.consult_round_protocol import PROVENANCE_HOLD_REASON
+
+    observed = uuid4()
+
+    class _ClassifyingStub(_SubstrateStub):
+        async def classify_cited_refs(self, *, refs):
+            return {
+                "by_origin_class": {},
+                "by_kind": {},
+                "resolved": 0,
+                "unresolved": 0,
+                "fabricated": len(refs),
+                "malformed": [],
+                "asked": len(refs),
+            }
+
+    substrate = _ClassifyingStub(
+        signal_rows=[{"id": str(observed), "title": "a"}],
+        signal_refs=[observed],
+    )
+    llm = _ScriptedLLMHandler([
+        json.dumps({"tool": "search_signals", "args": {"query": "x"}}),
+        (
+            f"{FINAL_SENTINEL}\n"
+            f"cited_refs: {observed}\n"
+            "\n"
+            "## Bottom line\n\nIran struck three sites on Tuesday."
+        ),
+    ])
+    deps = ConsultOnDemandDeps(llm=llm, substrate=substrate)
+    result = await run_method([{"question": "What is going on?"}], {}, deps)
+    consult = result.consult_response
+    assert consult.data["hold_reason"] == PROVENANCE_HOLD_REASON
+    assert consult.answer.startswith("> **Held:")
+    # The answer itself is KEPT, below the banner — a held answer is not a
+    # discarded one.
+    assert "Iran struck three sites" in consult.answer
+    census = consult.data["provenance_census"]
+    assert census["live"] == 0 and census["fabricated"] == 1
+    # The hold itself does not touch uncertainty; the EVIDENCE FLOOR does — an
+    # answer that resolved nothing is floored to 0.85 from the model's 0.5, and
+    # the stamp says so. One classify read served both (the census above and
+    # the floor here), which is why the two agree that nothing resolved.
+    assert consult.uncertainty == 0.85
+    assert consult.data["uncertainty_floor_applied"] == {
+        "from": 0.5, "to": 0.85, "resolved": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_grounded_answer_is_not_bannered():
+    observed = uuid4()
+
+    class _ClassifyingStub(_SubstrateStub):
+        async def classify_cited_refs(self, *, refs):
+            return {
+                "by_origin_class": {"live": len(refs)},
+                "by_kind": {"signal": len(refs)},
+                "resolved": len(refs),
+                "unresolved": 0,
+                "fabricated": 0,
+                "malformed": [],
+                "asked": len(refs),
+            }
+
+    substrate = _ClassifyingStub(
+        signal_rows=[{"id": str(observed), "title": "a"}],
+        signal_refs=[observed],
+    )
+    llm = _ScriptedLLMHandler([
+        json.dumps({"tool": "search_signals", "args": {"query": "x"}}),
+        (
+            f"{FINAL_SENTINEL}\n"
+            f"cited_refs: {observed}\n"
+            "\n"
+            "## Bottom line\n\nSomething happened."
+        ),
+    ])
+    deps = ConsultOnDemandDeps(llm=llm, substrate=substrate)
+    result = await run_method([{"question": "What is going on?"}], {}, deps)
+    consult = result.consult_response
+    assert "hold_reason" not in consult.data
+    assert consult.answer.startswith("## Bottom line")

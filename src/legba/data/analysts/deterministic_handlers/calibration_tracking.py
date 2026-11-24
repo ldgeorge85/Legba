@@ -57,6 +57,8 @@ from typing import Any, Mapping
 import numpy as np
 
 from ...provenance.models import FindingPayload
+from ... import subject as _subject
+from ... import calibration_honesty as _honesty
 from ...provenance.origin import origin_class_clause
 from ...provenance.verify import JUDGE_PIPELINE_VERSION
 from ...retrieval_origin import (
@@ -85,20 +87,24 @@ _DEFAULT_DRIFT_THRESHOLD = 2.0
 #: ``_MIN_EXOGENOUS_FOR_BRIER`` and the weak-tier / exogenous-vs-self-consistency
 #: split rules below. Bump it when any of them moves, so a Brier diff across the
 #: change reads as an instrument revision, not a calibration regression.
-METHOD_VERSION = "calibration_tracking/2026-09.1"
+METHOD_VERSION = "calibration_tracking/2026-11.1"
+# 2026-11.1 (lane E): hypothesis claimed confidence is SIGNED (was |balance|);
+# the collection-volume predictor (country_predictor) is excluded from every
+# calibration figure and reported under its own label; populations carry their
+# own n and newest-member date.
 
 # R1-T1.3 (#92) — the pre-registered acute-binary forecast pilot reports its
 # segregated Brier only once it has at least this many EXOGENOUSLY-resolved
 # (country, week) calls, so the first number isn't a small-sample artifact.
 # Below it the finding says "accumulating (n=k/N)". The pilot's number lives in
 # its OWN key (`brier_forecast_acute`) and is NEVER pooled into the headline.
-_FORECAST_ACUTE_MIN_SAMPLE = 30
+_FORECAST_ACUTE_MIN_SAMPLE = _honesty.ACUTE_PILOT_MIN_SAMPLE
 
 # DQ-H2: the headline Brier is only meaningful over EXOGENOUS resolutions
 # (the world graded the claim), not self-consistency ones (the system graded
 # itself). Below this many exogenous rows we report "insufficient exogenous
 # sample" rather than a number that looks calibrated but isn't.
-_MIN_EXOGENOUS_FOR_BRIER = 5
+_MIN_EXOGENOUS_FOR_BRIER = _honesty.EXOGENOUS_MIN_SAMPLE
 # The horizon-end prediction resolver's provenance label — EXOGENOUS (forecast
 # CI vs the actual realized event rate).
 _FORECAST_RESOLVER_SOURCE = "forecast_vs_actual"
@@ -294,7 +300,9 @@ def _drift_z(
 async def _resolve_region_geo(conn: Any, region: str) -> list[str]:
     """Resolve a prediction's ``region`` (the target descriptor id, e.g.
     ``country_g20_us``) to the geo codes signals are tagged with — prefer the
-    target's declared ``scope.geo``, fall back to the ISO2 suffix."""
+    target's declared ``scope.geo``, fall back to the profile's declared
+    geometry for the id (the subject ladder, ``legba.data.subject``) — never a
+    code parsed out of the id."""
     try:
         trow = await conn.fetchrow(
             "SELECT body FROM target_descriptors "
@@ -309,10 +317,9 @@ async def _resolve_region_geo(conn: Any, region: str) -> list[str]:
             geo = [g for g in (scope.get("geo") or []) if g]
             if geo:
                 return geo
-    except Exception:  # noqa: BLE001 — fall through to the suffix heuristic
+    except Exception:  # noqa: BLE001 — fall through to the declared geometry
         pass
-    suffix = region.rsplit("_", 1)[-1].upper() if region else ""
-    return [suffix] if len(suffix) == 2 and suffix.isalpha() else []
+    return list(_subject.subject_geo(region)) if region else []
 
 
 async def _grade_one_prediction(
@@ -479,7 +486,8 @@ async def _pull_resolved_claims(
                     (data->>'resolved_outcome')::int AS outcome,
                     COALESCE(data->>'resolved_by', $2) AS resolved_by,
                     data->>'resolved_at' AS resolved_at,
-                    data->>'forecast_method' AS forecast_method
+                    data->>'forecast_method' AS forecast_method,
+                    produced_at
                 FROM analyst_outputs
                 WHERE kind = 'prediction'
                   AND data->>'resolved_outcome' IS NOT NULL
@@ -504,6 +512,9 @@ async def _pull_resolved_claims(
                 # gets an exogenous CI-vs-actual resolution would otherwise inflate
                 # the honest headline sample).
                 "forecast_method": row["forecast_method"],
+                "produced_at": (
+                    row["produced_at"].isoformat() if row["produced_at"] else None
+                ),
             })
     except Exception as exc:
         logger.warning("calibration_tracking.pull_predictions_failed err=%s", exc)
@@ -532,7 +543,8 @@ async def _pull_resolved_claims(
                     evidence_balance,
                     resolved_outcome AS outcome,
                     resolved_at,
-                    resolved_by
+                    resolved_by,
+                    produced_at
                 FROM hypotheses
                 WHERE resolved_outcome IS NOT NULL
                   AND produced_at > NOW() - make_interval(days => $1)
@@ -542,8 +554,9 @@ async def _pull_resolved_claims(
         for row in hyp_rows:
             if row["outcome"] is None:
                 continue
-            bal = abs(int(row["evidence_balance"] or 0))
-            claimed = min(0.95, 0.5 + 0.15 * bal)
+            # Lane E (11-11): the SIGN is kept — strong evidence AGAINST a thesis
+            # is low confidence IN it (the old |balance| scored it as high).
+            claimed = _honesty.hypothesis_claimed_confidence(row["evidence_balance"])
             pulled.append({
                 "analyst_id": row["analyst_id"],
                 "claim_id": row["claim_id"],
@@ -559,6 +572,9 @@ async def _pull_resolved_claims(
                 # / 'operator:*' are EXOGENOUS. Carried through so the handler can
                 # report the breakdown + flag a self-consistency-only Brier.
                 "resolved_by": row["resolved_by"],
+                "produced_at": (
+                    row["produced_at"].isoformat() if row["produced_at"] else None
+                ),
             })
     except Exception as exc:
         logger.warning("calibration_tracking.pull_hypotheses_failed err=%s", exc)
@@ -823,6 +839,7 @@ def _validate_rows(
             # D28 — preserved so the tiering predicate can demote `naive_mean`
             # predictions to the weak tier even after validation.
             "forecast_method": r.get("forecast_method"),
+            "produced_at": r.get("produced_at"),
         })
     if drops:
         warnings.append(
@@ -856,6 +873,7 @@ def _build_finding(
     forecast_acute: dict[str, Any],
     warnings: list[str],
     target_id: str | None,
+    honesty: dict[str, Any] | None = None,
     brier_weak: float | None = None,
     weak_sample_size: int = 0,
     weak_fraction: float = 0.0,
@@ -1001,6 +1019,10 @@ def _build_finding(
             # it is the only number the project may quote as "forecast" skill,
             # and only once `forecast_acute_ready` AND `brier_skill_score` > 0.
             **forecast_acute,
+            # Lane E — per-population Brier + OWN n + newest member date, the
+            # collection-volume predictor's separate count, and the stamp of the
+            # signed hypothesis-confidence mapping.
+            **(honesty or {}),
             "warnings": warnings,
         },
     )
@@ -1063,7 +1085,16 @@ async def handle(
         except Exception as exc:  # noqa: BLE001
             logger.warning("calibration_tracking.acute_pull_failed err=%s", exc)
 
-    kept, warnings = _validate_rows(rows)
+    validated, warnings = _validate_rows(rows)
+    # Lane E: the collection-volume predictor's "outcome" is whether OUR OWN
+    # signal count fell in a predicted range — not a world event. It is excluded
+    # from every calibration figure below and reported under its own label.
+    volume_rows = [
+        r for r in validated if r["analyst_id"] in _honesty.COLLECTION_VOLUME_ANALYSTS
+    ]
+    kept = [
+        r for r in validated if r["analyst_id"] not in _honesty.COLLECTION_VOLUME_ANALYSTS
+    ]
 
     sample_size = len(kept)
     reliability = _reliability_bins(kept, bin_count=bin_count)
@@ -1111,7 +1142,30 @@ async def handle(
         ),
     )
 
+    def _pop(pop_rows: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "brier": _brier(pop_rows),
+            "n": len(pop_rows),
+            "newest_member_at": _honesty.newest_member_at(pop_rows),
+        }
+
+    honesty = {
+        "collection_volume_sample_size": len(volume_rows),
+        "hypothesis_confidence_mapping": "signed",
+        "hypothesis_confidence_signed_from": _honesty.SIGNED_CONFIDENCE_FROM,
+        "populations": {
+            _honesty.POP_HEADLINE: _pop(exo_rows),
+            _honesty.POP_POOLED: _pop(kept),
+            _honesty.POP_VOLUME: _pop(volume_rows),
+            _honesty.POP_SELF: _pop(
+                [r for r in kept if str(r.get("resolved_by") or "") in _SELF_CONSISTENCY_SOURCES]
+            ),
+            _honesty.POP_WEAK: _pop(weak_rows),
+        },
+    }
+
     finding = _build_finding(
+        honesty=honesty,
         brier=headline_brier,
         sample_size=sample_size,
         reliability_bins=reliability,

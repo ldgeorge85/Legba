@@ -372,6 +372,38 @@ async def test_cursor_pagination(client: AsyncClient, events_app):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_a_summary_read_answers_the_light_row_and_the_default_stays_whole(
+    client: AsyncClient, events_app,
+):
+    """Roll 87: the Watch page 2.01 MB against 2.00, its largest read
+    ``/v3/events?limit=500`` (0.42 MB). The map and the time band ask
+    ``fields=summary``; an omitted ``fields`` is the whole row as before."""
+    from legba.data.registry.event_list_weight import EventSummaryRow
+
+    _, _, pg = events_app
+    desk = f"country_ev_light_{uuid4().hex[:8]}"
+    t0 = datetime.now(timezone.utc) - timedelta(hours=2)
+    eid = await _insert_event(
+        pg, title="port strike", target_id=desk, geo=["NL"], geo_lat=51.9,
+        geo_lon=4.5, time_start=t0)
+    light = await client.get(
+        "/api/v1/v3/events", params={"target_id": desk, "fields": "summary"})
+    assert light.status_code == 200
+    (row,) = light.json()["data"]
+    assert set(row) == set(EventSummaryRow.model_fields)
+    assert (row["id"], row["geo"], row["geo_lat"], row["geo_lon"], row["target_id"]) == (
+        str(eid), ["NL"], 51.9, 4.5, desk)
+    assert row["time_start"] is not None and row["produced_at"] is not None
+    assert "summary" not in row and "locations" not in row
+    whole = await client.get("/api/v1/v3/events", params={"target_id": desk})
+    (full,) = whole.json()["data"]
+    assert {"summary", "locations", "signal_count", "analyst_id"} <= set(full)
+    assert (await client.get(
+        "/api/v1/v3/events", params={"fields": "nope"})).status_code == 422
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_bad_cursor_is_400(client: AsyncClient):
     r = await client.get("/api/v1/v3/events", params={"cursor": "%%%nope"})
     assert r.status_code == 400

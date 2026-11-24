@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:contrary_evidence_pass": {
+      "source": "analyst_contrary_evidence_pass.yaml",
+      "state": "draft"
+    }
+  }
+}

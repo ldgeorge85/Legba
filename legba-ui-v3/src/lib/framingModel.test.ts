@@ -44,6 +44,7 @@ import {
   deriveUnitRows,
   pickClaim,
   resolveClaim,
+  splitPriorHeader,
   unitLabel,
 } from '@/lib/framingModel'
 import { SCOPE_PIN_ORIGIN } from '@/lib/consultContext'
@@ -613,6 +614,37 @@ describe('the lens row — the six leans on the same evidence', () => {
     )
     expect(rows.find((r) => r.analystId === 'lens_right')!.judgeScore).toBe(0.9)
     expect(rows.find((r) => r.analystId === 'journal_voice')).toBeUndefined()
+  })
+
+  it('names the prior the read STAMPED over the mirror, and a new persona by its stamp', () => {
+    const rows = deriveLensRows(
+      [
+        lens({ analyst_id: 'lens_left', lens_prior: 'the Structuralist; who pays, who gains, and when' }),
+        lens({ analyst_id: 'lens_brand_new', lens_prior: 'the Cartographer; where the line is drawn' }),
+        lens({ analyst_id: 'lens_right', lens_prior: null }),
+      ],
+      claim,
+    )
+    const left = rows.find((r) => r.analystId === 'lens_left')!
+    expect(left.prior).toBe('who pays, who gains, and when')
+    expect(left.priorStamped).toBe(true)
+    expect(left.name).toBe('Structuralist')
+    const fresh = rows.find((r) => r.analystId === 'lens_brand_new')!
+    expect(fresh.name).toBe('Cartographer')
+    expect(fresh.prior).toBe('where the line is drawn')
+    const right = rows.find((r) => r.analystId === 'lens_right')!
+    expect(right.prior).toBe('order, deterrence, enforcement')
+    expect(right.priorStamped).toBe(false)
+  })
+
+  it('splits a stamped header; a blank stamp is absence', () => {
+    expect(splitPriorHeader('the Historian; asks how often this actually happens')).toEqual({
+      name: 'Historian',
+      prior: 'asks how often this actually happens',
+    })
+    expect(splitPriorHeader('no persona here')).toEqual({ name: null, prior: 'no persona here' })
+    expect(splitPriorHeader('  ')).toBeNull()
+    expect(splitPriorHeader(undefined)).toBeNull()
   })
 
   it('shows a lens persona this bundle has not learned about, under its own id', () => {

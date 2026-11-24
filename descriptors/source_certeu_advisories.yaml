@@ -1,0 +1,82 @@
+# K-1 cyber desk (2026-11-14) — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# CERT-EU (the cybersecurity service of the EU institutions, bodies and
+# agencies) — its security advisories: critical vulnerabilities it asks the
+# EU institutions to act on (about 20 a year). Feed address taken from the
+# RSS link on cert.europa.eu/publications/security-advisories. Probed
+# 2026-11-13 (two GETs: the page, the feed; generic client identity): HTTP
+# 200, text/xml, 10 items spanning two months, summaries ~560 characters.
+# A sibling feed, publications/threat-intelligence-rss (the monthly "Cyber
+# Brief"), exists and is stable; it is NOT added here (monthly digest of
+# items the desk reads first-hand) and is listed in the lane report.
+#
+# Geography: deliberately NO declared geo (EU is not an ISO country code;
+# an advisory's subject is a vendor's product).
+#
+# robots.txt: `User-agent: *` with no rule covering the feed.
+# Credibility: cert.europa.eu 0.88 / gov. Every four hours.
+#
+# Desk routing: scope.classifications `geopolitics.topic:cyber` is stamped on
+# every signal (W10 TAX-2) — the cyber desk's tag arm (target_cyber.yaml).
+
+identity:
+  id: source.certeu.advisories
+  name: CERT-EU — security advisories
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: cyber_desk_k1
+  created: "2026-11-14T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [cyber, advisory, gov, eu, cyber_desk]
+  classifications: ["geopolitics.topic:cyber"]
+  source_class: official
+  license_class: cc_by
+  attribution: "Source: CERT-EU (cert.europa.eu), CC BY 4.0"
+  access_class: public          # free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "47 */4 * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://cert.europa.eu/publications/security-advisories-rss"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor (the conservative default of the official-feed drafts).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

@@ -152,9 +152,14 @@ async def test_relay_keepalive_on_idle(nats_store, monkeypatch):
     resp = await endpoint(request_id, token="t", authorization=None)
     gen = resp.body_iterator
 
-    # First yield should be a keepalive comment (no message published yet).
+    # First yield is the NAMED keepalive event (no message published yet) — a
+    # comment line would never reach a browser script (W2 S-batch).
     first = await asyncio.wait_for(gen.__anext__(), timeout=5.0)
-    assert first == b": keepalive\n\n"
+    assert first.startswith(b"event: keepalive\ndata: ")
+    assert first.endswith(b"\n\n")
+    payload = json.loads(first.split(b"data: ", 1)[1])
+    assert payload["type"] == "keepalive"
+    assert payload["idle_s"] >= 0.2
 
     # Now publish a final so the generator terminates cleanly.
     await nats_store.nc.publish(

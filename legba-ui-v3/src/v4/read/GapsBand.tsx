@@ -31,7 +31,8 @@
  * The derivation is entirely in `lib/morningReadBands`; this file fetches,
  * lays out, and adds no number of its own.
  */
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
+import { useNearViewport } from '@/components/useNearViewport'
 import { useQueries } from '@tanstack/react-query'
 
 import { apiGet } from '@/lib/api'
@@ -46,16 +47,18 @@ import {
   type AbsenceResponse,
 } from '@/lib/absenceModel'
 import type { CountryScorecard } from '@/lib/evalOps'
+import { PROFILE_UI } from '@/lib/profileUi'
 import {
-  BANDS,
   deskGapView,
   gapDeskOrder,
   gapsBand,
+  useBand,
   type AbsenceKindGroup,
   type DeskGapView,
 } from '@/lib/morningReadBands'
 import {
   BandFrame,
+  bandCount,
   DESKS_PER_BAND,
   DeskHead,
   HeldBack,
@@ -64,6 +67,10 @@ import {
   type QueryState,
 } from './bandChrome'
 import { utcStamp } from './readFormat'
+
+/** The profile's subject noun in the band's note (UI-B2). */
+const SUBJECT = PROFILE_UI.subject.singular.toLowerCase()
+const SUBJECTS = PROFILE_UI.subject.plural.toLowerCase()
 
 /** Items shown per kind per desk before the held-back line. Smaller than
  *  {@link ITEMS_PER_DESK} because a desk answers under up to seven kinds and
@@ -90,6 +97,9 @@ export interface GapViews {
   total: number
   /** Desks the band is NOT reading, because the cap bounds the fan-out. */
   heldBackDesks: number
+  /** X1/D1 — true while any per-desk absence read is still in flight: the
+   *  band's `total` is then a partial sum, and the count prints `—`. */
+  pending: boolean
 }
 
 /**
@@ -100,7 +110,14 @@ export interface GapViews {
  * rail can carry the band's real count — a rail that counted only the
  * card-derived rows would under-report the band it links to.
  */
-export function useGapViews(cards: CountryScorecard[] | undefined): GapViews {
+export function useGapViews(
+  cards: CountryScorecard[] | undefined,
+  opts: { enabled?: boolean } = {},
+): GapViews {
+  // U-5 — `enabled` is false until the band is near the viewport: the six
+  // per-desk reads wait for the band, and every desk reads as still loading
+  // (the count prints `—`, never a partial sum) until then.
+  const { enabled = true } = opts
   const derivedGroups = useMemo(() => gapsBand(cards), [cards])
   const order = useMemo(() => gapDeskOrder(derivedGroups, cards), [derivedGroups, cards])
   const desks = useMemo(() => order.slice(0, DESKS_PER_BAND), [order])
@@ -112,6 +129,7 @@ export function useGapViews(cards: CountryScorecard[] | undefined): GapViews {
       // number and re-reading it on the band's poll buys nothing.
       staleTime: Infinity,
       retry: false,
+      enabled,
       queryFn: () =>
         apiGet<AbsenceResponse>(`/v3/absence?scope=${encodeURIComponent(d.targetId)}`),
     })),
@@ -124,7 +142,7 @@ export function useGapViews(cards: CountryScorecard[] | undefined): GapViews {
 
   const all = desks.map((d, i) => {
     const r = results[i]
-    const state: QueryState = !r
+    const state: QueryState = !r || (!enabled && r.data === undefined)
       ? 'loading'
       : r.isLoading
         ? 'loading'
@@ -151,6 +169,7 @@ export function useGapViews(cards: CountryScorecard[] | undefined): GapViews {
     clean: all.filter((v) => !hasContent(v)),
     total: all.reduce((n, v) => n + v.absenceCount + v.derived.length, 0),
     heldBackDesks: Math.max(0, order.length - desks.length),
+    pending: all.some((v) => v.state === 'loading'),
   }
 }
 
@@ -188,11 +207,11 @@ function AbsenceRow({
         data-stale={item.stale ? 'true' : 'false'}
       >
         <span className="block text-xs text-ink-1">{item.subject}</span>
-        <span className="block text-[0.6875rem] leading-relaxed text-ink-3">
+        <span className="block text-label leading-relaxed text-ink-3">
           {item.reason}
         </span>
         <span
-          className={`block text-[0.6875rem] ${item.stale ? 'text-ink-2' : 'text-ink-3'}`}
+          className={`block text-label ${item.stale ? 'text-ink-2' : 'text-ink-3'}`}
           data-testid="morning-read-gaps-stamp"
         >
           {absenceHeadline(item)}
@@ -207,14 +226,14 @@ function AbsenceRow({
               origin: 'morning-read-judgment',
             })
           }
-          className="mt-0.5 shrink-0 rounded border border-line px-1 py-0.5 text-[0.625rem] text-ink-3 hover:bg-surf-1"
+          className="mt-0.5 shrink-0 rounded border border-line px-1 py-0.5 text-label text-ink-3 hover:bg-surf-1"
           data-testid="morning-read-gaps-proof-ref"
         >
           {refKind}
         </button>
       ) : (
         <span
-          className="mt-0.5 shrink-0 px-1 py-0.5 text-[0.625rem] text-ink-3"
+          className="mt-0.5 shrink-0 px-1 py-0.5 text-label text-ink-3"
           title={item.proof.what_was_checked}
           data-testid="morning-read-gaps-proof-text"
         >
@@ -230,7 +249,7 @@ function KindGroup({ scope, group }: { scope: string; group: AbsenceKindGroup })
   if (group.state === 'not_measured') {
     return (
       <p
-        className="mt-1 text-[0.6875rem] leading-relaxed text-ink-3"
+        className="mt-1 text-label leading-relaxed text-ink-3"
         data-testid="morning-read-gaps-not-measured"
         data-kind={group.kind}
         title={group.meaning}
@@ -243,7 +262,7 @@ function KindGroup({ scope, group }: { scope: string; group: AbsenceKindGroup })
   if (group.state === 'clear') return null
   return (
     <div className="mt-1" data-testid="morning-read-gaps-kind" data-kind={group.kind}>
-      <p className="text-[0.6875rem] text-ink-2" title={group.meaning}>
+      <p className="text-label text-ink-2" title={group.meaning}>
         {ABSENCE_KIND_LABEL[group.kind]} · {group.count}
       </p>
       <ul className="space-y-0.5">
@@ -296,7 +315,7 @@ function DeskGaps({ view }: { view: DeskGapView }) {
       )}
       {view.derived.length > 0 && (
         <div className="mt-1" data-testid="morning-read-gaps-derived">
-          <p className="text-[0.6875rem] text-ink-2">from this desk&rsquo;s card</p>
+          <p className="text-label text-ink-2">from this desk&rsquo;s card</p>
           <ul className="space-y-0.5">
             {view.derived.slice(0, ITEMS_PER_DESK).map((item, i) => (
               <li key={`${item.kind}-${item.dimension ?? 'desk'}-${i}`}>
@@ -313,7 +332,7 @@ function DeskGaps({ view }: { view: DeskGapView }) {
                   <span className="block text-xs text-ink-1">
                     {item.dimension ?? 'whole desk'}
                   </span>
-                  <span className="block text-[0.6875rem] text-ink-3">
+                  <span className="block text-label text-ink-3">
                     {item.reason} · card {utcStamp(item.producedAt) ?? item.producedAt}
                   </span>
                 </button>
@@ -325,7 +344,7 @@ function DeskGaps({ view }: { view: DeskGapView }) {
       )}
       {view.coveredByKind > 0 && (
         <p
-          className="mt-1 text-[0.6875rem] text-ink-3"
+          className="mt-1 text-label text-ink-3"
           data-testid="morning-read-gaps-deduped"
         >
           {view.coveredByKind} card row{view.coveredByKind === 1 ? '' : 's'} not repeated
@@ -334,7 +353,7 @@ function DeskGaps({ view }: { view: DeskGapView }) {
       )}
       {view.state === 'ready' && clear.length > 0 && (
         <p
-          className="mt-1 text-[0.6875rem] text-ink-3"
+          className="mt-1 text-label text-ink-3"
           data-testid="morning-read-gaps-clear-kinds"
         >
           Read for this desk, nothing absent:{' '}
@@ -350,16 +369,30 @@ export default function GapsBand({
   clean,
   total,
   heldBackDesks,
+  pending,
   state,
-}: GapViews & { state: QueryState }) {
+  onNear,
+  armed = true,
+}: GapViews & { state: QueryState; onNear?: () => void; armed?: boolean }) {
+  const spec = useBand('gaps')
   const deskCount = views.length + clean.length
+  // U-5 — tell the surface when the band comes near the viewport; the
+  // per-desk absence reads start then.
+  const anchor = useRef<HTMLDivElement>(null)
+  const near = useNearViewport(anchor, { armed })
+  useEffect(() => {
+    if (near) onNear?.()
+  }, [near, onNear])
   return (
+    <>
+    <div ref={anchor} aria-hidden data-testid="morning-read-gaps-anchor" />
     <BandFrame
       id="gaps"
-      label={BANDS[2].label}
-      question={BANDS[2].question}
-      count={total}
-      note={`${total} on ${deskCount} desk${deskCount === 1 ? '' : 's'} read`}
+      label={spec.label}
+      question={spec.question}
+      count={pending ? null : bandCount(state, total)}
+      state={state}
+      note={`${total} on ${deskCount} ${deskCount === 1 ? SUBJECT : SUBJECTS} read`}
     >
       {state === 'loading' && (
         <StateLine testid="morning-read-gaps-loading">Reading the desks…</StateLine>
@@ -372,9 +405,9 @@ export default function GapsBand({
       )}
       {state === 'ready' && deskCount === 0 && (
         <StateLine testid="morning-read-gaps-empty">
-          No desk has a card on file, so there is no desk set to read typed absence
-          for. This band is empty because nothing was read, not because nothing is
-          missing.
+          No {SUBJECT} has a card on file, so there is no {SUBJECT} set to read typed
+          absence for. This band is empty because nothing was read, not because
+          nothing is missing.
         </StateLine>
       )}
       {views.map((v) => (
@@ -386,14 +419,14 @@ export default function GapsBand({
         </StateLine>
       )}
       {clean.length > 0 && (
-        <p className="mt-1 text-[0.6875rem] text-ink-3" data-testid="morning-read-gaps-clean">
+        <p className="mt-1 text-label text-ink-3" data-testid="morning-read-gaps-clean">
           Read clean, nothing typed absent:{' '}
           {clean.map((v) => v.label).join(', ')}.
         </p>
       )}
       <HeldBack n={heldBackDesks} noun="desk" />
       {state === 'ready' && deskCount > 0 && (
-        <p className="mt-1 text-[0.6875rem] leading-relaxed text-ink-3">
+        <p className="mt-1 text-label leading-relaxed text-ink-3">
           Each desk read once from{' '}
           <span className="font-mono">/v3/absence</span> —{' '}
           <span
@@ -410,5 +443,6 @@ export default function GapsBand({
         </p>
       )}
     </BandFrame>
+    </>
   )
 }

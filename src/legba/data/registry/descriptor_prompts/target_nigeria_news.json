@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:nigeria_news": {
+      "source": "target_nigeria_news.yaml",
+      "state": "active"
+    }
+  }
+}

@@ -92,8 +92,23 @@ class SourceFirstHandles:
     # S1 inbound-webhook drain (durable pull consumer over legba.inbound.>).
     # None when run_loops=False or the drain failed to start.
     inbound_drain: Any = None
+    # I-1 ingestion intake drain (LEGBA_INTAKE_DRAIN, off by default).
+    intake_drain: Any = None
+    # D-1 source-drift pass (LEGBA_EVIDENCE_DRIFT, off by default).
+    evidence_drift: Any = None
+    # I-4 subscribe supervisor (LEGBA_SUBSCRIBE_SUPERVISOR, off by default).
+    subscribe_supervisor: Any = None
+    # DM-C held-family feed from the desk shadow (LEGBA_HELD_RECORD_SHADOW, off by default).
+    held_record: Any = None
 
     async def stop(self) -> None:
+        # I-4: close every held stream first (lands queued events, writes the
+        # final window, releases the lease) while the substrate is still up.
+        if self.subscribe_supervisor is not None:
+            try:
+                await self.subscribe_supervisor.stop()
+            except Exception as exc:                            # pragma: no cover
+                logger.warning("source_first.subscribe_supervisor.stop err=%s", exc)
         # Liveness watchdog first — stop the check loop + drop its subscriptions
         # before the substrate connection is torn down.
         if self.liveness_watchdog is not None:
@@ -108,6 +123,21 @@ class SourceFirstHandles:
                 await self.inbound_drain.stop()
             except Exception as exc:                            # pragma: no cover
                 logger.warning("source_first.inbound_drain.stop err=%s", exc)
+        if self.intake_drain is not None:
+            try:
+                await self.intake_drain.stop()
+            except Exception as exc:                            # pragma: no cover
+                logger.warning("source_first.intake_drain.stop err=%s", exc)
+        if self.evidence_drift is not None:
+            try:
+                await self.evidence_drift.stop()
+            except Exception as exc:                            # pragma: no cover
+                logger.warning("source_first.evidence_drift.stop err=%s", exc)
+        if self.held_record is not None:
+            try:
+                await self.held_record.stop()
+            except Exception as exc:                            # pragma: no cover
+                logger.warning("source_first.held_record.stop err=%s", exc)
         # Trigger engine first — stop consuming + ticking.
         if self.trigger_engine is not None:
             try:
@@ -706,6 +736,11 @@ async def bring_up_source_first_planes(
     # answer to "is outward alerting live?"); an unconfigured webhook sink
     # still records skipped_unconfigured ledger rows so the gap is visible.
     alert_sink_dispatcher = AlertSinkDispatcher(pg_pool=pg_store.pool)
+    # L-1 — and it is THE dispatcher behind raise_alert for this pool, so every
+    # producer (hard fails, forecasts, host raises in-process) shares it.
+    from ..data.alerts.raise_alert import register_dispatcher
+
+    register_dispatcher(pg_store.pool, alert_sink_dispatcher)
 
     async def _governor_publish(subject: str, payload: bytes) -> None:
         # G2 — report delivery HONESTLY. ``publish_json`` is a JetStream
@@ -821,6 +856,10 @@ async def bring_up_source_first_planes(
     trigger_task: asyncio.Task | None = None
     liveness_watchdog: Any = None
     inbound_drain: Any = None
+    intake_drain: Any = None
+    evidence_drift: Any = None
+    subscribe_supervisor: Any = None
+    held_record: Any = None
     if run_loops:
         await worker_pool.start()
         logger.info("source_first.worker_pool.started workers=%d", pool_size)
@@ -850,6 +889,52 @@ async def bring_up_source_first_planes(
                 "recovers — not dropped)", exc,
             )
             inbound_drain = None
+
+        # I-1 ingestion intake drain — off unless LEGBA_INTAKE_DRAIN is on.
+        # Best-effort: a start failure leaves requests queued, never lost.
+        try:
+            from .intake_drain import start_intake_drain_if_enabled
+
+            intake_drain = await start_intake_drain_if_enabled(standard_deps.pg_pool)
+        except Exception as exc:                                # pragma: no cover
+            logger.warning("source_first.intake_drain.start err=%s", exc)
+            intake_drain = None
+
+        # I-4 subscribe supervisor — off unless LEGBA_SUBSCRIBE_SUPERVISOR is
+        # on. Best-effort: a start failure leaves subscribed sources unheld
+        # (the stream liveness check pages on a stream with no window rows).
+        try:
+            from .stream_supervisor import start_subscribe_supervisor_if_enabled
+
+            subscribe_supervisor = await start_subscribe_supervisor_if_enabled(standard_deps.pg_pool)
+        except Exception as exc:                                # pragma: no cover
+            logger.warning("source_first.subscribe_supervisor.start err=%s", exc)
+            subscribe_supervisor = None
+
+        # D-1 source-drift pass — off unless LEGBA_EVIDENCE_DRIFT is on.
+        # Best-effort: a start failure leaves drift rows unclassified, never lost.
+        try:
+            from .evidence_drift_loop import assess_llm_factory, start_evidence_drift_if_enabled
+
+            # D-2: the assessment's model step is built lazily, only when
+            # LEGBA_DRIFT_ASSESS_MODEL is on (default off).
+            evidence_drift = await start_evidence_drift_if_enabled(
+                standard_deps.pg_pool,
+                llm_factory=assess_llm_factory(registry_client, getattr(standard_deps, "secrets_resolve", None)),
+            )
+        except Exception as exc:                                # pragma: no cover
+            logger.warning("source_first.evidence_drift.start err=%s", exc)
+            evidence_drift = None
+
+        # DM-C held-family feed — off unless LEGBA_HELD_RECORD_SHADOW names a
+        # desk. Reads the desk shadow ledger, writes only the held family.
+        try:
+            from .held_record_loop import start_held_record_if_enabled
+
+            held_record = await start_held_record_if_enabled(standard_deps.pg_pool)
+        except Exception as exc:                                # pragma: no cover
+            logger.warning("source_first.held_record.start err=%s", exc)
+            held_record = None
 
         # Silent-stall liveness watchdog (W-1b §2): observe signal + finding
         # traffic and alert if the pipeline goes quiet. Best-effort — a
@@ -886,6 +971,10 @@ async def bring_up_source_first_planes(
         trigger_registrations=trigger_regs,
         liveness_watchdog=liveness_watchdog,
         inbound_drain=inbound_drain,
+        intake_drain=intake_drain,
+        evidence_drift=evidence_drift,
+        subscribe_supervisor=subscribe_supervisor,
+        held_record=held_record,
     )
 
 
@@ -923,13 +1012,14 @@ async def _wire_targets_and_triggers(
     import httpx
 
     from ..data.schemas.target import TargetDescriptor
+    from ..shared.registry_principal import service_auth_headers
     from .subscription import TargetSubscription
     from .triggers import TriggerRegistration, policy_from_descriptor
 
     base_url = os.environ.get(
         "LEGBA_REGISTRY_API_URL", "http://localhost:8090",
     ).rstrip("/")
-    token = os.environ.get("LEGBA_REGISTRY_API_TOKEN") or "dev"
+    auth = service_auth_headers()  # X2-B1: the fleet's principal
 
     # List ACTIVE targets + analysts via the registry. Lifecycle policy:
     #   active                = full participation (boot-wired here + the
@@ -945,7 +1035,7 @@ async def _wire_targets_and_triggers(
             r = await c.get(
                 f"{base_url}/api/v1/registry/descriptors",
                 params={"family": family, "head_only": "true", "limit": 500},
-                headers={"Authorization": f"Bearer {token}"},
+                headers=auth,
             )
             r.raise_for_status()
             return [row for row in r.json() if row.get("state") == "active"]

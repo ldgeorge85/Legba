@@ -308,3 +308,36 @@ async def test_issued_zero_reason_maps_to_distinct_warning(monkeypatch, reason, 
     result = await fs.handle([], {"sub_handler": "forecast_scoreboard"}, _Deps(object()))
     warnings = result.finding.data["warnings"]
     assert any(w.startswith(expect) for w in warnings), (reason, warnings)
+
+
+# ---------------------------------------------------------------------------
+# W5-F2 — a closed consult watch is not "open" in the minter meter
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_minter_meter_does_not_count_a_closed_watch_as_open(migrated_pg):
+    import asyncpg
+
+    minter = f"w6_small2_{uuid4().hex[:8]}"
+    pool = await asyncpg.create_pool(migrated_pg.dsn, min_size=1, max_size=2)
+    try:
+        async with pool.acquire() as c:
+            for status, outcome in (
+                ("open_question", None),  # open
+                ("active", None),         # open
+                ("expired", None),        # closed by the horizon sweep: NOT open
+                ("withdrawn", None),      # closed by the fold: NOT open
+                ("confirmed", 1),         # resolved
+            ):
+                await c.execute(
+                    "INSERT INTO hypotheses (thesis, status, analyst_id, resolved_outcome, "
+                    "diagnostic_evidence) VALUES ($1, $2, $3, $4, '[]'::jsonb)",
+                    f"{status} thesis", status, minter, outcome,
+                )
+        counts = {r["analyst_id"]: r for r in await fs._pull_hypothesis_minter_counts(pool)}
+        assert counts[minter] == {"analyst_id": minter, "open": 2, "resolved": 1}
+    finally:
+        async with pool.acquire() as c:
+            await c.execute("DELETE FROM hypotheses WHERE analyst_id = $1", minter)
+        await pool.close()

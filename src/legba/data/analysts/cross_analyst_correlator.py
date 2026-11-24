@@ -83,6 +83,7 @@ agreements are the lowest-priority confirmation signal.
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import hashlib
 import json
@@ -178,7 +179,7 @@ class CrossAnalystCorrelatorDeps:
 
     llm: LLMHandlerLike
     max_tokens: int = 2048
-    temperature: float = 0.1                                # low — we want
+    temperature: float = HOUSE_TEMPERATURE                                # low — we want
     #                                                         consistent
     #                                                         categorisation
     system_prompt: str | None = None                        # None → default
@@ -876,7 +877,7 @@ class CrossAnalystCorrelatorRunner:
         llm: LLMHandlerLike,
         *,
         max_tokens: int = 2048,
-        temperature: float = 0.1,
+        temperature: float = HOUSE_TEMPERATURE,
         system_prompt: str | None = None,
     ) -> None:
         self._deps = CrossAnalystCorrelatorDeps(

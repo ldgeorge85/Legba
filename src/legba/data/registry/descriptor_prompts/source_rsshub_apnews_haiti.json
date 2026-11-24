@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.rsshub.apnews.haiti": {
+      "source": "source_rsshub_apnews_haiti.yaml",
+      "state": "draft"
+    }
+  }
+}

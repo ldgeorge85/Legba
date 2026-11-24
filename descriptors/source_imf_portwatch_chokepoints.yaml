@@ -1,0 +1,145 @@
+# N-L — the first SERIES source (sink.family: observation). Ships DRAFT.
+#
+# IMF PortWatch daily chokepoint transits: an ArcGIS FeatureServer query, no
+# key. One row per (date, chokepoint); this source lands seven count series
+# per chokepoint into `observations` (live rows, migration 0246) — never into
+# `signals`, NATS, the corpus or the vector index. A re-poll of unchanged data
+# writes zero rows; a revised or late day writes one new vintage.
+#
+# Confirmed 2026-11-13 by three GETs through the egress guard: 28 chokepoints,
+# `date` as YYYY-MM-DD, maxRecordCount 1000 with resultOffset paging and
+# `exceededTransferLimit`, newest row 2026-11-08 (Last-Modified 2026-11-10):
+# a ~4-5 day publication lag in weekly-ish batches. Every poll re-reads
+# lag_days + revision_days (4 + 10) days; the first poll reads 45.
+#
+# This source reads a bounded ~400-row window once a day.
+#
+# N-R (2026-11-13): scope.attribution carries the attribution line;
+# the observation sink copies it and license_class onto every row's
+# provenance. The 8,036 rows of the first poll predate the stamp and are
+# attributed at READ time (legba.data.observation_attribution) — live rows are
+# append-only, never rewritten.
+#
+# Subject kind (N-R): `entity` — each row is about ONE chokepoint (subject =
+# portid, name in provenance.portname), not a world-level figure. Declared in
+# config.subject_kind AND on every series (they must agree). Rows written
+# before this head say `global`; read the declared kind from the series
+# registry (observation_attribution does).
+#
+# Cadence: daily at 11:01 UTC (moved from 09:17 at activation so the first poll
+# lands the same day; the data moves in weekly batches, any daily slot works).
+#
+# Register (deploy step, after migrations 0245 + 0246 and a registry rebuild —
+# the source schema gained `sink`): scripts/bringup_register_descriptors.py
+# registers every descriptors/source_*.yaml at its shipped state (draft), or
+# PUT this body to the registry's source route; then draft -> configured ->
+# active through the lifecycle route. Needs LEGBA_FETCH_RECEIPTS on (the
+# default): a live series value must rest on a stored response, and the sink
+# refuses one without.
+
+identity:
+  id: source.imf.portwatch_chokepoints
+  name: IMF PortWatch — daily chokepoint transits (series)
+  kind: portwatch
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: n_l_ingestion_sinks
+  created: "2026-11-13T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [maritime, shipping, chokepoint, trade, series, global]
+  source_class: official
+  license_class: api_terms        # IMF data terms: attribution; commercial reuse by permission
+  attribution: "Source: IMF PortWatch (portwatch.imf.org)"   # N-R: copied onto every row
+  access_class: public            # free, no-auth API
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "1 11 * * *"             # daily; the data moves in weekly batches ~4-5 days behind
+  cooldown_seconds: 3600
+  jitter_seconds: 120
+
+config:
+  lag_days:
+    factory_kind: number
+    raw: 4
+  revision_days:
+    factory_kind: number
+    raw: 10
+  backfill_days:
+    factory_kind: number
+    raw: 45
+  subject_kind:                  # N-R: a row's subject is ONE chokepoint (portid)
+    factory_kind: text
+    raw: entity
+
+sink:
+  family: observation
+  config:
+    series:
+      - id: imf_portwatch.chokepoint.n_total
+        field: n_total
+        unit: vessels
+        period: day
+        subject_kind: entity
+        methodology_version: portwatch-daily-chokepoints/1
+        description: "Daily count of all vessels transiting, per chokepoint (portid)"
+      - id: imf_portwatch.chokepoint.n_tanker
+        field: n_tanker
+        unit: vessels
+        period: day
+        subject_kind: entity
+        methodology_version: portwatch-daily-chokepoints/1
+        description: "Daily count of tankers transiting, per chokepoint"
+      - id: imf_portwatch.chokepoint.n_container
+        field: n_container
+        unit: vessels
+        period: day
+        subject_kind: entity
+        methodology_version: portwatch-daily-chokepoints/1
+        description: "Daily count of container ships transiting, per chokepoint"
+      - id: imf_portwatch.chokepoint.n_dry_bulk
+        field: n_dry_bulk
+        unit: vessels
+        period: day
+        subject_kind: entity
+        methodology_version: portwatch-daily-chokepoints/1
+        description: "Daily count of dry bulk carriers transiting, per chokepoint"
+      - id: imf_portwatch.chokepoint.n_general_cargo
+        field: n_general_cargo
+        unit: vessels
+        period: day
+        subject_kind: entity
+        methodology_version: portwatch-daily-chokepoints/1
+        description: "Daily count of general cargo ships transiting, per chokepoint"
+      - id: imf_portwatch.chokepoint.n_roro
+        field: n_roro
+        unit: vessels
+        period: day
+        subject_kind: entity
+        methodology_version: portwatch-daily-chokepoints/1
+        description: "Daily count of ro-ro vessels transiting, per chokepoint"
+      - id: imf_portwatch.chokepoint.n_cargo
+        field: n_cargo
+        unit: vessels
+        period: day
+        subject_kind: entity
+        methodology_version: portwatch-daily-chokepoints/1
+        description: "Daily count of cargo vessels (container + dry bulk + general cargo + ro-ro), per chokepoint"
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  media: reference
+
+deps: {}
+
+subscription_policy: open

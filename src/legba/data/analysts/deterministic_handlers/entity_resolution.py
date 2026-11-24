@@ -61,6 +61,8 @@ import uuid
 from typing import Any, Mapping
 
 from ...provenance.models import FindingPayload
+from ...case_columns import bind_entity_type
+from ...tags import stamp_classifications, tag_vocabulary_index
 from ....runtime.analyst_method import AnalystMethodResult
 # W2 shared canon spine — the ONE canon at legba.data._entity_canon (the old
 # deterministic_handlers/_entity_canon re-export shim is gone). canonicalize_entity
@@ -73,6 +75,10 @@ from ..._entity_canon import (
     is_junk_entity,
     is_org_surface,
     lookup_key,
+)
+from ..._entity_resolve import (
+    ACTIVE_K, FOLLOW_SQL, MATCHABLE_P, PRIO_K, SCAN_MATCHED_CLOSE, SCAN_MATCHED_OPEN,
+    fetch_normalized_keeper,
 )
 from ._entity_geo import NameGeocoder, resolve_entity_geo
 
@@ -637,6 +643,8 @@ async def _resolve_batch(
     # country/location genuine-ambiguity mention doesn't reuse the wrong cached
     # row (see the per-mention cache check below).
     name_to_id: dict[str, tuple[str, str]] = {}
+    # TAG-1: one vocabulary snapshot per batch for the profiles' classifications.
+    families = await tag_vocabulary_index()
 
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -771,13 +779,18 @@ async def _resolve_batch(
                     # pre-lookup only ever elects the ACTIVE survivor for the name.
                     #
                     # FAST exact-name path first (uses idx_entity_profiles_name_class).
+                    # Roll 85: a profile merged away (merged_into set) is
+                    # followed to its keeper (_entity_resolve.FOLLOW_SQL), so a
+                    # tombstone's own name converges onto the survivor.
                     pre = await conn.fetchrow(
                         f"""
-                        SELECT id, entity_class, canonical_name
-                          FROM entity_profiles
-                         WHERE lower(canonical_name) = lower($1)
-                           AND COALESCE(data->>'gc_status', '') NOT IN ('merged', 'junk')
-                         ORDER BY {_CLASS_PRIORITY_SQL}, created_at ASC
+                        SELECT k.id, k.entity_class, k.canonical_name
+                          FROM entity_profiles p
+                          {FOLLOW_SQL}
+                         WHERE lower(p.canonical_name) = lower($1)
+                           AND {MATCHABLE_P}
+                           AND {ACTIVE_K}
+                         ORDER BY {PRIO_K}, k.created_at ASC
                          LIMIT 1
                         """,
                         text,
@@ -792,30 +805,36 @@ async def _resolve_batch(
                         # normalize BOTH sides (same rule as lookup_key) and also
                         # probe each keeper's merged_aliases, so the variant
                         # converges onto the ACTIVE keeper instead of forking.
+                        #
+                        # P-6: the probe runs under LEGBA_ENTITY_ALIAS_LOOKUP
+                        # (scan = this statement, unchanged; table = the
+                        # entity_alias_keys index; shadow = both, scan served).
                         probe = lookup_key(text)
                         if probe:
-                            pre = await conn.fetchrow(
+                            pre = await fetch_normalized_keeper(
+                                conn,
                                 f"""
-                                SELECT id, entity_class, canonical_name
-                                  FROM entity_profiles
-                                 WHERE COALESCE(data->>'gc_status', '') NOT IN ('merged', 'junk')
+                                SELECT k.id, k.entity_class, k.canonical_name
+                                  FROM {SCAN_MATCHED_OPEN}{MATCHABLE_P}
                                    AND (
                                      regexp_replace(regexp_replace(
-                                         lower(btrim(canonical_name)),
+                                         lower(btrim(p.canonical_name)),
                                          '^(the|a|an)\\s+', '', 'g'),
                                          '\\s+', ' ', 'g') = $1
                                      OR EXISTS (
                                        SELECT 1
                                          FROM jsonb_array_elements_text(
-                                             COALESCE(data->'merged_aliases', '[]'::jsonb)
+                                             COALESCE(p.data->'merged_aliases', '[]'::jsonb)
                                          ) AS al
                                         WHERE regexp_replace(regexp_replace(
                                             lower(btrim(al)),
                                             '^(the|a|an)\\s+', '', 'g'),
                                             '\\s+', ' ', 'g') = $1
                                      )
-                                   )
-                                 ORDER BY {_CLASS_PRIORITY_SQL}, created_at ASC
+                                   ){SCAN_MATCHED_CLOSE}
+                                  {FOLLOW_SQL}
+                                 WHERE {ACTIVE_K}
+                                 ORDER BY {PRIO_K}, k.created_at ASC
                                  LIMIT 1
                                 """,
                                 probe,
@@ -894,9 +913,11 @@ async def _resolve_batch(
                                 if collide is None:
                                     await conn.execute(
                                         "UPDATE entity_profiles "
-                                        "SET entity_class = $2, entity_type = $2, "
+                                        "SET entity_class = $2, entity_type = $3, "
                                         "    updated_at = now() WHERE id = $1::uuid",
                                         str(pre["id"]), cls,
+                                        # TAX-4: entity_type binds entity_class
+                                        bind_entity_type(cls, families=families),
                                     )
                             else:
                                 # Stored row is same-or-higher priority: keep its
@@ -985,8 +1006,14 @@ async def _resolve_batch(
                                 geo_country = COALESCE(entity_profiles.geo_country, EXCLUDED.geo_country)
                         RETURNING id, version, (xmax = 0) AS inserted
                         """,
-                        write_name, upsert_cls, upsert_cls,
-                        json.dumps({"source": "entity_resolution"}),
+                        # TAX-4: entity_type is the entity_class family's
+                        # value, or `unclassified` — never the catch-all.
+                        write_name, bind_entity_type(upsert_cls, families=families),
+                        upsert_cls,
+                        json.dumps(stamp_classifications(
+                            "entity_profiles", {"entity_class": upsert_cls},
+                            {"source": "entity_resolution"}, families=families,
+                        )),
                         lat, lon, country, completeness,
                         analyst_id, analyst_version,
                         str(run_id) if run_id is not None else None,

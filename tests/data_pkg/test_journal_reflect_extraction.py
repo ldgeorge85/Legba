@@ -47,6 +47,7 @@ import pytest
 
 from legba.data.analysts import journal_assessor as new_journal_assessor
 from legba.data.analysts import journal_reflect as new_journal_reflect
+from legba.data import journal_evidence as je
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 # The worktree's pinned base commit — journal_assessor.py as it stood
@@ -230,6 +231,19 @@ async def test_reflect_claims_byte_identical_on_live_journal_entries(tmp_path) -
         body = row["body"] or ""
         old_result = old_reflect_claims(body)
         new_result = new_journal_reflect._reflect_claims(body)
+        if je.NESTED_REF_GROUP_RE.search(body):
+            # Lane N-U: REFLECT now reads the nested ``[[ref:a] [ref:b]]``
+            # group the pre-extraction code missed — a deliberate superset:
+            # every old ref kept, every new one a nested-group member.
+            nested = {
+                u.lower() for g in je.NESTED_REF_GROUP_RE.finditer(body)
+                for u in je.marker_refs(g.group(0))
+            }
+            old_flat = {str(u) for u in old_result[1]}
+            new_flat = {str(u) for u in new_result[1]}
+            if not (old_flat <= new_flat and new_flat - old_flat <= nested):
+                mismatches.append(str(row["id"]))
+            continue
         if new_result != old_result:
             mismatches.append(str(row["id"]))
     assert not mismatches, (

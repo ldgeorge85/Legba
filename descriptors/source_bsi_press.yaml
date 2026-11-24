@@ -1,0 +1,83 @@
+# K-1 cyber desk (2026-11-14) — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# Germany's Federal Office for Information Security (BSI) — its press
+# releases, short notices and event announcements (German). Probed 2026-11-13:
+# HTTP 200, text/xml, 40 items spanning nine months (low volume), summaries
+# ~270 characters. The general newsfeed address guessed first
+# (RSSNewsfeed.xml) returned 404; this is the press feed.
+#
+# NOT ADDED (said in the lane report): the BSI CERT-Bund "Warn- und
+# Informationsdienst" advisory feed (wid.cert-bund.de/content/public/
+# securityAdvisory/rss) — stable and public, but a firehose (250 items in
+# four hours, mostly "[UPDATE]" re-issues of vendor patch notices) that
+# duplicates the vendor coverage of source.cisa.kev and the CERT-FR alerts.
+#
+# Geography: declared DE as the publisher-origin FALLBACK (BSI warnings are
+# addressed to Germany). German: language_detect and the multilingual NER.
+# robots.txt (read
+# 2026-11-13): `User-agent: *`, `Crawl-delay: 10`, no rule covering the feed.
+# Credibility: bsi.bund.de 0.88 / gov. Every four hours.
+#
+# Desk routing: scope.classifications `geopolitics.topic:cyber` is stamped on
+# every signal (W10 TAX-2) — the cyber desk's tag arm (target_cyber.yaml).
+
+identity:
+  id: source.bsi.press
+  name: BSI — Pressemitteilungen und Kurzmitteilungen
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: cyber_desk_k1
+  created: "2026-11-14T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [DE]
+  languages: [de]
+  tags: [cyber, advisory, gov, germany, cyber_desk]
+  classifications: ["geopolitics.topic:cyber"]
+  source_class: official
+  license_class: permissive_feed_unreviewed
+  access_class: public          # free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "51 */4 * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.bsi.bund.de/SiteGlobals/Functions/RSSFeed/RSSNewsfeed/RSSNewsfeed_Presse_Veranstaltungen.xml"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor (the conservative default of the official-feed drafts).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

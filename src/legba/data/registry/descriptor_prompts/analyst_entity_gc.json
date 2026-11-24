@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:entity_gc": {
+      "source": "analyst_entity_gc.yaml",
+      "state": "active"
+    }
+  }
+}

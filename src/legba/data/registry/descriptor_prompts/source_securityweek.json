@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.securityweek.news": {
+      "source": "source_securityweek.yaml",
+      "state": "draft"
+    }
+  }
+}

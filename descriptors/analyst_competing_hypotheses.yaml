@@ -61,6 +61,7 @@ method:
   kind: llm_planner
   prompt_module: "legba.prompts.competing_hypotheses.v1"
   llm:
+    thinking: "on"   # T-2: low-volume synthesis seat thinks on every call
     primary:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
@@ -69,6 +70,12 @@ method:
     temperature: 1.0
     max_topics: 12             # hard per-run cap on focal topics (budget bound)
   budget_tokens_per_day: 0
+  options:
+    # 2026-09-28 (consult review): the twice-daily SELF-CONSISTENCY sweep that
+    # resolved every confirmed/refuted row against the same evidence_balance
+    # that set its status (4,410 rows all-time vs 329 resolved by subsequent
+    # facts) is OFF. Labels now move only on exogenous evidence.
+    enable_status_transition_resolution: false
   retry:
     budget:
       strategy: pause_until_next_window

@@ -21,6 +21,12 @@ These tests pin the fix:
     whose body names no country stays geo-unattributed — never stamped with the
     outlet's home country. This is the fix for the Singapore-outlet (CNA)
     LeBron/OpenAI/F1 stories that were all landing geo=SG and flooding SG's desk.
+  * (lane N-B, 2026-11-11) AMENDED: a story whose content names NO country at
+    all (no name, code, country entity or foreign demonym) now takes the origin
+    as a MARKED low-confidence fallback (``payload.geo_fallback``), because an
+    untagged row reaches no desk (Times of Israel's Knesset protest, 850253c4).
+    Any country named in the content still withholds the origin exactly as
+    before. ``LEGBA_GEO_ORIGIN_FALLBACK=0`` restores the S-2 behaviour.
 """
 
 from __future__ import annotations
@@ -128,18 +134,51 @@ async def test_run_baseline_fallback_corroborated_by_country_entity():
 
 
 @pytest.mark.asyncio
-async def test_run_baseline_withholds_origin_when_body_does_not_corroborate():
+async def test_run_baseline_withholds_origin_when_body_does_not_corroborate(monkeypatch):
     # S-2: a Singapore wire's world story (LeBron) — the body names no country,
-    # so the SG origin must NOT be stamped. Under the old rule this landed
-    # geo=SG and flooded Singapore's country desk.
-    sig = _sig(
-        title="LeBron James re-signs with the Los Angeles Lakers",
-        text="The NBA star agreed to a two-year contract extension.",
-    )
-    out = await run_baseline(sig, _ctx(["SG"]), enrichment_stage=_resolve_nothing)
+    # so the SG origin is never stamped as a CORROBORATED tag. Lane N-B: it is
+    # stamped as the MARKED fallback instead (distinguishable by
+    # payload.geo_fallback); with the kill switch it stays untagged as before.
+    def _lebron():
+        return _sig(
+            title="LeBron James re-signs with the Los Angeles Lakers",
+            text="The NBA star agreed to a two-year contract extension.",
+        )
+    out = await run_baseline(_lebron(), _ctx(["SG"]), enrichment_stage=_resolve_nothing)
     assert out is not None
-    assert out.geo == []                                  # NOT geo=SG
+    assert out.geo == ["SG"]
+    assert out.payload["geo_fallback"] == {
+        "basis": "publisher_origin", "iso2": ["SG"], "confidence": "low",
+    }
     assert out.payload["publisher_origin"] == ["SG"]      # origin still parked
+    monkeypatch.setenv("LEGBA_GEO_ORIGIN_FALLBACK", "0")
+    out = await run_baseline(_lebron(), _ctx(["SG"]), enrichment_stage=_resolve_nothing)
+    assert out.geo == []                                  # S-2 exactly
+    assert "geo_fallback" not in out.payload
+
+
+@pytest.mark.asyncio
+async def test_run_baseline_fallback_withheld_when_content_names_a_foreign_demonym():
+    # Lane N-B keeps S-2 for any row that names a place: "German" names
+    # Germany, so the Singapore origin is NOT a fallback for it.
+    sig = _sig(title="E.ON reviews former German nuclear sites for data centres")
+    out = await run_baseline(sig, _ctx(["SG"]), enrichment_stage=_resolve_nothing)
+    assert out.geo == []
+    assert "geo_fallback" not in out.payload
+
+
+@pytest.mark.asyncio
+async def test_run_baseline_fallback_for_knesset_protest_850253c4():
+    # The live miss: Times of Israel, no country named, geo={} → no desk.
+    sig = _sig(
+        title=("Right-wing protesters warn of \u2018civil war\u2019 if government "
+               "formed with Arab-party support"),
+        summary=("Demonstrators chant 'We want a Jewish state' in front of "
+                 "Knesset during swearing-in ceremony for MKs"),
+    )
+    out = await run_baseline(sig, _ctx(["IL"]), enrichment_stage=_resolve_nothing)
+    assert out.geo == ["IL"]
+    assert out.payload["geo_fallback"]["basis"] == "publisher_origin"
 
 
 @pytest.mark.asyncio
@@ -155,11 +194,13 @@ async def test_run_baseline_no_enrichment_stage_corroborated_still_falls_back():
 
 @pytest.mark.asyncio
 async def test_run_baseline_no_enrichment_stage_withholds_uncorroborated():
-    # Bare source, world story, no country in the body → no origin tag.
+    # Bare source, world story, no country in the body → no CORROBORATED origin
+    # tag; lane N-B's marked fallback instead.
     sig = _sig(title="LeBron James re-signs with the Los Angeles Lakers")
     out = await run_baseline(sig, _ctx(["SG"]))
     assert out is not None
-    assert out.geo == []
+    assert out.geo == ["SG"]
+    assert out.payload["geo_fallback"]["confidence"] == "low"
     assert out.payload["publisher_origin"] == ["SG"]
 
 

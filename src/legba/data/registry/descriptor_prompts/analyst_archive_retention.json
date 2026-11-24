@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:archive_retention": {
+      "source": "analyst_archive_retention.yaml",
+      "state": "draft"
+    }
+  }
+}

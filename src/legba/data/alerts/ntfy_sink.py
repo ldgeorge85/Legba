@@ -16,13 +16,19 @@ alert is HUMAN-READABLE ON A PHONE, not a JSON blob:
   receipt link on its own line;
 * ntfy semantics ride the headers — ``X-Title`` / ``X-Priority`` /
   ``X-Tags`` / ``X-Click`` (see the mapping tables below), so tapping the
-  notification opens the lineage receipt.
+  notification opens the record in the console (roll 84: ``#rec=<kind>:<id>``,
+  :mod:`.console_link`) — never the JSON lineage receipt.
 
 Configuration (env)
 -------------------
-* ``LEGBA_ALERT_NTFY_URL`` — the FULL topic URL (e.g.
+* ``LEGBA_ALERT_NTFY_URL`` — a topic URL on the ntfy server (e.g.
   ``http://ntfy/legba-alerts`` in-network, or
-  ``http://127.0.0.1:8093/legba-alerts``). Unset ⇒ the sink is
+  ``http://127.0.0.1:8093/legba-alerts``). X4 ALERTS: the sink publishes to
+  TWO topics on that server — ``world`` and ``engine`` (:mod:`.topics`; names
+  overridable by ``LEGBA_ALERT_NTFY_TOPIC_WORLD`` / ``_ENGINE``) — so the URL's
+  last path segment (the pre-split topic) only locates the server.
+  ``LEGBA_ALERT_NTFY_TOPIC_SPLIT=0`` publishes everything to the URL as given
+  (the single pre-split topic). Unset ⇒ the sink is
   DECLARED-INACTIVE: it still registers, the dispatcher logs the gap once
   at startup, and every fan-out writes a ``skipped_unconfigured`` ledger
   row — visible, never a silent drop (the P1-1 unconfigured contract,
@@ -31,7 +37,9 @@ Configuration (env)
   server, sent as ``Authorization: Bearer <token>``. Never logged.
 * ``LEGBA_ALERT_NTFY_MIN_SEVERITY`` — severity floor (default ``high``,
   mirroring the webhook sink's default). Alerts below the floor skip this
-  sink (no ledger row — a configured filter working as designed).
+  sink and the dispatcher writes a ``skipped_below_severity`` ledger row
+  with the reason. The units' ``moderate`` / ``elevated`` arrive already
+  mapped to ``medium`` / ``high`` (``sinks.SEVERITY_ALIASES``).
 
 Header mapping (ntfy publish conventions)
 -----------------------------------------
@@ -45,9 +53,10 @@ Header mapping (ntfy publish conventions)
   ``rotating_light``, high→``warning``, medium→``loudspeaker``,
   low/info→``information_source``; plus the originating channel name
   (sanitised to ntfy's tag alphabet), e.g. ``warning,escalations``.
-* ``X-Click``    — the ABSOLUTE receipt URL when present (requires
-  ``LEGBA_PUBLIC_BASE_URL``); omitted otherwise — a relative API path is
-  useless as a phone tap target.
+* ``X-Click``    — the ABSOLUTE console URL of the record when present
+  (``payload.console_url``; requires ``LEGBA_PUBLIC_BASE_URL``); omitted
+  otherwise — a relative path is useless as a phone tap target, and the
+  lineage receipt answers JSON.
 
 Retry behaviour
 ---------------
@@ -75,6 +84,7 @@ import os
 import re
 from typing import Any, Callable, Mapping
 
+from . import topics as _topics
 from .sinks import (
     SEVERITY_ORDER,
     AlertSinkPayload,
@@ -134,9 +144,18 @@ def _header_safe(value: str) -> str:
 
 
 def ntfy_title(payload: AlertSinkPayload) -> str:
-    """``Legba: <severity> - <target-or-channel>`` (ASCII, see module doc)."""
+    """``Legba: <severity> - <target-or-channel>`` (ASCII, see module doc).
+
+    A batched push (X4) names its size instead of one desk:
+    ``Legba: high - 9 band moves``.
+    """
     severity = normalise_severity(payload.severity)
-    subject = (payload.target_id or payload.channel_name or "").strip()
+    if payload.batch_count > 1:
+        noun = (payload.kind or payload.channel_name or "alert").replace("_", " ")
+        noun = "band moves" if noun == "band crossing" else f"{noun} alerts"
+        subject = f"{payload.batch_count} {noun}"
+    else:
+        subject = (payload.target_id or payload.channel_name or "").strip()
     title = f"Legba: {severity}"
     if subject:
         title = f"{title} - {subject}"
@@ -172,6 +191,10 @@ def ntfy_message(payload: AlertSinkPayload) -> str:
         meta.append(f"confidence {payload.effective_confidence:.2f}")
     meta.append(payload.verify_state)
     lines = [payload.summary or "(no summary)", " · ".join(meta)]
+    # X4: a batched push carries its members' one-line list (already capped
+    # by the batcher, with its own "… and N more" tail).
+    if payload.batch_count > 1 and payload.detail:
+        lines.extend(payload.detail.splitlines())
     # Cooldown coalescing: a burst distilled, not silently thinned — the
     # dispatcher attaches what its cooldown suppressed since the last send.
     if payload.suppressed_in_cooldown > 0:
@@ -182,7 +205,9 @@ def ntfy_message(payload: AlertSinkPayload) -> str:
         overflow = payload.suppressed_in_cooldown - len(payload.suppressed_preview)
         if overflow > 0:
             lines.append(f"  … and {overflow} more (see console)")
-    link = payload.receipt_url or payload.receipt_path
+    # The console page first (a phone opens it); the JSON receipt only when
+    # there is no console address.
+    link = payload.console_url or payload.receipt_url or payload.receipt_path
     if link:
         lines.append(link)
     return "\n".join(lines)
@@ -251,6 +276,17 @@ class NtfyAlertSink:
         """Host-only redaction — the topic path is effectively a secret."""
         return self._host
 
+    def url_for(self, payload: AlertSinkPayload) -> str:
+        """Where THIS payload is published: its topic on the configured server.
+
+        The dispatcher stamps ``payload.topic``; a payload handed to the sink
+        directly (tests, a future caller) resolves its own from its kind.
+        """
+        topic = payload.topic or _topics.topic_for(
+            payload.kind or payload.channel_name
+        )
+        return _topics.topic_url(self._url, topic)
+
     def accepts_severity(self, severity: str) -> bool:
         rank = SEVERITY_ORDER.get(normalise_severity(severity), 0)
         return rank >= SEVERITY_ORDER[self._min_severity]
@@ -263,7 +299,7 @@ class NtfyAlertSink:
                 outcome="skipped_unconfigured",
                 detail=f"ntfy sink not configured ({ENV_NTFY_URL} unset)",
             )
-        if not self.accepts_severity(payload.severity):
+        if not payload.rule_paged and not self.accepts_severity(payload.severity):
             return DeliveryResult(
                 sink_kind=self.sink_kind,
                 outcome="skipped_below_severity",
@@ -281,22 +317,24 @@ class NtfyAlertSink:
             "X-Priority": ntfy_priority(payload.severity),
             "X-Tags": ntfy_tags(payload),
         }
-        if payload.receipt_url:
-            # Absolute only — tapping the notification must open a page.
-            headers["X-Click"] = _header_safe(payload.receipt_url)
+        if payload.console_url:
+            # Absolute only, and a CONSOLE page (roll 84): tapping the
+            # notification opens the record, never the JSON lineage route.
+            headers["X-Click"] = _header_safe(payload.console_url)
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
 
+        url = self.url_for(payload)
         max_attempts = len(self._backoff) + 1
         last_status: int | None = None
         last_error = ""
         for attempt_idx in range(max_attempts):
-            status, error, transient = await self._post_once(body, headers)
+            status, error, transient = await self._post_once(url, body, headers)
             if status is not None and 200 <= status < 300:
                 logger.info(
-                    "alert_sinks.ntfy.delivered host=%s status=%s "
+                    "alert_sinks.ntfy.delivered host=%s topic=%s status=%s "
                     "attempt=%d severity=%s channel=%s",
-                    self._host, status, attempt_idx + 1,
+                    self._host, payload.topic or "-", status, attempt_idx + 1,
                     payload.severity, payload.channel_name,
                 )
                 return DeliveryResult(
@@ -347,7 +385,7 @@ class NtfyAlertSink:
     # -- one attempt -----------------------------------------------------
 
     async def _post_once(
-        self, body: bytes, headers: Mapping[str, str]
+        self, url: str, body: bytes, headers: Mapping[str, str]
     ) -> tuple[int | None, str, bool]:
         """One publish attempt → (status, error, transient?). Never raises.
 
@@ -357,7 +395,7 @@ class NtfyAlertSink:
         try:
             http = self._client()
             resp = await http.post(
-                self._url,
+                url,
                 content=body,
                 headers=dict(headers),
                 timeout=self._timeout_s,

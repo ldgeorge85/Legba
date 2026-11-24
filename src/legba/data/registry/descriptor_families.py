@@ -126,8 +126,11 @@ async def insert_descriptor_row(
     descriptor: Any,
     version: str,
     body: dict[str, Any],
+    *,
+    written_by: str | None = None,
 ) -> None:
-    """INSERT one descriptor row into its family's table as the new head."""
+    """INSERT one descriptor row into its family's table as the new head.
+    ``written_by`` is the writing principal's handle (lane 9), or ``None``."""
     now = datetime.now(tz=timezone.utc)
     if family_value == "target":
         assert isinstance(descriptor, TargetDescriptor)
@@ -136,8 +139,9 @@ async def insert_descriptor_row(
             INSERT INTO target_descriptors
                 (descriptor_id, version, schema_uri, is_head,
                  abstraction_level, state, owner, name, body,
-                 inherits, created_at, retire_after)
-            VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)
+                 inherits, created_at, retire_after, written_by)
+            VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8::jsonb, $9, $10, $11,
+                    legba_principal($12))
             """,
             descriptor.identity.id,
             version,
@@ -150,6 +154,7 @@ async def insert_descriptor_row(
             list(descriptor.identity.inherits),
             now,
             descriptor.identity.retire_after,
+            written_by,
         )
     elif family_value == "analyst":
         assert isinstance(descriptor, AnalystDescriptor)
@@ -158,9 +163,9 @@ async def insert_descriptor_row(
             INSERT INTO analyst_descriptors
                 (descriptor_id, version, schema_uri, is_head,
                  kind, state, owner, name, body,
-                 type_signature, inherits, created_at)
+                 type_signature, inherits, created_at, written_by)
             VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8::jsonb,
-                    $9::jsonb, $10, $11)
+                    $9::jsonb, $10, $11, legba_principal($12))
             """,
             descriptor.identity.id,
             version,
@@ -176,6 +181,7 @@ async def insert_descriptor_row(
             ),
             list(descriptor.identity.inherits),
             now,
+            written_by,
         )
     elif family_value == "source":
         assert isinstance(descriptor, SourceDescriptor)
@@ -184,9 +190,9 @@ async def insert_descriptor_row(
             INSERT INTO source_descriptors
                 (descriptor_id, version, schema_uri, is_head,
                  abstraction_level, kind, state, owner, name, body,
-                 inherits, created_at, retire_after)
+                 inherits, created_at, retire_after, written_by)
             VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8, $9::jsonb,
-                    $10, $11, $12)
+                    $10, $11, $12, legba_principal($13))
             """,
             descriptor.identity.id,
             version,
@@ -200,6 +206,7 @@ async def insert_descriptor_row(
             list(descriptor.identity.inherits),
             now,
             descriptor.identity.retire_after,
+            written_by,
         )
     elif family_value == "collection":
         assert isinstance(descriptor, CollectionDescriptor)
@@ -213,9 +220,9 @@ async def insert_descriptor_row(
                  abstraction_level, state, owner, name, body,
                  inherits, created_at, retire_after,
                  origin_shape, origin_class, licence_class,
-                 collection_version)
+                 collection_version, written_by)
             VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8::jsonb,
-                    $9, $10, $11, $12, $13, $14, $15)
+                    $9, $10, $11, $12, $13, $14, $15, legba_principal($16))
             """,
             descriptor.identity.id,
             version,
@@ -232,6 +239,7 @@ async def insert_descriptor_row(
             descriptor.origin_class,
             descriptor.licence_class,
             descriptor.manifest_hash(),
+            written_by,
         )
     elif family_value == "action_pack":
         assert isinstance(descriptor, ActionPack)
@@ -240,9 +248,9 @@ async def insert_descriptor_row(
             INSERT INTO action_pack_descriptors
                 (descriptor_id, version, schema_uri, is_head,
                  abstraction_level, state, owner, name, body,
-                 inherits, created_at, retire_after)
+                 inherits, created_at, retire_after, written_by)
             VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8::jsonb,
-                    $9, $10, $11)
+                    $9, $10, $11, legba_principal($12))
             """,
             descriptor.identity.id,
             version,
@@ -255,6 +263,7 @@ async def insert_descriptor_row(
             list(descriptor.identity.inherits),
             now,
             descriptor.identity.retire_after,
+            written_by,
         )
     else:  # pragma: no cover - Family is a closed enum upstream
         raise ValueError(f"no INSERT routing for descriptor family {family_value!r}")

@@ -204,6 +204,41 @@ class SpendGuard:
             "max_cost_usd": round(self.max_cost_usd, 2),
         }
 
+    def receipt(
+        self, llm: Any, *, elapsed_s: float | None, model: str | None = None,
+    ) -> dict[str, Any]:
+        """The turn's USAGE RECEIPT — the snapshot plus what a reader needs.
+
+        X2 / C1 (W1-F1): the snapshot above is a meter (totals against
+        ceilings) and was all a turn carried; it named no model, no elapsed
+        time, and could not say whether ``est_cost_usd = 0`` meant "free" or
+        "not priced". The receipt adds:
+
+        * ``model`` — the resolved model id the calls ran on (the handler's
+          configured name, else its subprovider);
+        * ``subprovider`` — the handler family (``vllm`` / ``anthropic`` …);
+        * ``elapsed_s`` — the run's own wall clock, measured by the loop;
+        * ``priced`` — whether the route carries a price table. ``False`` on
+          the self-hosted core plane, by design: its cost is not an estimate
+          of zero, it is not priced, and the front door publishes
+          ``cost_usd: null`` with a reason rather than ``0.00``.
+
+        The meter keys stay byte-identical so every stream frame and the
+        panel's live spend line read the receipt exactly as they read the
+        snapshot.
+        """
+        cfg = getattr(llm, "_cfg", None)
+        name = getattr(getattr(cfg, "model_name", None), "raw", None)
+        resolved = model or (name.strip() if isinstance(name, str) and name.strip() else None)
+        sub = getattr(llm, "subprovider", None)
+        return {
+            **self.snapshot(),
+            "model": resolved or (str(sub) if sub else None),
+            "subprovider": str(sub) if sub else None,
+            "elapsed_s": round(float(elapsed_s), 1) if elapsed_s is not None else None,
+            "priced": bool(price_table_for(llm)),
+        }
+
 
 __all__ = [
     "DEFAULT_MAX_COST_USD_PER_RUN",

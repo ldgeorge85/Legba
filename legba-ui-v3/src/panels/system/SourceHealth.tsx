@@ -42,6 +42,7 @@ import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react'
 import { PanelChrome } from '@/components/PanelChrome'
 import { cn } from '@/lib/cn'
+import { useBelowAdmin } from '@/auth/roles'
 import { selectRow } from '@/state/selection'
 import {
   fetchSourceQuality,
@@ -77,7 +78,9 @@ import {
   signalVolumeText,
   sortRatings,
   sortSourceQuality,
+  enrichmentLine,
   stalenessHeadline,
+  stalenessPill,
   winRateDisplay,
   winRateLowerDisplay,
   winRateRawDisplay,
@@ -150,6 +153,19 @@ export default function SourceHealthPanel({ registration }: PanelProps) {
   )
 
   const fault = classifyQualityError(quality.error)
+
+  // The assurance ledger (`source_ratings`, `source_dossiers`, migration 0094)
+  // has never been loaded on live (0 rows in both; data-layers inventory
+  // 2026-11-14 §3 item 11). When no row carries a rating or a dossier, say so
+  // once instead of rendering the same two empty sections under every source.
+  const ledgerEmpty =
+    rows.length > 0 &&
+    rows.every(
+      (r) =>
+        r.asserted.public_rating_count === 0 &&
+        r.asserted.private_rating_count === 0 &&
+        !r.asserted.has_dossier,
+    )
 
   const subtitle = fault
     ? fault.kind === 'not_provisioned'
@@ -238,6 +254,14 @@ export default function SourceHealthPanel({ registration }: PanelProps) {
           </div>
         )}
 
+        {ledgerEmpty && (
+          <div className="text-body text-ink-3" data-testid="source-health-ledger-empty">
+            No source has a rating or a dossier on file: the assurance ledger is empty (its
+            loader has never run). The grade and ratings / dossier columns record that
+            absence; they are not assessments.
+          </div>
+        )}
+
         {!quality.isLoading && fault == null && rows.length === 0 && (
           <div className="text-body text-ink-3" data-testid="source-health-empty">
             {contestedOnly
@@ -303,6 +327,7 @@ export default function SourceHealthPanel({ registration }: PanelProps) {
                   detail={expanded === row.source_id ? detail.data : undefined}
                   detailLoading={expanded === row.source_id && detail.isLoading}
                   detailError={expanded === row.source_id ? detail.error : null}
+                  ledgerEmpty={ledgerEmpty}
                   onToggle={() => {
                     const next = expanded === row.source_id ? null : row.source_id
                     setExpanded(next)
@@ -430,7 +455,8 @@ function StalenessStrip({
 function Stat({ label, value }: { label: string; value: number }) {
   return (
     <div>
-      <div className="text-label text-ink-3">{label}</div>
+      {/* The field's name in words; the raw key stays in the test id. */}
+      <div className="text-label text-ink-3">{label.replace(/_/g, ' ')}</div>
       <div className="text-heading font-semibold text-ink-1" data-testid={`source-health-stat-${label}`}>
         {value}
       </div>
@@ -451,8 +477,10 @@ function SourceRows({
   detailLoading,
   detailError,
   onToggle,
+  ledgerEmpty = false,
 }: {
   row: SourceQualityRow
+  ledgerEmpty?: boolean
   expanded: boolean
   includePrivate: boolean
   onToggleIncludePrivate: () => void
@@ -466,6 +494,8 @@ function SourceRows({
   const grade = assertedGrade(row.asserted)
   const flags = attentionFlags(row)
   const tone = freshnessTone(row.computed.freshness_grade)
+  const staleness = stalenessPill(row.computed.staleness)
+  const enrichment = enrichmentLine(row.computed.enrichment_last_poll)
   const smoothed = winRateDisplay(row.earned)
   const lower = winRateLowerDisplay(row.earned)
   const raw = winRateRawDisplay(row.earned)
@@ -624,6 +654,33 @@ function SourceRows({
             {row.computed.freshness_grade}
             {isFreshnessAbsence(row.computed.freshness_grade) ? ' (absence, not a fault)' : ''}
           </span>
+          <div className="mt-1" data-testid={`source-health-staleness-${id}`}>
+            <span
+              className={cn(
+                'rounded border px-1.5 py-0.5 text-label',
+                FRESHNESS_PILL[staleness.tone],
+              )}
+              title={staleness.title}
+              data-testid={`source-health-staleness-pill-${id}`}
+            >
+              {staleness.label}
+            </span>
+            {staleness.detail && (
+              <div
+                className="mt-0.5 text-label text-ink-3"
+                data-testid={`source-health-staleness-detail-${id}`}
+              >
+                {staleness.detail}
+              </div>
+            )}
+          </div>
+          <div
+            className="mt-0.5 text-label text-ink-3"
+            title={enrichment.title}
+            data-testid={`source-health-enrichment-${id}`}
+          >
+            {enrichment.text}
+          </div>
           <div className="mt-0.5 text-label text-ink-3">{lastSignalText(row.computed)}</div>
           <div className="text-label text-ink-3">{signalVolumeText(row.computed)}</div>
         </td>
@@ -658,6 +715,7 @@ function SourceRows({
               error={detailError}
               includePrivate={includePrivate}
               onToggleIncludePrivate={onToggleIncludePrivate}
+              ledgerEmpty={ledgerEmpty}
             />
           </td>
         </tr>
@@ -683,8 +741,10 @@ function SourceDetail({
   error,
   includePrivate,
   onToggleIncludePrivate,
+  ledgerEmpty = false,
 }: {
   row: SourceQualityRow
+  ledgerEmpty?: boolean
   detail: SourceQualityDetail | undefined
   loading: boolean
   error: unknown
@@ -692,6 +752,9 @@ function SourceDetail({
   onToggleIncludePrivate: () => void
 }) {
   const id = row.source_id
+  // RA-1: private-annex ratings are an admin's (the registry answers a
+  // reader's ask with the public rows); the toggle says so instead.
+  const belowAdmin = useBelowAdmin()
   const split = assertedVsEarned(detail ?? row)
   const earned = (detail ?? row).earned
   const ratings = detail ? sortRatings(detail.ratings) : []
@@ -738,6 +801,8 @@ function SourceDetail({
         <button
           type="button"
           onClick={onToggleIncludePrivate}
+          disabled={belowAdmin}
+          title={belowAdmin ? 'Private ratings are read by an admin; your account sees the public ratings.' : undefined}
           data-testid={`source-health-include-private-${id}`}
           className={cn(
             'rounded border px-2 py-0.5 text-label',
@@ -770,7 +835,16 @@ function SourceDetail({
         </div>
       )}
 
-      {detail && (
+      {detail && ledgerEmpty && ratings.length === 0 && detail.dossier == null && (
+        <Section label="Ratings and dossier">
+          <p className="text-body text-ink-3" data-testid={`source-health-ledger-empty-${id}`}>
+            None on file for any source — the assurance ledger is empty, so there is
+            nothing to show here (an absence of assessment, not a poor one).
+          </p>
+        </Section>
+      )}
+
+      {detail && !(ledgerEmpty && ratings.length === 0 && detail.dossier == null) && (
         <>
           <Section label={`Ratings (${ratings.length}) — each one a claim, with its author`}>
             {ratings.length === 0 ? (

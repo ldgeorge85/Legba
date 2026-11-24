@@ -21,8 +21,8 @@ This test exercises the cache-miss path at the function level:
     or transport failure), the helper propagates — caller surfaces it
     as hard_fail rather than silently bypassing.
 
-The :class:`RegistryHTTPClient` is exercised against the live
-legba-registry through a focused test that proves the wire works without
+The :class:`RegistryHTTPClient` is exercised against the real registry app
+(built in-process on the test substrate) through a focused test that proves the wire works without
 needing the full descriptor-creation dance — we just GET a known
 descriptor id and assert 404 (the descriptor doesn't exist; the
 client should NOT raise).
@@ -197,17 +197,42 @@ async def test_clear_deps_registry_removes_resolvers():
 async def test_registry_client_returns_none_on_404():
     """Proves the HTTP client wires correctly: a GET for a non-existent
     descriptor returns ``None`` rather than raising. This is the path the
-    resolver uses when a freshly-arriving actor_id has no descriptor."""
-    client = RegistryHTTPClient()
-    try:
-        # A descriptor that almost certainly doesn't exist.
-        result = await client.get_descriptor(
-            f"nonexistent_{uuid.uuid4().hex}",
-            family="target",
+    resolver uses when a freshly-arriving actor_id has no descriptor.
+
+    X1-A4: the registry is the REAL app (``create_app``, full lifespan) built
+    in-process on the test substrate, reached over ASGI — not the production
+    registry on 127.0.0.1:8090 with the operator's live token, which is what
+    this test used to call (and which the isolated test namespace cannot
+    reach)."""
+    import httpx
+
+    from legba.data.config import NatsConfig, PostgresConfig
+    from legba.data.registry.credentials import MASTER_KEY_ENV
+    from legba.data.registry.server import create_app
+
+    os.environ.setdefault(MASTER_KEY_ENV, "00112233445566778899" * 3 + "0011")
+    os.environ.setdefault("LEGBA_REGISTRY_SIGNING_KEY", "22" * 32)
+    app = create_app(
+        pg_config=PostgresConfig.from_env(),
+        nats_config=NatsConfig.from_env(),
+        enable_healthcheck_loop=False,
+        enable_vocabulary_subscription=False,
+    )
+    async with app.router.lifespan_context(app):
+        http = httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://registry",
         )
-        assert result is None
-    finally:
-        await client.close()
+        client = RegistryHTTPClient(base_url="http://registry", client=http)
+        try:
+            # A descriptor that almost certainly doesn't exist.
+            result = await client.get_descriptor(
+                f"nonexistent_{uuid.uuid4().hex}",
+                family="target",
+            )
+            assert result is None
+        finally:
+            await client.close()
+            await http.aclose()
 
 
 async def test_registry_client_fails_loud_on_unreachable_host():

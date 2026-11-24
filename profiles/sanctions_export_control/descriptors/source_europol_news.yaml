@@ -1,0 +1,63 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Sanctions / export-control profile SKELETON (PROFILE-1; DEC-11; Review B §1.2 F1).
+# From the source annex planning/DOMAIN_EXPANSION_SOURCES_2026-07-03.md (crime
+# section), verified there 2026-07-03 and NOT re-probed since: the operator
+# probes before activating. Ships DRAFT — registering it never schedules it.
+# The enforcement-practice question (question 5). Annex quirk: items may lack a per-item pubDate.
+
+identity:
+  id: source.europol.news
+  name: "Europol — Newsroom"
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: profile_sanctions_export_control
+  created: "2026-10-04T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [sanctions, enforcement, gov, eu]
+  source_class: official
+  access_class: public
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "41 */4 * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.europol.europa.eu/cms/api/rss/news"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

@@ -63,7 +63,8 @@ can trace that block.
 from __future__ import annotations
 
 import copy
-from typing import Any, Mapping, Sequence
+import re
+from typing import Any, Collection, Mapping, Sequence
 
 from ..provenance.assembly_arms import (
     ASSEMBLY_SCHEMA,
@@ -75,6 +76,7 @@ from ..provenance.composition_integrity import (
     desk_verdict_text,
     has_collection_denominator_scope,
 )
+from ..change_report import LEAD_CLAUSE_END_RE
 from ..provenance.text_fold import normalize_for_match
 from .assembly_spans import build_context_span, quoted_spans
 
@@ -85,8 +87,10 @@ __all__ = [
     "CARRY_FALLBACK_ORDINAL_1",
     "CARRY_MASS_FLOOR_DEFAULT",
     "CARRY_REASONS",
+    "CARRY_RESTRAINT_SHIFT",
     "CONTEXT_MATCH_KEY",
     "CONTEXT_ORIGIN_KEY",
+    "WORLD_CARRY_ROW_KEY",
     "LEADING_NEGATION_IDIOMS",
     "LEADING_NEGATION_TOKENS",
     "LEAD_CONNECTIVE_PHRASES",
@@ -98,8 +102,10 @@ __all__ = [
     "carried_origin_record",
     "carried_verdict_text",
     "carry_block",
+    "carry_choice",
     "child_assembly",
     "connective_leak",
+    "lead_clause",
     "leading_negation",
 ]
 
@@ -200,30 +206,59 @@ def leading_negation(text: Any) -> bool:
     return head in LEADING_NEGATION_TOKENS
 
 
+#: W1 (2026-11-07) — where a lead span's FIRST ASSERTION ends. Lives in
+#: :mod:`legba.data.change_report` since roll 65 (the carry rule reads it and
+#: may not import this package); the same object, re-bound here.
+_LEAD_CLAUSE_END_RE = LEAD_CLAUSE_END_RE
+
+#: W1 — a negation INSIDE the lead clause (the opener is
+#: :func:`leading_negation`'s). ``no`` minus the idioms that are not negations
+#: of the world — ``no longer`` is a CHANGE report — the same guard list
+#: ``absence_slice._is_absence_claim`` carries.
+_LEAD_NEGATION_RE = re.compile(
+    r"(?<![\w-])(?:no(?!\s+(?:longer|fewer|less|doubt|single|one)(?![\w-]))"
+    r"|none|nothing|neither|never|absent|absence\s+of"
+    r"|not\s+(?:been\s+)?(?:observed|seen|found|reported|evident|visible"
+    r"|recorded|detected|apparent|appear\w*))(?![\w-])"
+)
+
+
+def lead_clause(text: Any) -> str:
+    """The span's FIRST ASSERTION, folded: everything before the first clause
+    boundary (:data:`_LEAD_CLAUSE_END_RE`). Total — ``""`` for unusable input."""
+    folded = normalize_for_match(text)
+    m = _LEAD_CLAUSE_END_RE.search(folded)
+    return folded[: m.start()] if m else folded
+
+
 def block_is_absence(block: Mapping[str, Any]) -> bool:
     """Is this block's lead span a statement that NOTHING HAPPENED?
 
     THE ONE DEFINITION, called by both halves of Amendment 4 — the country
-    read's crown and the region rollup's carry — so the two tiers cannot come
-    to different conclusions about the same sentence. Three signals, any one of
-    which is enough:
+    read's crown and the region rollup's carry — and by the world carry, so the
+    tiers cannot come to different conclusions about the same sentence. A span
+    is an absence when EITHER
 
-      * ``has_collection_denominator_scope`` over the span text — ARM 2's own
-        SCOPE_TRUNCATED truthmaker, reused VERBATIM and not rewritten. Reuse is
-        the point: the class has false-positived three times and a second copy
-        would have to be re-audited alone.
-      * the ``collection_denominator`` token the span already DECLARES, which
-        catches ARM 2's ``scope_truncated`` case — the qualifier trimmed out of
-        the quoted span but still on the payload.
-      * :func:`leading_negation`, because the first two answer a narrower
-        question than this one does. Measured on the live corpus: of the 16
-        crowns and 8 region carries that open with a negation under Amendment
-        4, ``has_collection_denominator_scope`` catches ONE. It is documented
-        to fire on a COLLECTION denominator ("in collected reporting", "among
-        the monitored sources") and explicitly not on a clock ("in this
-        window") — and the live absence spans are bounded by a clock or by a
-        named national media set: *"No coordinated narrative is evident in
-        Argentina's media over the past three days"*.
+      * it OPENS with a negation (:func:`leading_negation` — the corpus-derived
+        opener: *"No coordinated narrative is evident in Argentina's media"*,
+        bounded by a clock, which a scope test cannot see); OR
+      * its LEAD CLAUSE (:func:`lead_clause`) carries a negation AND that
+        negation is bounded to a collection — ARM 2's SCOPE_TRUNCATED
+        truthmaker ``has_collection_denominator_scope`` over the lead clause,
+        reused VERBATIM, or the ``collection_denominator`` token the span
+        declares when the qualifier was trimmed out of the quoted text.
+
+    W1, 2026-11-07 — WHY THE SCOPE TEST NO LONGER STANDS ALONE. It used to be
+    enough by itself, over the WHOLE span. Since ``UNIT_BLUF_ABSENCE_RULE`` every
+    desk lead ends in a provenance clause (*"…while no mass unrest … appears in
+    this desk's collection through 7 November"*), and the scope marker
+    ``desk's`` matches even a positive verdict (*"…remains this desk's
+    escalation driver"*). On world record e30e67d3 that made 147 of the 171
+    candidate blocks "absences" — 22/22 internal_stability, 14/14
+    leadership_transition — so the US read carried military posture over *"Trump
+    replaced chief of staff Susie Wiles with hardliner Stephen Miller"*. A scope
+    phrase bounds a NEGATIVE; with no negative in the verdict it bounds
+    nothing, and the block says something happened.
 
     Asymmetric on purpose. Wrongly excluding a block costs the read its
     second-heaviest thread; wrongly including one costs it a headline that says
@@ -236,15 +271,23 @@ def block_is_absence(block: Mapping[str, Any]) -> bool:
     for span in quoted_spans(block):
         if not isinstance(span, Mapping):
             continue
-        tokens = span.get("scope_tokens")
-        if isinstance(tokens, Sequence) and not isinstance(tokens, (str, bytes)):
-            if any(str(t) == SCOPE_TOKEN_COLLECTION_DENOMINATOR for t in tokens):
-                return True
         text = str(span.get("text") or "")
         if leading_negation(text):
             return True
+        lead = lead_clause(text)
+        if not _LEAD_NEGATION_RE.search(lead):
+            continue
+        tokens = span.get("scope_tokens")
+        declared = (
+            isinstance(tokens, Sequence) and not isinstance(tokens, (str, bytes))
+            and any(str(t) == SCOPE_TOKEN_COLLECTION_DENOMINATOR for t in tokens)
+        )
         try:
-            if has_collection_denominator_scope(text):
+            if has_collection_denominator_scope(lead):
+                return True
+            # The declared token stands in for a qualifier TRIMMED out of the
+            # quoted text — never for one the text still carries elsewhere.
+            if declared and not has_collection_denominator_scope(text):
                 return True
         except Exception:  # a predicate must never take a read down
             continue
@@ -299,10 +342,16 @@ def block_is_absence(block: Mapping[str, Any]) -> bool:
 CARRY_EARNED_LEAD: str = "earned_lead"
 CARRY_BY_MASS: str = "by_mass"
 CARRY_FALLBACK_ORDINAL_1: str = "fallback_ordinal_1"
+#: The world tier's restraint-shift floor (``assembly_world``): a political /
+#: institutional change-reporting block placed in one of the K reserved slots.
+#: Spelled here so the one vocabulary every reader of ``carry_reason`` checks
+#: against holds every value the writers stamp.
+CARRY_RESTRAINT_SHIFT: str = "restraint_shift_floor"
 CARRY_REASONS: tuple[str, ...] = (
     CARRY_EARNED_LEAD,
     CARRY_BY_MASS,
     CARRY_FALLBACK_ORDINAL_1,
+    CARRY_RESTRAINT_SHIFT,
 )
 
 #: The by-mass carry's noise floor when the caller states none. ``0.0`` — carry
@@ -371,6 +420,7 @@ def child_assembly(row: Mapping[str, Any]) -> Mapping[str, Any] | None:
 
 def carried_lead_block(
     asm: Mapping[str, Any], *, mass_floor: float = CARRY_MASS_FLOOR_DEFAULT,
+    exclude: Collection[str] = (),
 ) -> tuple[Mapping[str, Any] | None, int | None, str | None]:
     """The child assembly's carried block, its ordinal there, and WHY that one.
 
@@ -394,10 +444,23 @@ def carried_lead_block(
     Re-derives NOTHING about the evidence. Every number it sorts on was computed
     by the child assembly and is persisted on the child's own block; this only
     chooses which of them travels.
+
+    ``exclude`` (W1, 2026-11-07) — desk-head ``finding_id``s another block of
+    the SAME carrying read already holds. The world read carries one block per
+    candidate, and a thematic candidate quotes the very desk heads a country
+    candidate does: on e30e67d3 Russia's escalation head filled slots 1 and 2,
+    once through ``escalation_composition`` and once through the Russia read.
+    An excluded block is never picked while the child has another; a child
+    whose EVERY block is excluded keeps the rule above unchanged (the caller
+    counts that case — a duplicate stated, not a slot silently emptied).
     """
     blocks = [b for b in (asm.get("blocks") or []) if isinstance(b, Mapping)]
     if not blocks:
         return None, None, None
+    taken = {str(x) for x in exclude}
+    blocks = [
+        b for b in blocks if str(b.get("finding_id") or "") not in taken
+    ] or blocks
 
     def _at(ordinal: int) -> Mapping[str, Any] | None:
         for b in blocks:
@@ -425,6 +488,27 @@ def carried_lead_block(
 
     first = _at(1) or blocks[0]
     return first, int(first.get("ordinal") or 1), CARRY_FALLBACK_ORDINAL_1
+
+
+#: W1 — the private row stamp a WORLD carry plan
+#: (``assembly_world.plan_world_carry``) leaves on each carried candidate:
+#: ``(block, via_ordinal, carry_reason)``, the choice already made across the
+#: whole carried set (deduplicated, restraint-shift floor applied). The
+#: ``_cited_salience`` idiom: the plan runs where the whole selection is
+#: visible, the assembler reads the answer off the row it is building from.
+WORLD_CARRY_ROW_KEY: str = "_world_carry"
+
+
+def carry_choice(
+    row: Mapping[str, Any], child: Mapping[str, Any],
+) -> tuple[Mapping[str, Any] | None, int | None, str | None]:
+    """The block ``row`` carries: the world plan's stamped choice when there is
+    one (:data:`WORLD_CARRY_ROW_KEY`), else :func:`carried_lead_block` — so every
+    tier the plan does not run on is byte-for-byte what shipped."""
+    stamped = row.get(WORLD_CARRY_ROW_KEY)
+    if isinstance(stamped, tuple) and len(stamped) == 3:
+        return stamped
+    return carried_lead_block(child)
 
 
 def carry_block(

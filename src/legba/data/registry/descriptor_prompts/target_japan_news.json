@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:japan_news": {
+      "source": "target_japan_news.yaml",
+      "state": "active"
+    }
+  }
+}

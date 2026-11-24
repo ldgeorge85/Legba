@@ -96,16 +96,15 @@ def _get_price_tables() -> dict[str, Mapping[str, ModelPrice]]:
 
 def _lookup_price(model: str, table: Mapping[str, ModelPrice]) -> ModelPrice | None:
     """Mirror ``stack.llm.base.estimate_cost`` resolution: exact key, then
-    prefix-match against the table (providers ship minor revisions on a
+    the LONGEST matching prefix key (providers ship minor revisions on a
     base model name, e.g. ``claude-opus-4-7-20260301`` vs ``claude-opus-4-7``).
     """
     price = table.get(model)
     if price is not None:
         return price
-    for key, entry in table.items():
-        if model.startswith(key):
-            return entry
-    return None
+    from ..stack.llm.base import longest_prefix_price
+
+    return longest_prefix_price(model, table)
 
 
 def compute_cost_usd(
@@ -193,6 +192,7 @@ async def record_budget(
     cache_write_tokens: int = 0,
     bucket: date | None = None,
     runs_increment: int = 1,
+    cost_estimate_usd_override: Decimal | float | None = None,
 ) -> BudgetLedgerRow:
     """Upsert this analyst's daily budget bucket with tokens + cost.
 
@@ -200,6 +200,15 @@ async def record_budget(
       * Resolves ``cost_estimate_usd`` via ``compute_cost_usd`` against the
         provider's ``PRICE_TABLE`` — unknown providers / unpriced models
         contribute 0 to the cost column (but tokens still accumulate).
+      * ``cost_estimate_usd_override`` (CONSULT_REVIEW_2026-09-28 B.10):
+        when given, this call's increment to ``cost_estimate_usd`` is THIS
+        value rather than the ``compute_cost_usd`` recomputation — for a
+        caller that already tracked its own per-call cost more precisely
+        than a single (provider, model, tokens) tuple can (a consult run's
+        ``SpendGuard`` sums each call's own stamped/priced estimate against
+        the model that call actually used, which can differ call-to-call —
+        a plane override mid-run, e.g.). Tokens still accumulate normally
+        either way; only the cost increment is substituted.
       * Adds to the existing (analyst_id, analyst_version, bucket) row if
         present; inserts a new one otherwise.
       * ``runs_increment`` is added to ``runs`` (default 1 = one LLM call =
@@ -211,17 +220,33 @@ async def record_budget(
     atomic at the row level. Two concurrent calls against the same bucket
     serialize on the PK and produce a correct sum.
     """
+    # Lazy, like the price tables: the stack package pulls httpx at import.
+    from ..stack.llm.pricing import call_token_total
+
     bucket = bucket or _today_utc()
-    tokens_inc = int(prompt_tokens) + int(completion_tokens) + int(reasoning_tokens)
-    cost_estimate_inc = compute_cost_usd(
+    # T-1: reasoning is a SUBSET of completion_tokens on the OpenAI-compatible
+    # wire (the core plane) and separate only on the Anthropic handler; the
+    # same formula as the per-call budget report, so neither counts it twice.
+    tokens_inc = call_token_total(
         provider,
-        model,
-        prompt_tokens,
-        completion_tokens,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
         reasoning_tokens=reasoning_tokens,
-        cache_read_tokens=cache_read_tokens,
-        cache_write_tokens=cache_write_tokens,
     )
+    if cost_estimate_usd_override is not None:
+        cost_estimate_inc = Decimal(str(cost_estimate_usd_override)).quantize(
+            Decimal("0.000001")
+        )
+    else:
+        cost_estimate_inc = compute_cost_usd(
+            provider,
+            model,
+            prompt_tokens,
+            completion_tokens,
+            reasoning_tokens=reasoning_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=cache_write_tokens,
+        )
 
     # asyncpg maps NUMERIC ↔ Decimal; pass the Decimal directly. NOW() on
     # the DB side keeps last_updated authoritative (clock skew immunity).

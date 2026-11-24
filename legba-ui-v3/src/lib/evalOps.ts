@@ -26,21 +26,39 @@ export interface ScorecardRow {
   /** optional ground-truth backtest accuracy in [0,1] when present */
   ground_truth_accuracy?: number | null
   produced_at: string
+  /**
+   * The verify verdict's score state (`scored` / `unassessable` /
+   * `carried_ungraded`), absent on rows older than the route field. SW-9:
+   * `carried_ungraded` is a memory-only finding — every citation was the
+   * desk's own prior read or window ledger — so its `overall_score` is a capped
+   * gate number (0.5), never a grade. It is counted beside the means, never in.
+   */
+  score_state?: string | null
+}
+
+/** SW-9 — the score state a memory-only (carried, ungraded) verdict carries. */
+export const CARRIED_UNGRADED = 'carried_ungraded'
+
+export function isCarriedUngraded(r: Pick<ScorecardRow, 'score_state'>): boolean {
+  return r.score_state === CARRIED_UNGRADED
 }
 
 export interface AnalystScorecard {
   analyst_id: string
-  /** rows newest-first */
+  /** GRADED rows newest-first (carried, ungraded rows are counted, not listed) */
   rows: ScorecardRow[]
-  latest_overall: number
-  /** mean overall across the window */
-  mean_overall: number
+  /** `null` when no row in the window was graded — never a borrowed 0 */
+  latest_overall: number | null
+  /** mean overall across the window's graded rows */
+  mean_overall: number | null
   /** latest - earliest overall in the window (trend direction) */
-  trend_delta: number
+  trend_delta: number | null
   /** mean per-axis scores across the window */
   axis_means: Record<string, number>
   /** latest ground-truth backtest accuracy if any row carries it */
   latest_accuracy: number | null
+  /** SW-9 — memory-only verdicts in the window, kept out of every number above */
+  carried_ungraded_n: number
 }
 
 /** Group raw scorecard rows into per-analyst summaries with trend stats. */
@@ -52,15 +70,19 @@ export function buildScorecards(rows: ScorecardRow[]): AnalystScorecard[] {
     byAnalyst.set(r.analyst_id, list)
   }
   const out: AnalystScorecard[] = []
-  for (const [analyst_id, list] of byAnalyst) {
+  for (const [analyst_id, all] of byAnalyst) {
+    // SW-9: a carried, ungraded verdict is not a grade — count it, never average it.
+    const list = all.filter((r) => !isCarriedUngraded(r))
+    const carried_ungraded_n = all.length - list.length
     // newest-first for display; oldest needed for trend.
     const sorted = [...list].sort(
       (a, b) => Date.parse(b.produced_at) - Date.parse(a.produced_at),
     )
     const newest = sorted[0]
     const oldest = sorted[sorted.length - 1]
-    const mean_overall =
-      sorted.reduce((a, r) => a + r.overall_score, 0) / (sorted.length || 1)
+    const mean_overall = sorted.length
+      ? sorted.reduce((a, r) => a + r.overall_score, 0) / sorted.length
+      : null
 
     // per-axis means over every row that carries the axis.
     const axisSum: Record<string, number> = {}
@@ -83,15 +105,21 @@ export function buildScorecards(rows: ScorecardRow[]): AnalystScorecard[] {
     out.push({
       analyst_id,
       rows: sorted,
-      latest_overall: newest.overall_score,
+      latest_overall: newest ? newest.overall_score : null,
       mean_overall,
-      trend_delta: newest.overall_score - oldest.overall_score,
+      trend_delta: newest && oldest ? newest.overall_score - oldest.overall_score : null,
       axis_means,
       latest_accuracy,
+      carried_ungraded_n,
     })
   }
-  // worst-performing analysts first — they need attention.
-  return out.sort((a, b) => a.latest_overall - b.latest_overall)
+  // worst-performing analysts first — they need attention; an analyst with no
+  // graded row in the window has no rank and sorts last.
+  return out.sort(
+    (a, b) =>
+      (a.latest_overall ?? Number.POSITIVE_INFINITY) -
+      (b.latest_overall ?? Number.POSITIVE_INFINITY),
+  )
 }
 
 /** Chronological (oldest→newest) overall-score series for a trend chart. */
@@ -126,13 +154,37 @@ export function scoreBand(score: number): ScoreBand {
  * keys and is never pooled in. `available` is false before any calibration
  * finding exists (a distinct "no pilot yet" state, not a failed pilot).
  */
+/** One calibration population: its Brier with ITS OWN n and newest member date. */
+export interface CalibrationPopulation {
+  key: string
+  label: string
+  brier: number | null
+  n: number | null
+  stale: boolean | null
+  newest_member_at: string | null
+  age_days: number | null
+}
+
+/** The label every legacy calibration figure carries (mirrors
+ *  `calibration_honesty.LEGACY_LABEL`). */
+export const LEGACY_CALIBRATION_LABEL = 'untrusted — legacy, under diagnosis'
+
 export interface CalibrationScoreboard {
   available: boolean
   produced_at: string | null
   brier: number | null
   brier_exogenous: number | null
   exogenous_sample_size: number | null
-  sample_size: number | null
+  /** the POOLED diagnostic count (was bare `sample_size`) — pairs only with `brier_pooled` */
+  brier_pooled?: number | null
+  pooled_sample_size: number | null
+  /** Lane E — these are legacy figures, never the sealed forecast ledger. */
+  label?: string
+  ledger_note?: string
+  stale?: boolean | null
+  newest_member_at?: string | null
+  withheld_reason?: string | null
+  populations?: CalibrationPopulation[]
   insufficient_exogenous: boolean | null
   self_consistency_only: boolean | null
   brier_forecast_acute: number | null
@@ -399,6 +451,10 @@ export interface CalibrationBanner {
   exogenous: { value: number | null; label: string; insufficient: boolean }
   /** acute-forecast leg — a `bss` number ONLY when ready && !degenerate && bss>0 */
   acute: { tag: AcuteTag; label: string; bss: number | null }
+  /** the explicit untrusted/legacy label (never the sealed forecast ledger) */
+  legacyLabel: string
+  /** staleness note when the headline population's newest member is old, else null */
+  staleNote: string | null
 }
 
 /** The n the acute pilot accumulates toward before a skill claim is admissible. */
@@ -435,6 +491,8 @@ export function calibrationBanner(
         label: 'no calibration finding computed yet',
         bss: null,
       },
+      legacyLabel: LEGACY_CALIBRATION_LABEL,
+      staleNote: null,
     }
   }
 
@@ -448,7 +506,7 @@ export function calibrationBanner(
       ? { value: brierExo, label: brierExo.toFixed(3), insufficient: false }
       : {
           value: null,
-          label: `INSUFFICIENT exogenous sample (n_exo=${cal.exogenous_sample_size ?? 0}/${cal.sample_size ?? 0})`,
+          label: `INSUFFICIENT exogenous sample (n_exo=${cal.exogenous_sample_size ?? 0}/${cal.pooled_sample_size ?? 0})`,
           insufficient: true,
         }
 
@@ -472,7 +530,17 @@ export function calibrationBanner(
     acute = { tag: 'accumulating', label: 'ready — no positive skill yet', bss: null }
   }
 
-  return { absent: false, exogenous, acute }
+  const staleNote =
+    cal.stale === true
+      ? `stale — newest member prediction ${cal.newest_member_at ?? 'date unknown'}`
+      : null
+  return {
+    absent: false,
+    exogenous,
+    acute,
+    legacyLabel: cal.label || LEGACY_CALIBRATION_LABEL,
+    staleNote,
+  }
 }
 
 // ===========================================================================

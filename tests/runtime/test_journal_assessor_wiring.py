@@ -401,10 +401,12 @@ def test_journal_known_tools_subset_in_pack():
     from legba.data.analysts.consult_on_demand import _KNOWN_TOOLS
 
     shared = set(JOURNAL_READ_TOOLS) & set(_KNOWN_TOOLS)
-    # The five reused reads are the shared set; the 9 instruments are journal-only.
+    # The five reused reads are the shared set, plus get_source_health (W11-F152:
+    # consult gained the per-source staleness read; the journal already had it);
+    # the other 8 instruments are journal-only.
     assert shared == {
         "list_findings", "query_facts", "query_nexuses", "list_situations",
-        "get_timeline",
+        "get_timeline", "get_source_health",
     }
     # And every shared tool is, by construction, in the pack tuple.
     assert shared <= set(JOURNAL_READ_TOOLS)

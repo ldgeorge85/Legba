@@ -3,6 +3,29 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- M-2: a phone is sent to the phone shell BEFORE the desktop's code is
+         requested (the build moves the entry into the loader below this one:
+         vite.config.ts::deferEntryForPhones). The rule is lib/phoneSurface.ts's,
+         written out; phoneSurface.test.ts runs this script against it. -->
+    <script id="legba-phone-redirect">
+      (function () {
+        try {
+          var l = window.location, s = l.search, q = new URLSearchParams(s);
+          if (q.get('desktop') === '1') { try { sessionStorage.setItem('legba_desktop', '1'); } catch (e) {} }
+          var chosen = false;
+          try { chosen = sessionStorage.getItem('legba_desktop') === '1'; } catch (e) {}
+          var w = window.innerWidth, sc = window.screen, sh = sc && sc.width > 0 && sc.height > 0 ? Math.min(sc.width, sc.height) : 0;
+          var coarse = false;
+          try { coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches); } catch (e) {}
+          var phone = w > 0 && (sh > 0 ? (sh <= 480 || (coarse && w < 900)) : (w <= 480 || (coarse && w < 900)));
+          var onM = l.pathname === '/m' || l.pathname.indexOf('/m/') === 0;
+          if (phone && !onM && !chosen && q.get('desktop') !== '1') {
+            window.__legbaToPhone = true;
+            l.replace('/m/' + s + l.hash);
+          }
+        } catch (e) {}
+      })();
+    </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Legba — Intelligence Workstation</title>
   </head>

@@ -1,0 +1,8 @@
+{
+  "states": {
+    "analyst:hypothesis_lifecycle": {
+      "source": "analyst_hypothesis_lifecycle.yaml",
+      "state": "retired"
+    }
+  }
+}

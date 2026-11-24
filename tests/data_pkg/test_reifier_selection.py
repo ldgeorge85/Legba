@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """K-G2 — the reifier's candidate window: pending-only + merge-aware dedup.
 
-Built from the LIVE shape the bake-off measured (``docs/TYPING_BAKEOFF_
-2026-08-03.md`` §1), not from an invented one:
+Built from the LIVE shape the bake-off measured (``docs/history/
+TYPING_BAKEOFF.md`` §1), not from an invented one:
 
   * ``proposed_edges`` holds four statuses. Only ``pending`` can become a new
     edge; ``promoted``/``rejected``/``orphaned`` are dead rows that reach

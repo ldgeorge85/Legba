@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.rsshub.rfi.afrique": {
+      "source": "source_rsshub_rfi_afrique.yaml",
+      "state": "draft"
+    }
+  }
+}

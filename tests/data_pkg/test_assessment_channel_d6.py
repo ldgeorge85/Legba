@@ -1778,10 +1778,12 @@ def _tension_payload():
     ``carried_vs_dropped`` arm (``b_carried`` False, ``b_ref`` a dropped head
     with its own ``span``).
     """
+    # N-C (2026-11-11): one ENTITY per tension (``tension_pairing`` rule 0), so
+    # the three heads are three reads of one unit.
     rows = [
         _tension_row(
-            uuid4(), target_id="country_g20_ru",
-            bluf="Russia's energy-security pressure is pushing escalation risk "
+            uuid4(), target_id="country_watch_kp",
+            bluf="North Korea's energy-security pressure is pushing escalation risk "
                  "upward with a sharp rise in refinery outages",
         ),
         _tension_row(
@@ -1790,8 +1792,8 @@ def _tension_payload():
                  "marked drop in supply disruptions", sigs=("s2",),
         ),
         _tension_row(
-            uuid4(), target_id="country_g20_cn",
-            bluf="China's energy-security pressure remains high with no sign "
+            uuid4(), target_id="country_watch_kp",
+            bluf="North Korea's energy-security pressure remains high with no sign "
                  "of easing", sigs=("s3",),
         ),
     ]

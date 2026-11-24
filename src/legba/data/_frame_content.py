@@ -135,7 +135,13 @@ from dataclasses import dataclass, fields
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
-from ._polity_match import home_prose, represented_by
+from ._polity_match import (
+    home_prose,
+    normalized_surfaces,
+    prepare_prose,
+    represented_by,
+    represented_in,
+)
 from .analysts.deterministic_handlers._coverage_floor_scan import (
     _ENTITY_AGG_SQL,
     _HOME_COUNTRIES_SQL,
@@ -796,15 +802,21 @@ def _naming_counts(
     """
     by_dimension: dict[tuple[str, str, str], int] = {}
     by_desk: dict[tuple[str, str], int] = {}
+    surfaces: dict[str, tuple[tuple[str, str], ...]] = {}
     for row in findings:
         desk = str(row.get("target_id") or "")
         candidates = candidates_by_desk.get(desk)
         if not candidates:
             continue
-        prose = f"{row.get('title') or ''} || {row.get('body') or ''}"
+        # N-W: ``represented_by``'s two folds, done once per finding / polity.
+        prose, squashed = prepare_prose(
+            f"{row.get('title') or ''} || {row.get('body') or ''}"
+        )
         dimension = str(row.get("analyst_id") or "")
         for polity in candidates:
-            if represented_by(polity, prose) is None:
+            if polity not in surfaces:
+                surfaces[polity] = normalized_surfaces(polity)
+            if represented_in(surfaces[polity], prose, squashed) is None:
                 continue
             by_dimension[(desk, dimension, polity)] = (
                 by_dimension.get((desk, dimension, polity), 0) + 1
@@ -827,6 +839,7 @@ async def collect(
     can splice it into its own ``data`` without touching a field it already
     publishes. Every read here is a SELECT; nothing is written anywhere.
     """
+    from . import rosters as _rosters
     from .analysts.deterministic_handlers.alert_trigger_scan import (
         _DESKS_SQL,
         _parse_jsonish,
@@ -841,7 +854,7 @@ async def collect(
     bounds = {"desks": 0, "frames": 0, "entity_rows": 0, "findings": 0,
               "census_pairs": 0, "candidates_truncated_desks": 0}
     async with pool.acquire() as conn:
-        desks = await conn.fetch(_DESKS_SQL, _MAX_DESKS)
+        desks = await conn.fetch(_DESKS_SQL, _MAX_DESKS, list(_rosters.scored_roster_tags()))
         desk_ids = [str(r["descriptor_id"]) for r in desks]
         if not desk_ids:
             return None

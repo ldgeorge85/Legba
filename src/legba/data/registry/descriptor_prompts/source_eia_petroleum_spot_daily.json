@@ -1,0 +1,8 @@
+{
+  "states": {
+    "source:source.eia.petroleum_spot_daily": {
+      "source": "source_eia_petroleum_spot_daily.yaml",
+      "state": "draft"
+    }
+  }
+}

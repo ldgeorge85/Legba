@@ -28,6 +28,7 @@ error to avoid, and the system prompt calls it out explicitly.
 """
 
 from __future__ import annotations
+from legba.shared.sampling import HOUSE_TEMPERATURE
 
 import json
 import logging
@@ -38,7 +39,9 @@ from typing import Any, Mapping, Protocol, runtime_checkable
 from ...runtime.analyst_method import AnalystMethodResult, LLMHandlerLike
 from ..provenance.kinds import TRACE_ONLY as _TRACE_ONLY
 from ..provenance.models import FindingPayload
+from .. import rosters as _rosters
 from .._entity_candidates import CandidatePair
+from ..tags import tag_vocabulary_index
 from ._tradecraft import with_preamble
 
 logger = logging.getLogger(__name__)
@@ -55,7 +58,7 @@ OUTPUT_KIND: object = _TRACE_ONLY
 
 DEFAULT_ADJ_MAX_TOKENS = 1400
 DEFAULT_ADJ_BATCH = 10
-DEFAULT_ADJ_TEMPERATURE = 0.0
+DEFAULT_ADJ_TEMPERATURE = HOUSE_TEMPERATURE
 
 _VALID_VERDICTS = frozenset({"same", "not_same", "unsure"})
 
@@ -193,29 +196,34 @@ def _norm_name(s: object) -> str:
     return re.sub(r"\s+", " ", str(s or "").strip().lower())
 
 
-def _coerce_class_correction(raw: object) -> ClassCorrection | None:
+def _coerce_class_correction(
+    raw: object, valid_classes: frozenset[str] | None = None,
+) -> ClassCorrection | None:
     """Parse the OPTIONAL ``class_correction`` field (P4 Class 6 Obs. 2).
 
     Strict on purpose: a malformed/unrecognized ``side`` or ``correct_class``
     (e.g. a hallucinated class outside the closed taxonomy) drops the whole
     correction rather than persisting a garbage hint downstream — the
     reclassify pipeline only ever sees a validated ``side``/``correct_class``
-    pair, never raw model text. References ``_VALID_ENTITY_CLASSES`` (the
-    closed taxonomy shared with the reclassify pass, defined later in this
-    module) — safe via late binding since this is only ever called at runtime,
-    after the module has finished loading."""
+    pair, never raw model text. ``valid_classes`` is the run's accepted class
+    set (:func:`_valid_entity_classes`); ``None`` = the documented fallback
+    ``_FALLBACK_ENTITY_CLASSES`` (defined later in this module — safe via late
+    binding since this is only ever called at runtime)."""
     if not isinstance(raw, Mapping):
         return None
     side = str(raw.get("side") or "").strip().lower()
     if side not in ("a", "b"):
         return None
     correct_class = str(raw.get("correct_class") or "").strip().lower()
-    if correct_class not in _VALID_ENTITY_CLASSES:
+    valid = _FALLBACK_ENTITY_CLASSES if valid_classes is None else valid_classes
+    if correct_class not in valid:
         return None
     return ClassCorrection(side=side, correct_class=correct_class)
 
 
-def _parse_batch(content: str, batch: list[CandidatePair]) -> list[Verdict]:
+def _parse_batch(
+    content: str, batch: list[CandidatePair], *, valid_classes: frozenset[str] | None = None,
+) -> list[Verdict]:
     """Bind each model verdict to a pair by its ECHOED names (authoritative),
     falling back to the 1-based ``n`` ONLY when an item echoes no names.
 
@@ -270,7 +278,9 @@ def _parse_batch(content: str, batch: list[CandidatePair]) -> list[Verdict]:
                 verdict=verdict,
                 confidence=conf,
                 justification=why,
-                class_correction=_coerce_class_correction(item.get("class_correction")),
+                class_correction=_coerce_class_correction(
+                    item.get("class_correction"), valid_classes,
+                ),
             )
         )
     return out
@@ -319,28 +329,30 @@ async def _load_cached(conn, pair_keys: list[str]) -> dict[str, Verdict]:
     return out
 
 
-async def _persist(conn, verdicts: list[Verdict]) -> None:
+async def _persist(conn, verdicts: list[Verdict], *, written_by: str | None = None) -> None:
     """Upsert verdicts into entity_judgement (idempotent on pair_key). A
     re-adjudication overwrites the prior row but a HUMAN decision is never
-    clobbered by an llm/rule pass."""
+    clobbered by an llm/rule pass. ``written_by`` is the running seat's
+    principal handle (lane 9; ``None`` = not known, the row names no writer)."""
     for v in verdicts:
         await conn.execute(
             """
             INSERT INTO entity_judgement
                 (pair_key, entity_a, entity_b, verdict, justification,
-                 decided_by, model_id, confidence)
-            VALUES ($1, $2::uuid, $3::uuid, $4, $5, $6, $7, $8)
+                 decided_by, model_id, confidence, written_by)
+            VALUES ($1, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, legba_principal($9))
             ON CONFLICT (pair_key) DO UPDATE SET
                 verdict       = EXCLUDED.verdict,
                 justification = EXCLUDED.justification,
                 decided_by    = EXCLUDED.decided_by,
                 model_id      = EXCLUDED.model_id,
                 confidence    = EXCLUDED.confidence,
-                decided_at    = now()
+                decided_at    = now(),
+                written_by    = EXCLUDED.written_by
             WHERE entity_judgement.decided_by <> 'human'
             """,
             v.pair_key, v.entity_a or None, v.entity_b or None, v.verdict,
-            v.justification, v.decided_by, v.model_id, v.confidence,
+            v.justification, v.decided_by, v.model_id, v.confidence, written_by,
         )
 
 
@@ -403,6 +415,7 @@ async def adjudicate_pairs(
     use_cache: bool = True,
     persist: bool = True,
     apply_class_corrections: bool = False,
+    written_by: str | None = None,
 ) -> list[Verdict]:
     """Adjudicate candidate ``pairs`` into same/not_same/unsure verdicts.
 
@@ -436,6 +449,7 @@ async def adjudicate_pairs(
             results.update(cached)
             remaining = [p for p in pairs if p.pair_key not in cached]
 
+    valid_classes = await _valid_entity_classes() if remaining else None
     for start in range(0, len(remaining), max(1, batch_size)):
         batch = remaining[start : start + batch_size]
         try:
@@ -446,7 +460,7 @@ async def adjudicate_pairs(
                 system=_ADJ_SYSTEM,
             )
             content = getattr(response, "content", "") or ""
-            batch_verdicts = _parse_batch(content, batch)
+            batch_verdicts = _parse_batch(content, batch, valid_classes=valid_classes)
         except Exception as exc:  # degrade-not-break: whole batch -> unsure
             logger.warning("entity_researcher.adjudicate_batch_failed err=%s", exc)
             batch_verdicts = [
@@ -463,7 +477,7 @@ async def adjudicate_pairs(
             ]
         if persist:
             try:
-                await _persist(conn, batch_verdicts)
+                await _persist(conn, batch_verdicts, written_by=written_by)
             except Exception as exc:  # audit-write failure must not lose verdicts
                 logger.warning("entity_researcher.persist_failed err=%s", exc)
         if apply_class_corrections:
@@ -889,11 +903,27 @@ class ResearchReport:
 # this extension cannot double the per-tick LLM volume.
 # ===========================================================================
 
-#: The closed target taxonomy the classifier may assign (person-skew targets).
-_VALID_ENTITY_CLASSES = frozenset({
+#: The class taxonomy the classifier may assign (person-skew targets) is the
+#: REGISTERED ``entity_class`` vocabulary family (ROSTER-1), read from the
+#: runtime's one vocabulary snapshot (``tags.tag_vocabulary_index()``; see
+#: :func:`_valid_entity_classes`). This literal is the documented FALLBACK when
+#: that family is unloaded — no provider installed (the registry process, a
+#: script, a test), the registry read failed, or the family is not registered.
+#: The prompt's menu (``_RECLASS_SCHEMA_AND_DEFS``) still offers exactly these
+#: seven; with the family loaded, an answer naming another REGISTERED class is
+#: accepted rather than degraded to no-change.
+_FALLBACK_ENTITY_CLASSES = frozenset({
     "country", "organization", "corporation", "location", "person", "event",
     "entity",
 })
+
+
+async def _valid_entity_classes() -> frozenset[str]:
+    """The run's accepted class set: the registered ``entity_class`` family
+    when loaded, else :data:`_FALLBACK_ENTITY_CLASSES`."""
+    return _rosters.entity_classes(
+        await tag_vocabulary_index(), fallback=_FALLBACK_ENTITY_CLASSES,
+    )
 DEFAULT_RECLASS_MIN_CONF = 0.75
 
 #: Shared lexical-suspect keyword families, factored out so the person and
@@ -1140,7 +1170,7 @@ def _build_reclass_prompt(batch: list[ReclassCandidate]) -> str:
     return "\n".join(lines)
 
 
-def _coerce_class(raw: object) -> str | None:
+def _coerce_class(raw: object, valid_classes: frozenset[str] | None = None) -> str | None:
     v = str(raw or "").strip().lower().replace(" ", "").replace("-", "")
     aliases = {
         "org": "organization", "organisation": "organization",
@@ -1150,13 +1180,14 @@ def _coerce_class(raw: object) -> str | None:
         "nation": "country", "state": "country",
         "generic": "entity", "unknown": "entity", "other": "entity",
     }
-    if v in _VALID_ENTITY_CLASSES:
+    if v in (_FALLBACK_ENTITY_CLASSES if valid_classes is None else valid_classes):
         return v
     return aliases.get(v)
 
 
 def _parse_reclass_batch(
-    content: str, batch: list[ReclassCandidate],
+    content: str, batch: list[ReclassCandidate], *,
+    valid_classes: frozenset[str] | None = None,
 ) -> list[ReclassVerdict]:
     """Bind each model class to a candidate by its ECHOED name (authoritative),
     falling back to the 1-based ``n`` only when no name is echoed. An item that
@@ -1195,7 +1226,7 @@ def _parse_reclass_batch(
     out: list[ReclassVerdict] = []
     for c in batch:
         item = assigned.get(c.id, {})
-        to_cls = _coerce_class(item.get("class")) or c.cur_class  # unknown -> keep
+        to_cls = _coerce_class(item.get("class"), valid_classes) or c.cur_class  # unknown -> keep
         try:
             conf = float(item.get("confidence"))
         except (TypeError, ValueError):
@@ -1259,6 +1290,7 @@ async def reclassify_entities(
     if not candidates:
         return (0, 0, [])
     system_prompt = _build_reclass_system(source_class)
+    valid_classes = await _valid_entity_classes()
 
     verdicts: list[ReclassVerdict] = []
     for start in range(0, len(candidates), max(1, batch_size)):
@@ -1267,11 +1299,11 @@ async def reclassify_entities(
             response = await llm.chat_complete(
                 [{"role": "user", "content": _build_reclass_prompt(batch)}],
                 max_tokens=DEFAULT_ADJ_MAX_TOKENS,
-                temperature=0.0,
+                temperature=None,  # the component default (1.0) — the house rule and the gateway's recommended sampling; 0.0 was a determinism habit from the OpenRouter grader era
                 system=system_prompt,
             )
             content = getattr(response, "content", "") or ""
-            batch_v = _parse_reclass_batch(content, batch)
+            batch_v = _parse_reclass_batch(content, batch, valid_classes=valid_classes)
         except Exception as exc:  # degrade-not-break: whole batch -> no change
             logger.warning("entity_researcher.reclass_batch_failed err=%s", exc)
             batch_v = [
@@ -1292,7 +1324,7 @@ async def reclassify_entities(
     for v in verdicts:
         is_change = (
             v.to_class != v.from_class
-            and v.to_class in _VALID_ENTITY_CLASSES
+            and v.to_class in valid_classes
             and v.confidence >= min_confidence
         )
         if is_change:
@@ -1339,6 +1371,7 @@ async def run_entity_research(
     conn,
     llm: LLMHandlerLike,
     *,
+    written_by: str | None = None,
     apply: bool = False,
     model_id: str | None = None,
     same_min_confidence: float = DEFAULT_SAME_MIN_CONF,
@@ -1401,6 +1434,7 @@ async def run_entity_research(
         # a dry-run pass mutates NO entity_profiles row, exactly like every
         # other write in this module. The COUNTER below is computed regardless.
         apply_class_corrections=apply,
+        written_by=written_by,
     )
     tally = {"same": 0, "not_same": 0, "unsure": 0}
     for v in verdicts:
@@ -1559,6 +1593,9 @@ class EntityResearcherDeps:
     llm: LLMHandlerLike
     pg_pool: Any = None
     budget: _BudgetLike | None = None
+    #: The running seat's principal handle (lane 9), stamped on every
+    #: entity_judgement row this run writes; ``None`` = not known.
+    written_by: str | None = None
     apply: bool = False
     max_pairs: int = DEFAULT_MAX_PAIRS
     same_min_confidence: float = DEFAULT_SAME_MIN_CONF
@@ -1659,6 +1696,7 @@ async def run_method(
                 reclassify_max=deps.reclassify_max,
                 reclass_min_confidence=deps.reclass_min_confidence,
                 reclass_entity_share=deps.reclass_entity_share,
+                written_by=deps.written_by,
             )
     except Exception as exc:  # pragma: no cover - degrade-not-break
         logger.warning("entity_researcher.run_failed err=%s", exc)

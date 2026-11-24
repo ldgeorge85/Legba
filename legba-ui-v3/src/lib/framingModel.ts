@@ -100,6 +100,11 @@ import type { Scope } from '@/state/scope'
  * members, and a lean whose id is not on this list still renders — under its
  * own id, with its prior stated as unnamed — rather than vanishing from a
  * surface whose whole job is to show who spoke.
+ *
+ * Since W2 a lens row written by the current runtime STAMPS its prior header
+ * (`JournalEntry.lens_prior`); `deriveLensRows` prefers that stamp and keeps
+ * this mirror as the fallback for older, unstamped rows and for leans with no
+ * read in the window.
  */
 export const LEAN_LENSES: readonly { id: string; name: string; prior: string }[] = [
   { id: 'lens_left', name: 'Structuralist', prior: 'who pays, who gains' },
@@ -111,6 +116,23 @@ export const LEAN_LENSES: readonly { id: string; name: string; prior: string }[]
 ]
 
 const LEAN_BY_ID = new Map(LEAN_LENSES.map((l) => [l.id, l]))
+
+/**
+ * Split a row-stamped prior header ("the Structuralist; who pays, who gains")
+ * into its persona name and its prior. A header with no `;` is all prior.
+ * `null` for an absent or blank stamp — the caller falls back to the mirror.
+ */
+export function splitPriorHeader(
+  header: string | null | undefined,
+): { name: string | null; prior: string } | null {
+  const h = (header ?? '').trim()
+  if (!h) return null
+  const cut = h.indexOf(';')
+  if (cut < 0) return { name: null, prior: h }
+  const name = h.slice(0, cut).trim().replace(/^the\s+/i, '')
+  const prior = h.slice(cut + 1).trim()
+  return prior ? { name: name || null, prior } : { name: null, prior: h }
+}
 
 /** The unit label roster the gap strip already publishes, by unit id. */
 const UNIT_LABEL = new Map(GAP_STRIP_UNITS.map((u) => [u.id, u.label]))
@@ -596,8 +618,11 @@ export interface FramingLensRow {
   analystId: string
   /** The persona's name, when the id is one of the six leans. */
   name: string | null
-  /** The declared prior, named. `null` for an id off the mirrored roster. */
+  /** The declared prior, named. The row's own stamp (`lens_prior`) when it
+   *  carries one, else the mirrored roster; `null` when neither names it. */
   prior: string | null
+  /** `true` when `prior` came from the read's own stamp, not the mirror. */
+  priorStamped: boolean
   entryId: string | null
   producedAt: string | null
   /** The entry's own gate score. `null` when no critique exists — never 0. */
@@ -652,6 +677,7 @@ export function deriveLensRows(
         analystId,
         name: lean?.name ?? null,
         prior: lean?.prior ?? null,
+        priorStamped: false,
         entryId: null,
         producedAt: null,
         judgeScore: null,
@@ -671,10 +697,12 @@ export function deriveLensRows(
         break
       }
     }
+    const stamped = splitPriorHeader(entry.lens_prior)
     return {
       analystId,
-      name: lean?.name ?? null,
-      prior: lean?.prior ?? null,
+      name: lean?.name ?? stamped?.name ?? null,
+      prior: stamped?.prior ?? lean?.prior ?? null,
+      priorStamped: stamped !== null,
       entryId: entry.id,
       producedAt: entry.produced_at,
       judgeScore: typeof entry.verify_score === 'number' ? entry.verify_score : null,

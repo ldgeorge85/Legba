@@ -11,6 +11,11 @@ Covers:
   * Integration: `record_budget` populates `cost_estimate_usd` correctly
     for Anthropic (non-zero) and vLLM (0) without breaking the existing
     `cost_usd` column or other budget_ledger columns.
+  * Integration (CONSULT_REVIEW_2026-09-28 B.10): `record_budget`'s
+    `cost_estimate_usd_override` carries a caller-computed cost (a consult
+    run's own SpendGuard total) into `cost_estimate_usd` in place of the
+    (provider, model, tokens) recomputation, and every existing no-override
+    caller is unaffected.
 """
 
 from __future__ import annotations
@@ -38,8 +43,8 @@ from legba.data.stack.llm.openai import OpenAIProviderHandler
 
 
 def test_compute_cost_anthropic_priced_model_non_zero():
-    # Anthropic claude-opus-4-7: input 15 / output 75 per 1M tokens.
-    # 1M prompt + 1M completion = $15 + $75 = $90.
+    # Anthropic claude-opus-4-7: input 5 / output 25 per 1M tokens (list, 2026-11-05).
+    # 1M prompt + 1M completion = $5 + $25 = $30.
     cost = compute_cost_usd(
         provider="anthropic",
         model="claude-opus-4-7",
@@ -47,18 +52,18 @@ def test_compute_cost_anthropic_priced_model_non_zero():
         completion_tokens=1_000_000,
     )
     assert isinstance(cost, Decimal)
-    assert cost == Decimal("90.000000")
+    assert cost == Decimal("30.000000")
 
 
 def test_compute_cost_anthropic_small_token_count_quantized():
-    # 1000 prompt tokens of claude-opus-4-7 @ $15/M = $0.015.
+    # 1000 prompt tokens of claude-opus-4-7 @ $5/M = $0.005.
     cost = compute_cost_usd(
         provider="anthropic",
         model="claude-opus-4-7",
         prompt_tokens=1000,
         completion_tokens=0,
     )
-    assert cost == Decimal("0.015000")
+    assert cost == Decimal("0.005000")
 
 
 def test_compute_cost_anthropic_prefix_match():
@@ -70,11 +75,11 @@ def test_compute_cost_anthropic_prefix_match():
         prompt_tokens=1_000_000,
         completion_tokens=0,
     )
-    assert cost == Decimal("15.000000")
+    assert cost == Decimal("5.000000")
 
 
 def test_compute_cost_anthropic_cache_tokens():
-    # cache_read 1.50 per 1M, cache_write 18.75 per 1M for claude-opus-4-7.
+    # cache_read 0.50 per 1M, cache_write 6.25 per 1M for claude-opus-4-7.
     cost = compute_cost_usd(
         provider="anthropic",
         model="claude-opus-4-7",
@@ -83,8 +88,8 @@ def test_compute_cost_anthropic_cache_tokens():
         cache_read_tokens=2_000_000,
         cache_write_tokens=1_000_000,
     )
-    # 2 * 1.50 + 1 * 18.75 = 3.00 + 18.75 = 21.75
-    assert cost == Decimal("21.750000")
+    # 2 * 0.50 + 1 * 6.25 = 1.00 + 6.25 = 7.25
+    assert cost == Decimal("7.250000")
 
 
 def test_compute_cost_openai_reasoning_tokens():
@@ -363,6 +368,93 @@ async def test_record_budget_preserves_existing_columns(
     finally:
         await conn.execute(
             "DELETE FROM budget_ledger WHERE analyst_id = $1", "test_l245_cols",
+        )
+        await conn.close()
+
+
+@pytest.mark.integration
+async def test_record_budget_cost_override_replaces_recomputation(
+    migrated_pg: PostgresConfig,
+):
+    """CONSULT_REVIEW_2026-09-28 B.10 — ``cost_estimate_usd_override`` wins
+    over the (provider, model, tokens) recomputation.
+
+    A consult run's own ``SpendGuard`` sums each call's own stamped/priced
+    estimate against the model THAT call actually used — which
+    ``compute_cost_usd(provider, model, ...)`` cannot reconstruct from a
+    single (provider, model) pair when a run's plane changed mid-run (the
+    09-28 Opus run's steps carried est_cost_usd=11.10 while the ledger row
+    it should have landed on showed cost 0.000 — the override closes that
+    gap at the write site).
+
+    Uses an unknown provider/model (which alone would compute to
+    ``Decimal('0')`` — see ``test_compute_cost_unknown_provider_returns_zero``
+    above) precisely so a non-zero written value can ONLY have come from the
+    override, never from a coincidental recomputed match.
+    """
+    conn = await asyncpg.connect(migrated_pg.dsn)
+    try:
+        row: BudgetLedgerRow = await record_budget(
+            conn,
+            analyst_id="test_l245_consult_override",
+            analyst_version="v1",
+            provider="not-a-real-provider",
+            model="not-a-real-model",
+            prompt_tokens=621_000,
+            completion_tokens=9_000,
+            bucket=date(2026, 9, 28),
+            cost_estimate_usd_override=11.10,
+        )
+        assert row.tokens_used == 630_000
+        assert row.cost_estimate_usd == Decimal("11.100000")
+        assert row.cost_usd == Decimal("0.000000")  # measured cost — untouched
+
+        # A second call for the same bucket, override again: the ledger's
+        # accumulation semantics (ADD onto the running total) still hold —
+        # this isn't a REPLACE-the-row write, just a replaced INCREMENT.
+        second = await record_budget(
+            conn,
+            analyst_id="test_l245_consult_override",
+            analyst_version="v1",
+            provider="not-a-real-provider",
+            model="not-a-real-model",
+            prompt_tokens=10_000,
+            completion_tokens=1_000,
+            bucket=date(2026, 9, 28),
+            cost_estimate_usd_override=0.50,
+        )
+        assert second.cost_estimate_usd == Decimal("11.600000")
+    finally:
+        await conn.execute(
+            "DELETE FROM budget_ledger WHERE analyst_id = $1",
+            "test_l245_consult_override",
+        )
+        await conn.close()
+
+
+@pytest.mark.integration
+async def test_record_budget_no_override_keeps_recomputation_byte_identical(
+    migrated_pg: PostgresConfig,
+):
+    """Every existing (scheduled-analyst) caller passes no override — the
+    recomputed-from-PRICE_TABLE path must stay exactly as it was."""
+    conn = await asyncpg.connect(migrated_pg.dsn)
+    try:
+        row = await record_budget(
+            conn,
+            analyst_id="test_l245_no_override",
+            analyst_version="v1",
+            provider="anthropic",
+            model="claude-sonnet-4-6",
+            prompt_tokens=200_000,
+            completion_tokens=50_000,
+            bucket=date(2026, 5, 20),
+        )
+        assert row.cost_estimate_usd == Decimal("1.350000")
+    finally:
+        await conn.execute(
+            "DELETE FROM budget_ledger WHERE analyst_id = $1",
+            "test_l245_no_override",
         )
         await conn.close()
 

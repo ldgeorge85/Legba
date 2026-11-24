@@ -21,6 +21,7 @@ from ..data._geo_routing import (
     surface_index as _geo_v2_index,
     title_probes as _geo_v2_probes,
 )
+from ..data.evidence_drift_slice import annotate_source_drift, slice_drift_mark_enabled
 from ..data.nats import SIGNALS_EXCLUDE_BACKFILL_SQL
 from ..data.provenance.origin import origin_class_clause
 from ..data.research_flag import (
@@ -28,6 +29,25 @@ from ..data.research_flag import (
     research_reaches_desks,
 )
 from ..data.schemas.analyst import AnalystDescriptor
+from ..data.slice_coverage import (
+    FETCH_HARD_CAP as WM_FETCH_HARD_CAP,
+    SliceRows,
+    coverage_stamp,
+    resolve_window,
+    select_by_salience,
+    watermark_config,
+    window_clauses,
+)
+from ..data.signal_slice_scope import (
+    CANONICAL_ONLY_SQL,
+    NO_FILTER,
+    analyst_tag_filter,
+    desk_geo_sql,
+    homonym_slice_filter,
+    slice_per_source_cap,
+    strict_per_source_cap,
+    target_tag_filter,
+)
 from .journal_slice_v2 import journal_v2_sql_for
 
 logger = logging.getLogger(__name__)
@@ -132,7 +152,10 @@ async def _apply_geo_routing_v2(
         clauses = list(base_clauses)
         params = list(base_params)
         params.append(target_geo)
-        clauses.append(f"NOT (geo && ${len(params)}::text[])")
+        # Lane N-X: the inverse of the WHOLE desk geo test (filed OR at sea
+        # off a desk coast), so this leg still returns only rows the geo leg
+        # did not — an at-sea row is never offered twice.
+        clauses.append(f"NOT ({desk_geo_sql(len(params))})")
         params.append([f"%{p}%" for p in probes])
         # The prose the prefilter reads has to be the SAME prose the exact
         # matcher reads below, or the two disagree about what was even a
@@ -486,6 +509,9 @@ async def _read_substrate_slice(
     # fetch_limit check below — those read the tenant-wide pool with no
     # predicate. Only a thematic target sets this to a real predicate.
     scope_predicate: str | None = None
+    # W8 TAX-1 — the target's declared signal-tag scope (strict include +
+    # exclude). NO_FILTER for every target that declares none.
+    target_tags = NO_FILTER
     if target_filter:
         try:
             trow = await conn.fetchrow(
@@ -514,16 +540,31 @@ async def _read_substrate_slice(
                 # post-query below. Null for every existing target (geo-driven),
                 # so the blast radius is exactly the new thematic targets.
                 scope_predicate = scope.get("predicate") if isinstance(scope, dict) else None
+                target_tags = target_tag_filter(scope)
         except Exception:                                       # pragma: no cover
             source_ids = []
             target_geo = []
             scope_predicate = None
+            target_tags = NO_FILTER
 
+    # Lane N-B — the WATERMARK window (``method.options.slice_since_watermark``,
+    # data/slice_coverage.py): everything since this desk's last successful
+    # run instead of the newest row_cap rows. Absent ⇒ None ⇒ the statement
+    # below is byte-identical (the interval clause, no extra params).
+    params: list[Any] = []
+    _wm_cfg = watermark_config(descriptor) if target_filter else None
+    _wm = None
+    if _wm_cfg is not None:
+        _wm = await resolve_window(
+            conn, analyst_id=getattr(getattr(descriptor, "identity", None), "id", None),
+            target_id=target_filter, window_hours=window_hours, cfg=_wm_cfg,
+        )
     # This is a UNIT's fresh REACTIVE-window slice — exclude backfill (S4-T4).
     # A manually-ingested, backdated observation informs facts/grounding via the
     # accumulation paths but must NEVER appear as a "fresh" signal here.
     clauses = [
-        f"fetched_at > NOW() - INTERVAL '{window_hours} hours'",
+        *(window_clauses(_wm, params) if _wm is not None else [
+            f"fetched_at > NOW() - INTERVAL '{window_hours} hours'"]),
         SIGNALS_EXCLUDE_BACKFILL_SQL,
         # C2b: canonical-only. Snapshot feeds (NWS active-alerts, recent-quake
         # endpoints) re-ingest the same item on every poll; dedup stamps each
@@ -532,7 +573,8 @@ async def _read_substrate_slice(
         # citations (one quake cited 251x — false corroboration + wasted
         # context). Mirrors the subscription path (runtime/subscription/filter.py
         # canonical_only) and the reads API (registry/substrate_reads_api.py).
-        "(canonical_signal_id IS NULL OR canonical_signal_id = id)",
+        # Named once in data/signal_slice_scope.py (W8 TAX-1), same text.
+        CANONICAL_ONLY_SQL,
         # P7/7g-1 — THE ORIGIN-CLASS LEG (SEAMS #57 sweep, `cadence_analysts`
         # in the collection firewall's `excluded_from`). The backfill clause
         # above tests a PAYLOAD key a manual batch happens to set; this tests
@@ -571,10 +613,21 @@ async def _read_substrate_slice(
     # written AND nothing already written is read.
     if not research_reaches_desks():
         clauses.append(RESEARCH_SLICE_EXCLUSION_SQL)
-    params: list[Any] = []
     if source_ids:
         params.append(source_ids)
         clauses.append(f"source_id = ANY(${len(params)})")
+    # W8 TAX-1 — THE SIGNAL-TAG FILTER, in SQL on this one statement so the
+    # LIMIT below is never starved by a post-pass. The target's scope
+    # (`tags && $n` strict, `NOT (tags && $m)`) and the analyst's
+    # `subscription.substrate.signal_tags` (with the untagged fallback
+    # `(tags && $n OR tags = '{}')` unless it declares
+    # `untagged_fallback: false`). Each declared tag reaches SQL through the
+    # legacy equivalence rule (`tags.signal_tag_match_forms`). Nothing is
+    # appended for a target and analyst declaring none, so their statement is
+    # byte-identical. Before the snapshot, so the GEO-v2 recovery leg carries
+    # the same filter.
+    for _tag_filter in (target_tags, analyst_tag_filter(descriptor)):
+        clauses.extend(_tag_filter.sql(params))
     # Snapshot the window/backfill/canonical/research (+ source_id) clauses and
     # their params BEFORE the geo predicate goes on. The GEO-ROUTING-v2 recovery
     # leg below needs exactly this prefix with the geo test INVERTED, and
@@ -585,8 +638,16 @@ async def _read_substrate_slice(
     if target_geo:
         params.append(target_geo)
         # geo overlap — the signal mentions at least one of the target's
-        # scoped countries/regions.
-        clauses.append(f"geo && ${len(params)}::text[]")
+        # scoped countries/regions — OR (lane N-X, operator-approved
+        # 2026-11-13) it is an unfiled incident at sea whose inferred
+        # nearest coasts name one of them. Country and lane desks alike; the
+        # rendered row says "at sea, about N km off X" (slice_render).
+        clauses.append(f"({desk_geo_sql(len(params))})")
+        # B6 (W11-F13) — the HOMONYM exclusion: a row filed under a code of
+        # this target off a homonym ("KP" = Khyber Pakhtunkhwa) never enters
+        # the slice. Nothing is appended for a target with no ruled code. An
+        # unfiled (at-sea) row has no filing for the rule to judge.
+        clauses.extend(homonym_slice_filter(target_geo).sql(params, admit_unfiled=True))
     where = "WHERE " + " AND ".join(clauses)
     # The BROAD-POOL case = a global/meta analyst (world_assessor) with no source
     # narrowing, no geo, no predicate. Its recency-only LIMIT 50 gets dominated
@@ -603,10 +664,22 @@ async def _read_substrate_slice(
     # slice) must not monopolise a desk's window. A source-id-narrowed slice is
     # already scoped to the target's own chosen feeds, so it is left uncapped.
     apply_diversity_cap = is_broad_pool or bool(target_geo)
+    # W8 TAX-1 — the DECLARED per-source cap (`method.options.
+    # slice_per_source_cap`, X-1 kind catalog): at most K rows per source_id on
+    # EVERY path of this analyst's slice, strict (no back-fill). Absent ⇒ None
+    # ⇒ today's behaviour exactly (the env diversity cap on the broad/geo
+    # paths, no cap on the source-narrowed or predicate paths).
+    declared_cap = slice_per_source_cap(descriptor)
     row_cap = _slice_row_cap()
     # Over-fetch on the predicate/diversity paths so the post-pass (per-source
     # diversity / residual predicate filter) isn't starved before it fills row_cap.
-    fetch_limit = max(200, row_cap * 3) if (scope_predicate or apply_diversity_cap) else row_cap
+    fetch_limit = (
+        max(200, row_cap * 3)
+        if (scope_predicate or apply_diversity_cap or declared_cap is not None)
+        else row_cap
+    )
+    if _wm is not None:
+        fetch_limit = WM_FETCH_HARD_CAP
     # ---------------------------------------------------------------------
     # JOURNAL SLICE v2 — the SALIENCE-AWARE second leg. LEGBA_JOURNAL_SLICE_V2,
     # default OFF, and only for ``identity.kind == 'journal_assessor'``.
@@ -668,7 +741,15 @@ async def _read_substrate_slice(
             row_cap=row_cap,
             target_filter=target_filter,
         )
-    if scope_predicate:
+    if _wm is not None:
+        # Lane N-B — the whole window competes on salience + source diversity
+        # (never recency alone) and the cut is DECLARED on the coverage stamp.
+        rows, _wm_coverage = await _select_watermark_rows(
+            conn, rows, window=_wm, where=where, params=params,
+            fetch_limit=fetch_limit, row_cap=row_cap, declared_cap=declared_cap,
+            scope_predicate=scope_predicate,
+        )
+    elif scope_predicate:
         # Apply the target's scope.predicate to focus the slice (off the event
         # loop — the predicate engine's SIGALRM budget must not run under the
         # asyncio loop), then cap at the historical 50.
@@ -676,7 +757,12 @@ async def _read_substrate_slice(
         kept = await asyncio.to_thread(
             filter_rows_by_residual, scope_predicate, [dict(r) for r in rows]
         )
-        rows = kept[:row_cap]
+        rows = (
+            strict_per_source_cap(kept, per_source_cap=declared_cap, limit=row_cap)
+            if declared_cap is not None else kept[:row_cap]
+        )
+    elif declared_cap is not None:
+        rows = strict_per_source_cap(rows, per_source_cap=declared_cap, limit=row_cap)
     elif apply_diversity_cap:
         # Per-source diversity cap: walk recency-ordered, admit ≤ cap rows per
         # source_id, until row_cap. A firehose source can't monopolise the slice
@@ -705,6 +791,14 @@ async def _read_substrate_slice(
         d["data"] = payload
         d["produced_at"] = d.get("fetched_at")
         out.append(d)
+
+    # Lane D-1 — mark rows whose source text changed after it was read.
+    # LEGBA_SLICE_SOURCE_DRIFT_MARK, default OFF: off, this block does not
+    # run, no row carries the key and the render is byte-identical. On, ONE
+    # extra read over the rows already chosen (the slice SQL above is not
+    # touched, so the rows and their order do not move).
+    if slice_drift_mark_enabled():
+        await annotate_source_drift(conn, out)
 
     # Graph-structure leg — feed the knowledge graph's own "interesting" shortlist
     # (the shared contract that structural_balance + graph_mining ADD to their
@@ -865,7 +959,7 @@ async def _read_substrate_slice(
     _kind = str(getattr(_kind_raw, "value", _kind_raw) or "")
     if out and target_filter and _kind == "inline_target":
         try:
-            from ..data.analysts.handler_options import resolve_kind_options
+            from ..data.option_catalog.handler_options import resolve_kind_options
             from ..data.analysts.history_grounding import HISTORY_SERIES_CAP
             from ..data.analysts.unit_grounding import (
                 OPEN_EVENTS_CAP,
@@ -909,4 +1003,53 @@ async def _read_substrate_slice(
         except Exception as exc:  # degrade-not-drop — grounding leg is enrichment
             logger.warning("substrate_slice.unit_grounding.failed err=%s", exc)
 
+    if _wm is not None:
+        out = SliceRows(out)
+        out.slice_coverage = _wm_coverage
     return out
+
+
+async def _select_watermark_rows(
+    conn: Any,
+    rows: list[Any],
+    *,
+    window: Any,
+    where: str,
+    params: list[Any],
+    fetch_limit: int,
+    row_cap: int,
+    declared_cap: int | None,
+    scope_predicate: Any,
+) -> tuple[list[Any], dict[str, Any]]:
+    """The watermark window's selection + its coverage stamp (lane N-B)."""
+    candidates = list(rows)
+    in_window = len(candidates)
+    fetch_capped = in_window >= fetch_limit
+    if fetch_capped:
+        # The fetch hit its bound: count the TRUE window, so the declared gap
+        # is the real one and not "at least".
+        try:
+            in_window = int(await conn.fetchval(
+                f"SELECT count(*) FROM signals {where}", *params,
+            ))
+        except Exception as exc:                            # pragma: no cover
+            logger.warning("substrate_slice.watermark.count_failed err=%s", exc)
+    if scope_predicate:
+        from .subscription.filter import filter_rows_by_residual
+        candidates = await asyncio.to_thread(
+            filter_rows_by_residual, scope_predicate, [dict(r) for r in candidates]
+        )
+        if not fetch_capped:
+            in_window = len(candidates)
+    selected = select_by_salience(
+        candidates, limit=row_cap, per_source_cap=declared_cap,
+    )
+    coverage = coverage_stamp(
+        window, in_window=in_window, selected=selected,
+        candidates=candidates, fetch_capped=fetch_capped,
+    )
+    logger.info(
+        "substrate_slice.watermark basis=%s start=%s in_window=%d selected=%d",
+        window.basis, coverage["window_start"], in_window, len(selected),
+    )
+    return selected, coverage

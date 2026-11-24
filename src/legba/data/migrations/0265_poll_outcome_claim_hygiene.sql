@@ -1,0 +1,34 @@
+-- SPDX-FileCopyrightText: 2026 Lewis George
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+--
+-- 0265_poll_outcome_claim_hygiene.sql
+--
+-- WHAT THE CLAIM-TEXT RULES DID TO A POLL'S CLAIM ROWS IS COUNTED (C-2).
+--
+-- WHY
+-- ---
+-- A claim source (scope.source_class 'claim', or a Telegram channel its
+-- descriptor marks 'claim') publishes a party's own claim. Before such a row
+-- is enriched or stored, the source actor rewrites its text
+-- (src/legba/data/claim_hygiene.py): every URL is reduced to its host, onion
+-- addresses are dropped, personal data (email addresses, phone numbers,
+-- government-id-like and payment-card-like numbers, IBANs, street addresses,
+-- credentials) is redacted, and file listings / sample-data dumps are cut to a
+-- bounded description. What was done must be visible on the poll's provenance
+-- row: kinds and counts, never a value.
+--
+-- WHAT THIS ADDS
+-- --------------
+--   * `claim_hygiene jsonb` (nullable) on `source_poll_outcomes` --
+--     `{"rows": n, "<kind>": count, ...}` for a poll (or stream window) that
+--     processed >= 1 claim row; the kinds are claim_hygiene.HYGIENE_KINDS.
+--     The writer appends the column only when it has a value, so every other
+--     poll writes the statement it always wrote.
+--
+-- SAFETY
+-- ------
+-- Additive and idempotent, routed through the runner (no inline BEGIN/COMMIT).
+-- No backfill: no claim source has ever been active.
+
+ALTER TABLE public.source_poll_outcomes
+    ADD COLUMN IF NOT EXISTS claim_hygiene jsonb;

@@ -1,20 +1,23 @@
 /**
- * Bound-panel synthesis — sidebar reachability for binding-scoped panels
- * without `ui_panel_registrations` rows.
+ * Bound-panel synthesis — a complete registration list for binding-scoped
+ * panels without `ui_panel_registrations` rows.
  *
  * The live system carries ZERO `ui_panel_registrations` rows (no descriptor
- * declares `outputs.ui_panel`), so the sidebar's Targets/Analysts groups —
- * built solely from `GET /registry/ui_panels` — never rendered, leaving every
- * bound panel kind (`target.map`, `target.timeline`, `analyst.runs`, …)
- * reachable only through the palette's Investigate grids.
+ * declares `outputs.ui_panel`). This module was written for the sidebar's
+ * Targets/Analysts groups, which were built solely from `GET
+ * /registry/ui_panels` and so never rendered. The sidebar is gone (UI-B1/shell
+ * replaced it with the object rail, and bound panels are reached through the
+ * rail, ⌘K and the drill list via the one executor); today the merged list
+ * `useRegistry` returns is read by the shell only for its loading state and
+ * last-refresh stamp (App.tsx).
  *
  * This module extends the synthetic-registration pattern the shell already
  * uses for singletons (App.tsx `addSingleton`) and Investigate grids
  * (`addBound`) to the registry list itself: given the live descriptor heads
  * (`GET /registry/descriptors?family=target|analyst&head_only=true` — the same
  * FROZEN routes `usePaletteRecords` reads), it mints one `PanelRegistration`
- * per (record × bound panel kind), so `useRegistry` can hand the Sidebar a
- * complete per-target / per-analyst panel set.
+ * per (record × bound panel kind), so `useRegistry` returns a complete
+ * per-target / per-analyst panel set.
  *
  * Real registry rows stay authoritative: `mergeRegistrations` drops any
  * synthetic row whose panel instance (`instanceId(kind, scope)`) is already
@@ -26,6 +29,7 @@
 import type { Mode, PanelKind, PanelRegistration } from '@/types'
 import { PANEL_ID_TO_KIND, PANEL_REGISTRY } from './registry'
 import { extractScope, instanceId } from './loader'
+import { resolveRetiredPanelId } from './aliases'
 import type { RegistryEntry } from './registry'
 
 /** One descriptor head from `GET /registry/descriptors?family=…&head_only=true`. */
@@ -41,7 +45,6 @@ function boundKindsFor(category: 'target' | 'analyst'): PanelKind[] {
   const out: PanelKind[] = []
   for (const [kind, entry] of Object.entries(PANEL_REGISTRY) as Array<[PanelKind, RegistryEntry]>) {
     if (!entry.definition.requiresBinding) continue
-    if (entry.definition.hidden) continue
     if (entry.definition.category !== category) continue
     out.push(kind)
   }
@@ -113,11 +116,13 @@ export function synthesizeBoundRegistrations(
   return out
 }
 
-/** Resolve a registration to its panel-instance key, or null for unknown kinds. */
+/** Resolve a registration to its panel-instance key, or null for unknown kinds.
+ *  A RETIRED panel id keys as its survivor (UI-B3: a real `target_overview`
+ *  row renders `subject.page` on that subject, so it covers that instance). */
 function instanceKeyOf(reg: PanelRegistration): string | null {
   const raw = reg.panel_id.trim()
   const normalized = raw.startsWith('panels.') ? raw.slice('panels.'.length) : raw
-  const kind = PANEL_ID_TO_KIND[normalized]
+  const kind = PANEL_ID_TO_KIND[normalized] ?? resolveRetiredPanelId(normalized)?.kind
   if (!kind) return null
   return instanceId(kind, extractScope(reg))
 }

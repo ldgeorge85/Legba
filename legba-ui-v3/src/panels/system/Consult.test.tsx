@@ -270,20 +270,32 @@ describe('ConsultPanel (chat)', () => {
 })
 
 describe('ConsultPanel (F1 model picker)', () => {
-  it('renders the model dropdown defaulting to opus and sends model on submit', async () => {
+  it('renders the model dropdown defaulting to core (DEC-17a) and sends model on submit', async () => {
     const fetchMock = answerOnce('ok')
     vi.stubGlobal('fetch', fetchMock)
 
     render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
     const select = screen.getByTestId('consult-model') as HTMLSelectElement
-    expect(select.value).toBe('opus')
+    expect(select.value).toBe('core')
 
     fireEvent.change(screen.getByTestId('consult-question'), { target: { value: 'q' } })
     fireEvent.click(screen.getByTestId('consult-submit'))
     await waitFor(() => expect(screen.getByTestId('consult-answer')).toBeInTheDocument())
 
     const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)
-    expect(body.model).toBe('opus')
+    expect(body.model).toBe('core')
+  })
+
+  it('a session whose stored opus was never picked SENDS core (roll 84, through the M-1 turn)', async () => {
+    localStorage.setItem('legba_consult_model', 'opus') // an older build's default, no pick marker
+    const fetchMock = answerOnce('ok')
+    vi.stubGlobal('fetch', fetchMock)
+    render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
+    fireEvent.change(screen.getByTestId('consult-question'), { target: { value: 'q' } })
+    fireEvent.click(screen.getByTestId('consult-submit'))
+    await waitFor(() => expect(screen.getByTestId('consult-answer')).toBeInTheDocument())
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)
+    expect(body.model).toBe('core')
   })
 
   it('sends the chosen plane, persists it, and surfaces the answered plane', async () => {
@@ -329,14 +341,34 @@ describe('ConsultPanel (F1 model picker)', () => {
 
   it('restores a persisted fable choice on mount', () => {
     localStorage.setItem('legba_consult_model', 'fable')
+    localStorage.setItem('legba_consult_model_chosen', '1') // an explicit pick
     render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
     expect((screen.getByTestId('consult-model') as HTMLSelectElement).value).toBe('fable')
   })
 
-  it('falls back to opus for a garbage / stale stored value', () => {
+  it('a stored paid plane that was never explicitly picked reads as core (roll 84)', () => {
+    for (const paid of ['opus', 'fable']) {
+      localStorage.clear()
+      localStorage.setItem('legba_consult_model', paid) // an older build's default, no pick marker
+      const { unmount } = render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
+      expect((screen.getByTestId('consult-model') as HTMLSelectElement).value).toBe('core')
+      unmount()
+    }
+  })
+
+  it('a pick in the picker is remembered as explicit, and opus stays selectable', () => {
+    render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
+    const picker = screen.getByTestId('consult-model') as HTMLSelectElement
+    expect([...picker.options].map((o) => o.value)).toEqual(expect.arrayContaining(['core', 'opus', 'fable']))
+    fireEvent.change(picker, { target: { value: 'opus' } })
+    expect(localStorage.getItem('legba_consult_model')).toBe('opus')
+    expect(localStorage.getItem('legba_consult_model_chosen')).toBe('1')
+  })
+
+  it('falls back to core for a garbage / stale stored value', () => {
     localStorage.setItem('legba_consult_model', 'some-old-raw-component-id')
     render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
-    expect((screen.getByTestId('consult-model') as HTMLSelectElement).value).toBe('opus')
+    expect((screen.getByTestId('consult-model') as HTMLSelectElement).value).toBe('core')
   })
 })
 

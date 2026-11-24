@@ -3,7 +3,7 @@
  * design pass.
  *
  * The draw layers (signals / findings / situations / events / entities) are one
- * thing; the six SOURCE layers of `docs/LAYERS.md` are another, and only the
+ * thing; the six SOURCE layers of `docs/DATA_SOURCES.md` are another, and only the
  * second has a per-country declaration behind it. What is pinned here is that
  * the second section exists on the map at all, that each of the six carries an
  * `i` stating what the operator declared for the country in scope, and that a
@@ -17,6 +17,7 @@ import type { ReactElement } from 'react'
 import LayerPanel from './LayerPanel'
 import { LAYER_VOCAB } from '@/lib/layerAperture'
 import { emptyMembers, resetScope, useScope } from '@/state/scope'
+import { useWorldState } from './worldState'
 
 const RECEIPT = {
   measured: true,
@@ -191,5 +192,53 @@ describe('LayerPanel — the aperture section', () => {
       expect(screen.getByTestId('aperture-summary')).toHaveTextContent('no country is in scope'),
     )
     expect(screen.getAllByTestId(/^aperture-row-/)).toHaveLength(LAYER_VOCAB.length)
+  })
+})
+
+describe('LayerPanel — the layer catalog (UI-B4/map)', () => {
+  beforeEach(() => {
+    useWorldState.setState({ counts: {} })
+  })
+
+  it("lists the profile's draw layers, each with its aperture `i`", () => {
+    render(wrap(<LayerPanel />))
+    expand()
+    for (const id of ['signals', 'findings', 'situations', 'events', 'entities']) {
+      expect(screen.getByTestId(`layer-row-${id}`)).toBeInTheDocument()
+      expect(screen.getByTestId(`layer-aperture-${id}`)).toBeInTheDocument()
+    }
+    const signals = screen.getByTestId('layer-aperture-signals-description')
+    expect(signals).toHaveTextContent('Reads: GET /signals')
+    expect(signals).toHaveTextContent('Window: the shared window')
+    expect(signals).toHaveTextContent('Subjects:')
+    expect(signals).toHaveTextContent('Source layers:')
+  })
+
+  it('an empty layer reads *no read yet* — never 0', () => {
+    render(wrap(<LayerPanel />))
+    expand()
+    const count = screen.getByTestId('layer-count-signals')
+    expect(count).toHaveTextContent('no read yet')
+    expect(count).toHaveAttribute('data-state', 'no_read_yet')
+    expect(count).not.toHaveTextContent('0')
+  })
+
+  it('a measured zero stays a zero, and a count carries its unit and as-of', () => {
+    useWorldState.getState().setCount('findings', 0)
+    useWorldState.getState().setCount('signals', 1234)
+    render(wrap(<LayerPanel />))
+    expand()
+    expect(screen.getByTestId('layer-count-findings')).toHaveTextContent(/^0$/)
+    expect(screen.getByTestId('layer-count-findings')).toHaveAttribute('data-state', 'measured')
+    const signals = screen.getByTestId('layer-count-signals')
+    expect(signals).toHaveTextContent('1,234')
+    expect(signals.getAttribute('aria-label')).toMatch(/1,234 in window, as of \d{4}-\d{2}-\d{2} \d{2}:\d{2}Z/)
+  })
+
+  it('a layer no renderer draws prints the dash and its `i` says why', () => {
+    render(wrap(<LayerPanel />))
+    expand()
+    expect(screen.getByTestId('layer-count-entities')).toHaveTextContent('—')
+    expect(screen.getByTestId('layer-aperture-entities-description')).toHaveTextContent('no renderer draws it yet')
   })
 })

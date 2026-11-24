@@ -30,6 +30,7 @@ SQL are exercised as mounted, not as called.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from datetime import date, datetime, timedelta, timezone
@@ -103,6 +104,214 @@ def test_sentinel_glossary_is_published_on_the_wire():
     ):
         assert sentinel in out.sentinels
         assert out.sentinels[sentinel].strip()
+
+
+# ---------------------------------------------------------------------------
+# P-3 — the read-cost rewrite: same answer, cheaper SQL, never a cold wait
+# ---------------------------------------------------------------------------
+
+
+def _fields(model) -> set[str]:
+    return set(model.model_fields)
+
+
+def test_p3_response_shape_is_unchanged():
+    """P-3 changed how the numbers are read, never what is returned: every
+    field of every model on the wire, pinned as it was before the rewrite."""
+    from legba.data.registry.judge_stats_api import (
+        JudgeComponentHealth, JudgeHealthOut, JudgePipelineVersionRow,
+        JudgeStatsCell, JudgeStatsProvider, JudgeStatsTotals, JudgeUncitedOut,
+        JudgeUncitedUnitDay,
+    )
+
+    assert _fields(JudgeStatsOut) == {
+        "generated_at", "window_days", "measured",
+        "pools_across_pipeline_versions", "totals", "providers",
+        "pipeline_versions", "cells", "sentinels", "judge_statuses", "health",
+        "uncited",
+    }
+    assert _fields(JudgeStatsCell) == {
+        "day", "served_by", "judge_status", "judge_pipeline_version", "n",
+        "faithfulness_n", "faithfulness_mean", "aligned_by_id",
+        "aligned_positionally", "miscount_n",
+    }
+    assert _fields(JudgeStatsProvider) == {
+        "served_by", "is_sentinel", "n", "by_status", "adjudicated_n",
+        "adjudicated_share", "faithfulness_n", "faithfulness_mean",
+        "positional_share", "miscount_rate", "judge_calls", "judge_call_errors",
+        "latency_p95_ms", "first_call_at", "last_call_at",
+    }
+    assert _fields(JudgePipelineVersionRow) == {
+        "judge_pipeline_version", "n", "providers", "faithfulness_n",
+        "faithfulness_mean", "positional_share", "miscount_rate",
+    }
+    assert _fields(JudgeStatsTotals) == {
+        "critiques", "by_status", "attributed", "unattributed", "providers",
+        "adjudicated_n", "adjudicated_share", "faithfulness_n",
+        "faithfulness_mean", "positional_share", "miscount_rate", "judge_calls",
+        "judge_call_errors",
+    }
+    assert _fields(JudgeHealthOut) == {
+        "measured", "unverified_since", "unverified_n", "open_at_window_start",
+        "components",
+    }
+    assert _fields(JudgeComponentHealth) == {
+        "component_id", "model", "calls", "last_success_at", "last_failure_at",
+        "failure_class", "last_failure_http_status", "consecutive_failures",
+        "unverified_since", "unverified_n", "open_at_window_start",
+    }
+    assert _fields(JudgeUncitedOut) == {"measured", "rows"}
+    assert _fields(JudgeUncitedUnitDay) == {
+        "day", "analyst_id", "reads", "fact_sentences", "uncited_fact_sentences",
+        "uncited_share", "bluf_reads", "bluf_uncited_reads", "bluf_uncited_share",
+    }
+
+
+def _ws(sql: str) -> str:
+    return " ".join(sql.split())
+
+
+def test_p3_critique_data_is_detoasted_once_per_row():
+    """Each ``o.data->...`` detoasts the whole critique document again; the cube
+    had eight (22.5 s cold / 2.4 s warm on live). The verification block is
+    extracted ONCE, behind ``OFFSET 0`` so the planner cannot inline it back."""
+    js = judge_stats_api
+    for name in ("_CUBE_SQL", "_HEALTH_STREAK_SQL", "_UNCITED_SQL"):
+        sql = _ws(getattr(js, name))
+        assert sql.count("o.data->'data'->'verification'") == 1, name
+        assert "o.data->'data'->'verification' AS v OFFSET 0" in sql or (
+            "o.data->'data'->'verification' AS v," in sql and "OFFSET 0" in sql
+        ), name
+
+
+def test_p3_trace_reads_never_join_the_receipts_array():
+    """A lateral ``jsonb_array_elements`` join drew a Memoize keyed on the whole
+    ``llm_calls`` document (detoast + hash per trace). The verify-judge calls
+    are a set-returning ``jsonb_path_query`` in the select list instead, with
+    the leg filter in STRICT mode (equal to ``c->>'leg' = 'verify_judge'``)."""
+    js = judge_stats_api
+    for name in ("_CUBE_SQL", "_RECEIPTS_SQL", "_HEALTH_CALLS_SQL"):
+        sql = getattr(js, name)
+        assert "jsonb_array_elements" not in sql, name
+        assert """'strict $[*] ? (@.leg == "verify_judge")'""" in sql, name
+
+
+def test_p3_cube_reads_only_the_runs_it_can_join():
+    """Only a run that HAS a critique can be joined to one; the cube's trace
+    side is narrowed to those runs (a primary-key lookup), and ``crit`` is
+    materialized so a bad row estimate cannot re-run the trace aggregate per
+    critique (the old plan did, 194 times, on a 3-day single-analyst read)."""
+    sql = _ws(judge_stats_api._CUBE_SQL)
+    assert sql.startswith("WITH crit AS MATERIALIZED (")
+    assert "AND t.run_id IN (SELECT run_id FROM crit)" in sql
+    assert sql.index("crit AS MATERIALIZED") < sql.index("judge_calls AS (")
+    # The receipts read keeps the whole window: calls are counted at their own
+    # grain, including runs whose critique is not in the window.
+    assert "run_id IN" not in _ws(judge_stats_api._RECEIPTS_SQL)
+
+
+class _FakePool:
+    """Answers every statement with no rows; counts what it was asked."""
+
+    def __init__(self) -> None:
+        self.fetches: list[str] = []
+        self.gate: asyncio.Event | None = None
+
+    def acquire(self):
+        pool = self
+
+        class _Conn:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def fetch(self, sql, *args):
+                pool.fetches.append(sql)
+                if pool.gate is not None:
+                    await pool.gate.wait()
+                return []
+
+        return _Conn()
+
+
+def _fake_app(pool: _FakePool) -> FastAPI:
+    from types import SimpleNamespace
+
+    deps = SimpleNamespace(descriptor_registry=SimpleNamespace(pg=pool))
+    app = FastAPI()
+    app.state.registry_deps = deps
+    app.include_router(build_judge_stats_router(deps), prefix="/api/v1/v3")  # type: ignore[arg-type]
+    return app
+
+
+@pytest.fixture
+def _open_bearer(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv(API_TOKEN_ENV, raising=False)
+    monkeypatch.setenv("LEGBA_DEV_MODE", "1")
+
+
+@pytest.mark.asyncio
+async def test_p3_an_expired_payload_is_served_at_once_while_it_refreshes(
+    _open_bearer, monkeypatch,
+):
+    """Past the TTL the last good payload answers immediately (its
+    ``generated_at`` says how old it is) while ONE refresh runs behind it."""
+
+    monkeypatch.setattr(judge_stats_api, "JUDGE_STATS_TTL_S", 0.05)
+    pool = _FakePool()
+    app = _fake_app(pool)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        first = (await c.get(_ROUTE)).json()
+        assert len(pool.fetches) == 5
+        await asyncio.sleep(0.06)
+        pool.gate = asyncio.Event()  # the refresh now blocks on the database
+        stale = await asyncio.wait_for(c.get(_ROUTE), timeout=2)
+        assert stale.status_code == 200
+        assert stale.json() == first  # same payload, same as-of, no wait
+        await asyncio.sleep(0.01)
+        # ONE refresh is already reading (cube, receipts, health calls,
+        # uncited; the health streak follows its calls on the same connection).
+        assert len(pool.fetches) == 9
+        pool.gate.set()
+        await asyncio.sleep(0.05)
+        assert len(pool.fetches) == 10
+        fresh = (await c.get(_ROUTE)).json()
+        assert len(pool.fetches) == 10  # the refreshed payload, from the cache
+    assert fresh["generated_at"] > first["generated_at"]
+    assert set(fresh) == set(first)
+
+
+@pytest.mark.asyncio
+async def test_p3_the_default_read_is_warmed_at_startup(_open_bearer):
+    """The router's lifespan computes the console's default read in the
+    background, so the first landing after a roll is served from the cache."""
+
+    pool = _FakePool()
+    app = _fake_app(pool)
+    async with app.router.lifespan_context(app):
+        for _ in range(50):
+            if len(pool.fetches) == 5:
+                break
+            await asyncio.sleep(0.01)
+        assert len(pool.fetches) == 5
+        await asyncio.sleep(0.01)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            r = await c.get(_ROUTE)
+        assert r.status_code == 200 and r.json()["measured"] is True
+        assert len(pool.fetches) == 5  # served from the warmed entry
+
+
+@pytest.mark.asyncio
+async def test_p3_a_warm_up_still_running_at_shutdown_is_cancelled(_open_bearer):
+
+    pool = _FakePool()
+    pool.gate = asyncio.Event()  # the database never answers
+    app = _fake_app(pool)
+    async with app.router.lifespan_context(app):
+        await asyncio.sleep(0.01)
+    # leaving the lifespan did not hang and did not raise
 
 
 def _cube(
@@ -559,6 +768,39 @@ async def test_structural_verify_family_is_excluded(client, seeded):
 
     body = (await client.get(_ROUTE, params={"analyst_id": "glass3_analyst"})).json()
     assert body["totals"]["critiques"] == 0
+
+
+@pytest.mark.asyncio
+async def test_p3_the_strict_path_filter_matches_exactly_what_leg_equality_did(
+    client, seeded,
+):
+    """P-3 swapped ``c->>'leg' = 'verify_judge'`` over ``jsonb_array_elements``
+    for ``jsonb_path_query('strict $[*] ? (@.leg == "verify_judge")')``. The
+    shapes where the two could part: a non-object element, an element with no
+    ``leg``, a NESTED array holding a judge call, and a ``leg`` that is an
+    array. ``->>`` matched none of them; lax mode would unwrap the two arrays
+    and match. Strict must match only the plain judge call."""
+    trace, critique = seeded
+    now = datetime.now(timezone.utc)
+    run = await trace(
+        calls=[
+            "not an object",
+            {"served_by": "P3EdgeNoLeg", "status": "success"},
+            [{"leg": "verify_judge", "served_by": "P3EdgeNested", "status": "success"}],
+            {"leg": ["verify_judge"], "served_by": "P3EdgeArrayLeg", "status": "success"},
+            {"leg": "verify_judge", "served_by": "P3EdgeReal", "status": "success"},
+        ],
+        started=now - timedelta(hours=2),
+    )
+    await critique(run_id=run, judge_status="llm", score=0.5, created=now - timedelta(hours=1))
+
+    body = (await client.get(_ROUTE, params={"analyst_id": "glass3_analyst"})).json()
+    provs = _providers(body)
+    assert provs["P3EdgeReal"]["n"] == 1
+    assert provs["P3EdgeReal"]["judge_calls"] == 1
+    for ghost in ("P3EdgeNoLeg", "P3EdgeNested", "P3EdgeArrayLeg"):
+        assert ghost not in provs, ghost
+    assert SENTINEL_MIXED not in provs or provs[SENTINEL_MIXED]["n"] == 0
 
 
 @pytest.mark.asyncio
